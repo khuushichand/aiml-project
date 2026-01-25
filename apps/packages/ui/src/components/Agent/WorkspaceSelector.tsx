@@ -2,7 +2,7 @@
  * WorkspaceSelector - Select and manage workspace directories
  */
 
-import { FC, useState, useEffect, useRef, MouseEvent } from "react"
+import { FC, useState, useEffect, useRef, MouseEvent, useCallback } from "react"
 import { useTranslation } from "react-i18next"
 import { Dropdown, Modal, Input, message, Divider } from "antd"
 import {
@@ -109,18 +109,8 @@ export const WorkspaceSelector: FC<WorkspaceSelectorProps> = ({
     callbackRef.current?.(selectedWorkspace)
   }, [selectedWorkspace])
 
-  // Auto-select last used workspace on mount
-  useAutoSelectWorkspace(
-    workspaces || [],
-    selectedId,
-    // Auto-select callback always uses latest handleSelect
-    (workspace: Workspace) => {
-      handleSelect(workspace)
-    }
-  )
-
   // Handle workspace selection
-  const handleSelect = async (workspace: Workspace) => {
+  const handleSelect = useCallback(async (workspace: Workspace) => {
     setIsSelecting(true)
     try {
       // Set workspace in native agent
@@ -146,7 +136,10 @@ export const WorkspaceSelector: FC<WorkspaceSelectorProps> = ({
     } finally {
       setIsSelecting(false)
     }
-  }
+  }, [recordUsage, setSelectedId, t])
+
+  // Auto-select last used workspace on mount
+  useAutoSelectWorkspace(workspaces || [], selectedId, handleSelect)
 
   // Handle adding new workspace
   const handleAddWorkspace = async () => {

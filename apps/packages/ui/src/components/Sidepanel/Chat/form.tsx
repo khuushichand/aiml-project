@@ -1887,6 +1887,7 @@ export const SidepanelForm = ({
                           className="absolute bottom-full left-3 right-3 mb-2"
                         />
                         <textarea
+                          id="textarea-message"
                           onKeyDown={(e) => handleKeyDown(e)}
                           ref={textareaRef}
                           data-testid="chat-input"

@@ -382,28 +382,41 @@ const getGlobalShell = (): LayoutShellGlobal | null => {
   return scope.__tldwOptionShell
 }
 
-export default function OptionLayout(props: OptionLayoutProps) {
-  const shell = useContext(LayoutShellContext)
-  const globalShell = getGlobalShell()
+/**
+ * Component for when OptionLayout is nested inside an existing shell.
+ * Extracted to satisfy React's Rules of Hooks (hooks must not be conditional).
+ */
+function NestedLayoutContent({
+  props,
+  shell,
+  globalShell
+}: {
+  props: OptionLayoutProps
+  shell: LayoutShellContextValue
+  globalShell: LayoutShellGlobal | null
+}) {
+  const requestedOverrides = React.useMemo(() => {
+    const overrides: LayoutShellOverrides = {}
+    if (props.hideHeader) overrides.hideHeader = true
+    if (props.hideSidebar) overrides.hideSidebar = true
+    return Object.keys(overrides).length > 0 ? overrides : null
+  }, [props.hideHeader, props.hideSidebar])
 
-  if (shell.inShell || globalShell?.mounted) {
-    const requestedOverrides = React.useMemo(() => {
-      const overrides: LayoutShellOverrides = {}
-      if (props.hideHeader) overrides.hideHeader = true
-      if (props.hideSidebar) overrides.hideSidebar = true
-      return Object.keys(overrides).length > 0 ? overrides : null
-    }, [props.hideHeader, props.hideSidebar])
+  React.useEffect(() => {
+    const setOverrides = shell.setOverrides || globalShell?.setOverrides
+    if (!setOverrides || !requestedOverrides) return
+    setOverrides(requestedOverrides)
+    return () => setOverrides?.(null)
+  }, [globalShell?.setOverrides, requestedOverrides, shell.setOverrides])
 
-    React.useEffect(() => {
-      const setOverrides = shell.setOverrides || globalShell?.setOverrides
-      if (!setOverrides || !requestedOverrides) return
-      setOverrides(requestedOverrides)
-      return () => setOverrides?.(null)
-    }, [globalShell?.setOverrides, requestedOverrides, shell.setOverrides])
+  return <>{props.children}</>
+}
 
-    return <>{props.children}</>
-  }
-
+/**
+ * Component for when OptionLayout is the root shell.
+ * Extracted to satisfy React's Rules of Hooks (hooks must not be conditional).
+ */
+function RootLayoutShell({ props, globalShell }: { props: OptionLayoutProps; globalShell: LayoutShellGlobal | null }) {
   const [overrides, setOverrides] = React.useState<LayoutShellOverrides | null>(
     null
   )
@@ -440,4 +453,17 @@ export default function OptionLayout(props: OptionLayoutProps) {
       </LayoutShellContext.Provider>
     </DemoModeProvider>
   )
+}
+
+export default function OptionLayout(props: OptionLayoutProps) {
+  const shell = useContext(LayoutShellContext)
+  const globalShell = getGlobalShell()
+
+  // Check if we're nested inside an existing shell
+  if (shell.inShell || globalShell?.mounted) {
+    return <NestedLayoutContent props={props} shell={shell} globalShell={globalShell} />
+  }
+
+  // We're the root shell
+  return <RootLayoutShell props={props} globalShell={globalShell} />
 }

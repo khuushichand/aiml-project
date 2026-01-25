@@ -4153,6 +4153,163 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
             logger.warning(f"set_message_metadata_extra failed for {message_id}: {e}")
             return False
 
+    def set_message_rag_context(
+        self,
+        message_id: str,
+        rag_context: Dict[str, Any],
+        merge: bool = True
+    ) -> bool:
+        """
+        Store RAG context (citations, retrieved documents, search settings) with a message.
+
+        This persists RAG search results and citations in message_metadata.extra_json
+        under the 'rag_context' key for later retrieval and export.
+
+        Args:
+            message_id: The message ID to attach RAG context to
+            rag_context: Dict containing:
+                - search_query: The original search query
+                - search_mode: Search mode used (fts/vector/hybrid)
+                - settings_snapshot: Key RAG settings used
+                - retrieved_documents: List of retrieved docs with scores/excerpts
+                - generated_answer: AI-generated answer (if any)
+                - citations: Citation metadata
+                - claims_verified: Verification results (if any)
+                - timestamp: ISO timestamp
+                - feedback_id: Analytics ID
+            merge: If True, merge with existing extra data; if False, replace entire extra
+
+        Returns:
+            bool: True if successful, False otherwise
+        """
+        try:
+            # Get current metadata to preserve other extra fields
+            current = self.get_message_metadata(message_id) or {}
+            current_extra = current.get('extra') or {}
+
+            if merge and isinstance(current_extra, dict):
+                # Merge: preserve existing extra fields, update rag_context
+                new_extra = dict(current_extra)
+                new_extra['rag_context'] = rag_context
+            else:
+                # Replace: only keep rag_context
+                new_extra = {'rag_context': rag_context}
+
+            return self.add_message_metadata(
+                message_id,
+                tool_calls=current.get('tool_calls'),
+                extra=new_extra
+            )
+        except Exception as e:
+            logger.warning(f"set_message_rag_context failed for {message_id}: {e}")
+            return False
+
+    def get_message_rag_context(self, message_id: str) -> Optional[Dict[str, Any]]:
+        """
+        Retrieve RAG context stored with a message.
+
+        Returns the rag_context dict from message_metadata.extra_json,
+        or None if no RAG context is stored.
+        """
+        try:
+            metadata = self.get_message_metadata(message_id)
+            if not metadata:
+                return None
+            extra = metadata.get('extra')
+            if not isinstance(extra, dict):
+                return None
+            return extra.get('rag_context')
+        except Exception as e:
+            logger.warning(f"get_message_rag_context failed for {message_id}: {e}")
+            return None
+
+    def get_messages_with_rag_context(
+        self,
+        conversation_id: str,
+        limit: int = 100,
+        offset: int = 0,
+        include_rag_context: bool = True
+    ) -> List[Dict[str, Any]]:
+        """
+        Retrieve messages for a conversation with optional RAG context attached.
+
+        This is optimized for the Knowledge QA page to load conversation history
+        with full citation data.
+
+        Args:
+            conversation_id: The conversation to fetch messages from
+            limit: Maximum number of messages to return
+            offset: Number of messages to skip
+            include_rag_context: If True, attach rag_context to each message
+
+        Returns:
+            List of message dicts, each optionally including 'rag_context' key
+        """
+        try:
+            messages = self.get_messages_for_conversation(
+                conversation_id,
+                limit=limit,
+                offset=offset
+            )
+
+            if not include_rag_context:
+                return messages
+
+            # Attach RAG context to each message
+            for msg in messages:
+                msg_id = msg.get('id')
+                if msg_id:
+                    rag_context = self.get_message_rag_context(msg_id)
+                    if rag_context:
+                        msg['rag_context'] = rag_context
+
+            return messages
+        except Exception as e:
+            logger.warning(f"get_messages_with_rag_context failed for conversation {conversation_id}: {e}")
+            return []
+
+    def get_conversation_citations(self, conversation_id: str) -> List[Dict[str, Any]]:
+        """
+        Retrieve all citations from a conversation's messages.
+
+        This aggregates all retrieved_documents from rag_context across
+        all messages in a conversation, useful for export and citation
+        bibliography generation.
+
+        Returns:
+            List of unique retrieved documents with their source message IDs
+        """
+        try:
+            messages = self.get_messages_for_conversation(conversation_id, limit=1000)
+            citations_by_id: Dict[str, Dict[str, Any]] = {}
+
+            for msg in messages:
+                msg_id = msg.get('id')
+                if not msg_id:
+                    continue
+
+                rag_context = self.get_message_rag_context(msg_id)
+                if not rag_context:
+                    continue
+
+                retrieved_docs = rag_context.get('retrieved_documents', [])
+                for doc in retrieved_docs:
+                    doc_id = doc.get('id') or doc.get('chunk_id') or f"anon_{len(citations_by_id)}"
+                    if doc_id not in citations_by_id:
+                        citations_by_id[doc_id] = {
+                            **doc,
+                            'message_ids': [msg_id],
+                            'first_cited_at': msg.get('timestamp')
+                        }
+                    else:
+                        if msg_id not in citations_by_id[doc_id]['message_ids']:
+                            citations_by_id[doc_id]['message_ids'].append(msg_id)
+
+            return list(citations_by_id.values())
+        except Exception as e:
+            logger.warning(f"get_conversation_citations failed for conversation {conversation_id}: {e}")
+            return []
+
     def backfill_tool_calls_from_inline(self, strip_inline: bool = False, limit: Optional[int] = None) -> Dict[str, int]:
         """Scan assistant messages for an inline "[tool_calls]: <json>" suffix and backfill message_metadata.
 

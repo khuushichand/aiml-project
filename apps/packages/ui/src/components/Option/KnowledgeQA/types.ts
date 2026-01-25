@@ -1,0 +1,176 @@
+/**
+ * Types for KnowledgeQA component
+ */
+
+import type { RagSettings, RagPresetName } from "@/services/rag/unified-rag"
+
+// Retrieved document with citation info
+export type RagResult = {
+  id?: string
+  content?: string
+  text?: string
+  chunk?: string
+  metadata?: {
+    title?: string
+    source?: string
+    url?: string
+    page_number?: number
+    chunk_id?: string
+    source_type?: string
+    [key: string]: unknown
+  }
+  score?: number
+  excerpt?: string
+}
+
+// Citation reference in generated answer
+export type CitationRef = {
+  index: number // 1-based index as shown in answer [1], [2], etc.
+  documentId: string
+  excerpt?: string
+  startOffset?: number
+  endOffset?: number
+}
+
+// RAG context to be persisted with messages
+export type RagContextData = {
+  search_query: string
+  search_mode?: string
+  settings_snapshot?: Partial<RagSettings>
+  retrieved_documents: Array<{
+    id?: string
+    source_type?: string
+    title?: string
+    score?: number
+    chunk_id?: string
+    excerpt?: string
+    url?: string
+    page_number?: number
+    line_range?: [number, number]
+    metadata?: Record<string, unknown>
+  }>
+  generated_answer?: string
+  citations?: Array<{
+    text: string
+    source: string
+    confidence: number
+    type: string
+  }>
+  claims_verified?: Array<{
+    claim: string
+    verified: boolean
+    confidence: number
+    source?: string
+  }>
+  timestamp?: string
+  feedback_id?: string
+}
+
+// Search history item
+export type SearchHistoryItem = {
+  id: string
+  query: string
+  timestamp: string
+  conversationId?: string
+  messageId?: string
+  sourcesCount: number
+  hasAnswer: boolean
+  preset?: RagPresetName
+}
+
+// Thread/conversation for Knowledge QA
+export type KnowledgeQAThread = {
+  id: string
+  title?: string
+  topicLabel?: string
+  createdAt: string
+  lastModifiedAt: string
+  state: "in-progress" | "resolved"
+  messageCount: number
+  source: "knowledge_qa"
+}
+
+// Message with RAG context
+export type KnowledgeQAMessage = {
+  id: string
+  conversationId: string
+  role: "user" | "assistant" | "system"
+  content: string
+  timestamp: string
+  ragContext?: RagContextData
+}
+
+// State for the KnowledgeQA component
+export type KnowledgeQAState = {
+  // Search state
+  query: string
+  isSearching: boolean
+  results: RagResult[]
+  answer: string | null
+  citations: CitationRef[]
+  error: string | null
+
+  // Thread state
+  currentThreadId: string | null
+  messages: KnowledgeQAMessage[]
+  threads: KnowledgeQAThread[]
+
+  // Settings state
+  preset: RagPresetName
+  settings: RagSettings
+  expertMode: boolean
+
+  // History state
+  searchHistory: SearchHistoryItem[]
+  historySidebarOpen: boolean
+
+  // UI state
+  settingsPanelOpen: boolean
+  focusedSourceIndex: number | null
+}
+
+// Actions for KnowledgeQA
+export type KnowledgeQAActions = {
+  // Search actions
+  setQuery: (query: string) => void
+  search: () => Promise<void>
+  clearResults: () => void
+
+  // Thread actions
+  createNewThread: () => Promise<string>
+  selectThread: (threadId: string) => Promise<void>
+  askFollowUp: (question: string) => Promise<void>
+
+  // Settings actions
+  setPreset: (preset: RagPresetName) => void
+  updateSetting: <K extends keyof RagSettings>(key: K, value: RagSettings[K]) => void
+  resetSettings: () => void
+  toggleExpertMode: () => void
+
+  // History actions
+  loadSearchHistory: () => Promise<void>
+  restoreFromHistory: (item: SearchHistoryItem) => Promise<void>
+  deleteHistoryItem: (id: string) => Promise<void>
+
+  // UI actions
+  setSettingsPanelOpen: (open: boolean) => void
+  setHistorySidebarOpen: (open: boolean) => void
+  focusSource: (index: number | null) => void
+
+  // Citation actions
+  persistRagContext: (messageId: string, context: RagContextData) => Promise<boolean>
+  scrollToSource: (index: number) => void
+}
+
+// Context value combining state and actions
+export type KnowledgeQAContextValue = KnowledgeQAState & KnowledgeQAActions
+
+// Export format options
+export type ExportFormat = "markdown" | "pdf" | "chatbook"
+
+export type ExportOptions = {
+  format: ExportFormat
+  includeSettingsSnapshot: boolean
+  includeSourceExcerpts: boolean
+  citationStyle: "apa" | "mla" | "chicago" | "harvard" | "ieee"
+}

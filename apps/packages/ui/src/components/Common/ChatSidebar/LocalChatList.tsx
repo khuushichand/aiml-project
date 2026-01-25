@@ -39,7 +39,6 @@ import { useConfirmDanger } from "@/components/Common/confirm-danger"
 import { IconButton } from "@/components/Common/IconButton"
 import { useMessageOption } from "@/hooks/useMessageOption"
 import { useStoreChatModelSettings } from "@/store/model"
-import { useFolderActions } from "@/store/folder"
 import { useLoadLocalConversation } from "@/hooks/useLoadLocalConversation"
 import { cn } from "@/libs/utils"
 
@@ -48,7 +47,7 @@ type ChatGroup = {
   items: HistoryInfo[]
 }
 
-interface LocalChatListProps {
+export interface LocalChatListProps {
   searchQuery: string
   selectedChatId: string | null
   onSelectChat?: (chatId: string) => void
@@ -288,13 +287,24 @@ export function LocalChatList({
           title: t("common:undo.chatDeleted", "Chat deleted"),
           description: t("common:undo.chatDeletedDesc", "\"{{title}}\" was removed", { title: chatTitle }),
           onUndo: async () => {
-            if (chatData) {
+            try {
               await restoreChat(chatData)
               queryClient.invalidateQueries({ queryKey: ["fetchChatHistory"] })
               // If this was the active chat, reload it
               if (wasActive) {
-                loadLocalConversation(chatData.historyInfo.id)
+                await loadLocalConversation(chatData.historyInfo.id)
               }
+            } catch (error) {
+              const errorMessage =
+                error && typeof error === "object" && "message" in error
+                  ? String((error as { message?: unknown }).message)
+                  : t("common:unknownError", { defaultValue: "Unknown error" })
+              message.error(
+                t("common:undo.restoreChatError", {
+                  defaultValue: "Failed to restore chat: {{error}}",
+                  error: errorMessage
+                })
+              )
             }
           }
         })

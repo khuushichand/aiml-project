@@ -43,7 +43,10 @@ interface ServerChatListProps {
 
 type UpdateChatRequestPayload = {
   chatId: string
-  data: Record<string, unknown>
+  data:
+    | { title?: string }
+    | { topic_label?: string | null }
+    | { state?: ConversationState }
   expectedVersion?: number | null
 }
 
@@ -103,43 +106,54 @@ export function ServerChatList({
   const [bulkTagPickerOpen, setBulkTagPickerOpen] = React.useState(false)
   const [bulkDeleteConfirmOpen, setBulkDeleteConfirmOpen] = React.useState(false)
 
-  const openExtensionUrl = (
-    path: `/options.html${string}` | `/sidepanel.html${string}`
-  ) => {
-    try {
-      if (browser?.runtime?.getURL) {
-        const url = browser.runtime.getURL(path)
-        if (browser.tabs?.create) {
-          browser.tabs.create({ url })
-        } else {
-          window.open(url, "_blank")
+  const openExtensionUrl = React.useCallback(
+    (path: `/options.html${string}` | `/sidepanel.html${string}`) => {
+      try {
+        if (browser?.runtime?.getURL) {
+          const url = browser.runtime.getURL(path)
+          if (browser.tabs?.create) {
+            browser.tabs.create({ url })
+          } else {
+            window.open(url, "_blank")
+          }
+          return
         }
-        return
+      } catch (err) {
+        console.debug("[ServerChatList] openExtensionUrl browser API unavailable:", err)
       }
-    } catch (err) {
-      console.debug("[ServerChatList] openExtensionUrl browser API unavailable:", err)
-    }
 
-    try {
-      if (typeof chrome !== "undefined" && chrome.runtime?.getURL) {
-        const url = chrome.runtime.getURL(path)
-        window.open(url, "_blank")
-        return
+      try {
+        if (typeof chrome !== "undefined" && chrome.runtime?.getURL) {
+          const url = chrome.runtime.getURL(path)
+          window.open(url, "_blank")
+          return
+        }
+        if (
+          typeof chrome !== "undefined" &&
+          chrome.runtime?.openOptionsPage &&
+          path.includes("/options.html")
+        ) {
+          chrome.runtime.openOptionsPage()
+          return
+        }
+      } catch (err) {
+        console.debug("[ServerChatList] openExtensionUrl chrome API unavailable:", err)
       }
-      if (
-        typeof chrome !== "undefined" &&
-        chrome.runtime?.openOptionsPage &&
-        path.includes("/options.html")
-      ) {
-        chrome.runtime.openOptionsPage()
-        return
-      }
-    } catch (err) {
-      console.debug("[ServerChatList] openExtensionUrl chrome API unavailable:", err)
-    }
 
-    window.open(path, "_blank")
-  }
+      let fallbackUrl: string = path
+      try {
+        fallbackUrl = new URL(path, window.location.origin).toString()
+      } catch (err) {
+        console.warn("[ServerChatList] openExtensionUrl failed to build fallback URL:", err)
+      }
+      console.warn(
+        "[ServerChatList] openExtensionUrl runtime API unavailable; falling back to",
+        fallbackUrl
+      )
+      window.open(fallbackUrl, "_blank")
+    },
+    []
+  )
 
   const {
     folderApiAvailable,
@@ -296,7 +310,7 @@ export function ServerChatList({
         }
       )
     },
-    []
+    [openExtensionUrl]
   )
 
   React.useEffect(() => {
@@ -598,7 +612,7 @@ export function ServerChatList({
   }
 
   // Loading state
-  if (status === "pending" || isLoading) {
+  if (isLoading) {
     return (
       <div className={cn("flex justify-center items-center py-8", className)}>
         <Skeleton active paragraph={{ rows: 4 }} />

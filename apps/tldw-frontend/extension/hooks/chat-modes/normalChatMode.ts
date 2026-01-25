@@ -2,6 +2,7 @@ import {
   systemPromptForNonRagOption,
   getWebSearchPrompt
 } from "~/services/tldw-server"
+import { SystemMessage } from "@/types/messages"
 import { type ChatHistory, type Message, type ToolChoice } from "~/store/option"
 import { getPromptById } from "@/db/dexie/helpers"
 import { generateHistory } from "@/utils/generate-history"
@@ -29,6 +30,45 @@ interface WebSearchPayload {
   google_domain?: string
 }
 
+/** Raw web search result from API - shape varies by provider */
+interface RawWebSearchResult {
+  title?: string
+  name?: string
+  url?: string
+  link?: string
+  content?: string
+  snippet?: string
+  text?: string
+  publishedDate?: string
+  published?: string
+  metadata?: {
+    title?: string
+    snippet?: string
+    date_published?: string
+  }
+}
+
+/** Normalized web search result */
+interface NormalizedWebSearchResult {
+  title: string
+  url: string
+  snippet: string
+  published: string | null
+}
+
+/** Source entry for web search results */
+interface WebSearchSource {
+  name: string
+  url: string | undefined
+  content: string
+  metadata: {
+    title: string | undefined
+    source: string | undefined
+    date_published: string | undefined
+  }
+  mode: string
+}
+
 const MAX_WEBSEARCH_SNIPPET_LENGTH = 600
 
 const truncateText = (value: string, max = MAX_WEBSEARCH_SNIPPET_LENGTH) => {
@@ -37,7 +77,7 @@ const truncateText = (value: string, max = MAX_WEBSEARCH_SNIPPET_LENGTH) => {
   return `${trimmed.slice(0, max - 1).trimEnd()}...`
 }
 
-const normalizeWebSearchResult = (result: any) => {
+const normalizeWebSearchResult = (result: RawWebSearchResult): NormalizedWebSearchResult => {
   const title =
     result?.title || result?.name || result?.metadata?.title || ""
   const url = result?.url || result?.link || ""
@@ -61,7 +101,7 @@ const normalizeWebSearchResult = (result: any) => {
   }
 }
 
-const buildWebSearchPrompt = async (results: any[]) => {
+const buildWebSearchPrompt = async (results: RawWebSearchResult[]): Promise<string | null> => {
   if (!Array.isArray(results) || results.length === 0) return null
   const prompt = await getWebSearchPrompt()
   const now = new Date().toISOString()
@@ -84,7 +124,7 @@ const buildWebSearchPrompt = async (results: any[]) => {
     .replace("{search_results}", formattedResults)
 }
 
-const buildWebSearchSources = (results: any[]) => {
+const buildWebSearchSources = (results: RawWebSearchResult[]): WebSearchSource[] => {
   if (!Array.isArray(results)) return []
   return results.map((result) => {
     const normalized = normalizeWebSearchResult(result)
@@ -170,7 +210,7 @@ const normalChatModeDefinition: ChatModeDefinition<NormalChatModeParams> = {
     modelId: ctx.resolvedModelId,
     parentMessageId: ctx.resolvedAssistantParentMessageId ?? null
   }),
-  preflight: async (ctx) => {
+  preflight: async (_ctx) => {
     return null
   },
   preparePrompt: async (ctx) => {
@@ -178,8 +218,8 @@ const normalChatModeDefinition: ChatModeDefinition<NormalChatModeParams> = {
     const selectedPrompt = await getPromptById(ctx.selectedSystemPrompt)
     const promptId = ctx.selectedSystemPrompt
     let promptContent: string | undefined = undefined
-    let webSearchSources: any[] = []
-    let webSearchSystemMessage: any | null = null
+    let webSearchSources: WebSearchSource[] = []
+    let webSearchSystemMessage: SystemMessage | null = null
 
     let humanMessage = await humanMessageFormatter({
       content: [

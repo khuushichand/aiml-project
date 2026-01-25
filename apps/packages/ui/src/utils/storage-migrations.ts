@@ -3,6 +3,10 @@ import { createSafeStorage } from "@/utils/safe-storage"
 export const MODEL_PLAYGROUND_SIDEBAR_KEY = "modelPlaygroundSidebarOpen"
 export const MODEL_PLAYGROUND_DEBUG_KEY = "modelPlaygroundDebugOpen"
 
+// Workspace Playground pane state keys
+export const WORKSPACE_LEFT_PANE_KEY = "workspaceLeftPaneOpen"
+export const WORKSPACE_RIGHT_PANE_KEY = "workspaceRightPaneOpen"
+
 const LEGACY_SIDEBAR_KEY = "workspaceSidebarOpen"
 const LEGACY_DEBUG_KEY = "workspaceDebugOpen"
 

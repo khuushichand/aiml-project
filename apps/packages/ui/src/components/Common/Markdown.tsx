@@ -75,7 +75,7 @@ function Markdown({
             }
 
             const codeClassName = codeChild.props?.className as string | undefined
-            const match = /language-(\w+)/.exec(codeClassName || "")
+            const match = /language-([^\s]+)/.exec(codeClassName || "")
             const blockIndex = blockIndexRef.current++
             const value = String(codeChild.props?.children ?? "").replace(/\n$/, "")
 

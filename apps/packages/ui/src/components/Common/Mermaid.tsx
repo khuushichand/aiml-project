@@ -1,6 +1,6 @@
 import React, { useEffect, useRef, useState } from "react"
 
-type MermaidProps = {
+export type MermaidProps = {
   code: string
   className?: string
   ariaLabel?: string

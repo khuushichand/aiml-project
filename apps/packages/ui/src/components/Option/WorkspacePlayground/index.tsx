@@ -1,254 +1,214 @@
-import React from "react"
+import React, { useEffect } from "react"
 import { useTranslation } from "react-i18next"
-import { useNavigate } from "react-router-dom"
-import { Tabs, Card, Alert } from "antd"
+import { useStorage } from "@plasmohq/storage/hook"
+import { Drawer, Tabs } from "antd"
+import { FileText, MessageSquare, Sparkles } from "lucide-react"
 import {
-  FlaskConical,
-  Sparkles,
-  DollarSign,
-  Braces,
-  BookText,
-  GitBranch,
-  ArrowRight,
-  Settings2
-} from "lucide-react"
-import { useStoreChatModelSettings } from "@/store/model"
-import {
-  ParameterPresets,
-  ParameterPresetsDropdown,
-  JsonModeToggle,
-  SystemPromptTemplatesModal,
-  CostEstimation,
-  PROMPT_TEMPLATES,
-  type PromptTemplate
-} from "../Playground/playground-features"
+  WORKSPACE_LEFT_PANE_KEY,
+  WORKSPACE_RIGHT_PANE_KEY
+} from "@/utils/storage-migrations"
+import { useWorkspaceStore } from "@/store/workspace"
+import { useMobile } from "@/hooks/useMediaQuery"
+import { WorkspaceHeader } from "./WorkspaceHeader"
+import { SourcesPane } from "./SourcesPane"
+import { ChatPane } from "./ChatPane"
+import { StudioPane } from "./StudioPane"
 
+/**
+ * WorkspacePlayground - NotebookLM-style three-pane research interface
+ *
+ * Layout at different breakpoints:
+ * - lg+ (1024px+): Full three-pane layout
+ * - md (768-1023px): Chat main, Sources/Studio as slide-out drawers
+ * - sm (<768px): Bottom tab navigation between panes
+ *
+ * Features:
+ * - Sources Pane (left): Add and manage research sources
+ * - Chat Pane (middle): RAG-powered conversation with selected sources
+ * - Studio Pane (right): Generate outputs (summaries, quizzes, flashcards, etc.)
+ */
 export const WorkspacePlayground: React.FC = () => {
   const { t } = useTranslation(["playground", "option", "common"])
-  const navigate = useNavigate()
-  const [templatesOpen, setTemplatesOpen] = React.useState(false)
-  const [selectedTemplate, setSelectedTemplate] =
-    React.useState<PromptTemplate | null>(null)
+  const isMobile = useMobile()
 
-  const setSystemPrompt = useStoreChatModelSettings((s) => s.setSystemPrompt)
-  const systemPrompt = useStoreChatModelSettings((s) => s.systemPrompt)
-  const temperature = useStoreChatModelSettings((s) => s.temperature)
-  const jsonMode = useStoreChatModelSettings((s) => s.jsonMode)
+  // Pane state with persistence
+  const [leftPaneOpen, setLeftPaneOpen] = useStorage(WORKSPACE_LEFT_PANE_KEY, true)
+  const [rightPaneOpen, setRightPaneOpen] = useStorage(WORKSPACE_RIGHT_PANE_KEY, true)
 
-  const handleTemplateSelect = (template: PromptTemplate) => {
-    setSelectedTemplate(template)
-    setSystemPrompt(template.content)
+  // Mobile drawer state
+  const [leftDrawerOpen, setLeftDrawerOpen] = React.useState(false)
+  const [rightDrawerOpen, setRightDrawerOpen] = React.useState(false)
+
+  // Mobile tab state
+  const [activeTab, setActiveTab] = React.useState<"sources" | "chat" | "studio">("chat")
+
+  // Workspace store
+  const workspaceId = useWorkspaceStore((s) => s.workspaceId)
+  const initializeWorkspace = useWorkspaceStore((s) => s.initializeWorkspace)
+  const selectedSourceIds = useWorkspaceStore((s) => s.selectedSourceIds)
+  const generatedArtifacts = useWorkspaceStore((s) => s.generatedArtifacts)
+
+  // Initialize workspace on mount if not already initialized
+  useEffect(() => {
+    if (!workspaceId) {
+      initializeWorkspace()
+    }
+  }, [workspaceId, initializeWorkspace])
+
+  const handleToggleLeftPane = () => {
+    if (isMobile) {
+      setLeftDrawerOpen(!leftDrawerOpen)
+    } else {
+      setLeftPaneOpen(!leftPaneOpen)
+    }
   }
 
-  const handleGoToChat = () => {
-    navigate("/")
+  const handleToggleRightPane = () => {
+    if (isMobile) {
+      setRightDrawerOpen(!rightDrawerOpen)
+    } else {
+      setRightPaneOpen(!rightPaneOpen)
+    }
   }
 
+  // Mobile tab items with badges
+  const mobileTabItems = [
+    {
+      key: "sources",
+      label: (
+        <span className="flex items-center gap-1.5">
+          <FileText className="h-4 w-4" />
+          <span>{t("playground:sources.title", "Sources")}</span>
+          {selectedSourceIds.length > 0 && (
+            <span className="ml-1 rounded-full bg-primary px-1.5 py-0.5 text-xs text-white">
+              {selectedSourceIds.length}
+            </span>
+          )}
+        </span>
+      ),
+      children: <SourcesPane />
+    },
+    {
+      key: "chat",
+      label: (
+        <span className="flex items-center gap-1.5">
+          <MessageSquare className="h-4 w-4" />
+          <span>{t("playground:chat.title", "Chat")}</span>
+        </span>
+      ),
+      children: <ChatPane />
+    },
+    {
+      key: "studio",
+      label: (
+        <span className="flex items-center gap-1.5">
+          <Sparkles className="h-4 w-4" />
+          <span>{t("playground:studio.title", "Studio")}</span>
+          {generatedArtifacts.length > 0 && (
+            <span className="ml-1 rounded-full bg-success px-1.5 py-0.5 text-xs text-white">
+              {generatedArtifacts.length}
+            </span>
+          )}
+        </span>
+      ),
+      children: <StudioPane />
+    }
+  ]
+
+  // Mobile layout (< 768px): Tab navigation
+  if (isMobile) {
+    return (
+      <div className="flex h-full flex-col bg-bg text-text">
+        {/* Mobile Header */}
+        <WorkspaceHeader
+          leftPaneOpen={false}
+          rightPaneOpen={false}
+          onToggleLeftPane={handleToggleLeftPane}
+          onToggleRightPane={handleToggleRightPane}
+          hideToggles
+        />
+
+        {/* Mobile Tabs */}
+        <Tabs
+          activeKey={activeTab}
+          onChange={(key) => setActiveTab(key as typeof activeTab)}
+          items={mobileTabItems}
+          centered
+          className="flex-1 [&_.ant-tabs-content]:h-full [&_.ant-tabs-content-holder]:flex-1 [&_.ant-tabs-tabpane]:h-full"
+          tabBarStyle={{ marginBottom: 0, borderBottom: "1px solid var(--border)" }}
+        />
+      </div>
+    )
+  }
+
+  // Tablet/Desktop layout
   return (
-    <div className="space-y-6">
+    <div className="flex h-full flex-col bg-bg text-text">
       {/* Header */}
-      <div className="flex items-start justify-between gap-4">
-        <div>
-          <h1 className="flex items-center gap-3 text-2xl font-bold text-text">
-            <FlaskConical className="h-7 w-7 text-primary" />
-            {t("option:header.modelPlayground", "Workspace Playground")}
-          </h1>
-          <p className="mt-2 max-w-2xl text-sm text-text-muted">
-            {t(
-              "playground:modelPlayground.description",
-              "Experiment with model parameters, presets, and system prompts. Configure your settings here, then head to Chat to test them out."
-            )}
-          </p>
-        </div>
-        <button
-          type="button"
-          onClick={handleGoToChat}
-          className="flex items-center gap-2 rounded-lg bg-primary px-4 py-2 text-sm font-medium text-surface transition hover:bg-primaryStrong">
-          {t("playground:modelPlayground.goToChat", "Go to Chat")}
-          <ArrowRight className="h-4 w-4" />
-        </button>
-      </div>
-
-      {/* Current Settings Summary */}
-      <Card size="small" className="bg-surface2/50">
-        <div className="flex flex-wrap items-center gap-4 text-sm">
-          <div className="flex items-center gap-2">
-            <Settings2 className="h-4 w-4 text-text-muted" />
-            <span className="font-medium text-text">
-              {t("playground:modelPlayground.currentSettings", "Current Settings")}:
-            </span>
-          </div>
-          <div className="flex flex-wrap items-center gap-3 text-text-muted">
-            <span>
-              Temperature: <strong className="text-text">{temperature ?? 0.7}</strong>
-            </span>
-            <span>•</span>
-            <span>
-              JSON Mode:{" "}
-              <strong className={jsonMode ? "text-primary" : "text-text"}>
-                {jsonMode ? "On" : "Off"}
-              </strong>
-            </span>
-            {systemPrompt && (
-              <>
-                <span>•</span>
-                <span>
-                  System Prompt:{" "}
-                  <strong className="text-text">
-                    {systemPrompt.slice(0, 30)}...
-                  </strong>
-                </span>
-              </>
-            )}
-          </div>
-        </div>
-      </Card>
-
-      {/* Feature Cards */}
-      <div className="grid gap-6 md:grid-cols-2">
-        {/* Parameter Presets */}
-        <Card
-          title={
-            <div className="flex items-center gap-2">
-              <Sparkles className="h-5 w-5 text-primary" />
-              {t("playground:presets.title", "Parameter Presets")}
-            </div>
-          }
-          className="h-full">
-          <p className="mb-4 text-sm text-text-muted">
-            {t(
-              "playground:modelPlayground.presetsDescription",
-              "Quickly switch between Creative, Balanced, and Precise modes to adjust model behavior."
-            )}
-          </p>
-          <ParameterPresetsDropdown />
-        </Card>
-
-        {/* JSON Mode */}
-        <Card
-          title={
-            <div className="flex items-center gap-2">
-              <Braces className="h-5 w-5 text-primary" />
-              {t("playground:jsonMode.title", "JSON Mode")}
-            </div>
-          }
-          className="h-full">
-          <p className="mb-4 text-sm text-text-muted">
-            {t(
-              "playground:jsonMode.description",
-              "When enabled, the model will output valid JSON. This is useful for structured data extraction, API responses, and programmatic parsing."
-            )}
-          </p>
-          <JsonModeToggle showLabel />
-        </Card>
-
-        {/* System Prompt Templates */}
-        <Card
-          title={
-            <div className="flex items-center gap-2">
-              <BookText className="h-5 w-5 text-primary" />
-              {t("playground:templates.title", "System Prompt Templates")}
-            </div>
-          }
-          className="h-full">
-          <p className="mb-4 text-sm text-text-muted">
-            {t(
-              "playground:modelPlayground.templatesDescription",
-              "Choose from a library of pre-built system prompts for different use cases like coding, writing, analysis, and more."
-            )}
-          </p>
-          <div className="space-y-3">
-            <button
-              type="button"
-              onClick={() => setTemplatesOpen(true)}
-              className="flex w-full items-center justify-center gap-2 rounded-lg border border-border bg-surface py-2 text-sm font-medium text-text transition hover:border-primary/50 hover:bg-surface-hover">
-              <BookText className="h-4 w-4" />
-              {t("playground:modelPlayground.browseTemplates", "Browse Templates")}
-            </button>
-            {selectedTemplate && (
-              <Alert
-                type="success"
-                showIcon
-                message={
-                  <span className="text-sm">
-                    Using template:{" "}
-                    <strong>{selectedTemplate.title}</strong>
-                  </span>
-                }
-              />
-            )}
-          </div>
-        </Card>
-
-        {/* Cost Estimation */}
-        <Card
-          title={
-            <div className="flex items-center gap-2">
-              <DollarSign className="h-5 w-5 text-primary" />
-              {t("playground:cost.title", "Cost Estimation")}
-            </div>
-          }
-          className="h-full">
-          <p className="mb-4 text-sm text-text-muted">
-            {t(
-              "playground:modelPlayground.costDescription",
-              "See estimated costs for your API calls based on token usage and model pricing. Costs are displayed in real-time during chat."
-            )}
-          </p>
-          <div className="rounded-lg border border-border bg-surface2/50 p-4">
-            <div className="text-center text-sm text-text-muted">
-              {t(
-                "playground:modelPlayground.costHint",
-                "Cost estimation appears automatically during chat based on your selected model and token usage."
-              )}
-            </div>
-          </div>
-        </Card>
-      </div>
-
-      {/* Quick Tips */}
-      <Card
-        title={t("playground:modelPlayground.tips", "Quick Tips")}
-        size="small"
-        className="bg-primary/5 border-primary/20">
-        <ul className="space-y-2 text-sm text-text-muted">
-          <li className="flex items-start gap-2">
-            <span className="mt-1 h-1.5 w-1.5 flex-shrink-0 rounded-full bg-primary" />
-            <span>
-              <strong className="text-text">Creative mode</strong> is great for brainstorming,
-              storytelling, and generating varied responses.
-            </span>
-          </li>
-          <li className="flex items-start gap-2">
-            <span className="mt-1 h-1.5 w-1.5 flex-shrink-0 rounded-full bg-primary" />
-            <span>
-              <strong className="text-text">Precise mode</strong> works best for factual questions,
-              code generation, and tasks requiring consistency.
-            </span>
-          </li>
-          <li className="flex items-start gap-2">
-            <span className="mt-1 h-1.5 w-1.5 flex-shrink-0 rounded-full bg-primary" />
-            <span>
-              Enable <strong className="text-text">JSON mode</strong> and include "JSON" in your
-              prompt for best structured output results.
-            </span>
-          </li>
-          <li className="flex items-start gap-2">
-            <span className="mt-1 h-1.5 w-1.5 flex-shrink-0 rounded-full bg-primary" />
-            <span>
-              Use <strong className="text-text">System Prompt Templates</strong> as starting points
-              and customize them for your specific needs.
-            </span>
-          </li>
-        </ul>
-      </Card>
-
-      {/* Templates Modal */}
-      <SystemPromptTemplatesModal
-        open={templatesOpen}
-        onClose={() => setTemplatesOpen(false)}
-        onSelect={handleTemplateSelect}
+      <WorkspaceHeader
+        leftPaneOpen={!!leftPaneOpen}
+        rightPaneOpen={!!rightPaneOpen}
+        onToggleLeftPane={handleToggleLeftPane}
+        onToggleRightPane={handleToggleRightPane}
       />
+
+      {/* Main three-pane layout */}
+      <div className="flex min-h-0 flex-1">
+        {/* Left pane - Sources (desktop) */}
+        {leftPaneOpen && (
+          <aside className="hidden w-72 shrink-0 border-r border-border bg-surface lg:flex lg:flex-col">
+            <SourcesPane />
+          </aside>
+        )}
+
+        {/* Left pane - Sources (tablet drawer) */}
+        <Drawer
+          title={
+            <span className="flex items-center gap-2">
+              <FileText className="h-4 w-4" />
+              {t("playground:sources.title", "Sources")}
+            </span>
+          }
+          placement="left"
+          onClose={() => setLeftDrawerOpen(false)}
+          open={leftDrawerOpen}
+          width={320}
+          className="lg:hidden"
+          styles={{ body: { padding: 0 } }}
+        >
+          <SourcesPane />
+        </Drawer>
+
+        {/* Center pane - Chat */}
+        <main className="flex min-w-0 flex-1 flex-col">
+          <ChatPane />
+        </main>
+
+        {/* Right pane - Studio (desktop) */}
+        {rightPaneOpen && (
+          <aside className="hidden w-80 shrink-0 border-l border-border bg-surface lg:flex lg:flex-col">
+            <StudioPane />
+          </aside>
+        )}
+
+        {/* Right pane - Studio (tablet drawer) */}
+        <Drawer
+          title={
+            <span className="flex items-center gap-2">
+              <Sparkles className="h-4 w-4" />
+              {t("playground:studio.title", "Studio")}
+            </span>
+          }
+          placement="right"
+          onClose={() => setRightDrawerOpen(false)}
+          open={rightDrawerOpen}
+          width={360}
+          className="lg:hidden"
+          styles={{ body: { padding: 0 } }}
+        >
+          <StudioPane />
+        </Drawer>
+      </div>
     </div>
   )
 }

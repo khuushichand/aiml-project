@@ -535,6 +535,27 @@ const dismissQuickIngestInspectorIntro = async (page: Page) => {
 }
 
 const clickQuickIngestRun = async (modal: Locator) => {
+  const page = modal.page()
+  const waitForStableConnection = async (label: string) => {
+    await page.waitForFunction(
+      () => {
+        const store = (window as any).__tldw_useConnectionStore
+        const state = store?.getState?.().state
+        return (
+          state?.isConnected === true &&
+          state?.phase === "connected" &&
+          state?.isChecking === false
+        )
+      },
+      undefined,
+      { timeout: 15000 }
+    ).catch(async (error) => {
+      await logConnectionSnapshot(page, `quick-ingest-run-${label}`)
+      throw error
+    })
+  }
+  await waitForStableConnection("before-click")
+
   let runButton = modal.getByTestId("quick-ingest-run")
   if ((await runButton.count()) === 0) {
     runButton = modal.getByRole("button", {
@@ -547,20 +568,64 @@ const clickQuickIngestRun = async (modal: Locator) => {
   await visibleRun.waitFor({ state: "visible", timeout: 15000 })
   await visibleRun.scrollIntoViewIfNeeded()
   await expect(visibleRun).toBeEnabled({ timeout: 15000 })
-  await visibleRun.click({ timeout: 10000, force: true })
-  const started = await expect
-    .poll(
-      async () => ({
-        disabled: await visibleRun.isDisabled().catch(() => false),
-        text: (await visibleRun.textContent().catch(() => "")) || ""
-      }),
-      { timeout: 15000 }
-    )
-    .toMatchObject({ disabled: true })
-    .then(() => true)
-    .catch(() => false)
+  const getRunState = async () => ({
+    disabled: await visibleRun.isDisabled().catch(() => false),
+    text: ((await visibleRun.textContent().catch(() => "")) || "").trim(),
+    dataState: await visibleRun.getAttribute("data-state").catch(() => null),
+    dataRunning: await visibleRun.getAttribute("data-running").catch(() => null),
+    ariaDisabled: await visibleRun.getAttribute("aria-disabled").catch(() => null)
+  })
+  const triggerRun = async () => {
+    await visibleRun.click({ timeout: 10000, force: true })
+  }
+  await triggerRun()
+  let lastState: Awaited<ReturnType<typeof getRunState>> | null = null
+  const detectStarted = async () => {
+    return expect
+      .poll(async () => {
+        const state = await getRunState()
+        lastState = state
+        return (
+          state.dataRunning === "true" ||
+          state.dataState === "running" ||
+          /processing/i.test(state.text) ||
+          state.disabled
+        )
+      }, { timeout: 15000 })
+      .toBe(true)
+      .then(() => true)
+      .catch(() => false)
+  }
+  let started = await detectStarted()
   if (!started) {
-    throw new Error("Quick ingest run did not start (button stayed enabled).")
+    await waitForStableConnection("retry")
+    await triggerRun()
+    started = await detectStarted()
+  }
+  if (!started) {
+    const state = lastState || await getRunState()
+    const notices = await page
+      .locator(".ant-message-notice-content")
+      .allTextContents()
+      .catch(() => [])
+    const warnings = await modal.locator(".text-warn").allTextContents().catch(() => [])
+    const reattach = await modal
+      .getByRole("button", { name: /Reattach/i })
+      .allTextContents()
+      .catch(() => [])
+    const connection = await page.evaluate(() => {
+      const store = (window as any).__tldw_useConnectionStore
+      return store?.getState?.().state || null
+    }).catch(() => null)
+    throw new Error(
+      `Quick ingest run did not start (button stayed enabled). Debug: ${JSON.stringify({
+        state,
+        notices,
+        warnings,
+        reattach,
+        connection
+      })}`
+    )
   }
 }
 
@@ -3373,7 +3438,10 @@ test.describe("Real server end-to-end workflows", () => {
         /Search across configured RAG sources|Search your knowledge/i
       )
       await searchInput.fill(query)
-      await page.getByRole("button", { name: /^Search$/i }).click()
+      await page
+        .locator("#media-search-panel")
+        .getByRole("button", { name: /^Search$/i })
+        .click()
 
       const listItem = page.locator(".ant-list-item")
       const hasResults = await listItem
@@ -5282,7 +5350,10 @@ test.describe("Real server end-to-end workflows", () => {
         /Search media \(title\/content\)/i
       )
       await searchInput.fill(String(unique))
-      await page.getByRole("button", { name: /^Search$/i }).click()
+      await page
+        .locator("#media-search-panel")
+        .getByRole("button", { name: /^Search$/i })
+        .click()
 
       const resultRow = page
         .locator('[role="button"]')

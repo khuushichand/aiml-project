@@ -66,10 +66,11 @@ export const CodeBlock: FC<Props> = ({ language, value, blockIndex }) => {
     : t("artifactsView", "View code")
   
   const computeKey = () => {
+    const content = value ?? ""
     const base =
       typeof blockIndex === "number"
         ? `${normalizedLanguage}::${blockIndex}`
-        : `${normalizedLanguage}::${value?.slice(0, 200)}`
+        : `${normalizedLanguage}::${content.length}::${content.slice(0, 200)}::${content.slice(-200)}`
     let hash = 0
     for (let i = 0; i < base.length; i++) {
       hash = (hash * 31 + base.charCodeAt(i)) >>> 0
@@ -450,6 +451,7 @@ export const CodeBlock: FC<Props> = ({ language, value, blockIndex }) => {
               <Tooltip title={t("downloadCode")}>
                 <button
                   onClick={handleDownload}
+                  aria-label={t("downloadCode")}
                   className="flex gap-1.5 items-center rounded bg-none p-1 text-xs text-text-muted hover:bg-surface2 hover:text-text focus:outline-none">
                   <DownloadIcon className="size-4" />
                 </button>
@@ -457,6 +459,7 @@ export const CodeBlock: FC<Props> = ({ language, value, blockIndex }) => {
               <Tooltip title={t("copyToClipboard")}>
                 <button
                   onClick={handleCopy}
+                  aria-label={t("copyToClipboard")}
                   className="flex gap-1.5 items-center rounded bg-none p-1 text-xs text-text-muted hover:bg-surface2 hover:text-text focus:outline-none">
                   {!isBtnPressed ? (
                     <CopyIcon className="size-4" />

@@ -45,7 +45,7 @@ export const SidepanelHeaderSimple = ({
   const sidebarOpen = isControlled
     ? (propSidebarOpen as boolean)
     : localSidebarOpen
-  const logoSrc = typeof logoImage === "string" ? logoImage : logoImage.src
+  const logoSrc = logoImage
   const sidebarToggleLabel = sidebarOpen
     ? t("common:chatSidebar.collapse", "Collapse sidebar")
     : t("common:chatSidebar.expand", "Expand sidebar")

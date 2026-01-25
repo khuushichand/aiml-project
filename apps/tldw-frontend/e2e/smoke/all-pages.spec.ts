@@ -10,7 +10,7 @@
  * Run with: npm run e2e:smoke
  */
 
-import { test, expect, seedAuth, getCriticalIssues, DiagnosticsData } from "./smoke.setup"
+import { test, expect, seedAuth, getCriticalIssues } from "./smoke.setup"
 import { PAGES, PageEntry, getActivePages, PAGE_COUNT, ACTIVE_PAGE_COUNT } from "./page-inventory"
 
 // Test configuration
@@ -97,12 +97,6 @@ test.describe("Smoke Tests - All Pages", () => {
 
       const errorTextVisible = await page
         .getByText(/something went wrong/i)
-        .first()
-        .isVisible()
-        .catch(() => false)
-
-      const crashTextVisible = await page
-        .getByText(/error|crashed|failed to load/i)
         .first()
         .isVisible()
         .catch(() => false)

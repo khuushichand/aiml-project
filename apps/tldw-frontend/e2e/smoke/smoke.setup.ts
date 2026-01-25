@@ -46,6 +46,7 @@ export const test = base.extend<{ diagnostics: DiagnosticsData }>({
       })
     })
 
+    // eslint-disable-next-line react-hooks/rules-of-hooks
     await use(data)
   }
 })

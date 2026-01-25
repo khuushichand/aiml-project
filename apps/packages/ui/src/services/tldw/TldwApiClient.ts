@@ -434,6 +434,55 @@ export class TldwApiClient {
     return await bgRequest<T>(init)
   }
 
+  async fetchWithAuth(
+    path: PathOrUrl,
+    init?: {
+      method?: string
+      headers?: Record<string, string>
+      body?: any
+      timeoutMs?: number
+      signal?: AbortSignal
+      responseType?: "json" | "text" | "arrayBuffer"
+    }
+  ): Promise<{
+    ok: boolean
+    status?: number
+    error?: string
+    data?: any
+    json: () => Promise<any>
+    text: () => Promise<string>
+  }> {
+    await this.ensureConfigForRequest(true)
+    const response = await bgRequest<any, PathOrUrl>({
+      path,
+      method: (init?.method || "GET") as any,
+      headers: init?.headers,
+      body: init?.body,
+      timeoutMs: init?.timeoutMs,
+      abortSignal: init?.signal,
+      responseType: init?.responseType,
+      returnResponse: true
+    })
+    const data = response?.data
+    const text = () => {
+      if (typeof data === "string") return Promise.resolve(data)
+      if (data == null) return Promise.resolve("")
+      try {
+        return Promise.resolve(JSON.stringify(data))
+      } catch {
+        return Promise.resolve(String(data))
+      }
+    }
+    return {
+      ok: Boolean(response?.ok),
+      status: response?.status,
+      error: response?.error,
+      data,
+      json: () => Promise.resolve(data),
+      text
+    }
+  }
+
   private async upload<T>(init: any, requireAuth = true): Promise<T> {
     await this.ensureConfigForRequest(requireAuth)
     return await bgUpload<T>(init)
@@ -3245,6 +3294,128 @@ export class TldwApiClient {
     const filename = filenameMatch?.[1] || "reading_export.jsonl"
     const blob = new Blob([response.data], { type: headers.get("content-type") || "application/octet-stream" })
     return { blob, filename }
+  }
+
+  // ─────────────────────────────────────────────────────────────────────────────
+  // Slides / Presentations API
+  // ─────────────────────────────────────────────────────────────────────────────
+
+  async generateSlidesFromMedia(
+    mediaId: number,
+    options?: {
+      titleHint?: string
+      theme?: string
+      provider?: string
+      model?: string
+      temperature?: number
+    }
+  ): Promise<{
+    id: string
+    title: string
+    description?: string
+    theme: string
+    slides: Array<{
+      order: number
+      layout: string
+      title?: string
+      content: string
+      speaker_notes?: string
+    }>
+    version: number
+    created_at: string
+  }> {
+    const body: Record<string, unknown> = { media_id: mediaId }
+    if (options?.titleHint) body.title_hint = options.titleHint
+    if (options?.theme) body.theme = options.theme
+    if (options?.provider) body.provider = options.provider
+    if (options?.model) body.model = options.model
+    if (options?.temperature != null) body.temperature = options.temperature
+    return await this.request<any>({
+      path: "/api/v1/slides/generate/from-media",
+      method: "POST",
+      body
+    })
+  }
+
+  async getPresentation(presentationId: string): Promise<{
+    id: string
+    title: string
+    description?: string
+    theme: string
+    slides: Array<{
+      order: number
+      layout: string
+      title?: string
+      content: string
+      speaker_notes?: string
+    }>
+    version: number
+    created_at: string
+    last_modified: string
+  }> {
+    return await this.request<any>({
+      path: `/api/v1/slides/presentations/${encodeURIComponent(presentationId)}`,
+      method: "GET"
+    })
+  }
+
+  async exportPresentation(
+    presentationId: string,
+    format: "revealjs" | "markdown" | "json" | "pdf"
+  ): Promise<Blob> {
+    await this.ensureConfigForRequest(true)
+
+    const response = await this.request<any>({
+      path: `/api/v1/slides/presentations/${encodeURIComponent(presentationId)}/export?format=${encodeURIComponent(format)}`,
+      method: "GET",
+      responseType: "arrayBuffer",
+      returnResponse: true
+    })
+
+    if (!response) {
+      throw new Error("Export failed")
+    }
+
+    // Handle response data
+    let data: ArrayBuffer
+    if (response.data instanceof ArrayBuffer) {
+      data = response.data
+    } else if (response.data instanceof Uint8Array) {
+      data = response.data.buffer.slice(
+        response.data.byteOffset,
+        response.data.byteOffset + response.data.byteLength
+      )
+    } else if (typeof response.data === "string") {
+      const encoder = new TextEncoder()
+      data = encoder.encode(response.data).buffer
+    } else if (response.data && typeof response.data === "object") {
+      // Handle JSON response
+      const encoder = new TextEncoder()
+      data = encoder.encode(JSON.stringify(response.data)).buffer
+    } else {
+      throw new Error("Invalid export response")
+    }
+
+    // Determine MIME type based on format
+    let mimeType: string
+    switch (format) {
+      case "revealjs":
+        mimeType = "application/zip"
+        break
+      case "markdown":
+        mimeType = "text/markdown"
+        break
+      case "json":
+        mimeType = "application/json"
+        break
+      case "pdf":
+        mimeType = "application/pdf"
+        break
+      default:
+        mimeType = "application/octet-stream"
+    }
+
+    return new Blob([data], { type: mimeType })
   }
 }
 

@@ -333,12 +333,10 @@ export const ToolCallLog: FC<ToolCallLogProps> = ({
     if (!autoScroll || !container) {
       return
     }
-    const distanceFromBottom =
-      container.scrollHeight - container.scrollTop - container.clientHeight
-    const isNearBottom = distanceFromBottom <= scrollThreshold
-    isAtBottomRef.current = isNearBottom
-    if (isAtBottomRef.current) {
+    const wasAtBottom = isAtBottomRef.current
+    if (wasAtBottom) {
       container.scrollTop = container.scrollHeight
+      isAtBottomRef.current = true
     }
   }, [entries, autoScroll])
 
