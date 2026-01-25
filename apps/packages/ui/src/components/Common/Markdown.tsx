@@ -33,6 +33,7 @@ function Markdown({
   const [codeTheme] = useStorage("codeTheme", "auto")
   const [allowExternalImagesSetting] = useStorage("allowExternalImages", DEFAULT_CHAT_SETTINGS.allowExternalImages)
   const blockIndexRef = React.useRef(0)
+  // Reset index each render pass to assign sequential indices to code blocks.
   blockIndexRef.current = 0
   const resolvedClassName = React.useMemo(() => {
     if (!checkWideMode) return className

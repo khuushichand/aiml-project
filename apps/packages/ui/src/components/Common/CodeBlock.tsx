@@ -134,12 +134,16 @@ export const CodeBlock: FC<Props> = ({ language, value, blockIndex }) => {
     if (typeof stored === "boolean") return stored
     return isLong
   })
-  const handleCopy = () => {
-    navigator.clipboard.writeText(value)
-    setIsBtnPressed(true)
-    setTimeout(() => {
-      setIsBtnPressed(false)
-    }, 4000)
+  const handleCopy = async () => {
+    try {
+      await navigator.clipboard.writeText(value)
+      setIsBtnPressed(true)
+      setTimeout(() => {
+        setIsBtnPressed(false)
+      }, 4000)
+    } catch {
+      // Clipboard write failed - optionally show error feedback
+    }
   }
 
   const isPreviewable = ["html", "svg", "xml"].includes(
@@ -234,11 +238,11 @@ export const CodeBlock: FC<Props> = ({ language, value, blockIndex }) => {
 
   useEffect(() => {
     previewStateMap.set(keyRef.current, showPreview)
-  }, [showPreview, previewStateMap, keyRef])
+  }, [showPreview, previewStateMap])
 
   useEffect(() => {
     collapsedStateMap.set(keyRef.current, collapsed)
-  }, [collapsed, collapsedStateMap, keyRef])
+  }, [collapsed, collapsedStateMap])
 
   useEffect(() => {
     if (debounceTimeoutRef.current) {

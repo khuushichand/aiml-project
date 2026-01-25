@@ -6,16 +6,32 @@ except Exception:
     from pydantic import validator as field_validator  # type: ignore
 
 
-# Only expose engines which are implemented and supported server-side.
-# Bing is deprecated in the core and should not be allowed.
-SUPPORTED_WEBSEARCH_ENGINES = {"google", "duckduckgo", "brave", "kagi", "tavily", "searx"}
+# Expose engines that are implemented or explicitly stubbed server-side.
+# Deprecated/placeholder engines return a processing_error rather than 422.
+SUPPORTED_WEBSEARCH_ENGINES = {
+    "google",
+    "duckduckgo",
+    "brave",
+    "kagi",
+    "tavily",
+    "searx",
+    "exa",
+    "firecrawl",
+    "baidu",
+    "bing",
+    "yandex",
+    "sogou",
+    "startpage",
+    "stract",
+    "serper",
+}
 
 
 class WebSearchRequest(BaseModel):
     query: str = Field(..., description="User query to search the web for")
     engine: str = Field(
         "google",
-        description="Search engine to use. Supported: google, duckduckgo, brave, kagi, tavily, searx",
+        description="Search engine to use. Supported: google, duckduckgo, brave, kagi, tavily, searx, exa, firecrawl",
     )
     result_count: int = Field(10, ge=1, le=50)
     content_country: str = Field("US")
@@ -30,6 +46,10 @@ class WebSearchRequest(BaseModel):
     geolocation: Optional[str] = None
     search_result_language: Optional[str] = None
     sort_results_by: Optional[str] = None
+    # Provider overrides
+    searx_url: Optional[str] = None
+    searx_json_mode: bool = False
+    google_domain: Optional[str] = None
 
     subquery_generation: bool = False
     subquery_generation_llm: Optional[str] = None

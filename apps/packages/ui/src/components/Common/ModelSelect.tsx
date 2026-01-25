@@ -121,7 +121,7 @@ export const ModelSelect: React.FC<Props> = ({iconClassName = "size-5", showSele
       })
     }
     return items
-  }, [data, selectedModelValue, setSelectedModel])
+  }, [data, selectedModelValue, setSelectedModel, t])
 
   // Get display name for selected model
   const selectedModelDisplay = React.useMemo(() => {

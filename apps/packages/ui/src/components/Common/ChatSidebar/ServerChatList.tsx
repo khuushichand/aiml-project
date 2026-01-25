@@ -170,16 +170,30 @@ export function ServerChatList({
     queryClient.invalidateQueries({ queryKey: ["serverChatHistory"] })
   }, [queryClient])
 
-  const useUpdateChatMutation = () =>
-    useMutation<ServerChatSummary, Error, UpdateChatRequestPayload>({
-      mutationFn: updateChatRequest,
-      onSettled: invalidateServerChatHistory
-    })
-
-  const { mutate: updateChatMetadata } = useUpdateChatMutation()
-  const { mutate: renameChat, isPending: renameLoading } = useUpdateChatMutation()
-  const { mutate: updateChatTopic, isPending: topicLoading } =
-    useUpdateChatMutation()
+  const { mutate: updateChatMetadata } = useMutation<
+    ServerChatSummary,
+    Error,
+    UpdateChatRequestPayload
+  >({
+    mutationFn: updateChatRequest,
+    onSettled: invalidateServerChatHistory
+  })
+  const { mutate: renameChat, isPending: renameLoading } = useMutation<
+    ServerChatSummary,
+    Error,
+    UpdateChatRequestPayload
+  >({
+    mutationFn: updateChatRequest,
+    onSettled: invalidateServerChatHistory
+  })
+  const { mutate: updateChatTopic, isPending: topicLoading } = useMutation<
+    ServerChatSummary,
+    Error,
+    UpdateChatRequestPayload
+  >({
+    mutationFn: updateChatRequest,
+    onSettled: invalidateServerChatHistory
+  })
 
   const {
     data: serverChatData,

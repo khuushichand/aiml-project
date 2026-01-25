@@ -2,7 +2,6 @@ import React, { useState, useMemo } from "react"
 import { useNavigate, useLocation } from "react-router-dom"
 import { useTranslation } from "react-i18next"
 import { Input, Tooltip, Segmented } from "antd"
-import { useQuery } from "@tanstack/react-query"
 import {
   Plus,
   Search,
@@ -20,14 +19,12 @@ import {
 import { useSetting } from "@/hooks/useSetting"
 
 import { useDebounce } from "@/hooks/useDebounce"
-import { useConnectionState } from "@/hooks/useConnectionState"
 import { useServerChatHistory } from "@/hooks/useServerChatHistory"
 import { useClearChat } from "@/hooks/chat/useClearChat"
 import { useStoreMessageOption } from "@/store/option"
 import { useFolderStore } from "@/store/folder"
 import { useRouteTransitionStore } from "@/store/route-transition"
 import { cn } from "@/libs/utils"
-import { tldwClient } from "@/services/tldw/TldwApiClient"
 import { ServerChatList } from "./ChatSidebar/ServerChatList"
 import { FolderChatList } from "./ChatSidebar/FolderChatList"
 import {
@@ -59,7 +56,6 @@ export function ChatSidebar({
   const [searchQuery, setSearchQuery] = useState("")
   const debouncedSearchQuery = useDebounce(searchQuery, 300)
   const [selectionMode, setSelectionMode] = useState(false)
-  const { isConnected } = useConnectionState()
   const normalizedSearchQuery = useMemo(
     () => debouncedSearchQuery.trim().toLowerCase(),
     [debouncedSearchQuery]
@@ -85,30 +81,8 @@ export function ChatSidebar({
   )
 
   // Server chat count for tab badge
-  const { data: serverChatData } = useServerChatHistory(debouncedSearchQuery, {
-    enabled: normalizedSearchQuery.length > 0
-  })
-  const serverChatCountFromList = serverChatData?.length
-  const { data: serverChatCountFromApi } = useQuery({
-    queryKey: ["serverChatCount", normalizedSearchQuery],
-    enabled:
-      isConnected &&
-      normalizedSearchQuery.length === 0 &&
-      serverChatCountFromList == null,
-    queryFn: async () => {
-      await tldwClient.initialize().catch(() => null)
-      const { chats, total } = await tldwClient.listChatsWithMeta({
-        limit: 1,
-        ordering: "-updated_at"
-      })
-      return total ?? chats.length
-    },
-    staleTime: 60_000,
-    gcTime: 5 * 60_000,
-    refetchOnMount: false,
-    retry: 1
-  })
-  const serverChatCount = serverChatCountFromList ?? serverChatCountFromApi ?? 0
+  const { data: serverChatData } = useServerChatHistory(debouncedSearchQuery)
+  const serverChatCount = serverChatData?.length ?? 0
 
   const sidebarShortcuts = useMemo(
     () => normalizeSidebarShortcutSelection(shortcutSelection),

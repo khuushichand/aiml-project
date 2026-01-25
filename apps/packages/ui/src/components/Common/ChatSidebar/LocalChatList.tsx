@@ -379,6 +379,38 @@ export function LocalChatList({
 
   const effectiveSelectedChatId = selectedChatId ?? historyId ?? null
 
+  const handleRenameSubmit = () => {
+    if (!renamingChat) return
+
+    const newTitle = renameValue.trim()
+    if (!newTitle) {
+      setRenameError(
+        t("common:renameChatEmptyError", {
+          defaultValue: "Title cannot be empty."
+        })
+      )
+      return
+    }
+
+    setRenameError(null)
+    editHistory(
+      { id: renamingChat, title: newTitle },
+      {
+        onSuccess: () => {
+          setRenamingChat(null)
+          setRenameValue("")
+        },
+        onError: () => {
+          message.error(
+            t("common:renameChatError", {
+              defaultValue: "Failed to rename chat."
+            })
+          )
+        }
+      }
+    )
+  }
+
   // Loading state
   if (isLoading) {
     return (
@@ -419,38 +451,6 @@ export function LocalChatList({
       <div className={cn("flex justify-center items-center py-8", className)}>
         <Empty description={t("common:noHistory")} />
       </div>
-    )
-  }
-
-  const handleRenameSubmit = () => {
-    if (!renamingChat) return
-
-    const newTitle = renameValue.trim()
-    if (!newTitle) {
-      setRenameError(
-        t("common:renameChatEmptyError", {
-          defaultValue: "Title cannot be empty."
-        })
-      )
-      return
-    }
-
-    setRenameError(null)
-    editHistory(
-      { id: renamingChat, title: newTitle },
-      {
-        onSuccess: () => {
-          setRenamingChat(null)
-          setRenameValue("")
-        },
-        onError: () => {
-          message.error(
-            t("common:renameChatError", {
-              defaultValue: "Failed to rename chat."
-            })
-          )
-        }
-      }
     )
   }
 
@@ -643,7 +643,6 @@ export function LocalChatList({
                       ariaLabel={`${t("option:header.moreActions", "More actions")}: ${chat.title}`}
                       hasPopup="menu"
                       ariaExpanded={openMenuFor === chat.id}
-                      ariaControls={`history-actions-${chat.id}`}
                     >
                       <MoreHorizontal className="w-4 h-4" />
                     </IconButton>

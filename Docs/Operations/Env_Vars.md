@@ -1,11 +1,11 @@
 # Environment Variables - tldw_server (v0.1)
 
-This reference lists environment variables recognized by the server. Environment variables take precedence over values from `Config_Files/.env`, which in turn take precedence over `Config_Files/config.txt` (where supported).
+This reference lists environment variables recognized by the server. Environment variables take precedence over values from `tldw_Server_API/Config_Files/.env`, which in turn take precedence over `tldw_Server_API/Config_Files/config.txt` (where supported).
 
 Precedence (highest → lowest):
 - Process environment variables
-- `.env` (Pydantic / dotenv)
-- `config.txt` (sections parsed by the app; not all settings support file overrides)
+- `.env` (Pydantic / dotenv; default `tldw_Server_API/Config_Files/.env`)
+- `config.txt` (sections parsed by the app; not all settings support file overrides; default `tldw_Server_API/Config_Files/config.txt`)
 
 Note: Secrets should be set via environment or `.env`. `config.txt` is supported for convenience in dev; prefer env in production.
 

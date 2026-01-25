@@ -4,6 +4,10 @@
   "workspaces": {
     "": {
       "name": "tldw-monorepo",
+      "devDependencies": {
+        "@playwright/test": "^1.57.0",
+        "playwright": "^1.57.0",
+      },
     },
     "extension": {
       "name": "tldw-assistant",

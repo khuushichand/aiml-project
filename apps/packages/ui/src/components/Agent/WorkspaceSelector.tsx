@@ -30,6 +30,22 @@ interface WorkspaceSelectorProps {
   className?: string
 }
 
+const generateWorkspaceId = () => {
+  if (typeof crypto !== "undefined" && typeof crypto.randomUUID === "function") {
+    return crypto.randomUUID()
+  }
+  if (typeof crypto !== "undefined" && typeof crypto.getRandomValues === "function") {
+    const bytes = new Uint8Array(16)
+    crypto.getRandomValues(bytes)
+    // RFC4122 version 4 and variant bits.
+    bytes[6] = (bytes[6] & 0x0f) | 0x40
+    bytes[8] = (bytes[8] & 0x3f) | 0x80
+    const hex = Array.from(bytes, (b) => b.toString(16).padStart(2, "0")).join("")
+    return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20)}`
+  }
+  throw new Error("Secure UUID generation unavailable")
+}
+
 export const WorkspaceSelector: FC<WorkspaceSelectorProps> = ({
   onWorkspaceChange,
   className = ""
@@ -83,6 +99,7 @@ export const WorkspaceSelector: FC<WorkspaceSelectorProps> = ({
   const selectedWorkspace = workspaces?.find(w => w.id === selectedId) || null
 
   const callbackRef = useRef(onWorkspaceChange)
+  // Sync ref on every render (intentionally no deps) to avoid stale closures in effects.
   useEffect(() => {
     callbackRef.current = onWorkspaceChange
   })
@@ -157,7 +174,7 @@ export const WorkspaceSelector: FC<WorkspaceSelectorProps> = ({
 
       // Add to list
       const workspace: Workspace = {
-        id: (crypto as any)?.randomUUID?.() || Math.random().toString(36).slice(2),
+        id: generateWorkspaceId(),
         name: newName.trim() || derivedName,
         path: trimmedPath
       }
@@ -183,7 +200,7 @@ export const WorkspaceSelector: FC<WorkspaceSelectorProps> = ({
   }
 
   // Handle removing workspace
-  const handleRemove = (id: string, e: React.MouseEvent) => {
+  const handleRemove = (id: string, e: MouseEvent<HTMLButtonElement>) => {
     e.stopPropagation()
     setWorkspaces(prev => (prev || []).filter(w => w.id !== id))
     if (selectedId === id) {
