@@ -1,4 +1,4 @@
-import OptionLayout from "~/components/Layouts/Layout"
+import OptionLayout from "@web/extension/components/Layouts/Layout"
 import { KnowledgeSettings } from "@/components/Option/Knowledge"
 
 const OptionKnowledgeWorkspace = () => {

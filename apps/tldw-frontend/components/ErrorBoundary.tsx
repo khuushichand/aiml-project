@@ -62,7 +62,7 @@ export default class ErrorBoundary extends Component<ErrorBoundaryProps, ErrorBo
     const showErrorDetails = process.env.NODE_ENV !== 'production';
 
     return (
-      <div className="min-h-screen bg-gray-50 px-4 py-12">
+      <div className="min-h-screen bg-gray-50 px-4 py-12" data-testid="error-boundary">
         <div className="mx-auto max-w-lg rounded-lg bg-white p-6 text-center shadow">
           <h1 className="text-2xl font-semibold text-gray-900">Something went wrong</h1>
           <p className="mt-2 text-sm text-gray-600">

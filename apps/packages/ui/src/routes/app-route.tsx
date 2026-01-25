@@ -77,7 +77,10 @@ class OptionsErrorBoundary extends React.Component<
   render(): ReactNode {
     if (this.state.hasError) {
       return (
-        <div className="flex min-h-screen items-center justify-center bg-surface p-8">
+        <div
+          className="flex min-h-screen items-center justify-center bg-surface p-8"
+          data-testid="error-boundary"
+        >
           <div className="max-w-lg text-center">
             <h2 className="text-lg font-semibold text-text">
               Something went wrong
@@ -139,7 +142,10 @@ class SidepanelErrorBoundary extends React.Component<
   render(): ReactNode {
     if (this.state.hasError) {
       return (
-        <div className="flex min-h-screen items-center justify-center bg-surface p-8">
+        <div
+          className="flex min-h-screen items-center justify-center bg-surface p-8"
+          data-testid="error-boundary"
+        >
           <div className="max-w-lg text-center">
             <h2 className="text-lg font-semibold text-text">
               Something went wrong

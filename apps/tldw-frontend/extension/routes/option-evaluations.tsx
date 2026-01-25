@@ -1,4 +1,4 @@
-import OptionLayout from "~/components/Layouts/Layout"
+import OptionLayout from "@web/extension/components/Layouts/Layout"
 import { EvaluationsPlaygroundPage } from "@/components/Option/Evaluations/EvaluationsPlaygroundPage"
 
 const OptionEvaluations = () => {

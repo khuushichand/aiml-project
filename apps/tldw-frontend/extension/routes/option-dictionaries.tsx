@@ -1,4 +1,4 @@
-import OptionLayout from "~/components/Layouts/Layout"
+import OptionLayout from "@web/extension/components/Layouts/Layout"
 import { DictionariesWorkspace } from "~/components/Option/Dictionaries/DictionariesWorkspace"
 
 const OptionDictionariesWorkspaceRoute = () => {

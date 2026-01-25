@@ -1,4 +1,4 @@
-import OptionLayout from "~/components/Layouts/Layout"
+import OptionLayout from "@web/extension/components/Layouts/Layout"
 import { PageShell } from "@/components/Common/PageShell"
 import { KanbanPlayground } from "@/components/Option/KanbanPlayground"
 

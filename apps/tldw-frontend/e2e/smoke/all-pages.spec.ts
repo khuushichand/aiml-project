@@ -90,7 +90,7 @@ test.describe("Smoke Tests - All Pages", () => {
 
       // Check for error boundary UI patterns
       const errorBoundaryVisible = await page
-        .locator('[role="alert"]')
+        .getByTestId("error-boundary")
         .first()
         .isVisible()
         .catch(() => false)
@@ -126,7 +126,7 @@ test.describe("Smoke Tests - All Pages", () => {
       // Assertions
       expect(
         errorBoundaryVisible,
-        `Error boundary [role="alert"] triggered on ${entry.path}`
+        `Error boundary [data-testid="error-boundary"] triggered on ${entry.path}`
       ).toBeFalsy()
 
       expect(
