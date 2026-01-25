@@ -338,3 +338,5 @@ wizard.log
 /tldw_Server_API/Config_Files/acp_runner_home
 /Demo
 /apps/tldw-frontend/test-results
+apps/Databases/system_logs.jsonl.lock
+apps/Databases/system_logs.jsonl

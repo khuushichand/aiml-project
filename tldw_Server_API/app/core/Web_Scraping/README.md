@@ -39,6 +39,8 @@
   - Kagi: `search_web_kagi` — :1820; `parse_kagi_results` — :1861
   - Searx: `search_web_searx` — :1925; `parse_searx_results` — :2021
   - Tavily: `search_web_tavily` — :2085; `parse_tavily_results` — :2134
+  - Exa: `search_web_exa` — :2140; `parse_exa_results` — :2191
+  - Firecrawl: `search_web_firecrawl` — :2220; `parse_firecrawl_results` — :2272
 - Dependencies
   - HTTP: `aiohttp`, `httpx`
   - Parsing/Extraction: `BeautifulSoup`, `trafilatura`, `lxml`

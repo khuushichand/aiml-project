@@ -10,7 +10,21 @@ import {
 const TOTAL_SEARCH_RESULTS = 2
 const DEFAULT_PROVIDER = "duckduckgo"
 
-const AVAILABLE_PROVIDERS = ["google", "duckduckgo"] as const
+const AVAILABLE_PROVIDERS = [
+  "google",
+  "duckduckgo",
+  "sogou",
+  "baidu",
+  "brave",
+  "searxng",
+  "brave-api",
+  "tavily-api",
+  "bing",
+  "stract",
+  "startpage",
+  "exa",
+  "firecrawl"
+] as const
 
 type SearchProvider = (typeof AVAILABLE_PROVIDERS)[number]
 

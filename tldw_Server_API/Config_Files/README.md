@@ -298,6 +298,13 @@ VibeVoice:
 - `search_result_save_to_db` (bool)
 - `search_result_analysis_tone` (str)
 - Per-engine keys: API keys/IDs/region/language filters and router URLs.
+  - Examples:
+    - Google: `search_engine_api_key_google`, `search_engine_id_google`, `search_engine_api_url_google`
+    - Brave: `search_engine_api_key_brave_regular`, `search_engine_api_key_brave_ai`
+    - Searx: `search_engine_searx_api`
+    - Tavily: `search_engine_api_key_tavily`
+    - Exa: `search_engine_api_key_exa`, `search_engine_api_url_exa`
+    - Firecrawl: `search_engine_api_key_firecrawl`, `search_engine_api_url_firecrawl`
 
 ## [Web-Scraper]
 - `web_scraper_api_key|web_scraper_api_url` (str)

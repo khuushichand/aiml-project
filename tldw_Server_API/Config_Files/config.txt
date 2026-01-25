@@ -1129,6 +1129,10 @@ google_sort_results_by =
 search_engine_api_key_kagi = <kagi_api_key>>
 search_engine_searx_api = https://search.rhscz.eu/
 search_engine_api_key_tavily = <tavily_api_key>
+search_engine_api_key_exa = <exa_api_key>
+search_engine_api_url_exa = https://api.exa.ai/search
+search_engine_api_key_firecrawl = <firecrawl_api_key>
+search_engine_api_url_firecrawl = https://api.firecrawl.dev/v2/search
 search_engine_api_key_yandex = 1e1b1b1b1b1b1b1b1
 search_engine_id_yandex = 1e1b1b1b1b1b1b1b1
 

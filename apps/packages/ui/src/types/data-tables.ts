@@ -37,6 +37,7 @@ export interface DataTable {
   id: string
   name: string
   description?: string
+  workspace_tag?: string
   prompt: string // Original generation prompt
   columns: DataTableColumn[]
   rows: Record<string, any>[]
@@ -52,6 +53,7 @@ export interface DataTableSummary {
   id: string
   name: string
   description?: string
+  workspace_tag?: string
   row_count: number
   column_count: number
   created_at: string
@@ -63,6 +65,7 @@ export interface DataTableSummary {
 export interface GenerateTableRequest {
   name: string
   prompt: string
+  workspace_tag?: string
   sources: DataTableSource[]
   column_hints?: Partial<DataTableColumn>[] // Optional schema guidance
   model?: string // Override default model
@@ -91,6 +94,7 @@ export interface DataTableListParams {
   search?: string
   sort_by?: "created_at" | "updated_at" | "name"
   sort_order?: "asc" | "desc"
+  workspace_tag?: string
 }
 
 // List response with pagination

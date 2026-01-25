@@ -1036,6 +1036,19 @@ export class TldwApiClient {
     })
   }
 
+  async updateMediaKeywords(
+    mediaId: string | number,
+    payload: { keywords: string[]; mode?: "add" | "remove" | "set" }
+  ): Promise<{ media_id: number; keywords: string[] }> {
+    const id = encodeURIComponent(String(mediaId))
+    return await bgRequest<{ media_id: number; keywords: string[] }>({
+      path: `/api/v1/media/${id}/keywords`,
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: payload
+    })
+  }
+
   // Notes Methods
   async createNote(content: string, metadata?: any): Promise<any> {
     return await bgRequest<any>({ path: '/api/v1/notes/', method: 'POST', headers: { 'Content-Type': 'application/json' }, body: { content, ...metadata } })
@@ -2424,6 +2437,7 @@ export class TldwApiClient {
     offset?: number
     search?: string
     status?: string
+    workspace_tag?: string
   }): Promise<{ tables: any[]; total: number }> {
     const limit = params?.limit ?? params?.page_size ?? 20
     const page = params?.page ?? 1
@@ -2432,7 +2446,8 @@ export class TldwApiClient {
       limit,
       offset,
       search: params?.search,
-      status_filter: params?.status
+      status_filter: params?.status,
+      workspace_tag: params?.workspace_tag
     } as Record<string, any>)
     const response = await bgRequest<any>({
       path: `/api/v1/data-tables${query}`,
@@ -2467,6 +2482,7 @@ export class TldwApiClient {
   async generateDataTable(payload: {
     name: string
     prompt: string
+    workspace_tag?: string
     sources: Array<{ type: string; id: string; title: string; snippet?: string }>
     column_hints?: Array<{ name?: string; type?: string; description?: string; format?: string }>
     model?: string
@@ -2475,6 +2491,7 @@ export class TldwApiClient {
     const body = {
       name: payload.name,
       prompt: payload.prompt,
+      workspace_tag: payload.workspace_tag,
       sources: payload.sources.map(mapUiSourceToApi),
       column_hints: payload.column_hints,
       model: payload.model,
@@ -3091,11 +3108,43 @@ export class TldwApiClient {
     })
   }
 
+  async listOutputs(params?: {
+    page?: number
+    size?: number
+    job_id?: number
+    run_id?: number
+    type?: string
+    workspace_tag?: string
+    include_deleted?: boolean
+  }): Promise<{ items: any[]; total: number; page?: number; size?: number }> {
+    const query = this.buildQuery(params as Record<string, any>)
+    const response = await bgRequest<any>({
+      path: `/api/v1/outputs${query}`,
+      method: "GET"
+    })
+    const items = Array.isArray(response?.items)
+      ? response.items.map((item: any) => ({
+          ...item,
+          id: String(item.id),
+          media_item_id:
+            item.media_item_id === null || typeof item.media_item_id === "undefined"
+              ? undefined
+              : String(item.media_item_id)
+        }))
+      : []
+    return {
+      ...response,
+      items,
+      total: response?.total ?? items.length
+    }
+  }
+
   async generateOutput(data: {
     template_id: string
     item_ids?: string[]
     run_id?: string
     title?: string
+    workspace_tag?: string
     data?: Record<string, unknown>
   }): Promise<any> {
     const output = await bgRequest<any>({
@@ -3107,6 +3156,7 @@ export class TldwApiClient {
         item_ids: data.item_ids?.map((id) => Number(id)),
         run_id: data.run_id ? Number(data.run_id) : undefined,
         title: data.title,
+        workspace_tag: data.workspace_tag,
         data: data.data
       }
     })

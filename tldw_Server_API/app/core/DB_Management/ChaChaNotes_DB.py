@@ -375,7 +375,7 @@ class CharactersRAGDB:
         is_memory_db (bool): True if the database is in-memory.
         db_path_str (str): String representation of the database path for SQLite connection.
     """
-    _CURRENT_SCHEMA_VERSION = 16  # Schema v16 adds Writing Wordcloud caching tables
+    _CURRENT_SCHEMA_VERSION = 17  # Schema v17 adds workspace_tag to quizzes
     _SCHEMA_NAME = "rag_char_chat_schema"  # Used for the db_schema_version table
     _ALLOWED_CONVERSATION_STATES: Tuple[str, ...] = ("in-progress", "resolved", "backlog", "non-viable")
     _DEFAULT_CONVERSATION_STATE = "in-progress"
@@ -1736,6 +1736,7 @@ CREATE TABLE IF NOT EXISTS quizzes (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   name TEXT NOT NULL,
   description TEXT,
+  workspace_tag TEXT,
   media_id INTEGER,
   total_questions INTEGER DEFAULT 0,
   time_limit_seconds INTEGER,
@@ -2148,6 +2149,22 @@ UPDATE db_schema_version
    SET version = 16
  WHERE schema_name = 'rag_char_chat_schema'
    AND version < 16;
+"""
+
+    # --- Migration: V16 -> V17 (Workspace tag for quizzes) ---
+    _MIGRATION_SQL_V16_TO_V17 = """
+/*───────────────────────────────────────────────────────────────
+  Migration to Version 17 - Quizzes workspace_tag (2026-02-18)
+───────────────────────────────────────────────────────────────*/
+PRAGMA foreign_keys = ON;
+
+ALTER TABLE quizzes ADD COLUMN workspace_tag TEXT;
+CREATE INDEX IF NOT EXISTS idx_quizzes_workspace_tag ON quizzes(workspace_tag);
+
+UPDATE db_schema_version
+   SET version = 17
+ WHERE schema_name = 'rag_char_chat_schema'
+   AND version < 17;
 """
 
     _MIGRATION_SQL_V10_TO_V11_POSTGRES = """
@@ -3244,6 +3261,26 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
             logger.error(f"[{self._SCHEMA_NAME}] Unexpected error during migration V15->V16: {e}", exc_info=True)
             raise SchemaError(f"Unexpected error migrating to V16 for '{self._SCHEMA_NAME}': {e}") from e
 
+    def _migrate_from_v16_to_v17(self, conn: sqlite3.Connection):
+        """Migrates schema from V16 to V17 (Workspace tag for quizzes)."""
+        logger.info(f"Migrating '{self._SCHEMA_NAME}' schema from V16 to V17 for DB: {self.db_path_str}...")
+        try:
+            conn.executescript(self._MIGRATION_SQL_V16_TO_V17)
+            final_version = self._get_db_version(conn)
+            if final_version != 17:
+                raise SchemaError(
+                    f"[{self._SCHEMA_NAME}] Migration V16->V17 failed version check. Expected 17, got: {final_version}"
+                )
+            logger.info(f"[{self._SCHEMA_NAME}] Migration to V17 completed.")
+        except sqlite3.Error as e:
+            logger.error(f"[{self._SCHEMA_NAME}] Migration V16->V17 failed: {e}", exc_info=True)
+            raise SchemaError(f"Migration V16->V17 failed for '{self._SCHEMA_NAME}': {e}") from e
+        except SchemaError:
+            raise
+        except Exception as e:
+            logger.error(f"[{self._SCHEMA_NAME}] Unexpected error during migration V16->V17: {e}", exc_info=True)
+            raise SchemaError(f"Unexpected error migrating to V17 for '{self._SCHEMA_NAME}': {e}") from e
+
     def _initialize_schema(self):
         if self.backend_type == BackendType.SQLITE:
             self._initialize_schema_sqlite()
@@ -3421,6 +3458,9 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
                         current_db_version = self._get_db_version(conn)
                     if target_version >= 16 and current_db_version == 15:
                         self._migrate_from_v15_to_v16(conn)
+                        current_db_version = self._get_db_version(conn)
+                    if target_version >= 17 and current_db_version == 16:
+                        self._migrate_from_v16_to_v17(conn)
                         current_db_version = self._get_db_version(conn)
                 # Ensure helpful indexes that may have been introduced post-creation
                 try:
@@ -3600,6 +3640,9 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
                 if target_version >= 16 and current_db_version == 15:
                     self._migrate_from_v15_to_v16(conn)
                     current_db_version = self._get_db_version(conn)
+                if target_version >= 17 and current_db_version == 16:
+                    self._migrate_from_v16_to_v17(conn)
+                    current_db_version = self._get_db_version(conn)
 
                 final_version_check = self._get_db_version(conn)
                 if final_version_check != target_version:
@@ -3702,6 +3745,9 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
             if current_version < 16:
                 self._apply_postgres_migration_script(self._MIGRATION_SQL_V15_TO_V16, conn, expected_version=16)
                 current_version = 16
+            if current_version < 17:
+                self._apply_postgres_migration_script(self._MIGRATION_SQL_V16_TO_V17, conn, expected_version=17)
+                current_version = 17
 
             if current_version > target_version:
                 raise SchemaError(
@@ -9294,6 +9340,7 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
         self,
         name: str,
         description: Optional[str] = None,
+        workspace_tag: Optional[str] = None,
         media_id: Optional[int] = None,
         time_limit_seconds: Optional[int] = None,
         passing_score: Optional[int] = None,
@@ -9304,13 +9351,14 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
         try:
             with self.transaction() as conn:
                 insert_sql = (
-                    "INSERT INTO quizzes(name, description, media_id, total_questions, time_limit_seconds, "
+                    "INSERT INTO quizzes(name, description, workspace_tag, media_id, total_questions, time_limit_seconds, "
                     "passing_score, deleted, client_id, version, created_at, last_modified) "
-                    "VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
+                    "VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
                 )
                 params = (
                     name,
                     description,
+                    workspace_tag,
                     media_id,
                     0,
                     time_limit_seconds,
@@ -9340,7 +9388,7 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
         """Get quiz by ID, returns None if not found or deleted (unless include_deleted)."""
         deleted_clause = "" if include_deleted else "AND deleted = 0"
         query = (
-            "SELECT id, name, description, media_id, total_questions, time_limit_seconds, passing_score, "
+            "SELECT id, name, description, workspace_tag, media_id, total_questions, time_limit_seconds, passing_score, "
             "deleted, client_id, version, created_at, last_modified "
             "FROM quizzes WHERE id = ? " + deleted_clause
         )
@@ -9355,6 +9403,7 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
         self,
         q: Optional[str] = None,
         media_id: Optional[int] = None,
+        workspace_tag: Optional[str] = None,
         include_deleted: bool = False,
         limit: int = 50,
         offset: int = 0,
@@ -9367,6 +9416,9 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
         if media_id is not None:
             where_clauses.append("media_id = ?")
             params.append(media_id)
+        if workspace_tag:
+            where_clauses.append("workspace_tag = ?")
+            params.append(workspace_tag)
         if q:
             where_clauses.append("(LOWER(name) LIKE ? OR LOWER(description) LIKE ?)")
             q_like = f"%{q.lower()}%"
@@ -9374,7 +9426,7 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
 
         where_sql = " AND ".join(where_clauses)
         query = (
-            "SELECT id, name, description, media_id, total_questions, time_limit_seconds, passing_score, "
+            "SELECT id, name, description, workspace_tag, media_id, total_questions, time_limit_seconds, passing_score, "
             "deleted, client_id, version, created_at, last_modified "
             f"FROM quizzes WHERE {where_sql} ORDER BY last_modified DESC LIMIT ? OFFSET ?"
         )
@@ -9392,7 +9444,7 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
     def update_quiz(self, quiz_id: int, updates: Dict[str, Any], client_id: str = "unknown") -> bool:
         """Update quiz fields, returns True if successful."""
         expected_version = updates.pop("expected_version", None)
-        allowed = {"name", "description", "media_id", "time_limit_seconds", "passing_score"}
+        allowed = {"name", "description", "workspace_tag", "media_id", "time_limit_seconds", "passing_score"}
         set_parts = []
         params: List[Any] = []
         for k, v in updates.items():

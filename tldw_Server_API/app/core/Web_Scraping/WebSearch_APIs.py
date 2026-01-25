@@ -125,7 +125,7 @@ def _truncate_text(value: Optional[str], max_len: int = 600) -> str:
     text = str(value).strip()
     if len(text) <= max_len:
         return text
-    return text[: max_len - 1].rstrip() + "…"
+    return text[: max_len - 1].rstrip() + "..."
 from tldw_Server_API.app.core.LLM_Calls.Summarization_General_Lib import analyze
 #
 #

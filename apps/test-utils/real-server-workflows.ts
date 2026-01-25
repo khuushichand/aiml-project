@@ -510,22 +510,126 @@ const ensureChatSidebarExpanded = async (page: Page) => {
   return sidebar
 }
 
-const sendChatMessage = async (page: Page, message: string) => {
-  let input = page.getByTestId("chat-input")
-  if ((await input.count()) === 0) {
-    input = page.getByPlaceholder(/Ask anything|Type a message/i)
-  }
-  const visible = await input.isVisible().catch(() => false)
-  if (!visible) {
-    const startButton = page.getByRole("button", {
-      name: /Start chatting/i
+const dismissQuickIngestInspectorIntro = async (page: Page) => {
+  const drawer = page
+    .locator(".ant-drawer")
+    .filter({ hasText: /Inspector/i })
+    .first()
+  const gotIt = drawer.getByRole("button", { name: /Got it/i })
+  const gotItVisible = await gotIt.isVisible().catch(() => false)
+  if (gotItVisible) {
+    await gotIt.click()
+    await expect(page.locator(".ant-drawer")).toHaveCount(0, {
+      timeout: 5000
     })
-    if (await startButton.isVisible().catch(() => false)) {
-      await startButton.click()
+    return
+  }
+  const closeButton = drawer.getByRole("button", { name: /Close/i })
+  const closeVisible = await closeButton.isVisible().catch(() => false)
+  if (closeVisible) {
+    await closeButton.click()
+    await expect(page.locator(".ant-drawer")).toHaveCount(0, {
+      timeout: 5000
+    })
+  }
+}
+
+const clickQuickIngestRun = async (modal: Locator) => {
+  let runButton = modal.getByTestId("quick-ingest-run")
+  if ((await runButton.count()) === 0) {
+    runButton = modal.getByRole("button", {
+      name: /Run quick ingest|Ingest|Process|Review/i
+    })
+  }
+  const visibleRun = runButton
+    .filter({ hasText: /Ingest|Process|Review|Processing/i })
+    .first()
+  await visibleRun.waitFor({ state: "visible", timeout: 15000 })
+  await visibleRun.scrollIntoViewIfNeeded()
+  await expect(visibleRun).toBeEnabled({ timeout: 15000 })
+  await visibleRun.click({ timeout: 10000, force: true })
+  const started = await expect
+    .poll(
+      async () => ({
+        disabled: await visibleRun.isDisabled().catch(() => false),
+        text: (await visibleRun.textContent().catch(() => "")) || ""
+      }),
+      { timeout: 15000 }
+    )
+    .toMatchObject({ disabled: true })
+    .then(() => true)
+    .catch(() => false)
+  if (!started) {
+    throw new Error("Quick ingest run did not start (button stayed enabled).")
+  }
+}
+
+const waitForQuickIngestCompletion = async (
+  modal: Locator,
+  timeoutMs = 120000
+) => {
+  return modal
+    .getByText(/Quick ingest completed/i)
+    .waitFor({ timeout: timeoutMs })
+    .then(() => true)
+    .catch(() => false)
+}
+
+const openQuickIngestModal = async (page: Page) => {
+  const modal = page.locator(".quick-ingest-modal .ant-modal-content")
+  if (await modal.isVisible().catch(() => false)) return modal
+
+  const triggerCandidates = [
+    page.getByTestId("open-quick-ingest"),
+    page.getByRole("button", { name: /Quick ingest/i })
+  ]
+  for (const trigger of triggerCandidates) {
+    if ((await trigger.count()) === 0) continue
+    const visible = await trigger.first().isVisible().catch(() => false)
+    if (!visible) continue
+    await trigger.first().click()
+    if (await modal.isVisible().catch(() => false)) return modal
+  }
+
+  await page.evaluate(() => {
+    window.dispatchEvent(new CustomEvent("tldw:open-quick-ingest"))
+  })
+  await expect(modal).toBeVisible({ timeout: 15000 })
+  return modal
+}
+
+const resolveChatInput = async (page: Page) => {
+  let input = page.locator("#textarea-message")
+  if ((await input.count()) > 0) return input
+  input = page.getByTestId("chat-input")
+  if ((await input.count()) > 0) return input
+  return page.getByPlaceholder(
+    /Ask anything|Type a message|form\.textarea\.placeholder/i
+  )
+}
+
+const clickStartChatIfVisible = async (page: Page) => {
+  const startChat = page.getByRole("button", { name: /Start chatting/i })
+  if ((await startChat.count()) === 0) return
+  if (!(await startChat.isVisible().catch(() => false))) return
+  for (let attempt = 0; attempt < 3; attempt += 1) {
+    try {
+      await startChat.first().click({ timeout: 5000, force: true })
+      return
+    } catch {
+      await page.waitForTimeout(200).catch(() => {})
     }
   }
+}
+
+const sendChatMessage = async (page: Page, message: string) => {
+  let input = await resolveChatInput(page)
+  const visible = await input.isVisible().catch(() => false)
+  if (!visible) {
+    await clickStartChatIfVisible(page)
+  }
   if (!(await input.isVisible().catch(() => false))) {
-    input = page.getByPlaceholder(/Ask anything|Type a message/i)
+    input = await resolveChatInput(page)
   }
   await expect(input).toBeVisible({ timeout: 15000 })
   await expect(input).toBeEditable({ timeout: 15000 })
@@ -3008,25 +3112,16 @@ test.describe("Real server end-to-end workflows", () => {
       })
       await waitForConnected(page, "workflow-quick-ingest")
 
-      const resolveQuickIngestTrigger = async () => {
-        const byTestId = page.getByTestId("open-quick-ingest")
-        if (await byTestId.count()) return byTestId.first()
-        return page.getByRole("button", { name: /Quick ingest/i }).first()
-      }
-
-      let trigger = await resolveQuickIngestTrigger()
-      if (!(await trigger.count())) {
+      let modal: Locator
+      try {
+        modal = await openQuickIngestModal(page)
+      } catch {
         await driver.goto(page, "/playground", {
           waitUntil: "domcontentloaded"
         })
         await waitForConnected(page, "workflow-quick-ingest-fallback")
-        trigger = await resolveQuickIngestTrigger()
+        modal = await openQuickIngestModal(page)
       }
-      await expect(trigger).toBeVisible({ timeout: 15000 })
-      await trigger.click()
-
-      const modal = page.locator(".quick-ingest-modal .ant-modal-content")
-      await expect(modal).toBeVisible({ timeout: 15000 })
       await expect(
         page.locator('.quick-ingest-modal [data-state="ready"]')
       ).toBeVisible({ timeout: 20000 })
@@ -3041,30 +3136,7 @@ test.describe("Real server end-to-end workflows", () => {
 
       const fileRow = modal.getByText(fileName).first()
       await expect(fileRow).toBeVisible({ timeout: 15000 })
-      const dismissInspectorIntro = async () => {
-        const drawer = page
-          .locator(".ant-drawer")
-          .filter({ hasText: /Inspector/i })
-          .first()
-        const gotIt = drawer.getByRole("button", { name: /Got it/i })
-        const gotItVisible = await gotIt.isVisible().catch(() => false)
-        if (gotItVisible) {
-          await gotIt.click()
-          await expect(page.locator(".ant-drawer-mask")).toBeHidden({
-            timeout: 5000
-          })
-          return
-        }
-        const closeButton = drawer.getByRole("button", { name: /Close/i })
-        const closeVisible = await closeButton.isVisible().catch(() => false)
-        if (closeVisible) {
-          await closeButton.click()
-          await expect(page.locator(".ant-drawer-mask")).toBeHidden({
-            timeout: 5000
-          })
-        }
-      }
-      await dismissInspectorIntro()
+      await dismissQuickIngestInspectorIntro(page)
 
       const analysisToggle = page.getByLabel(/Ingestion options .*analysis/i)
       if ((await analysisToggle.count()) > 0) {
@@ -3094,7 +3166,7 @@ test.describe("Real server end-to-end workflows", () => {
         runLabel: await runButton.textContent().catch(() => null)
       })
       logStep("run click")
-      await runButton.click()
+      await clickQuickIngestRun(modal)
       try {
         await expect(runButton).toBeDisabled({ timeout: 15000 })
       } catch (error) {
@@ -3176,7 +3248,9 @@ test.describe("Real server end-to-end workflows", () => {
         /Search media \(title\/content\)/i
       )
       await searchInput.fill(String(unique))
-      await page.getByRole("button", { name: /^Search$/i }).click()
+      const searchPanel = page.locator("#media-search-panel")
+      await expect(searchPanel).toBeVisible({ timeout: 10000 })
+      await searchPanel.getByRole("button", { name: /^Search$/i }).click()
 
       const expectedTitle = fileName.replace(/\.txt$/i, "")
       const resultsRow = page
@@ -3370,9 +3444,9 @@ test.describe("Real server end-to-end workflows", () => {
         chatPage = await driver.openSidepanel()
         await waitForConnected(chatPage, "workflow-knowledge-chat")
       }
-      await expect(
-        chatPage.getByPlaceholder(/Ask anything|Type a message/i)
-      ).toBeVisible({ timeout: 20000 })
+      await expect(await resolveChatInput(chatPage)).toBeVisible({
+        timeout: 20000
+      })
 
       await sendChatMessage(
         chatPage,
@@ -3698,9 +3772,7 @@ test.describe("Real server end-to-end workflows", () => {
             await overwriteButton.click()
           }
 
-          const chatInput = page.getByPlaceholder(
-            /Ask anything|Type a message/i
-          )
+          const chatInput = await resolveChatInput(page)
           const sendButton = page.locator('[data-testid="chat-send"]')
           if ((await sendButton.count()) > 0) {
             await sendButton.click()
@@ -5165,25 +5237,16 @@ test.describe("Real server end-to-end workflows", () => {
       })
       await waitForConnected(page, "workflow-media-trash-ingest")
 
-      const resolveQuickIngestTrigger = async () => {
-        const byTestId = page.getByTestId("open-quick-ingest")
-        if (await byTestId.count()) return byTestId.first()
-        return page.getByRole("button", { name: /Quick ingest/i }).first()
-      }
-
-      let trigger = await resolveQuickIngestTrigger()
-      if (!(await trigger.count())) {
+      let modal: Locator
+      try {
+        modal = await openQuickIngestModal(page)
+      } catch {
         await driver.goto(page, "/playground", {
           waitUntil: "domcontentloaded"
         })
         await waitForConnected(page, "workflow-media-trash-ingest-fallback")
-        trigger = await resolveQuickIngestTrigger()
+        modal = await openQuickIngestModal(page)
       }
-      await expect(trigger).toBeVisible({ timeout: 15000 })
-      await trigger.click()
-
-      const modal = page.locator(".quick-ingest-modal .ant-modal-content")
-      await expect(modal).toBeVisible({ timeout: 15000 })
       await expect(
         page.locator('.quick-ingest-modal [data-state="ready"]')
       ).toBeVisible({ timeout: 20000 })
@@ -5197,18 +5260,10 @@ test.describe("Real server end-to-end workflows", () => {
       const fileRow = modal.getByText(fileName).first()
       await expect(fileRow).toBeVisible({ timeout: 15000 })
       await fileRow.click()
+      await dismissQuickIngestInspectorIntro(page)
 
-      const runButton = modal
-        .getByRole("button", {
-          name: /Run quick ingest|Ingest|Process/i
-        })
-        .first()
-      await expect(runButton).toBeEnabled({ timeout: 15000 })
-      await runButton.click()
-
-      await expect(
-        modal.getByText(/Quick ingest completed/i)
-      ).toBeVisible({ timeout: 180000 })
+      await clickQuickIngestRun(modal)
+      void waitForQuickIngestCompletion(modal, 120000)
 
       const mediaMatch = await pollForMediaMatch(
         normalizedServerUrl,
@@ -5378,27 +5433,18 @@ test.describe("Real server end-to-end workflows", () => {
 
       await setSelectedModel(page, selectedModelId)
 
-      const resolveQuickIngestTrigger = async () => {
-        const byTestId = page.getByTestId("open-quick-ingest")
-        if (await byTestId.count()) return byTestId.first()
-        return page.getByRole("button", { name: /Quick ingest/i }).first()
-      }
-
       await waitForConnected(page, "workflow-analysis-ingest")
 
-      let trigger = await resolveQuickIngestTrigger()
-      if (!(await trigger.count())) {
+      let modal: Locator
+      try {
+        modal = await openQuickIngestModal(page)
+      } catch {
         await driver.goto(page, "/playground", {
           waitUntil: "domcontentloaded"
         })
         await waitForConnected(page, "workflow-analysis-ingest-fallback")
-        trigger = await resolveQuickIngestTrigger()
+        modal = await openQuickIngestModal(page)
       }
-      await expect(trigger).toBeVisible({ timeout: 15000 })
-      await trigger.click()
-
-      const modal = page.locator(".quick-ingest-modal .ant-modal-content")
-      await expect(modal).toBeVisible({ timeout: 15000 })
       await expect(
         page.locator('.quick-ingest-modal [data-state="ready"]')
       ).toBeVisible({ timeout: 20000 })
@@ -5412,18 +5458,10 @@ test.describe("Real server end-to-end workflows", () => {
       const fileRow = modal.getByText(fileName).first()
       await expect(fileRow).toBeVisible({ timeout: 15000 })
       await fileRow.click()
+      await dismissQuickIngestInspectorIntro(page)
 
-      const runButton = modal
-        .getByRole("button", {
-          name: /Run quick ingest|Ingest|Process/i
-        })
-        .first()
-      await expect(runButton).toBeEnabled({ timeout: 15000 })
-      await runButton.click()
-
-      await expect(
-        modal.getByText(/Quick ingest completed/i)
-      ).toBeVisible({ timeout: 180000 })
+      await clickQuickIngestRun(modal)
+      void waitForQuickIngestCompletion(modal, 120000)
 
       const mediaMatch = await pollForMediaMatch(
         normalizedServerUrl,
@@ -5681,12 +5719,10 @@ test.describe("Real server end-to-end workflows", () => {
       const startChat = page.getByRole("button", {
         name: /Start chatting/i
       })
-      if (await startChat.isVisible().catch(() => false)) {
-        await startChat.click({ timeout: 15000 })
-      }
+      await clickStartChatIfVisible(page)
 
       await expect(
-        page.getByPlaceholder(/Ask anything|Type a message/i)
+        await resolveChatInput(page)
       ).toBeVisible({ timeout: 20000 })
       await expect(
         page

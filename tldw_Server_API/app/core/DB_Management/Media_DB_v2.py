@@ -230,7 +230,7 @@ class MediaDatabase:
     handling sync metadata and FTS updates internally via Python code.
     Requires client_id on initialization. Includes schema versioning.
     """
-    _CURRENT_SCHEMA_VERSION = 18  # Latest sqlite migrations (audiobook + collections enhancements)
+    _CURRENT_SCHEMA_VERSION = 19  # Latest sqlite migrations (workspace_tag for data tables)
 
     # <<< Schema Definition (Version 1) >>>
 
@@ -955,6 +955,7 @@ class MediaDatabase:
         uuid TEXT UNIQUE NOT NULL,
         name TEXT NOT NULL,
         description TEXT,
+        workspace_tag TEXT,
         prompt TEXT NOT NULL,
         column_hints_json TEXT,
         status TEXT NOT NULL DEFAULT 'queued',
@@ -973,6 +974,7 @@ class MediaDatabase:
     CREATE INDEX IF NOT EXISTS idx_data_tables_status ON data_tables(status);
     CREATE INDEX IF NOT EXISTS idx_data_tables_updated ON data_tables(updated_at DESC);
     CREATE INDEX IF NOT EXISTS idx_data_tables_deleted ON data_tables(deleted);
+    CREATE INDEX IF NOT EXISTS idx_data_tables_workspace_tag ON data_tables(workspace_tag);
 
     CREATE TABLE IF NOT EXISTS data_table_columns (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -7079,6 +7081,7 @@ class MediaDatabase:
         name: str,
         prompt: str,
         description: Optional[str] = None,
+        workspace_tag: Optional[str] = None,
         column_hints: Optional[Union[str, Dict[str, Any], List[Any]]] = None,
         status: str = "queued",
         row_count: int = 0,
@@ -7112,7 +7115,7 @@ class MediaDatabase:
                 conn,
                 """
                 INSERT INTO data_tables (
-                    uuid, name, description, prompt, column_hints_json, status,
+                    uuid, name, description, workspace_tag, prompt, column_hints_json, status,
                     row_count, generation_model, last_error,
                     created_at, updated_at, last_modified, version, client_id, deleted
                 ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
@@ -7121,6 +7124,7 @@ class MediaDatabase:
                     table_uuid,
                     name,
                     description,
+                    workspace_tag,
                     prompt,
                     column_hints_json,
                     status,
@@ -7189,6 +7193,7 @@ class MediaDatabase:
         *,
         status: Optional[str] = None,
         search: Optional[str] = None,
+        workspace_tag: Optional[str] = None,
         limit: int = 50,
         offset: int = 0,
         include_deleted: bool = False,
@@ -7214,6 +7219,9 @@ class MediaDatabase:
         if status:
             conditions.append("status = ?")
             params.append(str(status))
+        if workspace_tag:
+            conditions.append("workspace_tag = ?")
+            params.append(str(workspace_tag))
         if search:
             like_op = "ILIKE" if self.backend_type == BackendType.POSTGRESQL else "LIKE"
             conditions.append(f"(name {like_op} ? OR description {like_op} ?)")
@@ -7236,6 +7244,7 @@ class MediaDatabase:
         *,
         status: Optional[str] = None,
         search: Optional[str] = None,
+        workspace_tag: Optional[str] = None,
         include_deleted: bool = False,
         owner_user_id: Optional[int] = None,
     ) -> int:
@@ -7251,6 +7260,9 @@ class MediaDatabase:
         if status:
             conditions.append("status = ?")
             params.append(str(status))
+        if workspace_tag:
+            conditions.append("workspace_tag = ?")
+            params.append(str(workspace_tag))
         if search:
             like_op = "ILIKE" if self.backend_type == BackendType.POSTGRESQL else "LIKE"
             conditions.append(f"(name {like_op} ? OR description {like_op} ?)")
