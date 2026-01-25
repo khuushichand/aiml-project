@@ -97,7 +97,7 @@ export function ChatHeader({
             <Tooltip title={shortcutsToggleLabel} placement="bottom">
               <button
                 type="button"
-                onClick={() => onToggleShortcuts()}
+                onClick={() => onToggleShortcuts(!shortcutsExpanded)}
                 aria-label={shortcutsToggleLabel as string}
                 className="inline-flex items-center justify-center rounded-md p-1.5 text-text-muted hover:bg-surface2 hover:text-text"
                 title={shortcutsToggleLabel}

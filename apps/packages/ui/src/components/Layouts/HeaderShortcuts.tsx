@@ -33,6 +33,10 @@ interface HeaderShortcutsProps {
   className?: string
   /** Whether to render the toggle button */
   showToggle?: boolean
+  /** Controlled expanded state */
+  expanded?: boolean
+  /** Controlled state updater */
+  onExpandedChange?: (next: boolean) => void
 }
 
 /**
@@ -44,6 +48,8 @@ export function HeaderShortcuts({
   defaultExpanded = false,
   className,
   showToggle = true,
+  expanded,
+  onExpandedChange,
 }: HeaderShortcutsProps) {
   const { t } = useTranslation(["option", "common", "settings"])
 
@@ -82,9 +88,11 @@ export function HeaderShortcuts({
       return fn
     }, [setShortcutsPreference])
 
-  const [shortcutsExpanded, setShortcutsExpanded] = useState(() =>
+  const isControlled = typeof expanded === "boolean"
+  const [shortcutsExpandedInternal, setShortcutsExpandedInternal] = useState(() =>
     Boolean(shortcutsPreference ?? defaultExpanded)
   )
+  const shortcutsExpanded = isControlled ? expanded : shortcutsExpandedInternal
   const location = useLocation()
   const shortcutsToggleRef = useRef<HTMLButtonElement>(null)
   const shortcutsContainerRef = useRef<HTMLDivElement>(null)
@@ -117,8 +125,9 @@ export function HeaderShortcuts({
 
   // Sync with storage preference
   useEffect(() => {
-    setShortcutsExpanded(Boolean(shortcutsPreference))
-  }, [shortcutsPreference])
+    if (isControlled) return
+    setShortcutsExpandedInternal(Boolean(shortcutsPreference))
+  }, [isControlled, shortcutsPreference])
 
   // Cleanup debounced setter
   useEffect(() => {
@@ -147,17 +156,27 @@ export function HeaderShortcuts({
     }
   }, [shortcutsExpanded])
 
+  const setShortcutsExpanded = useCallback(
+    (next: boolean) => {
+      if (isControlled) {
+        onExpandedChange?.(next)
+        return
+      }
+      setShortcutsExpandedInternal(next)
+      debouncedSetShortcutsPreference(next)
+    },
+    [debouncedSetShortcutsPreference, isControlled, onExpandedChange]
+  )
+
   const handleToggle = useCallback(() => {
     const next = !shortcutsExpanded
     setShortcutsExpanded(next)
-    debouncedSetShortcutsPreference(next)
-  }, [shortcutsExpanded, debouncedSetShortcutsPreference])
+  }, [setShortcutsExpanded, shortcutsExpanded])
 
   const handleShortcutNavigate = useCallback(() => {
     if (!shortcutsExpanded) return
     setShortcutsExpanded(false)
-    debouncedSetShortcutsPreference(false)
-  }, [shortcutsExpanded, debouncedSetShortcutsPreference])
+  }, [setShortcutsExpanded, shortcutsExpanded])
 
   // Register "?" keyboard shortcut to toggle shortcuts
   useShortcut({
@@ -165,7 +184,8 @@ export function HeaderShortcuts({
     modifiers: ["shift"],
     action: handleToggle,
     description: "Toggle keyboard shortcuts",
-    allowInInput: false,
+    // Allow global toggle, even when an input is focused.
+    allowInInput: true,
   })
 
   useEffect(() => {
@@ -173,10 +193,9 @@ export function HeaderShortcuts({
       previousPathRef.current = location.pathname
       if (shortcutsExpanded) {
         setShortcutsExpanded(false)
-        debouncedSetShortcutsPreference(false)
       }
     }
-  }, [location.pathname, shortcutsExpanded, debouncedSetShortcutsPreference])
+  }, [location.pathname, shortcutsExpanded, setShortcutsExpanded])
 
   if (!showToggle && !shortcutsExpanded) {
     return null

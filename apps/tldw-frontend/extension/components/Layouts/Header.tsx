@@ -77,13 +77,13 @@ export const Header: React.FC<Props> = ({
 
   const toggleHeaderShortcuts = React.useCallback(
     (next?: boolean) => {
-      const resolved =
-        typeof next === "boolean" ? next : !headerShortcutsExpanded
-      void setHeaderShortcutsExpanded(resolved).catch(() => {
+      void setHeaderShortcutsExpanded((prev) =>
+        typeof next === "boolean" ? next : !prev
+      ).catch(() => {
         // ignore storage write failures
       })
     },
-    [headerShortcutsExpanded, setHeaderShortcutsExpanded]
+    [setHeaderShortcutsExpanded]
   )
 
   const handleTitleEditStart = React.useCallback(() => {
