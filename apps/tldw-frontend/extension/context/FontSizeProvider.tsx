@@ -1,5 +1,5 @@
 import { useStorage } from '@plasmohq/storage/hook';
-import React, { createContext, useContext, useState, useEffect } from 'react';
+import React, { createContext, useContext, useEffect } from 'react';
 
 interface FontSizeContextType {
   scale: number;

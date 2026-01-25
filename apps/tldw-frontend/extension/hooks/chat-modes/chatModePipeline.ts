@@ -106,8 +106,13 @@ export type ChatModeDefinition<TParams extends ChatModeParamsBase> = {
   extractGenerationInfo?: (output: unknown) => unknown
 }
 
-const defaultExtractGenerationInfo = (output: any) =>
-  output?.generations?.[0][0]?.generationInfo
+const defaultExtractGenerationInfo = (output: unknown) => {
+  if (!output || typeof output !== "object") return undefined
+  const candidate = output as {
+    generations?: Array<Array<{ generationInfo?: unknown }>>
+  }
+  return candidate.generations?.[0]?.[0]?.generationInfo
+}
 
 export const runChatPipeline = async <TParams extends ChatModeParamsBase>(
   mode: ChatModeDefinition<TParams>,
@@ -319,7 +324,7 @@ export const runChatPipeline = async <TParams extends ChatModeParamsBase>(
         assistantParentMessageId: resolvedAssistantParentMessageId ?? null,
         documents,
         isContinue: mode.isContinue,
-        generationInfo: preflight.generationInfo as any,
+        generationInfo: preflight.generationInfo,
         prompt_content: preflight.promptContent,
         prompt_id: preflight.promptId,
         reasoning_time_taken: timetaken,
@@ -443,7 +448,7 @@ export const runChatPipeline = async <TParams extends ChatModeParamsBase>(
       assistantParentMessageId: resolvedAssistantParentMessageId ?? null,
       documents,
       isContinue: mode.isContinue,
-      generationInfo: generationInfo as any,
+      generationInfo,
       prompt_content: promptContent,
       prompt_id: promptId,
       reasoning_time_taken: timetaken,

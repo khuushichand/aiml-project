@@ -3,8 +3,7 @@ import { isChromiumTarget } from "@/config/platform"
 const captureVisibleTab = () => {
   const result = new Promise<string>((resolve) => {
     if (isChromiumTarget) {
-      chrome.tabs.query({ active: true, currentWindow: true }, async (tabs) => {
-        const tab = tabs[0]
+      chrome.tabs.query({ active: true, currentWindow: true }, async (_tabs) => {
         chrome.tabs.captureVisibleTab(null, { format: "png" }, (dataUrl) => {
           resolve(dataUrl ?? "")
         })
@@ -12,7 +11,7 @@ const captureVisibleTab = () => {
     } else {
       browser.tabs
         .query({ active: true, currentWindow: true })
-        .then(async (tabs) => {
+        .then(async () => {
           const dataUrl = (await Promise.race([
             browser.tabs.captureVisibleTab(null, { format: "png" }),
             new Promise((_, reject) =>

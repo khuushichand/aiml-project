@@ -7,6 +7,9 @@ export interface MetricPoint {
   value: number
 }
 
+const isRecord = (value: unknown): value is Record<string, unknown> =>
+  typeof value === "object" && value !== null && !Array.isArray(value)
+
 const isFiniteNumber = (value: unknown): value is number =>
   typeof value === "number" && Number.isFinite(value)
 
@@ -27,22 +30,20 @@ export const formatMetricDelta = (delta: number, digits = 3): string => {
 }
 
 export const flattenMetrics = (
-  results: any,
+  results: unknown,
   maxItems = 30
 ): Record<string, number> => {
   const map: Record<string, number> = {}
   const candidate =
-    results?.metrics && typeof results.metrics === "object"
-      ? results.metrics
-      : results
+    isRecord(results) && isRecord(results.metrics) ? results.metrics : results
 
-  const walk = (obj: any, prefix = "") => {
-    if (!obj || typeof obj !== "object" || Array.isArray(obj)) return
+  const walk = (obj: unknown, prefix = "") => {
+    if (!isRecord(obj)) return
     for (const [k, v] of Object.entries(obj)) {
       const name = prefix ? `${prefix}.${k}` : k
       if (isFiniteNumber(v)) {
         map[name] = v
-      } else if (v && typeof v === "object" && Object.keys(map).length < maxItems) {
+      } else if (isRecord(v) && Object.keys(map).length < maxItems) {
         walk(v, name)
       }
       if (Object.keys(map).length >= maxItems) return
@@ -54,7 +55,7 @@ export const flattenMetrics = (
 }
 
 export const metricsFromResults = (
-  results: any,
+  results: unknown,
   maxItems = 20
 ): MetricPoint[] => {
   const map = flattenMetrics(results, maxItems)

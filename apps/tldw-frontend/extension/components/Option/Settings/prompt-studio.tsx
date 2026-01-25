@@ -26,6 +26,19 @@ import {
 
 const { Title, Paragraph, Text } = Typography
 
+type PromptStudioDefaultsFormValues = {
+  defaultProjectId?: number | null
+  executeProvider: string
+  executeModel: string
+  executeTemperature?: number
+  executeMaxTokens?: number
+  evalModelName: string
+  evalTemperature?: number
+  evalMaxTokens?: number
+  pageSize?: number
+  warnSeconds?: number
+}
+
 const StatusDescription = ({ status }: { status: PromptStudioStatus | undefined }) => {
   if (!status) return null
   const leases = status.leases || {}
@@ -83,7 +96,7 @@ export const PromptStudioSettings: React.FC = () => {
   }, [defaultsQuery.data, form])
 
   const saveMutation = useMutation({
-    mutationFn: async (values: any) => {
+    mutationFn: async (values: PromptStudioDefaultsFormValues) => {
       await setPromptStudioDefaults({
         defaultProjectId: values.defaultProjectId ?? null,
         executeProvider: values.executeProvider,
@@ -116,9 +129,9 @@ export const PromptStudioSettings: React.FC = () => {
     onSuccess: (data) => {
       setStatusResult(data || null)
     },
-    onError: (err: any) => {
+    onError: (err: unknown) => {
       setStatusResult(null)
-      setStatusError(err?.message || "Status failed")
+      setStatusError(err instanceof Error ? err.message : "Status failed")
     }
   })
 

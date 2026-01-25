@@ -1,3 +1,21 @@
+type ChromeLanguageModel = {
+  availability?: () => Promise<string>
+  create?: (options: Record<string, unknown>) => Promise<AITextSession>
+}
+
+type ChromeAI = {
+  languageModel?: {
+    capabilities?: () => Promise<{ available?: string }>
+    create?: (options: Record<string, unknown>) => Promise<AITextSession>
+  }
+  assistant?: {
+    capabilities?: () => Promise<{ available?: string }>
+    create?: (options: Record<string, unknown>) => Promise<AITextSession>
+  }
+  canCreateTextSession?: () => Promise<string>
+  createTextSession?: (options: Record<string, unknown>) => Promise<AITextSession>
+}
+
 export const checkChromeAIAvailability = async (): Promise<
   | "readily"
   | "unavailable"
@@ -8,11 +26,12 @@ export const checkChromeAIAvailability = async (): Promise<
 > => {
   try {
     // latest latest newer version
-    if (typeof (globalThis as any).LanguageModel !== "undefined") {
-      const availability = await (
-        globalThis as any
-      ).LanguageModel.availability()
-      console.log("LanguageModel availability:", availability) 
+    const languageModel = (
+      globalThis as { LanguageModel?: ChromeLanguageModel }
+    ).LanguageModel
+    if (languageModel?.availability) {
+      const availability = await languageModel.availability()
+      console.log("LanguageModel availability:", availability)
       if (availability === "downloadable") {
         return "downloadable"
       }
@@ -21,7 +40,7 @@ export const checkChromeAIAvailability = async (): Promise<
       }
       return availability == "available" ? "readily" : "no"
     }
-    const ai = (window as any).ai
+    const ai = (globalThis as { ai?: ChromeAI }).ai
 
     // latest i guess
     if (ai?.languageModel?.capabilities) {
@@ -56,16 +75,19 @@ export interface AITextSession {
 }
 
 export const createAITextSession = async (
-  data: any
+  data: Record<string, unknown>
 ): Promise<AITextSession> => {
   // even newer version
-  if (typeof (globalThis as any).LanguageModel !== "undefined") {
-    const session = await (globalThis as any).LanguageModel.create({
+  const languageModel = (
+    globalThis as { LanguageModel?: ChromeLanguageModel }
+  ).LanguageModel
+  if (languageModel?.create) {
+    const session = await languageModel.create({
       ...data
     })
     return session
   }
-  const ai = (window as any).ai
+  const ai = (globalThis as { ai?: ChromeAI }).ai
 
   // new version i guess
   if (ai?.languageModel?.create) {

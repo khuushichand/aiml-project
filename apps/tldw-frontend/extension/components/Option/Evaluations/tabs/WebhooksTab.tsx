@@ -14,7 +14,6 @@ import {
   Input,
   Modal,
   Select,
-  Space,
   Spin,
   Tag,
   Typography
@@ -30,6 +29,7 @@ import {
 import { useServerOnline } from "@/hooks/useServerOnline"
 import { useEvaluationsStore } from "@/store/evaluations"
 import { CopyButton } from "../components"
+import type { EvaluationWebhook } from "@/services/evaluations"
 
 const { Text } = Typography
 
@@ -47,7 +47,7 @@ export const WebhooksTab: React.FC = () => {
   const registerMutation = useRegisterWebhook()
   const deleteMutation = useDeleteWebhook()
 
-  const webhooks = webhooksResp?.data?.data || []
+  const webhooks: EvaluationWebhook[] = webhooksResp?.data?.data || []
 
   const handleRegister = async () => {
     try {
@@ -183,7 +183,7 @@ export const WebhooksTab: React.FC = () => {
           />
         ) : (
           <div className="flex flex-col gap-2">
-            {webhooks.map((hook: any) => (
+            {webhooks.map((hook) => (
               <Card
                 key={hook.id}
                 size="small"

@@ -12,6 +12,7 @@ import {
 import { useTranslation } from "react-i18next"
 import { useStorage } from "@plasmohq/storage/hook"
 import { Highlight, themes } from "prism-react-renderer"
+import type { Language } from "prism-react-renderer"
 import { browser } from "wxt/browser"
 import { useArtifactsStore } from "@/store/artifacts"
 import { useStoreMessageOption } from "@/store/option"
@@ -172,8 +173,9 @@ export const ArtifactsPanel = () => {
   }
 
   const isCodeArtifact = active.kind === "code" || active.kind === "diagram"
-  const highlightLanguage =
-    active.kind === "diagram" ? "markdown" : normalizedLanguage
+  const highlightLanguage = (active.kind === "diagram"
+    ? "markdown"
+    : normalizedLanguage) as Language
 
   const handleCopy = () => {
     navigator.clipboard.writeText(active.content)
@@ -278,7 +280,7 @@ export const ArtifactsPanel = () => {
         ) : isCodeArtifact ? (
           <Highlight
             code={active.content}
-            language={highlightLanguage as any}
+            language={highlightLanguage}
             theme={resolveTheme(codeTheme || "dracula")}>
             {({
               className: highlightClassName,

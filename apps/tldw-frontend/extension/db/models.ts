@@ -126,7 +126,7 @@ export const createManyModels = async (
       lookup: `${item.model_id}_${item.provider_id}`,
       id: `${item.model_id}_${generateID()}`,
       db_type: "openai_model",
-      name: item.name.replaceAll(/accounts\/[^\/]+\/models\//g, "")
+      name: item.name.replaceAll(/accounts\/[^/]+\/models\//g, "")
     }
   })
 
@@ -147,8 +147,6 @@ export const createModelFB = async (model: Model): Promise<boolean> => {
     await db.create(model)
     return true
   } catch (e) {
-    // Surface storage failures instead of silently swallowing them
-    // eslint-disable-next-line no-console
     console.error("Failed to create model", e)
     return false
   }

@@ -9,7 +9,6 @@ import React, { useRef, useEffect, useCallback } from 'react'
 import cytoscape, { Core, NodeSingular, EdgeSingular } from 'cytoscape'
 import dagre from 'cytoscape-dagre'
 import { useTimelineStore } from '@/store/timeline'
-import type { TimelineNode, TimelineEdge } from '@/services/timeline'
 
 // Register dagre layout
 cytoscape.use(dagre)
@@ -18,7 +17,29 @@ cytoscape.use(dagre)
 // Styles
 // ============================================================================
 
-const getCytoscapeStyles = (settings: ReturnType<typeof useTimelineStore.getState>['settings']) => [
+type DagreLayoutOptions = cytoscape.LayoutOptions & {
+  rankDir?: string
+  nodeSep?: number
+  rankSep?: number
+  animationDuration?: number
+}
+
+const buildLayoutOptions = (
+  direction: ReturnType<typeof useTimelineStore.getState>['settings']['layoutDirection'],
+  nodeSeparation: number,
+  rankSeparation: number
+): DagreLayoutOptions => ({
+  name: 'dagre',
+  rankDir: direction,
+  nodeSep: nodeSeparation,
+  rankSep: rankSeparation,
+  animate: true,
+  animationDuration: 300
+})
+
+const getCytoscapeStyles = (
+  settings: ReturnType<typeof useTimelineStore.getState>['settings']
+): cytoscape.StylesheetJson => [
   // Cytoscape's typed stylesheet helpers are fairly limited, so we define
   // styles with plain objects and cast to `any` at the leaf level. If this
   // becomes hard to maintain, consider introducing a small wrapper with
@@ -42,7 +63,7 @@ const getCytoscapeStyles = (settings: ReturnType<typeof useTimelineStore.getStat
       'border-color': 'transparent',
       'text-outline-width': 1,
       'text-outline-color': '#000'
-    } as any
+    }
   },
 
   // Root node
@@ -54,7 +75,7 @@ const getCytoscapeStyles = (settings: ReturnType<typeof useTimelineStore.getStat
       'shape': 'diamond',
       'width': 60,
       'height': 60
-    } as any
+    }
   },
 
   // User message nodes
@@ -62,7 +83,7 @@ const getCytoscapeStyles = (settings: ReturnType<typeof useTimelineStore.getStat
     selector: 'node[role="user"]',
     style: {
       'background-color': settings.userNodeColor
-    } as any
+    }
   },
 
   // Assistant message nodes
@@ -74,7 +95,7 @@ const getCytoscapeStyles = (settings: ReturnType<typeof useTimelineStore.getStat
       'text-outline-color': '#fff',
       'border-color': '#ccc',
       'border-width': 1
-    } as any
+    }
   },
 
   // System message nodes
@@ -82,7 +103,7 @@ const getCytoscapeStyles = (settings: ReturnType<typeof useTimelineStore.getStat
     selector: 'node[role="system"]',
     style: {
       'background-color': settings.systemNodeColor
-    } as any
+    }
   },
 
   // Swipe nodes (alternative responses)
@@ -93,7 +114,7 @@ const getCytoscapeStyles = (settings: ReturnType<typeof useTimelineStore.getStat
       'border-style': 'dashed',
       'border-color': '#f59e0b',
       'opacity': 0.85
-    } as any
+    }
   },
 
   // Nodes with swipes indicator
@@ -102,7 +123,7 @@ const getCytoscapeStyles = (settings: ReturnType<typeof useTimelineStore.getStat
     style: {
       'border-width': 3,
       'border-color': '#f59e0b'
-    } as any
+    }
   },
 
   // Selected node
@@ -112,7 +133,7 @@ const getCytoscapeStyles = (settings: ReturnType<typeof useTimelineStore.getStat
       'border-width': 4,
       'border-color': '#22c55e',
       'background-blacken': -0.1
-    } as any
+    }
   },
 
   // Highlighted nodes (from search)
@@ -122,7 +143,7 @@ const getCytoscapeStyles = (settings: ReturnType<typeof useTimelineStore.getStat
       'border-width': 4,
       'border-color': '#fbbf24',
       'background-blacken': -0.2
-    } as any
+    }
   },
 
   // Hovered node
@@ -131,7 +152,7 @@ const getCytoscapeStyles = (settings: ReturnType<typeof useTimelineStore.getStat
     style: {
       'overlay-opacity': 0.2,
       'overlay-color': '#fff'
-    } as any
+    }
   },
 
   // Current conversation nodes
@@ -139,7 +160,7 @@ const getCytoscapeStyles = (settings: ReturnType<typeof useTimelineStore.getStat
     selector: 'node[is_current="true"]',
     style: {
       'background-blacken': -0.1
-    } as any
+    }
   },
 
   // Base edge style
@@ -152,7 +173,7 @@ const getCytoscapeStyles = (settings: ReturnType<typeof useTimelineStore.getStat
       'target-arrow-shape': 'triangle',
       'curve-style': settings.curveStyle,
       'arrow-scale': 0.8
-    } as any
+    }
   },
 
   // Swipe edges
@@ -163,7 +184,7 @@ const getCytoscapeStyles = (settings: ReturnType<typeof useTimelineStore.getStat
       'line-color': '#f59e0b',
       'target-arrow-color': '#f59e0b',
       'opacity': 0.7
-    } as any
+    }
   },
 
   // Selected edge
@@ -173,7 +194,7 @@ const getCytoscapeStyles = (settings: ReturnType<typeof useTimelineStore.getStat
       'width': 3,
       'line-color': '#22c55e',
       'target-arrow-color': '#22c55e'
-    } as any
+    }
   },
 
   // Highlighted edges
@@ -183,7 +204,7 @@ const getCytoscapeStyles = (settings: ReturnType<typeof useTimelineStore.getStat
       'width': 3,
       'line-color': '#fbbf24',
       'target-arrow-color': '#fbbf24'
-    } as any
+    }
   }
 ]
 
@@ -201,13 +222,39 @@ export const GraphCanvas: React.FC = () => {
     settings,
     selectedNodeId,
     highlightedNodeIds,
-    hoveredNodeId,
     selectNode,
     hoverNode,
     toggleSwipeExpansion,
     getVisibleNodes,
     updateSettings
   } = useTimelineStore()
+
+  const settingsRef = useRef(settings)
+  const selectNodeRef = useRef(selectNode)
+  const hoverNodeRef = useRef(hoverNode)
+  const toggleSwipeExpansionRef = useRef(toggleSwipeExpansion)
+  const updateSettingsRef = useRef(updateSettings)
+  const buildElementsRef = useRef<() => cytoscape.ElementDefinition[]>(() => [])
+
+  useEffect(() => {
+    settingsRef.current = settings
+  }, [settings])
+
+  useEffect(() => {
+    selectNodeRef.current = selectNode
+  }, [selectNode])
+
+  useEffect(() => {
+    hoverNodeRef.current = hoverNode
+  }, [hoverNode])
+
+  useEffect(() => {
+    toggleSwipeExpansionRef.current = toggleSwipeExpansion
+  }, [toggleSwipeExpansion])
+
+  useEffect(() => {
+    updateSettingsRef.current = updateSettings
+  }, [updateSettings])
 
   // Convert graph data to Cytoscape elements
   const buildElements = useCallback(() => {
@@ -249,25 +296,27 @@ export const GraphCanvas: React.FC = () => {
     return [...nodeElements, ...edgeElements]
   }, [graph, getVisibleNodes])
 
+  useEffect(() => {
+    buildElementsRef.current = buildElements
+  }, [buildElements])
+
   // Initialize Cytoscape
   useEffect(() => {
     if (!containerRef.current) return
 
+    const initialSettings = settingsRef.current
     const cy = cytoscape({
       container: containerRef.current,
-      elements: buildElements(),
-      style: getCytoscapeStyles(settings),
-      layout: {
-        name: 'dagre',
-        rankDir: settings.layoutDirection,
-        nodeSep: settings.nodeSeparation,
-        rankSep: settings.rankSeparation,
-        animate: true,
-        animationDuration: 300
-      } as any,
+      elements: buildElementsRef.current(),
+      style: getCytoscapeStyles(initialSettings),
+      layout: buildLayoutOptions(
+        initialSettings.layoutDirection,
+        initialSettings.nodeSeparation,
+        initialSettings.rankSeparation
+      ),
       wheelSensitivity: 0.2,
-      minZoom: settings.minZoom,
-      maxZoom: settings.maxZoom,
+      minZoom: initialSettings.minZoom,
+      maxZoom: initialSettings.maxZoom,
       boxSelectionEnabled: false,
       autounselectify: false
     })
@@ -281,7 +330,7 @@ export const GraphCanvas: React.FC = () => {
     // Node click - select
     cy.on('tap', 'node', (evt) => {
       const node = evt.target as NodeSingular
-      selectNode(node.id())
+      selectNodeRef.current(node.id())
     })
 
     // Node double-click - could navigate to message
@@ -298,7 +347,7 @@ export const GraphCanvas: React.FC = () => {
 
       if (nodeData.has_swipes === 'true') {
         longPressTimerRef.current = setTimeout(() => {
-          toggleSwipeExpansion(node.id())
+          toggleSwipeExpansionRef.current(node.id())
           longPressTimerRef.current = null
         }, 500) // 500ms long press
       }
@@ -314,12 +363,12 @@ export const GraphCanvas: React.FC = () => {
     // Node hover
     cy.on('mouseover', 'node', (evt) => {
       const node = evt.target as NodeSingular
-      hoverNode(node.id())
+      hoverNodeRef.current(node.id())
       containerRef.current!.style.cursor = 'pointer'
     })
 
     cy.on('mouseout', 'node', () => {
-      hoverNode(null)
+      hoverNodeRef.current(null)
       containerRef.current!.style.cursor = 'default'
     })
 
@@ -327,13 +376,13 @@ export const GraphCanvas: React.FC = () => {
     cy.on('tap', 'edge', (evt) => {
       const edge = evt.target as EdgeSingular
       // Select the target node of the edge
-      selectNode(edge.target().id())
+      selectNodeRef.current(edge.target().id())
     })
 
     // Background click - deselect
     cy.on('tap', (evt) => {
       if (evt.target === cy) {
-        selectNode(null)
+        selectNodeRef.current(null)
       }
     })
 
@@ -342,7 +391,7 @@ export const GraphCanvas: React.FC = () => {
       const currentZoom = cy.zoom()
       const storeZoom = useTimelineStore.getState().settings.zoomLevel
       if (Math.abs(storeZoom - currentZoom) < 0.001) return
-      updateSettings({ zoomLevel: currentZoom })
+      updateSettingsRef.current({ zoomLevel: currentZoom })
     })
 
     // Cleanup
@@ -370,33 +419,31 @@ export const GraphCanvas: React.FC = () => {
     cy.add(elements)
 
     // Re-run layout
-    cy.layout({
-      name: 'dagre',
-      rankDir: settings.layoutDirection,
-      nodeSep: settings.nodeSeparation,
-      rankSep: settings.rankSeparation,
-      animate: true,
-      animationDuration: 300
-    } as any).run()
+    cy
+      .layout(
+        buildLayoutOptions(
+          settings.layoutDirection,
+          settings.nodeSeparation,
+          settings.rankSeparation
+        )
+      )
+      .run()
 
     // Fit to viewport
     cy.fit(undefined, 50)
-  }, [graph, buildElements, settings.layoutDirection])
+  }, [
+    graph,
+    buildElements,
+    settings.layoutDirection,
+    settings.nodeSeparation,
+    settings.rankSeparation
+  ])
 
   // Update styles when settings change
   useEffect(() => {
     if (!cyRef.current) return
     cyRef.current.style(getCytoscapeStyles(settings))
-  }, [
-    settings.nodeWidth,
-    settings.nodeHeight,
-    settings.nodeShape,
-    settings.userNodeColor,
-    settings.assistantNodeColor,
-    settings.systemNodeColor,
-    settings.edgeColor,
-    settings.curveStyle
-  ])
+  }, [settings])
 
   // Apply zoom level changes from toolbar/settings
   useEffect(() => {

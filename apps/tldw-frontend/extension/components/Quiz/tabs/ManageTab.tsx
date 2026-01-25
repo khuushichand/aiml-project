@@ -1,7 +1,6 @@
 import React from "react"
 import {
   Button,
-  Card,
   Divider,
   Empty,
   Form,
@@ -168,7 +167,7 @@ export const ManageTab: React.FC<ManageTabProps> = ({
         return next
       })
       refetch()
-    } catch (error) {
+    } catch {
       // Deletion failed, restore the quiz in UI
       setDeletedQuizIds((prev) => {
         const next = new Set(prev)
@@ -267,7 +266,7 @@ export const ManageTab: React.FC<ManageTabProps> = ({
       )
       closeEditModal()
       refetch()
-    } catch (error) {
+    } catch {
       messageApi.error(
         t("option:quiz.updateError", { defaultValue: "Failed to update quiz" })
       )
@@ -395,7 +394,7 @@ export const ManageTab: React.FC<ManageTabProps> = ({
       }
       closeQuestionModal()
       questionsQuery.refetch()
-    } catch (error) {
+    } catch {
       messageApi.error(
         t("option:quiz.questionSaveError", { defaultValue: "Failed to save question." })
       )
@@ -431,7 +430,7 @@ export const ManageTab: React.FC<ManageTabProps> = ({
         return next
       })
       questionsQuery.refetch()
-    } catch (error) {
+    } catch {
       // Deletion failed, restore the question in UI
       setDeletedQuestionIds((prev) => {
         const next = new Set(prev)

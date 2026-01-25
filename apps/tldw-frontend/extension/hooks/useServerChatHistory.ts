@@ -37,7 +37,6 @@ export const useServerChatHistory = (searchQuery: string) => {
           return haystack.includes(normalizedQuery)
         })
       } catch (e) {
-        // eslint-disable-next-line no-console
         console.error(
           "[serverChatHistory] Failed to fetch server chats",
           e

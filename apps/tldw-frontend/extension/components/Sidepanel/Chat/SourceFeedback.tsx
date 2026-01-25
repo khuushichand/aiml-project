@@ -3,17 +3,18 @@ import { Tooltip } from "antd"
 import { ThumbsDown, ThumbsUp } from "lucide-react"
 import { useTranslation } from "react-i18next"
 import { MessageSource } from "@/components/Common/Playground/MessageSource"
+import type { Source } from "@/components/Common/Playground/types"
 import type { FeedbackThumb } from "@/store/feedback"
 
 type Props = {
-  source: any
+  source: Source
   sourceKey: string
   sourceIndex?: number
   selected?: FeedbackThumb
   disabled?: boolean
-  onRate?: (sourceKey: string, source: any, thumb: FeedbackThumb) => void
-  onSourceClick?: (source: any) => void
-  onTrackClick?: (source: any, index?: number) => void
+  onRate?: (sourceKey: string, source: Source, thumb: FeedbackThumb) => void
+  onSourceClick?: (source: Source) => void
+  onTrackClick?: (source: Source, index?: number) => void
 }
 
 const buttonBase =
@@ -32,7 +33,7 @@ export const SourceFeedback = ({
   const { t } = useTranslation("playground")
 
   const handleSourceClick = React.useCallback(
-    (payload: any) => {
+    (payload: Source) => {
       onTrackClick?.(payload, sourceIndex)
       onSourceClick?.(payload)
     },
@@ -40,7 +41,7 @@ export const SourceFeedback = ({
   )
 
   const handleSourceNavigate = React.useCallback(
-    (payload: any) => {
+    (payload: Source) => {
       onTrackClick?.(payload, sourceIndex)
     },
     [onTrackClick, sourceIndex]

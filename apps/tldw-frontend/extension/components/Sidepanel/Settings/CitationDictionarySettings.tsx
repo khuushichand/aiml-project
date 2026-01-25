@@ -86,7 +86,7 @@ export const CitationDictionarySettings = () => {
       ...(ragAdvancedOptions || {}),
       citation_style: citationStyle
     })
-  }, [citationStyle, setRagAdvancedOptions])
+  }, [citationStyle, ragAdvancedOptions, setRagAdvancedOptions])
 
   return (
     <div className="border border-border rounded p-4 bg-surface">

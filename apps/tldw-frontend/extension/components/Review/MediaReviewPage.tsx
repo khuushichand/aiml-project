@@ -1,5 +1,5 @@
 import React from "react"
-import { Input, Button, Spin, Tag, Tooltip, Radio, Pagination, Empty, Select, Checkbox, Typography, Skeleton, Switch, Alert, Collapse, Dropdown } from "antd"
+import { Input, Button, Spin, Tag, Tooltip, Radio, Pagination, Empty, Select, Checkbox, Typography, Skeleton, Switch, Dropdown } from "antd"
 import { useTranslation } from "react-i18next"
 import { bgRequest } from "@/services/background-proxy"
 import { useQuery, keepPreviousData } from "@tanstack/react-query"
@@ -36,29 +36,61 @@ type MediaDetail = {
   content?: string
   text?: string
   raw_text?: string
+  rawText?: string
   summary?: string
   latest_version?: { content?: string }
+  latestVersion?: Record<string, unknown>
+  data?: Record<string, unknown>
+  analysis?: string
+  source?: string | Record<string, unknown>
+  url?: string
+  original_url?: string
+  duration?: string | number
 }
 
-const getContent = (d: MediaDetail): string => {
+const isRecord = (value: unknown): value is Record<string, unknown> =>
+  value !== null && typeof value === "object"
+
+const getStringValue = (value: unknown): string | undefined =>
+  typeof value === "string" ? value : undefined
+
+const getMediaId = (record: Record<string, unknown>): string | number => {
+  const raw = record.id ?? record.media_id ?? record.pk ?? record.uuid
+  if (typeof raw === "string" || typeof raw === "number") return raw
+  return String(raw ?? "")
+}
+
+const getContent = (d: MediaDetail | string | null | undefined): string => {
   if (!d) return ""
-  const firstString = (...vals: any[]): string => {
+  if (typeof d === "string") return d
+  const firstString = (...vals: unknown[]): string => {
     for (const v of vals) {
       if (typeof v === 'string' && v.trim().length > 0) return v
     }
     return ""
   }
-  if (typeof d === 'string') return d
-  const root = firstString(d.content, d.text, (d as any).raw_text, (d as any).rawText, d.summary)
+  const root = firstString(d.content, d.text, d.raw_text, d.rawText, d.summary)
   if (root) return root
-  const lv: any = (d as any).latest_version || (d as any).latestVersion
+  const lv = isRecord(d.latest_version) ? d.latest_version : d.latestVersion
   if (lv && typeof lv === 'object') {
-    const fromLatest = firstString(lv.content, lv.text, lv.raw_text, lv.rawText, lv.summary)
+    const fromLatest = firstString(
+      lv.content,
+      lv.text,
+      lv.raw_text,
+      lv.rawText,
+      lv.summary
+    )
     if (fromLatest) return fromLatest
   }
-  const data: any = (d as any).data
+  const data = d.data
   if (data && typeof data === 'object') {
-    const fromData = firstString(data.content, data.text, data.raw_text, data.rawText, data.summary)
+    const fromData = firstString(
+      data.content,
+      data.text,
+      data.raw_text,
+      data.rawText,
+      data.summary
+    )
     if (fromData) return fromData
   }
   return ""
@@ -135,25 +167,45 @@ export const MediaReviewPage: React.FC = () => {
   const fetchList = async (): Promise<MediaItem[]> => {
     const hasQuery = query.trim().length > 0
     if (hasQuery) {
-      const body: any = { query, fields: ["title", "content"], sort_by: "relevance" }
+      const body: Record<string, unknown> = {
+        query,
+        fields: ["title", "content"],
+        sort_by: "relevance"
+      }
       if (types.length > 0) body.media_types = types
       if (keywordTokens.length > 0) body.must_have = keywordTokens
-      const res = await bgRequest<any>({
-        path: `/api/v1/media/search?page=${page}&results_per_page=${pageSize}` as any,
-        method: "POST" as any,
+      const res = await bgRequest<unknown>({
+        path: `/api/v1/media/search?page=${page}&results_per_page=${pageSize}`,
+        method: "POST",
         headers: { "Content-Type": "application/json" },
         body
       })
-      const items = Array.isArray(res?.items) ? res.items : (Array.isArray(res?.results) ? res.results : [])
-      const pagination = res?.pagination
-      setTotal(Number(pagination?.total_items || items.length || 0))
-      const mapped: MediaItem[] = items.map((m: any) => ({
-        id: m?.id ?? m?.media_id ?? m?.pk ?? m?.uuid,
-        title: m?.title || m?.filename || `Media ${m?.id}`,
-        snippet: m?.snippet || m?.summary || "",
-        type: String(m?.type || m?.media_type || "").toLowerCase(),
-        created_at: m?.created_at
-      }))
+      const resRecord = isRecord(res) ? res : {}
+      const rawItems = Array.isArray(resRecord.items)
+        ? resRecord.items
+        : Array.isArray(resRecord.results)
+          ? resRecord.results
+          : []
+      const items = rawItems.filter(isRecord)
+      const pagination = isRecord(resRecord.pagination) ? resRecord.pagination : undefined
+      const totalItems =
+        pagination && typeof pagination.total_items === "number"
+          ? pagination.total_items
+          : items.length
+      setTotal(Number(totalItems || 0))
+      const mapped: MediaItem[] = items.map((m) => {
+        const id = getMediaId(m)
+        const title = getStringValue(m.title) || getStringValue(m.filename) || `Media ${id}`
+        const snippet = getStringValue(m.snippet) || getStringValue(m.summary) || ""
+        const typeRaw = getStringValue(m.type) || getStringValue(m.media_type) || ""
+        return {
+          id,
+          title,
+          snippet,
+          type: typeRaw.toLowerCase(),
+          created_at: getStringValue(m.created_at)
+        }
+      })
       // Update available types
       const typeSet = new Set(availableTypes)
       for (const it of mapped) if (it.type) typeSet.add(it.type)
@@ -176,7 +228,10 @@ export const MediaReviewPage: React.FC = () => {
           let d = details[m.id]
           if (!d) {
             try {
-              d = await bgRequest<MediaDetail>({ path: `/api/v1/media/${m.id}` as any, method: 'GET' as any })
+              d = await bgRequest<MediaDetail>({
+                path: `/api/v1/media/${m.id}`,
+                method: "GET"
+              })
               setDetails((prev) => (prev[m.id] ? prev : { ...prev, [m.id]: d! }))
             } catch {}
           }
@@ -196,17 +251,32 @@ export const MediaReviewPage: React.FC = () => {
       return filtered
     }
     // Browse listing when no query
-    const res = await bgRequest<any>({ path: `/api/v1/media/?page=${page}&results_per_page=${pageSize}` as any, method: "GET" as any })
-    const items = Array.isArray(res?.items) ? res.items : []
-    const pagination = res?.pagination
-    setTotal(Number(pagination?.total_items || items.length || 0))
-    const mapped: MediaItem[] = items.map((m: any) => ({
-      id: m?.id ?? m?.media_id ?? m?.pk ?? m?.uuid,
-      title: m?.title || m?.filename || `Media ${m?.id}`,
-      snippet: m?.snippet || m?.summary || "",
-      type: String(m?.type || m?.media_type || "").toLowerCase(),
-      created_at: m?.created_at
-    }))
+    const res = await bgRequest<unknown>({
+      path: `/api/v1/media/?page=${page}&results_per_page=${pageSize}`,
+      method: "GET"
+    })
+    const resRecord = isRecord(res) ? res : {}
+    const rawItems = Array.isArray(resRecord.items) ? resRecord.items : []
+    const items = rawItems.filter(isRecord)
+    const pagination = isRecord(resRecord.pagination) ? resRecord.pagination : undefined
+    const totalItems =
+      pagination && typeof pagination.total_items === "number"
+        ? pagination.total_items
+        : items.length
+    setTotal(Number(totalItems || 0))
+    const mapped: MediaItem[] = items.map((m) => {
+      const id = getMediaId(m)
+      const title = getStringValue(m.title) || getStringValue(m.filename) || `Media ${id}`
+      const snippet = getStringValue(m.snippet) || getStringValue(m.summary) || ""
+      const typeRaw = getStringValue(m.type) || getStringValue(m.media_type) || ""
+      return {
+        id,
+        title,
+        snippet,
+        type: typeRaw.toLowerCase(),
+        created_at: getStringValue(m.created_at)
+      }
+    })
     const typeSet = new Set(availableTypes)
     for (const it of mapped) if (it.type) typeSet.add(it.type)
     setAvailableTypes(Array.from(typeSet))
@@ -224,13 +294,16 @@ export const MediaReviewPage: React.FC = () => {
     if (includeContent && (keywordTokens.length > 0 || query.trim().length > 0)) {
       setContentLoading(true)
       const enriched = await Promise.all(filtered.map(async (m) => {
-        let d = details[m.id]
-        if (!d) {
-          try {
-            d = await bgRequest<MediaDetail>({ path: `/api/v1/media/${m.id}` as any, method: 'GET' as any })
-            setDetails((prev) => (prev[m.id] ? prev : { ...prev, [m.id]: d! }))
-          } catch {}
-        }
+          let d = details[m.id]
+          if (!d) {
+            try {
+              d = await bgRequest<MediaDetail>({
+                path: `/api/v1/media/${m.id}`,
+                method: "GET"
+              })
+              setDetails((prev) => (prev[m.id] ? prev : { ...prev, [m.id]: d! }))
+            } catch {}
+          }
         const content = d ? getContent(d) : ''
         return { m, content }
       }))
@@ -247,7 +320,7 @@ export const MediaReviewPage: React.FC = () => {
     return filtered
   }
 
-  const { data, isFetching, refetch } = useQuery({
+  const { data, isFetching, refetch } = useQuery<MediaItem[]>({
     queryKey: ["media-review", query, page, pageSize],
     queryFn: fetchList,
     // React Query v5: use placeholderData helper to keep previous data
@@ -258,7 +331,7 @@ export const MediaReviewPage: React.FC = () => {
   React.useEffect(() => {
     // auto fetch initial
     refetch()
-  }, [])
+  }, [refetch])
 
   // Keyword suggestions: preload and on-demand search
   const loadKeywordSuggestions = React.useCallback(async (q?: string) => {
@@ -281,9 +354,18 @@ export const MediaReviewPage: React.FC = () => {
     if (details[id] || detailLoading[id]) return
     setDetailLoading((prev) => ({ ...prev, [id]: true }))
     try {
-      const d = await bgRequest<MediaDetail>({ path: `/api/v1/media/${id}` as any, method: 'GET' as any })
-      const base = Array.isArray(data) ? (data as MediaItem[]).find((x) => x.id === id) : undefined
-      const enriched = { ...d, id, title: (d as any)?.title ?? base?.title, type: (d as any)?.type ?? base?.type, created_at: (d as any)?.created_at ?? base?.created_at } as any
+      const d = await bgRequest<MediaDetail>({
+        path: `/api/v1/media/${id}`,
+        method: "GET"
+      })
+      const base = data?.find((x) => x.id === id)
+      const enriched: MediaDetail = {
+        ...d,
+        id,
+        title: d?.title ?? base?.title,
+        type: d?.type ?? base?.type,
+        created_at: d?.created_at ?? base?.created_at
+      }
       setDetails((prev) => ({ ...prev, [id]: enriched }))
     } catch {
       // ignore detail fetch errors but clear loading flag
@@ -371,16 +453,20 @@ export const MediaReviewPage: React.FC = () => {
     ? 'border border-border rounded p-3 bg-surface w-full'
     : 'border border-border rounded p-3 bg-surface w-full md:w-[48%]'
 
-  const allResults: MediaItem[] = Array.isArray(data) ? data : []
+  const allResults = React.useMemo<MediaItem[]>(() => data ?? [], [data])
   const hasResults = allResults.length > 0
-  const viewerItems = selectedIds.map((id) => details[id]).filter(Boolean)
-  const visibleIds = viewMode === "spread"
-    ? selectedIds
-    : viewMode === "list"
-      ? (focusedId != null ? [focusedId] : [])
-      : selectedIds
+  const viewerItems = React.useMemo(
+    () => selectedIds.map((id) => details[id]).filter(Boolean),
+    [selectedIds, details]
+  )
+  const visibleIds = React.useMemo(() => {
+    if (viewMode === "spread") return selectedIds
+    if (viewMode === "list") return focusedId != null ? [focusedId] : []
+    return selectedIds
+  }, [viewMode, selectedIds, focusedId])
   const focusedDetail = focusedId != null ? details[focusedId] : null
-  const focusIndex = focusedId != null ? allResults.findIndex((r) => r.id === focusedId) : -1
+  const focusIndex =
+    focusedId != null ? allResults.findIndex((r) => r.id === focusedId) : -1
   const listParentRef = React.useRef<HTMLDivElement | null>(null)
   const viewerParentRef = React.useRef<HTMLDivElement | null>(null)
   const cardRefs = React.useRef<Record<string, HTMLElement | null>>({})
@@ -390,7 +476,7 @@ export const MediaReviewPage: React.FC = () => {
     getScrollElement: () => listParentRef.current,
     estimateSize: () => 110,
     overscan: 8,
-    getItemKey: (index) => String((allResults[index] as any)?.id ?? index)
+    getItemKey: (index) => String(allResults[index]?.id ?? index)
   })
 
   const viewerVirtualizer = useVirtualizer({
@@ -415,7 +501,7 @@ export const MediaReviewPage: React.FC = () => {
         })
       )
     }
-  }, [allResults, ensureDetail, openAllLimit, t])
+  }, [allResults, ensureDetail, message, openAllLimit, t])
 
   const expandAllContent = React.useCallback(() => {
     setContentExpandedIds(new Set(visibleIds.map((id) => String(id))))
@@ -538,7 +624,7 @@ export const MediaReviewPage: React.FC = () => {
     const { virtualRow, isAllMode } = opts || {}
     const key = String(d.id)
     const content = getContent(d) || ""
-    const analysisText = d.summary || (d as any)?.analysis || ""
+    const analysisText = d.summary || d.analysis || ""
     const contentIsLong = content.length > 2000
     const analysisIsLong = analysisText.length > 1600
     const contentExpanded = contentExpandedIds.has(key)
@@ -546,7 +632,7 @@ export const MediaReviewPage: React.FC = () => {
     const contentShown = !contentIsLong || contentExpanded ? content : `${content.slice(0, 2000)}…`
     const analysisShown = !analysisIsLong || analysisExpanded ? analysisText : `${analysisText.slice(0, 1600)}…`
     const isLoadingDetail = detailLoading[d.id]
-    const rawSource = (d as any)?.source || (d as any)?.url || (d as any)?.original_url
+    const rawSource = d.source || d.url || d.original_url
     const source =
       rawSource && typeof rawSource === "object"
         ? (rawSource.url || rawSource.title || rawSource.href || "")
@@ -585,7 +671,9 @@ export const MediaReviewPage: React.FC = () => {
               {isAllMode && <Tag>{t("mediaPage.stackPosition", "#{{num}}", { num: idx + 1 })}</Tag>}
               {d.type && <Tag>{String(d.type).toLowerCase()}</Tag>}
               {d.created_at && <span>{new Date(d.created_at).toLocaleString()}</span>}
-              {(d as any)?.duration && <span>{t("mediaPage.duration", "{{value}}", { value: (d as any).duration })}</span>}
+              {d.duration != null && (
+                <span>{t("mediaPage.duration", "{{value}}", { value: d.duration })}</span>
+              )}
               {source && <span className="truncate max-w-[10rem]">{String(source)}</span>}
               {transcriptLen ? <span>{t("mediaPage.transcriptLength", "{{k}}k chars", { k: transcriptLen })}</span> : null}
             </div>
@@ -606,7 +694,7 @@ export const MediaReviewPage: React.FC = () => {
                   try { await navigator.clipboard.writeText(full); message.success(t('mediaPage.contentCopied', 'Content copied')) }
                   catch { message.error(t('mediaPage.copyFailed', 'Copy failed')) }
                 }}
-                icon={(<CopyIcon className="w-4 h-4" />) as any}
+                icon={<CopyIcon className="w-4 h-4" />}
               >
                 {t("mediaPage.copyContentLabel", "Copy Content")}
               </Button>
@@ -619,7 +707,7 @@ export const MediaReviewPage: React.FC = () => {
                   try { await navigator.clipboard.writeText(full); message.success(t('mediaPage.analysisCopied', 'Analysis copied')) }
                   catch { message.error(t('mediaPage.copyFailed', 'Copy failed')) }
                 }}
-                icon={(<CopyIcon className="w-4 h-4" />) as any}
+                icon={<CopyIcon className="w-4 h-4" />}
               >
                 {t("mediaPage.copyAnalysisLabel", "Copy Analysis")}
               </Button>
@@ -999,9 +1087,9 @@ export const MediaReviewPage: React.FC = () => {
                     className="min-w-[12rem]"
                     placeholder={t("mediaPage.pickItem", "Pick an item")}
                     value={focusedId ?? undefined}
-                    onChange={(val) => {
-                      setFocusedId(val as any)
-                      void ensureDetail(val as any)
+                    onChange={(val: string | number) => {
+                      setFocusedId(val)
+                      void ensureDetail(val)
                     }}
                     options={allResults.map((m, idx) => ({
                       label: `${idx + 1}. ${m.title || `Media ${m.id}`}`,

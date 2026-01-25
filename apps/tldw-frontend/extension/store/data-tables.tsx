@@ -137,7 +137,7 @@ interface UIActions {
 interface EditingActions {
   startEditing: (table: DataTable) => void
   stopEditing: () => void
-  updateCell: (rowIndex: number, columnId: string, value: any) => void
+  updateCell: (rowIndex: number, columnId: string, value: unknown) => void
   addRow: (afterIndex?: number) => void
   deleteRow: (rowIndex: number) => void
   addColumn: (column: DataTableColumn, afterColumnId?: string) => void
@@ -145,7 +145,10 @@ interface EditingActions {
   reorderColumns: (fromIndex: number, toIndex: number) => void
   setEditingCellKey: (key: string | null) => void
   discardChanges: () => void
-  getEditedTableData: () => { columns: DataTableColumn[]; rows: Record<string, any>[] } | null
+  getEditedTableData: () => {
+    columns: DataTableColumn[]
+    rows: Record<string, unknown>[]
+  } | null
 }
 
 // ─────────────────────────────────────────────────────────────────────────────

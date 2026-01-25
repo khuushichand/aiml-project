@@ -36,6 +36,7 @@ export const ContextChips: React.FC<ContextChipsProps> = ({
           className="inline-flex items-center gap-2 rounded-full border border-border bg-surface2 px-2.5 py-0.5 text-[11px] text-text"
         >
           {item.previewSrc ? (
+            // eslint-disable-next-line @next/next/no-img-element
             <img
               src={item.previewSrc}
               alt=""

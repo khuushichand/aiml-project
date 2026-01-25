@@ -12,7 +12,6 @@ import {
   Badge
 } from "antd"
 import { Plus, Kanban, Upload, RefreshCw } from "lucide-react"
-import { useTranslation } from "react-i18next"
 
 import {
   listBoards,
@@ -27,7 +26,6 @@ import { ImportPanel } from "./ImportPanel"
 type PlaygroundTab = "board" | "import"
 
 export const KanbanPlayground = () => {
-  const { t } = useTranslation(["settings", "common"])
   const queryClient = useQueryClient()
   // Tab state
   const [activeTab, setActiveTab] = useState<PlaygroundTab>("board")

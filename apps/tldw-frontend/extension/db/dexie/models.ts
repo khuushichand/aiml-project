@@ -99,7 +99,7 @@ export const createManyModels = async (
       lookup: `${item.model_id}_${item.provider_id}`,
       id: `${item.model_id}_${generateID()}`,
       db_type: "openai_model",
-      name: item.name.replaceAll(/accounts\/[^\/]+\/models\//g, "")
+      name: item.name.replaceAll(/accounts\/[^/]+\/models\//g, "")
     }
   })
 

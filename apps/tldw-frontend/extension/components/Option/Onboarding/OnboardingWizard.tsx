@@ -81,7 +81,6 @@ const LegacyOnboardingWizard: React.FC<Props> = ({ onFinish }) => {
         await useConnectionStore.getState().beginOnboarding()
       } catch (err) {
         // Store init failures should not block the wizard, but log for diagnostics.
-        // eslint-disable-next-line no-console
         console.debug(
           "[OnboardingWizard] Failed to begin onboarding from connection store",
           err
@@ -104,7 +103,6 @@ const LegacyOnboardingWizard: React.FC<Props> = ({ onFinish }) => {
             const fallback = await getTldwServerURL()
             if (fallback) setServerUrl(fallback)
           } catch (err) {
-            // eslint-disable-next-line no-console
             console.debug(
               "[OnboardingWizard] Failed to derive fallback server URL",
               err
@@ -112,7 +110,6 @@ const LegacyOnboardingWizard: React.FC<Props> = ({ onFinish }) => {
           }
         }
       } catch (err) {
-        // eslint-disable-next-line no-console
         console.debug(
           "[OnboardingWizard] Failed to load initial tldw config",
           err
@@ -179,7 +176,6 @@ const LegacyOnboardingWizard: React.FC<Props> = ({ onFinish }) => {
       try {
         void useConnectionStore.getState().setServerUrl(trimmed)
       } catch (err) {
-        // eslint-disable-next-line no-console
         console.debug(
           "[OnboardingWizard] Failed to sync serverUrl into connection store",
           err
@@ -273,25 +269,6 @@ const LegacyOnboardingWizard: React.FC<Props> = ({ onFinish }) => {
     return 1
   }, [activeStep])
 
-  const stepTitle = React.useMemo(() => {
-    if (activeStep === 1) {
-      return t(
-        "settings:onboarding.stepLabel.url",
-        "Tell the extension where your server is"
-      )
-    }
-    if (activeStep === 2) {
-      return t(
-        "settings:onboarding.stepLabel.auth",
-        "Set up authentication"
-      )
-    }
-    return t(
-      "settings:onboarding.stepLabel.health",
-      "Check connection and Knowledge"
-    )
-  }, [activeStep, t])
-
   const startCommands = React.useMemo(
     () => [
       {
@@ -336,7 +313,6 @@ const LegacyOnboardingWizard: React.FC<Props> = ({ onFinish }) => {
     try {
       await useConnectionStore.getState().setConfigPartial({ serverUrl })
     } catch (err) {
-      // eslint-disable-next-line no-console
       console.debug(
         "[OnboardingWizard] Failed to persist serverUrl via setConfigPartial",
         err
@@ -351,7 +327,6 @@ const LegacyOnboardingWizard: React.FC<Props> = ({ onFinish }) => {
       .getState()
       .beginOnboarding()
       .catch((err) => {
-        // eslint-disable-next-line no-console
         console.debug(
           "[OnboardingWizard] Failed to reset onboarding step to URL",
           err
@@ -418,7 +393,6 @@ const LegacyOnboardingWizard: React.FC<Props> = ({ onFinish }) => {
       })
       await useConnectionStore.getState().testConnectionFromOnboarding()
     } catch (err) {
-      // eslint-disable-next-line no-console
       console.debug(
         "[OnboardingWizard] Failed to persist auth config or run connection test",
         err
@@ -441,7 +415,6 @@ const LegacyOnboardingWizard: React.FC<Props> = ({ onFinish }) => {
     try {
       useConnectionStore.getState().setDemoMode()
     } catch (err) {
-      // eslint-disable-next-line no-console
       console.debug(
         "[OnboardingWizard] Failed to enable demo mode from onboarding",
         err
@@ -455,7 +428,6 @@ const LegacyOnboardingWizard: React.FC<Props> = ({ onFinish }) => {
       .getState()
       .markFirstRunComplete()
       .catch((err) => {
-        // eslint-disable-next-line no-console
         console.debug(
           "[OnboardingWizard] Failed to mark first run complete",
           err

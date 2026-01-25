@@ -16,6 +16,7 @@ import { maybeInjectActorMessage } from "@/utils/actor"
 import type { ChatModelSettings } from "@/store/model"
 import { extractGenerationInfo } from "@/utils/llm-helpers"
 import type { SaveMessageData, SaveMessageErrorData } from "@/types/chat-modes"
+import type { ChatDocuments } from "@/models/ChatTypes"
 import {
   runChatPipeline,
   type ChatModeDefinition
@@ -74,7 +75,7 @@ type DocumentChatModeParams = {
   uploadedFiles: UploadedFile[]
   newFiles: UploadedFile[]
   allFiles: UploadedFile[]
-  documents?: any[]
+  documents?: ChatDocuments
 }
 
 const documentChatModeDefinition: ChatModeDefinition<DocumentChatModeParams> = {
@@ -129,7 +130,7 @@ const documentChatModeDefinition: ChatModeDefinition<DocumentChatModeParams> = {
         ]
 
     let context = ""
-    let source: any[] = []
+    let source: Record<string, unknown>[] = []
     const docSize = await getNoOfRetrievedDocs()
 
     if (contextMessages.length > 2) {
@@ -297,11 +298,10 @@ export const documentChatMode = async (
   )
 
   const allFiles = [...sessionFiles, ...newFiles]
-  const documentsForSave: any[] = uploadedFiles.map((file) => ({
+  const documentsForSave: ChatDocuments = uploadedFiles.map((file) => ({
     type: "file",
     filename: file.filename,
-    fileSize: file.size,
-    processed: file.processed
+    fileSize: file.size
   }))
 
   const saveMessageOnSuccess = async (data: SaveMessageData) => {

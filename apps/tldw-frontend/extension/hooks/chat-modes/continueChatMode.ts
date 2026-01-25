@@ -7,6 +7,7 @@ import type { ActorSettings } from "@/types/actor"
 import { maybeInjectActorMessage } from "@/utils/actor"
 import { updateActiveVariant } from "@/utils/message-variants"
 import type { SaveMessageData, SaveMessageErrorData } from "@/types/chat-modes"
+import type { ChatModelSettings } from "@/store/model"
 import {
   runChatPipeline,
   type ChatModeDefinition
@@ -16,7 +17,7 @@ type ContinueChatModeParams = {
   selectedModel: string
   useOCR: boolean
   selectedSystemPrompt: string
-  currentChatModelSettings: any
+  currentChatModelSettings: ChatModelSettings | null
   toolChoice?: ToolChoice
   setMessages: (messages: Message[] | ((prev: Message[]) => Message[])) => void
   saveMessageOnSuccess: (data: SaveMessageData) => Promise<string | null>
@@ -76,9 +77,9 @@ const continueChatModeDefinition: ChatModeDefinition<ContinueChatModeParams> = {
       )
     }
 
+    const systemPrompt = ctx.currentChatModelSettings?.systemPrompt
     const isTempSystemprompt =
-      ctx.currentChatModelSettings.systemPrompt &&
-      ctx.currentChatModelSettings.systemPrompt?.trim().length > 0
+      systemPrompt && systemPrompt.trim().length > 0
 
     if (!isTempSystemprompt && selectedPrompt) {
       const selectedPromptContent =
@@ -91,13 +92,13 @@ const continueChatModeDefinition: ChatModeDefinition<ContinueChatModeParams> = {
       promptContent = selectedPromptContent
     }
 
-    if (isTempSystemprompt) {
+    if (isTempSystemprompt && systemPrompt) {
       applicationChatHistory.unshift(
         await systemPromptFormatter({
-          content: ctx.currentChatModelSettings.systemPrompt
+          content: systemPrompt
         })
       )
-      promptContent = ctx.currentChatModelSettings.systemPrompt
+      promptContent = systemPrompt
     }
 
     const templatesActive = !!ctx.selectedSystemPrompt

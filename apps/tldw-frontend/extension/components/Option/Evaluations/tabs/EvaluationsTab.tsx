@@ -33,6 +33,8 @@ import { CopyButton, CreateEvaluationWizard } from "../components"
 import type { EvaluationSummary } from "@/services/evaluations"
 
 const { Text } = Typography
+const isRecord = (value: unknown): value is Record<string, unknown> =>
+  typeof value === "object" && value !== null
 
 export const EvaluationsTab: React.FC = () => {
   const { t } = useTranslation(["evaluations", "common"])
@@ -45,7 +47,6 @@ export const EvaluationsTab: React.FC = () => {
     setSelectedEvalId,
     setSelectedRunId,
     editingEvalId,
-    setEditingEvalId,
     createEvalOpen,
     openCreateEval,
     closeCreateEval,
@@ -134,23 +135,36 @@ export const EvaluationsTab: React.FC = () => {
   const handleOpenEdit = () => {
     if (!selectedEvalId) return
     const selectedSummary = evaluations.find((e) => e.id === selectedEvalId)
-    const detail = evalDetail as any
+    const detail = isRecord(evalDetail) ? evalDetail : {}
     const type =
-      detail?.eval_type || selectedSummary?.eval_type || "response_quality"
+      (typeof detail.eval_type === "string" && detail.eval_type) ||
+      selectedSummary?.eval_type ||
+      "response_quality"
+    const evalSpec =
+      detail.eval_spec !== undefined
+        ? detail.eval_spec
+        : getDefaultEvalSpecForType(type)
     setEvalSpecError(null)
     setEvalSpecText(
       JSON.stringify(
-        detail?.eval_spec || getDefaultEvalSpecForType(type),
+        evalSpec,
         null,
         2
       )
     )
     form.setFieldsValue({
       evalType: type,
-      name: detail?.name || selectedSummary?.name || selectedEvalId,
-      description: detail?.description || selectedSummary?.description,
-      datasetId: detail?.dataset_id || selectedSummary?.dataset_id,
-      evalMetadataJson: detail?.metadata
+      name:
+        (typeof detail.name === "string" && detail.name) ||
+        selectedSummary?.name ||
+        selectedEvalId,
+      description:
+        (typeof detail.description === "string" && detail.description) ||
+        selectedSummary?.description,
+      datasetId:
+        (typeof detail.dataset_id === "string" && detail.dataset_id) ||
+        selectedSummary?.dataset_id,
+      evalMetadataJson: detail.metadata
         ? JSON.stringify(detail.metadata, null, 2)
         : undefined
     })
@@ -177,11 +191,11 @@ export const EvaluationsTab: React.FC = () => {
     setEvalSpecError(null)
     try {
       const values = await form.validateFields()
-      let spec: any
+      let spec: unknown
       try {
         spec = JSON.parse(evalSpecText || "{}")
-      } catch (e: any) {
-        setEvalSpecError(e?.message || "Invalid JSON")
+      } catch (e) {
+        setEvalSpecError(e instanceof Error ? e.message : "Invalid JSON")
         return
       }
 
@@ -189,7 +203,7 @@ export const EvaluationsTab: React.FC = () => {
         .trim()
         .replace(/[^a-zA-Z0-9_-]/g, "-")
 
-      let inlineDataset: any[] | undefined
+      let inlineDataset: unknown[] | undefined
       if (inlineDatasetEnabled && inlineDatasetText.trim().length > 0) {
         try {
           const parsed = JSON.parse(inlineDatasetText)
@@ -198,18 +212,22 @@ export const EvaluationsTab: React.FC = () => {
           } else {
             throw new Error("Inline dataset must be an array.")
           }
-        } catch (e: any) {
-          setEvalSpecError(e?.message || "Invalid inline dataset JSON")
+        } catch (e) {
+          setEvalSpecError(
+            e instanceof Error ? e.message : "Invalid inline dataset JSON"
+          )
           return
         }
       }
 
-      let metadata: Record<string, any> | undefined
+      let metadata: Record<string, unknown> | undefined
       if (values.evalMetadataJson) {
         try {
           metadata = JSON.parse(values.evalMetadataJson)
-        } catch (e: any) {
-          setEvalSpecError(e?.message || "Invalid metadata JSON")
+        } catch (e) {
+          setEvalSpecError(
+            e instanceof Error ? e.message : "Invalid metadata JSON"
+          )
           return
         }
       }

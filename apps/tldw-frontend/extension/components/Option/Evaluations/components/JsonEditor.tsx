@@ -40,8 +40,8 @@ export const JsonEditor: React.FC<JsonEditorProps> = ({
       JSON.parse(value)
       setError(null)
       onValidationError?.(null)
-    } catch (e: any) {
-      const errorMessage = e?.message || "Invalid JSON"
+    } catch (e) {
+      const errorMessage = e instanceof Error ? e.message : "Invalid JSON"
       setError(errorMessage)
       onValidationError?.(errorMessage)
     }

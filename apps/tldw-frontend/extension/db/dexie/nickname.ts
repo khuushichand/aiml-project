@@ -36,7 +36,7 @@ export class ModelNickname {
       mergeData?: boolean
     } = {}
   ): Promise<void> {
-    const { replaceExisting = false, mergeData = true } = options
+    const { replaceExisting: _replaceExisting = false, mergeData: _mergeData = true } = options
 
     for (const oai of data) {
       console.log("Saving x")
@@ -72,7 +72,7 @@ export const getModelNicknameByID = async (
   try {
     const modelNickname = new ModelNickname()
     return (await modelNickname.getModelNicknameByID(model_id)) ?? null
-  } catch (e) {
+  } catch {
     return null
   }
 }

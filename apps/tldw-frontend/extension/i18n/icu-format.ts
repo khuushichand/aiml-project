@@ -2,7 +2,7 @@ import ICU, { type IcuConfig } from "i18next-icu"
 import type { i18n, InterpolationOptions, Interpolator } from "i18next"
 
 declare module "i18next-icu" {
-  interface IcuInstance<TOptions = IcuConfig> {
+  interface IcuInstance<_TOptions = IcuConfig> {
     parse(
       res: string,
       options: Record<string, unknown>,

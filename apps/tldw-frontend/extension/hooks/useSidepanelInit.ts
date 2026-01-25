@@ -23,14 +23,14 @@ export function useSidepanelInit(options: UseSidepanelInitOptions = {}) {
     const resolvedDirection: SidepanelDirection = dir === "rtl" ? "rtl" : "ltr"
     document.documentElement.dir = resolvedDirection
     setDirection(resolvedDirection)
-  }, [language])
+  }, [i18n, language])
 
   useEffect(() => {
     if (typeof document === "undefined") return
     document.title = i18n.t("common:titles.sidepanel", {
       defaultValue: titleDefaultValue
     })
-  }, [language, titleDefaultValue])
+  }, [i18n, language, titleDefaultValue])
 
   return { direction, t, i18n }
 }

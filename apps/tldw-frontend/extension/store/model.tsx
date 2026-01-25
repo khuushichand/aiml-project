@@ -218,5 +218,9 @@ export const useStoreChatModelSettings = create<ChatModelSettingsStore>(
 
 // Expose for Playwright tests and debugging (development only)
 if (typeof window !== "undefined" && env.DEV) {
-  ;(window as any).__tldw_useStoreChatModelSettings = useStoreChatModelSettings
+  type WindowWithChatModelSettings = Window & {
+    __tldw_useStoreChatModelSettings?: typeof useStoreChatModelSettings
+  }
+  const windowWithStore = window as WindowWithChatModelSettings
+  windowWithStore.__tldw_useStoreChatModelSettings = useStoreChatModelSettings
 }

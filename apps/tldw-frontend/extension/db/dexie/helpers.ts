@@ -117,12 +117,12 @@ export const saveMessage = async ({
   role: string
   content: string
   images: string[]
-  source?: any[]
+  source?: Message["sources"]
   time?: number
   message_type?: string
   clusterId?: string
   modelId?: string
-  generationInfo?: any
+  generationInfo?: Message["generationInfo"]
   reasoning_time_taken?: number
   modelName?: string
   modelImage?: string
@@ -189,7 +189,13 @@ const shouldGroupVariants = (message: Message): boolean => {
   return true
 }
 
-const buildVariantFromHistory = (message: Message): MessageVariant => ({
+const buildVariantFromHistory = (message: Message): MessageVariant => {
+  const meta = message as Record<string, unknown>
+  const serverMessageId =
+    typeof meta.serverMessageId === "string" ? meta.serverMessageId : undefined
+  const serverMessageVersion =
+    typeof meta.serverMessageVersion === "number" ? meta.serverMessageVersion : undefined
+  return {
   id: message.id,
   message: message.content,
   sources: message.sources ?? [],
@@ -197,9 +203,10 @@ const buildVariantFromHistory = (message: Message): MessageVariant => ({
   generationInfo: message.generationInfo,
   reasoning_time_taken: message.reasoning_time_taken,
   createdAt: message.createdAt,
-  serverMessageId: (message as any).serverMessageId,
-  serverMessageVersion: (message as any).serverMessageVersion
-})
+  serverMessageId,
+  serverMessageVersion
+  }
+}
 
 const collapseVariantMessages = (messages: MessageHistory) => {
   const sorted = [...messages].sort((a, b) => a.createdAt - b.createdAt)
@@ -350,7 +357,7 @@ export const updateMessageByIndex = async (
     if (sortedHistory[index]) {
       await db.updateMessage(history_id, sortedHistory[index].id, message)
     }
-  } catch (e) {
+  } catch {
     // temp chat will break
   }
 }
@@ -537,7 +544,7 @@ export const getAllWebshares = async () => {
   try {
     const db = new PageAssistDatabase()
     return await db.getAllWebshares()
-  } catch (e) {
+  } catch {
     return []
   }
 }
@@ -661,7 +668,7 @@ export const importPrompts = async (prompts: Prompts) => {
   }
 }
 
-export const importOAIConfigs = async (configs: any[]) => {
+export const importOAIConfigs = async (configs: unknown[]) => {
   // Legacy OpenAI provider configs are ignored now that the
   // extension is tldw_server-only.
   void configs
@@ -822,8 +829,13 @@ export const clearSessionFiles = async (sessionId: string) => {
   const db = new PageAssistDatabase()
   await db.clearSessionFiles(sessionId)
 }
+type ChatHistoryImportItem = {
+  history?: HistoryInfo
+  messages?: Message[]
+}
+
 export const importChatHistoryV2 = async (
-  data: any[],
+  data: ChatHistoryImportItem[],
   options: {
     replaceExisting?: boolean
     mergeData?: boolean
@@ -845,7 +857,7 @@ export const importPromptsV2 = async (
 }
 
 export const importOAIConfigsV2 = async (
-  data: any[],
+  data: unknown[],
   options: {
     replaceExisting?: boolean
     mergeData?: boolean

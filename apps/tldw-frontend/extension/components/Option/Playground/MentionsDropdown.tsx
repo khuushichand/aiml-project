@@ -36,7 +36,6 @@ export const MentionsDropdown: React.FC<MentionsDropdownProps> = ({
 
   React.useEffect(() => {
     if (show && textareaRef.current && dropdownRef.current) {
-      const textareaRect = textareaRef.current.getBoundingClientRect()
       const dropdownHeight = dropdownRef.current.offsetHeight || 320 
       
       setPosition({
@@ -44,7 +43,7 @@ export const MentionsDropdown: React.FC<MentionsDropdownProps> = ({
         left: 0
       })
     }
-  }, [show, tabs])
+  }, [show, tabs, textareaRef])
 
   React.useEffect(() => {
     if (show) {
@@ -145,6 +144,7 @@ export const MentionsDropdown: React.FC<MentionsDropdownProps> = ({
             }`}>
             <div className="flex-shrink-0">
               {tab.favIconUrl ? (
+                // eslint-disable-next-line @next/next/no-img-element
                 <img
                   src={tab.favIconUrl}
                   alt=""

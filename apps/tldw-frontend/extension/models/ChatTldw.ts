@@ -93,9 +93,11 @@ export class ChatTldw {
       signal?: AbortSignal
       // Matches the shape used in normalChatMode/search/rag, where
       // callbacks: [{ handleLLMEnd(output) { ... } }]
-      callbacks?: Array<{ handleLLMEnd?: (output: any) => any }>
+      callbacks?: Array<{
+        handleLLMEnd?: (output: unknown) => void | Promise<void>
+      }>
     }
-  ): Promise<AsyncGenerator<any, void, unknown>> {
+  ): Promise<AsyncGenerator<string, void, unknown>> {
     const { signal, callbacks } = options || {}
 
     const tldwMessages = this.convertToTldwMessages(messages)

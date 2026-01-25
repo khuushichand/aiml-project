@@ -28,7 +28,7 @@ export const AddUpdateModelSettings: React.FC<Props> = ({
   const { t } = useTranslation("common")
   const queryClient = useQueryClient()
 
-  const { status, isError } = useQuery({
+  const { status } = useQuery({
     queryKey: ["fetchModelSettings", model_id],
     queryFn: async () => {
       const data = await getModelSettings(model_id)
@@ -66,7 +66,7 @@ export const AddUpdateModelSettings: React.FC<Props> = ({
       {status === "pending" && <Skeleton active />}
       {status === "success" && (
         <Form
-          onFinish={(values: any) => {
+          onFinish={(values: Record<string, unknown>) => {
             mutate({
               model_id,
               settings: values

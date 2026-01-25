@@ -56,14 +56,10 @@ export const NodeInfoPanel: React.FC = () => {
     return timelineSearch.highlightMatches(node.content, fragments)
   }, [node, searchQuery])
 
-  const messageIds = useMemo(
-    () => node?.message_ids ?? [],
-    [JSON.stringify(node?.message_ids)]
-  )
-  const historyIds = useMemo(
-    () => node?.history_ids ?? [],
-    [JSON.stringify(node?.history_ids)]
-  )
+  const nodeMessageIds = node?.message_ids
+  const nodeHistoryIds = node?.history_ids
+  const messageIds = useMemo(() => nodeMessageIds ?? [], [nodeMessageIds])
+  const historyIds = useMemo(() => nodeHistoryIds ?? [], [nodeHistoryIds])
   const hasMessage = messageIds.length > 0
   const resolveMessageTarget = React.useCallback(async () => {
     if (messageIds.length === 0) return null

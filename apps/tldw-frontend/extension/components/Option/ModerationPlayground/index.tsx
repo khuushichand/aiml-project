@@ -62,6 +62,15 @@ const HERO_GRID_STYLE: React.CSSProperties = {
   opacity: 0.35
 }
 
+const isRecord = (value: unknown): value is Record<string, unknown> =>
+  typeof value === "object" && value !== null && !Array.isArray(value)
+
+const getErrorMessage = (error: unknown): string =>
+  error instanceof Error ? error.message : typeof error === "string" ? error : ""
+
+const getStatusCode = (error: unknown): number | null =>
+  isRecord(error) && typeof error.status === "number" ? error.status : null
+
 const normalizeCategories = (value: unknown): string[] => {
   if (Array.isArray(value)) {
     return value.map((item) => String(item).trim()).filter(Boolean)
@@ -177,7 +186,7 @@ export const ModerationPlayground: React.FC = () => {
     enabled: online
   })
 
-  const policyQuery = useQuery<Record<string, any>>({
+  const policyQuery = useQuery<Record<string, unknown>>({
     queryKey: ["moderation-policy", activeUserId ?? "server"],
     queryFn: () => getEffectivePolicy(activeUserId || undefined),
     enabled: online
@@ -244,9 +253,9 @@ export const ModerationPlayground: React.FC = () => {
         }
         setOverrideDraft(normalized)
         setOverrideLoaded(true)
-      } catch (err: any) {
+      } catch (error: unknown) {
         if (cancelled) return
-        if (err?.status === 404) {
+        if (getStatusCode(error) === 404) {
           setOverrideDraft({})
           setOverrideLoaded(false)
         } else {
@@ -287,8 +296,8 @@ export const ModerationPlayground: React.FC = () => {
       messageApi.success("Moderation settings updated")
       await settingsQuery.refetch()
       await policyQuery.refetch()
-    } catch (err: any) {
-      messageApi.error(err?.message || "Failed to update settings")
+    } catch (error: unknown) {
+      messageApi.error(getErrorMessage(error) || "Failed to update settings")
     }
   }
 
@@ -307,8 +316,8 @@ export const ModerationPlayground: React.FC = () => {
       if (showAdvanced) {
         await overridesQuery.refetch()
       }
-    } catch (err: any) {
-      messageApi.error(err?.message || "Failed to apply preset")
+    } catch (error: unknown) {
+      messageApi.error(getErrorMessage(error) || "Failed to apply preset")
     }
   }
 
@@ -326,8 +335,8 @@ export const ModerationPlayground: React.FC = () => {
       if (showAdvanced) {
         await overridesQuery.refetch()
       }
-    } catch (err: any) {
-      messageApi.error(err?.message || "Failed to save override")
+    } catch (error: unknown) {
+      messageApi.error(getErrorMessage(error) || "Failed to save override")
     }
   }
 
@@ -346,8 +355,8 @@ export const ModerationPlayground: React.FC = () => {
       if (showAdvanced) {
         await overridesQuery.refetch()
       }
-    } catch (err: any) {
-      messageApi.error(err?.message || "Failed to delete override")
+    } catch (error: unknown) {
+      messageApi.error(getErrorMessage(error) || "Failed to delete override")
     }
   }
 
@@ -360,8 +369,8 @@ export const ModerationPlayground: React.FC = () => {
       if (showAdvanced) {
         await overridesQuery.refetch()
       }
-    } catch (err: any) {
-      messageApi.error(err?.message || "Reload failed")
+    } catch (error: unknown) {
+      messageApi.error(getErrorMessage(error) || "Reload failed")
     }
   }
 
@@ -371,8 +380,8 @@ export const ModerationPlayground: React.FC = () => {
       const lines = await getBlocklist()
       setBlocklistText((lines || []).join("\n"))
       setBlocklistLint(null)
-    } catch (err: any) {
-      messageApi.error(err?.message || "Failed to load blocklist")
+    } catch (error: unknown) {
+      messageApi.error(getErrorMessage(error) || "Failed to load blocklist")
     } finally {
       setBlocklistLoading(false)
     }
@@ -386,8 +395,8 @@ export const ModerationPlayground: React.FC = () => {
         .map((line) => line.trimEnd())
       await updateBlocklist(lines)
       messageApi.success("Blocklist saved")
-    } catch (err: any) {
-      messageApi.error(err?.message || "Failed to save blocklist")
+    } catch (error: unknown) {
+      messageApi.error(getErrorMessage(error) || "Failed to save blocklist")
     } finally {
       setBlocklistLoading(false)
     }
@@ -399,8 +408,8 @@ export const ModerationPlayground: React.FC = () => {
       const lines = blocklistText.split(/\r?\n/)
       const lint = await lintBlocklist({ lines })
       setBlocklistLint(lint)
-    } catch (err: any) {
-      messageApi.error(err?.message || "Lint failed")
+    } catch (error: unknown) {
+      messageApi.error(getErrorMessage(error) || "Lint failed")
     } finally {
       setBlocklistLoading(false)
     }
@@ -412,8 +421,8 @@ export const ModerationPlayground: React.FC = () => {
       const { data, etag } = await getManagedBlocklist()
       setManagedItems(data.items || [])
       setManagedVersion(data.version || etag || "")
-    } catch (err: any) {
-      messageApi.error(err?.message || "Failed to load managed blocklist")
+    } catch (error: unknown) {
+      messageApi.error(getErrorMessage(error) || "Failed to load managed blocklist")
     } finally {
       setManagedLoading(false)
     }
@@ -435,8 +444,8 @@ export const ModerationPlayground: React.FC = () => {
       setManagedLine("")
       await handleLoadManaged()
       messageApi.success("Line appended")
-    } catch (err: any) {
-      messageApi.error(err?.message || "Failed to append or refresh list")
+    } catch (error: unknown) {
+      messageApi.error(getErrorMessage(error) || "Failed to append or refresh list")
     } finally {
       setManagedLoading(false)
     }
@@ -449,8 +458,8 @@ export const ModerationPlayground: React.FC = () => {
       await deleteManagedBlocklistItem(managedVersion, itemId)
       await handleLoadManaged()
       messageApi.success("Line deleted")
-    } catch (err: any) {
-      messageApi.error(err?.message || "Delete failed")
+    } catch (error: unknown) {
+      messageApi.error(getErrorMessage(error) || "Delete failed")
     } finally {
       setManagedLoading(false)
     }
@@ -465,8 +474,8 @@ export const ModerationPlayground: React.FC = () => {
     try {
       const lint = await lintBlocklist({ line: managedLine.trim() })
       setManagedLint(lint)
-    } catch (err: any) {
-      messageApi.error(err?.message || "Lint failed")
+    } catch (error: unknown) {
+      messageApi.error(getErrorMessage(error) || "Lint failed")
     } finally {
       setManagedLoading(false)
     }
@@ -485,8 +494,8 @@ export const ModerationPlayground: React.FC = () => {
       }
       const res = await testModeration(payload)
       setTestResult(res)
-    } catch (err: any) {
-      messageApi.error(err?.message || "Moderation test failed")
+    } catch (error: unknown) {
+      messageApi.error(getErrorMessage(error) || "Moderation test failed")
     }
   }
 
@@ -505,13 +514,13 @@ export const ModerationPlayground: React.FC = () => {
     { title: "Error", dataIndex: "error", key: "error", ellipsis: true }
   ]
 
-  const overrideColumns: ColumnsType<{ user_id: string; override: Record<string, any> }> = [
+  const overrideColumns: ColumnsType<{ user_id: string; override: Record<string, unknown> }> = [
     { title: "User", dataIndex: "user_id", key: "user_id", width: 160 },
     {
       title: "Override",
       dataIndex: "override",
       key: "override",
-      render: (override: Record<string, any>) => (
+      render: (override: Record<string, unknown>) => (
         <Text code className="whitespace-pre-wrap">
           {formatJson(override)}
         </Text>

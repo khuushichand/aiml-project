@@ -26,9 +26,13 @@ export async function apiSend<T = any, P extends PathOrUrl = PathOrUrl, M extend
   payload: ApiSendPayload<P, M>
 ): Promise<ApiSendResponse<T>> {
   try {
-    if (browser?.runtime?.sendMessage) {
+    // In web mode the wxt/browser shim provides sendMessage but no runtime.id.
+    // Only use extension messaging when a real runtime is present.
+    if (browser?.runtime?.sendMessage && browser?.runtime?.id) {
       const resp = await browser.runtime.sendMessage({ type: 'tldw:request', payload })
-      return resp as ApiSendResponse<T>
+      if (resp) {
+        return resp as ApiSendResponse<T>
+      }
     }
   } catch {
     // fall through to direct request

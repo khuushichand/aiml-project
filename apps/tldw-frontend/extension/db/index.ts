@@ -56,11 +56,14 @@ type Message = {
   createdAt: number
   reasoning_time_taken?: number
   messageType?: string
-  generationInfo?: any
+  generationInfo?: Record<string, unknown>
   modelName?: string
   modelImage?: string
   documents?: ChatDocuments
 }
+
+const isRecord = (value: unknown): value is Record<string, unknown> =>
+  typeof value === "object" && value !== null && !Array.isArray(value)
 function simpleFuzzyMatch(text: string, query: string): boolean {
   if (!text || !query) {
     return false
@@ -224,17 +227,21 @@ export class PageAssitDatabase {
 
   async getChatHistory(id: string): Promise<MessageHistory> {
     const modelNicknames = await getAllModelNicknames()
-    return new Promise((resolve, reject) => {
-      this.db.get(id, (result) => {
+    return new Promise((resolve) => {
+      this.db.get(id, (result: unknown) => {
+        const rawList =
+          isRecord(result) && Array.isArray(result[id]) ? result[id] : []
         resolve(
-          (result[id] || []).map((message: any) => {
+          rawList.map((message) => {
+            const record = isRecord(message) ? message : {}
+            const name = typeof record.name === "string" ? record.name : ""
             return {
-              ...message,
+              ...record,
               modelName:
-                modelNicknames[message.name]?.model_name || message.name,
+                modelNicknames[name]?.model_name || name,
               modelImage:
-                modelNicknames[message.name]?.model_avatar || undefined
-            }
+                modelNicknames[name]?.model_avatar || undefined
+            } as MessageType
           })
         )
       })
@@ -242,9 +249,13 @@ export class PageAssitDatabase {
   }
 
   async getChatHistories(): Promise<ChatHistory> {
-    return new Promise((resolve, reject) => {
-      this.db.get("chatHistories", (result) => {
-        resolve(result.chatHistories || [])
+    return new Promise((resolve) => {
+      this.db.get("chatHistories", (result: unknown) => {
+        const histories =
+          isRecord(result) && Array.isArray(result.chatHistories)
+            ? result.chatHistories
+            : []
+        resolve(histories)
       })
     })
   }
@@ -321,9 +332,13 @@ export class PageAssitDatabase {
   }
 
   async getAllPrompts(): Promise<Prompts> {
-    return new Promise((resolve, reject) => {
-      this.db.get("prompts", (result) => {
-        resolve(result.prompts || [])
+    return new Promise((resolve) => {
+      this.db.get("prompts", (result: unknown) => {
+        const prompts =
+          isRecord(result) && Array.isArray(result.prompts)
+            ? result.prompts
+            : []
+        resolve(prompts)
       })
     })
   }
@@ -396,17 +411,22 @@ export class PageAssitDatabase {
   }
 
   async getWebshare(id: string) {
-    return new Promise((resolve, reject) => {
-      this.db.get(id, (result) => {
-        resolve(result[id] || [])
+    return new Promise((resolve) => {
+      this.db.get(id, (result: unknown) => {
+        const item = isRecord(result) ? result[id] : []
+        resolve(item || [])
       })
     })
   }
 
   async getAllWebshares(): Promise<Webshare[]> {
-    return new Promise((resolve, reject) => {
-      this.db.get("webshares", (result) => {
-        resolve(result.webshares || [])
+    return new Promise((resolve) => {
+      this.db.get("webshares", (result: unknown) => {
+        const webshares =
+          isRecord(result) && Array.isArray(result.webshares)
+            ? result.webshares
+            : []
+        resolve(webshares)
       })
     })
   }
@@ -424,9 +444,13 @@ export class PageAssitDatabase {
   }
 
   async getUserID() {
-    return new Promise((resolve, reject) => {
-      this.db.get("user_id", (result) => {
-        resolve(result.user_id || "")
+    return new Promise((resolve) => {
+      this.db.get("user_id", (result: unknown) => {
+        const userId =
+          isRecord(result) && typeof result.user_id === "string"
+            ? result.user_id
+            : ""
+        resolve(userId)
       })
     })
   }
@@ -540,10 +564,10 @@ export const saveMessage = async ({
   role: string
   content: string
   images: string[]
-  source?: any[]
+  source?: Message["sources"]
   time?: number
   message_type?: string
-  generationInfo?: any
+  generationInfo?: Message["generationInfo"]
   reasoning_time_taken?: number
   modelName?: string
   modelImage?: string
@@ -667,7 +691,7 @@ export const updateMessageByIndex = async (
     const chatHistory = (await db.getChatHistory(history_id)).reverse()
     chatHistory[index].content = message
     await db.db.set({ [history_id]: chatHistory.reverse() })
-  } catch (e) {
+  } catch {
     // temp chat will break
   }
 }

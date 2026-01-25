@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { Tag, Card, Space, Typography, Button, Alert, Tooltip, InputNumber, Spin } from 'antd'
 import { browser } from 'wxt/browser'
 import { Link, useNavigate } from 'react-router-dom'
@@ -103,13 +103,90 @@ const makeChecks = (t: TFunction): Check[] => {
   ]
 }
 
-type Result = { status: 'unknown'|'healthy'|'unhealthy', detail?: any, statusCode?: number, durationMs?: number }
+type Result = {
+  status: 'unknown' | 'healthy' | 'unhealthy'
+  detail?: unknown
+  statusCode?: number
+  durationMs?: number
+}
+
+type QueueStatus = {
+  enabled?: boolean
+  queue_size?: number
+  processing_count?: number
+  max_queue_size?: number
+  max_concurrent?: number
+  total_processed?: number
+  total_rejected?: number
+  message?: string
+}
+
+type QueueActivityItem = {
+  request_id?: string
+  result?: string
+  status?: string
+  priority?: number | string
+  duration?: number
+}
+
+type QueueActivity = {
+  activity: QueueActivityItem[]
+}
+
+const isRecord = (value: unknown): value is Record<string, unknown> =>
+  typeof value === 'object' && value !== null && !Array.isArray(value)
+
+const toNumber = (value: unknown): number | undefined =>
+  typeof value === 'number' && !Number.isNaN(value) ? value : undefined
+
+const toString = (value: unknown): string | undefined =>
+  typeof value === 'string' ? value : undefined
+
+const getErrorMessage = (error: unknown): string =>
+  error instanceof Error ? error.message : typeof error === 'string' ? error : ''
+
+const normalizeQueueStatus = (value: unknown): QueueStatus | null => {
+  if (!isRecord(value)) return null
+  return {
+    enabled: typeof value.enabled === 'boolean' ? value.enabled : undefined,
+    queue_size: toNumber(value.queue_size),
+    processing_count: toNumber(value.processing_count),
+    max_queue_size: toNumber(value.max_queue_size),
+    max_concurrent: toNumber(value.max_concurrent),
+    total_processed: toNumber(value.total_processed),
+    total_rejected: toNumber(value.total_rejected),
+    message: toString(value.message)
+  }
+}
+
+const normalizeQueueActivity = (value: unknown): QueueActivity | null => {
+  if (!isRecord(value)) return null
+  const rawActivity = Array.isArray(value.activity) ? value.activity : []
+  const activity = rawActivity
+    .map((item) => {
+      if (!isRecord(item)) return null
+      const priority =
+        typeof item.priority === 'number' || typeof item.priority === 'string'
+          ? item.priority
+          : undefined
+      return {
+        request_id: toString(item.request_id),
+        result: toString(item.result),
+        status: toString(item.status),
+        priority,
+        duration: toNumber(item.duration)
+      }
+    })
+    .filter((item): item is QueueActivityItem => item !== null)
+  return { activity }
+}
 
 export default function HealthStatus() {
   const { t } = useTranslation(['settings', 'common', 'option'])
   const notification = useAntdNotification()
-  const checks = makeChecks(t)
+  const checks = useMemo(() => makeChecks(t), [t])
   const [results, setResults] = useState<Record<string, Result>>({})
+  const resultsRef = useRef(results)
   const [loading, setLoading] = useState(false)
   const [runningChecks, setRunningChecks] = useState<Set<string>>(new Set())
   const [serverUrl, setServerUrl] = useState<string>('')
@@ -119,8 +196,8 @@ export default function HealthStatus() {
   const [recentHealthy, setRecentHealthy] = useState<Set<string>>(new Set())
   const [lastUpdatedAt, setLastUpdatedAt] = useState<number | null>(null)
   const [secondsSinceUpdate, setSecondsSinceUpdate] = useState<number | null>(null)
-  const [queueStatus, setQueueStatus] = useState<any | null>(null)
-  const [queueActivity, setQueueActivity] = useState<any | null>(null)
+  const [queueStatus, setQueueStatus] = useState<QueueStatus | null>(null)
+  const [queueActivity, setQueueActivity] = useState<QueueActivity | null>(null)
   const [queueLoading, setQueueLoading] = useState(false)
   const [queueError, setQueueError] = useState<string | null>(null)
   const isRunningRef = useRef(false)
@@ -137,7 +214,11 @@ export default function HealthStatus() {
   const { capabilities } = useServerCapabilities()
   const storeHost = storeServerUrl ? cleanUrl(storeServerUrl) : null
 
-  const runSingle = async (c: Check): Promise<boolean> => {
+  useEffect(() => {
+    resultsRef.current = results
+  }, [results])
+
+  const runSingle = useCallback(async (c: Check): Promise<boolean> => {
     setRunningChecks(prev => new Set(prev).add(c.key))
     const t0 = performance.now()
     try {
@@ -158,9 +239,9 @@ export default function HealthStatus() {
         }
       }))
       return !!resp?.ok
-    } catch (e) {
+    } catch (error) {
       const t1 = performance.now()
-      const message = (e as any)?.message || 'Network error'
+      const message = getErrorMessage(error) || 'Network error'
       setResults((prev) => ({
         ...prev,
         [c.key]: {
@@ -178,17 +259,16 @@ export default function HealthStatus() {
         return next
       })
     }
-  }
+  }, [])
 
-  const runChecks = async (userTriggered: boolean = false) => {
+  const runChecks = useCallback(async (userTriggered: boolean = false) => {
     if (isRunningRef.current) return
     isRunningRef.current = true
     setLoading(true)
     let allHealthy = true
     try {
       for (const c of checks) {
-        // eslint-disable-next-line no-await-in-loop
-        const prev = results[c.key]?.status
+        const prev = resultsRef.current[c.key]?.status
         const ok = await runSingle(c)
         if (userTriggered && ok && prev !== 'healthy') {
           // Mark as recently turned healthy for a subtle pulse
@@ -219,7 +299,7 @@ export default function HealthStatus() {
       setLoading(false)
       isRunningRef.current = false
     }
-  }
+  }, [checks, notification, runSingle, t])
 
   const recheckOne = async (c: Check) => {
     if (runningChecks.has(c.key)) return
@@ -255,7 +335,7 @@ export default function HealthStatus() {
     }
   }
 
-  const testCoreConnection = async () => {
+  const testCoreConnection = useCallback(async () => {
     try {
       await tldwClient.initialize()
       const ok = await tldwClient.healthCheck()
@@ -263,9 +343,9 @@ export default function HealthStatus() {
     } catch {
       setCoreStatus('failed')
     }
-  }
+  }, [])
 
-  const loadQueueDiagnostics = async () => {
+  const loadQueueDiagnostics = useCallback(async () => {
     if (!capabilities?.hasChatQueue) return
     setQueueLoading(true)
     setQueueError(null)
@@ -275,14 +355,14 @@ export default function HealthStatus() {
         tldwClient.chatQueueStatus(),
         tldwClient.chatQueueActivity(25)
       ])
-      setQueueStatus(status)
-      setQueueActivity(activity)
-    } catch (e: any) {
-      setQueueError(e?.message || "Unable to load queue diagnostics.")
+      setQueueStatus(normalizeQueueStatus(status))
+      setQueueActivity(normalizeQueueActivity(activity))
+    } catch (error) {
+      setQueueError(getErrorMessage(error) || "Unable to load queue diagnostics.")
     } finally {
       setQueueLoading(false)
     }
-  }
+  }, [capabilities?.hasChatQueue])
 
   useEffect(() => {
     if (initialLoadRef.current) return
@@ -303,7 +383,7 @@ export default function HealthStatus() {
       void runChecks()
     }, Math.max(MIN_INTERVAL_SEC, intervalSec) * 1000)
     return () => clearInterval(id)
-  }, [autoRefresh, intervalSec])
+  }, [autoRefresh, intervalSec, runChecks])
 
   useEffect(() => {
     if (!lastUpdatedAt) {
@@ -323,7 +403,7 @@ export default function HealthStatus() {
     if (capabilities?.hasChatQueue) {
       void loadQueueDiagnostics()
     }
-  }, [capabilities?.hasChatQueue])
+  }, [capabilities?.hasChatQueue, loadQueueDiagnostics])
 
   const intervalSecClamped = Math.max(MIN_INTERVAL_SEC, intervalSec)
   const secondsUntilNext =
@@ -918,7 +998,7 @@ export default function HealthStatus() {
                 )}
               </Card>
             )}
-            {queueActivity && Array.isArray(queueActivity.activity) && (
+            {queueActivity && (
               <Card title={t("healthPage.queueActivityTitle", "Recent activity")}>
                 {queueActivity.activity.length === 0 ? (
                   <Typography.Paragraph type="secondary" className="!mb-0 text-xs">
@@ -926,7 +1006,7 @@ export default function HealthStatus() {
                   </Typography.Paragraph>
                 ) : (
                   <div className="space-y-2">
-                    {queueActivity.activity.slice(0, 10).map((item: any, idx: number) => (
+                    {queueActivity.activity.slice(0, 10).map((item, idx) => (
                       <div
                         key={`${item.request_id || idx}`}
                         className="rounded-md border border-border bg-surface2 p-2 text-xs"

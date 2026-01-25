@@ -33,7 +33,7 @@ const validateJson = (value: string): string | null => {
   try {
     JSON.parse(value)
     return null
-  } catch (e) {
+  } catch {
     return "Invalid JSON format"
   }
 }
@@ -46,7 +46,6 @@ export const ModelParamsPanel: React.FC<ModelParamsPanelProps> = ({
   const mode = useUiModeStore((state) => state.mode)
   const [paramsCollapsed, setParamsCollapsed] = React.useState(true)
   const [providerCollapsed, setProviderCollapsed] = React.useState(true)
-  const [advancedCollapsed, setAdvancedCollapsed] = React.useState(true)
   const [headersError, setHeadersError] = React.useState<string | null>(null)
   const [bodyError, setBodyError] = React.useState<string | null>(null)
 

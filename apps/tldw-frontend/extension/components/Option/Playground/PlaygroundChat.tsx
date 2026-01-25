@@ -17,6 +17,17 @@ import { fetchChatModels } from "@/services/tldw-server"
 import { tldwModels } from "@/services/tldw"
 import { applyVariantToMessage } from "@/utils/message-variants"
 import type { Character } from "@/types/character"
+import type { Message } from "@/types/message"
+
+type ChatModel = {
+  model?: string
+  nickname?: string
+  provider?: string
+  name?: string
+}
+
+const isRecord = (value: unknown): value is Record<string, unknown> =>
+  typeof value === "object" && value !== null && !Array.isArray(value)
 
 type TimelineBlock =
   | { kind: "single"; index: number }
@@ -147,7 +158,7 @@ export const PlaygroundChat = () => {
   } = useMessageOption()
   const [openReasoning] = useStorage("openReasoning", false)
   const [selectedCharacter] = useSelectedCharacter<Character | null>(null)
-  const { data: chatModels = [] } = useQuery({
+  const { data: chatModels = [] } = useQuery<ChatModel[]>({
     queryKey: ["playground:chatModels"],
     queryFn: () => fetchChatModels({ returnEmpty: true }),
     enabled: true
@@ -221,7 +232,7 @@ export const PlaygroundChat = () => {
     serverChatId
   ])
   const resolveMessageType = React.useCallback(
-    (message: any, index: number) => {
+    (message: Message, index: number) => {
       const explicit = message?.messageType ?? message?.message_type
       if (explicit) return explicit
       if (!serverChatId && hasSelectedCharacter) {
@@ -264,7 +275,7 @@ export const PlaygroundChat = () => {
   )
   const modelMetaById = React.useMemo(() => {
     const map = new Map<string, { label: string; provider: string }>()
-    const models = (chatModels as any[]) || []
+    const models = Array.isArray(chatModels) ? chatModels : []
     models.forEach((model) => {
       if (!model?.model) {
         return
@@ -276,13 +287,13 @@ export const PlaygroundChat = () => {
     })
     return map
   }, [chatModels])
-  const getTokenCount = React.useCallback((generationInfo?: any) => {
+  const getTokenCount = React.useCallback((generationInfo?: Record<string, unknown>) => {
     if (!generationInfo || typeof generationInfo !== "object") {
       return null
     }
     const toNumber = (value: unknown) =>
       typeof value === "number" && Number.isFinite(value) ? value : null
-    const usage = (generationInfo as any)?.usage
+    const usage = isRecord(generationInfo.usage) ? generationInfo.usage : null
     const prompt =
       toNumber(generationInfo.prompt_eval_count) ??
       toNumber(generationInfo.prompt_tokens) ??
@@ -406,7 +417,7 @@ export const PlaygroundChat = () => {
           const replyItems = block.assistantIndices.map((i) => {
             const message = messages[i]
             const modelKey =
-              (message as any).modelId || message.modelName || message.name
+              message.modelId || message.modelName || message.name
             return {
               index: i,
               message,
@@ -828,12 +839,12 @@ export const PlaygroundChat = () => {
                   const displayName = message?.modelName || message.name
 
                   const clusterMessagesForModel = messages
-                    .map((m: any, idx) => ({ m, idx }))
+                    .map((m, idx) => ({ m, idx }))
                     .filter(
                       ({ m }) =>
                         m.clusterId === block.clusterId &&
                         (m.messageType === "compare:user" ||
-                          ((m as any).modelId || m.modelName || m.name) ===
+                          (m.modelId || m.modelName || m.name) ===
                             modelKey)
                     )
 
@@ -1205,7 +1216,7 @@ export const PlaygroundChat = () => {
                   if (!canonicalId) {
                     return null
                   }
-                  const canonical = (messages as any[]).find(
+                  const canonical = messages.find(
                     (m) => m.id && m.id === canonicalId
                   )
                   if (!canonical) {

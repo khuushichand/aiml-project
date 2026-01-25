@@ -8,6 +8,9 @@ import { SUPPORTED_LANGUAGES } from "~/utils/supported-languages"
 
 const { Panel } = Collapse
 
+const isRecord = (value: unknown): value is Record<string, unknown> =>
+  typeof value === "object" && value !== null && !Array.isArray(value)
+
 export const SSTSettings = ({ hideBorder }: { hideBorder?: boolean }) => {
   const { t } = useTranslation("settings")
   const [speechToTextLanguage, setSpeechToTextLanguage] = useStorage(
@@ -90,7 +93,6 @@ export const SSTSettings = ({ hideBorder }: { hideBorder?: boolean }) => {
         }
       } catch (e) {
         if (env.DEV) {
-          // eslint-disable-next-line no-console
           console.warn("Failed to load transcription models from server", e)
         }
       } finally {
@@ -114,9 +116,7 @@ export const SSTSettings = ({ hideBorder }: { hideBorder?: boolean }) => {
     try {
       const res = await tldwClient.getTranscriptionModelHealth(model)
       const status =
-        typeof res === "object" && res && "status" in res
-          ? (res as any).status
-          : undefined
+        isRecord(res) && typeof res.status === "string" ? res.status : undefined
       if (status && typeof status === "string") {
         setModelHealth(status.toLowerCase() === "ok" ? "ok" : "error")
       } else {
@@ -124,7 +124,6 @@ export const SSTSettings = ({ hideBorder }: { hideBorder?: boolean }) => {
       }
     } catch (e) {
       if (env.DEV) {
-        // eslint-disable-next-line no-console
         console.warn("Transcription model health check failed", e)
       }
       setModelHealth("error")

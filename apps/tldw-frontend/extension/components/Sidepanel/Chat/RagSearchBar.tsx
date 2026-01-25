@@ -12,7 +12,7 @@ import {
   Spin,
   Switch
 } from "antd"
-import type { InputRef, MenuProps } from "antd"
+import type { CollapseProps, InputRef, MenuProps } from "antd"
 import { X } from "lucide-react"
 import { useStorage } from "@plasmohq/storage/hook"
 import { browser } from "wxt/browser"
@@ -64,7 +64,7 @@ type RagResult = {
   content?: string
   text?: string
   chunk?: string
-  metadata?: any
+  metadata?: Record<string, unknown>
   score?: number
   relevance?: number
 }
@@ -73,6 +73,9 @@ type BatchResultGroup = {
   query: string
   results: RagResult[]
 }
+
+const isRecord = (value: unknown): value is Record<string, unknown> =>
+  typeof value === "object" && value !== null && !Array.isArray(value)
 
 const TRANSIENT_KEYS = new Set<keyof RagSettings>(["query", "batch_queries"])
 
@@ -444,59 +447,33 @@ export const RagSearchBar: React.FC<Props> = ({
     applyPresetSelection("balanced")
   }
 
-  const normalizeBatchResults = (payload: any): BatchResultGroup[] => {
+  const normalizeBatchResults = (payload: unknown): BatchResultGroup[] => {
     if (!payload) return []
     if (Array.isArray(payload)) {
       return payload
-        .map((group: any) => ({
-          query: String(group.query || ""),
-          results: group.results || []
-        }))
-        .filter((group: BatchResultGroup) => group.results.length > 0)
+        .map((group) => {
+          if (!isRecord(group)) return null
+          const query = String(group.query ?? "")
+          const results = Array.isArray(group.results)
+            ? (group.results as RagResult[])
+            : []
+          return { query, results }
+        })
+        .filter(
+          (group): group is BatchResultGroup =>
+            Boolean(group) && group.results.length > 0
+        )
     }
-    if (typeof payload === "object") {
+    if (isRecord(payload)) {
       return Object.entries(payload)
         .map(([query, results]) => ({
           query,
-          results: Array.isArray(results) ? results : []
+          results: Array.isArray(results) ? (results as RagResult[]) : []
         }))
         .filter((group) => group.results.length > 0)
     }
     return []
   }
-
-  const sortResults = React.useCallback(
-    (items: RagResult[]) => {
-      if (sortMode === "type") {
-        return [...items].sort((a, b) =>
-          String(getResultType(a)).localeCompare(String(getResultType(b)))
-        )
-      }
-      if (sortMode === "date") {
-        return [...items].sort((a, b) => {
-          const dateA = new Date(
-            a.metadata?.created_at ||
-              a.metadata?.date ||
-              a.metadata?.added_at ||
-              0
-          ).getTime()
-          const dateB = new Date(
-            b.metadata?.created_at ||
-              b.metadata?.date ||
-              b.metadata?.added_at ||
-              0
-          ).getTime()
-          return dateB - dateA
-        })
-      }
-      return [...items].sort((a, b) => {
-        const scoreA = getResultScore(a) ?? 0
-        const scoreB = getResultScore(b) ?? 0
-        return scoreB - scoreA
-      })
-    },
-    [sortMode]
-  )
 
   const runSearch = async (opts?: { applyFirst?: boolean }) => {
     if (opts?.applyFirst) {
@@ -542,7 +519,7 @@ export const RagSearchBar: React.FC<Props> = ({
         setResults(docs)
       }
       setTimedOut(false)
-    } catch (e) {
+    } catch {
       setResults([])
       setBatchResults([])
       setTimedOut(true)
@@ -2394,7 +2371,7 @@ export const RagSearchBar: React.FC<Props> = ({
         </div>
       )
     }
-  ].filter(Boolean) as any[]
+  ].filter(Boolean) as NonNullable<CollapseProps["items"]>
 
   return (
     <div className={wrapperClassName}>

@@ -208,6 +208,17 @@ const MODEL_SETTINGS_KEYS = [
 type ModelSettingsKey = (typeof MODEL_SETTINGS_KEYS)[number]
 type ChatModelSettingsState = ReturnType<typeof useStoreChatModelSettings.getState>
 
+const isRecord = (value: unknown): value is Record<string, unknown> =>
+  typeof value === "object" && value !== null && !Array.isArray(value)
+
+const getErrorMessage = (error: unknown): string =>
+  error instanceof Error ? error.message : typeof error === "string" ? error : ""
+
+const getTabsStorageKey = (id: number | null | undefined) =>
+  id != null ? `sidepanelChatTabsState:tab-${id}` : "sidepanelChatTabsState"
+const getLegacyStorageKey = (id: number | null | undefined) =>
+  id != null ? `sidepanelChatState:tab-${id}` : "sidepanelChatState"
+
 const pickChatModelSettings = (
   state: ChatModelSettingsState
 ): ChatModelSettingsSnapshot => {
@@ -230,7 +241,7 @@ const applyChatModelSettingsSnapshot = (
   MODEL_SETTINGS_KEYS.forEach((key) => {
     const value = snapshot[key]
     if (value !== undefined) {
-      store.updateSetting(key, value as any)
+      store.updateSetting(key, value as ChatModelSettingsState[ModelSettingsKey])
     }
   })
 }
@@ -308,6 +319,7 @@ const SidepanelChat = () => {
       area: "local"
     })
   )
+  const restoredTabIdRef = React.useRef<number | null | undefined>(undefined)
   const [dropState, setDropState] = React.useState<
     "idle" | "dragging" | "error"
   >("idle")
@@ -473,8 +485,8 @@ const SidepanelChat = () => {
         message: t("sidepanel:notification.savedToNotes", "Saved to Notes")
       })
       resetNoteModal()
-    } catch (e: any) {
-      const msg = e?.message || "Failed to save note"
+    } catch (error: unknown) {
+      const msg = getErrorMessage(error) || "Failed to save note"
       setNoteError(msg)
       notification.error({ message: msg })
     } finally {
@@ -584,6 +596,7 @@ const SidepanelChat = () => {
       setHistoryId,
       setChatMode,
       setWebSearch,
+      setToolChoice,
       setSelectedModel,
       setSelectedSystemPrompt,
       setSelectedQuickPrompt,
@@ -650,11 +663,6 @@ const SidepanelChat = () => {
   const bgMsg = useBackgroundMessage()
   const lastBgMsgRef = React.useRef<typeof bgMsg | null>(null)
 
-  const getTabsStorageKey = (id: number | null | undefined) =>
-    id != null ? `sidepanelChatTabsState:tab-${id}` : "sidepanelChatTabsState"
-  const getLegacyStorageKey = (id: number | null | undefined) =>
-    id != null ? `sidepanelChatState:tab-${id}` : "sidepanelChatState"
-
   type LegacySidepanelChatSnapshot = {
     history: ChatHistory
     messages: ChatMessage[]
@@ -668,7 +676,7 @@ const SidepanelChat = () => {
     snapshotsById: Record<string, SidepanelChatSnapshot>
   }
 
-  const restoreSidepanelState = async () => {
+  const restoreSidepanelState = React.useCallback(async () => {
     // Wait until we've attempted to resolve tab id so we don't
     // accidentally attach a tab-specific snapshot to the wrong key.
     if (tabId === undefined) {
@@ -687,7 +695,6 @@ const SidepanelChat = () => {
 
       let tabsState: SidepanelTabsState | null = null
       for (const key of keysToTry) {
-        // eslint-disable-next-line no-await-in-loop
         const candidate = (await storage.get(key)) as SidepanelTabsState | null
         if (candidate && Array.isArray(candidate.tabs)) {
           tabsState = candidate
@@ -726,7 +733,6 @@ const SidepanelChat = () => {
 
       let legacySnapshot: LegacySidepanelChatSnapshot | null = null
       for (const key of legacyKeysToTry) {
-        // eslint-disable-next-line no-await-in-loop
         const candidate = (await storage.get(key)) as
           | LegacySidepanelChatSnapshot
           | null
@@ -830,7 +836,28 @@ const SidepanelChat = () => {
     } finally {
       setIsRestoringChat(false)
     }
-  }
+  }, [
+    applySnapshot,
+    chatMode,
+    messages.length,
+    modelSettingsSnapshot,
+    queuedMessages,
+    selectedModel,
+    selectedQuickPrompt,
+    selectedSystemPrompt,
+    serverChatClusterId,
+    serverChatExternalRef,
+    serverChatId,
+    serverChatSource,
+    serverChatState,
+    serverChatTopic,
+    t,
+    tabId,
+    temporaryChat,
+    toolChoice,
+    useOCR,
+    webSearch
+  ])
 
   const persistSidepanelState = React.useCallback(() => {
     const storage = storageRef.current
@@ -866,10 +893,10 @@ const SidepanelChat = () => {
     const fetchTabId = async () => {
       try {
         // browser is provided by the extension runtime (see wxt config).
-        const resp: any = await browser.runtime.sendMessage({
+        const resp: unknown = await browser.runtime.sendMessage({
           type: "tldw:get-tab-id"
         })
-        if (resp && typeof resp.tabId === "number") {
+        if (isRecord(resp) && typeof resp.tabId === "number") {
           setTabId(resp.tabId)
         } else {
           setTabId(null)
@@ -882,8 +909,11 @@ const SidepanelChat = () => {
   }, [])
 
   React.useEffect(() => {
+    if (tabId === undefined) return
+    if (restoredTabIdRef.current === tabId) return
+    restoredTabIdRef.current = tabId
     void restoreSidepanelState()
-  }, [tabId])
+  }, [restoreSidepanelState, tabId])
 
   const truncateTabLabel = React.useCallback((label: string) => {
     const trimmed = label.trim()
@@ -1146,11 +1176,11 @@ const SidepanelChat = () => {
           },
           snapshot
         )
-      } catch (err: any) {
+      } catch (err: unknown) {
         notification.error({
           message: t("common:error", "Error"),
           description:
-            err?.message ||
+            getErrorMessage(err) ||
             t("common:serverChatLoadError", "Failed to load conversation.")
         })
       } finally {
@@ -1371,11 +1401,11 @@ const SidepanelChat = () => {
           },
           snapshot
         )
-      } catch (err: any) {
+      } catch (err: unknown) {
         notification.error({
           message: t("common:error", "Error"),
           description:
-            err?.message ||
+            getErrorMessage(err) ||
             t("common:serverChatLoadError", "Failed to load conversation.")
         })
       } finally {
@@ -1401,6 +1431,7 @@ const SidepanelChat = () => {
       tabs,
       toolChoice,
       truncateTabLabel,
+      userDisplayName,
       useOCR,
       webSearch
     ]
@@ -1455,7 +1486,8 @@ const SidepanelChat = () => {
   }, [handleTimelineActionRequest])
 
   React.useEffect(() => {
-    if (!drop.current) {
+    const dropEl = drop.current
+    if (!dropEl) {
       return
     }
     const handleDragOver = (e: DragEvent) => {
@@ -1526,20 +1558,18 @@ const SidepanelChat = () => {
       }, 50)
     }
 
-    drop.current.addEventListener("dragover", handleDragOver)
-    drop.current.addEventListener("drop", handleDrop)
-    drop.current.addEventListener("dragenter", handleDragEnter)
-    drop.current.addEventListener("dragleave", handleDragLeave)
+    dropEl.addEventListener("dragover", handleDragOver)
+    dropEl.addEventListener("drop", handleDrop)
+    dropEl.addEventListener("dragenter", handleDragEnter)
+    dropEl.addEventListener("dragleave", handleDragLeave)
 
     return () => {
-      if (drop.current) {
-        drop.current.removeEventListener("dragover", handleDragOver)
-        drop.current.removeEventListener("drop", handleDrop)
-        drop.current.removeEventListener("dragenter", handleDragEnter)
-        drop.current.removeEventListener("dragleave", handleDragLeave)
-      }
+      dropEl.removeEventListener("dragover", handleDragOver)
+      dropEl.removeEventListener("drop", handleDrop)
+      dropEl.removeEventListener("dragenter", handleDragEnter)
+      dropEl.removeEventListener("dragleave", handleDragLeave)
     }
-  }, [])
+  }, [showDropFeedback, t])
 
   React.useEffect(() => {
     return () => {
@@ -1562,7 +1592,7 @@ const SidepanelChat = () => {
     if (sidepanelTemporaryChat) {
       setTemporaryChat(true)
     }
-  }, [defaultChatWithWebsite, sidepanelTemporaryChat])
+  }, [defaultChatWithWebsite, setChatMode, setTemporaryChat, sidepanelTemporaryChat])
 
   React.useEffect(() => {
     if (!bgMsg) return

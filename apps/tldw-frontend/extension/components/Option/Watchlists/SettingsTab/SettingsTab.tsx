@@ -28,6 +28,12 @@ import type { ClaimCluster, WatchlistJob, WatchlistClusterSubscription } from "@
 import { humanizeMilliseconds } from "@/utils/humanize-milliseconds"
 import { formatRelativeTime } from "@/utils/dateFormatters"
 
+const getErrorMessage = (err: unknown): string | null => {
+  if (!err || typeof err !== "object") return null
+  const record = err as Record<string, unknown>
+  return typeof record.message === "string" ? record.message : null
+}
+
 export const SettingsTab: React.FC = () => {
   const { t } = useTranslation(["watchlists", "common"])
 
@@ -93,11 +99,12 @@ export const SettingsTab: React.FC = () => {
         keyword: clusterSearch || undefined
       })
       setClusters(Array.isArray(result) ? result : [])
-    } catch (err: any) {
+    } catch (err: unknown) {
       console.error("Failed to fetch claim clusters:", err)
       setClusters([])
       setClustersError(
-        err?.message || t("watchlists:settings.clusters.fetchError", "Failed to load claim clusters")
+        getErrorMessage(err) ||
+          t("watchlists:settings.clusters.fetchError", "Failed to load claim clusters")
       )
     } finally {
       setClustersLoading(false)

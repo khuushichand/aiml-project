@@ -201,7 +201,6 @@ export const TTSModeSettings = ({ hideBorder }: { hideBorder?: boolean }) => {
     },
     onError: (error: unknown) => {
       // Surface a user-visible error and log for diagnostics
-      // eslint-disable-next-line no-console
       console.error("Failed to save TTS settings:", error)
       const errorMessage =
         error instanceof Error
@@ -254,7 +253,6 @@ export const TTSModeSettings = ({ hideBorder }: { hideBorder?: boolean }) => {
         })
       }
     } catch (e: unknown) {
-      // eslint-disable-next-line no-console
       console.error("Failed to test ElevenLabs API key:", e)
       const baseMessage = t(
         "generalSettings.tts.apiKeyTest.failed",

@@ -2,16 +2,17 @@ import './vitest.setup'
 import { vi } from 'vitest'
 
 if (!window.matchMedia) {
-  window.matchMedia = ((query: string) => ({
+  const matchMediaStub: Window['matchMedia'] = (query) => ({
     matches: false,
     media: query,
     onchange: null,
-    addListener: vi.fn(),
-    removeListener: vi.fn(),
-    addEventListener: vi.fn(),
-    removeEventListener: vi.fn(),
-    dispatchEvent: vi.fn()
-  })) as any
+    addListener: () => {},
+    removeListener: () => {},
+    addEventListener: () => {},
+    removeEventListener: () => {},
+    dispatchEvent: () => false
+  })
+  window.matchMedia = matchMediaStub
 }
 
 if (!window.scrollTo) {
@@ -22,12 +23,12 @@ if (!HTMLElement.prototype.scrollIntoView) {
   HTMLElement.prototype.scrollIntoView = vi.fn()
 }
 
-class ResizeObserver {
-  observe() {}
-  unobserve() {}
+class ResizeObserverMock implements ResizeObserver {
+  observe(_target: Element, _options?: ResizeObserverOptions) {}
+  unobserve(_target: Element) {}
   disconnect() {}
 }
 
 if (!globalThis.ResizeObserver) {
-  globalThis.ResizeObserver = ResizeObserver as any
+  globalThis.ResizeObserver = ResizeObserverMock
 }

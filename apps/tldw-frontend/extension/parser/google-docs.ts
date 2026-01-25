@@ -43,7 +43,7 @@ const getGoogleDocs = () => {
             results.push({ path: currentPath, value })
             return
           }
-        } catch (error) {}
+        } catch {}
 
         if (value != null && !visited.has(value)) {
           visited.add(value)
@@ -51,7 +51,7 @@ const getGoogleDocs = () => {
             value.forEach((val, index) => {
               try {
                 traverseObj(index.toString(), val, currentPath, depth + 1)
-              } catch (error) {}
+              } catch {}
             })
           } else if (typeof value === "object") {
             const propNamesForValue =
@@ -67,7 +67,7 @@ const getGoogleDocs = () => {
                   currentPath,
                   depth + 1
                 )
-              } catch (error) {}
+              } catch {}
             })
           }
         }
@@ -76,7 +76,7 @@ const getGoogleDocs = () => {
       propNames.forEach((prop) => {
         try {
           traverseObj(prop, obj[prop], [])
-        } catch (error) {}
+        } catch {}
       })
 
       return { results, iterations }
@@ -108,7 +108,7 @@ const getGoogleDocs = () => {
     return {
       content: null
     }
-  } catch (error) {
+  } catch {
     return {
       content: null
     }

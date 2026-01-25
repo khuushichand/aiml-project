@@ -29,9 +29,13 @@ function searchQueryInContent(content: string, query: string): boolean {
   return wordBoundaryPattern.test(normalizedContent);
 }
 
-function fastForward(lastRow: any, idProp: string, otherCriterion?: (item: any) => boolean) {
+function fastForward<T extends Record<string, unknown>>(
+  lastRow: T,
+  idProp: keyof T,
+  otherCriterion?: (item: T) => boolean
+) {
   let fastForwardComplete = false;
-  return (item: any) => {
+  return (item: T) => {
     if (fastForwardComplete) return otherCriterion ? otherCriterion(item) : true;
     if (item[idProp] === lastRow[idProp]) {
       fastForwardComplete = true;
@@ -39,6 +43,11 @@ function fastForward(lastRow: any, idProp: string, otherCriterion?: (item: any) 
     return false;
   };
 }
+
+type ChatHistoryImportItem = {
+  history?: HistoryInfo;
+  messages?: Message[];
+};
 
 
 
@@ -379,8 +388,8 @@ export class PageAssistDatabase {
       };
     }
   }
-  async getChatHistoriesPaginatedOptimized(lastEntry?: any, searchQuery?: string): Promise<{
-    histories: ChatHistory;
+  async getChatHistoriesPaginatedOptimized(lastEntry?: HistoryInfo, searchQuery?: string): Promise<{
+    histories: HistoryInfo[];
     hasMore: boolean;
   }> {
     if (searchQuery) {
@@ -496,7 +505,7 @@ export class PageAssistDatabase {
   }
 
 
-  async importChatHistoryV2(data: any[], options: {
+  async importChatHistoryV2(data: ChatHistoryImportItem[], options: {
     replaceExisting?: boolean;
     mergeData?: boolean;
   } = {}) {

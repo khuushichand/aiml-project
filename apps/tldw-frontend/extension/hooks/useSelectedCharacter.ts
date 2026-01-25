@@ -12,7 +12,7 @@ type StoredCharacter = Character
 
 type Subscriber<T> = (value: T | null) => void
 
-const selectedCharacterSubscribers = new Set<Subscriber<any>>()
+const selectedCharacterSubscribers = new Set<Subscriber<unknown>>()
 
 const notifySelectedCharacterSubscribers = (value: unknown) => {
   selectedCharacterSubscribers.forEach((subscriber) => {

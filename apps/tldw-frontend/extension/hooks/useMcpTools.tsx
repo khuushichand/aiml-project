@@ -52,8 +52,11 @@ export const useMcpTools = (): McpToolsStatus => {
     refetchOnWindowFocus: false
   })
 
-  const tools = toolsQuery.data ?? []
-  const toolsAvailable = toolsQuery.isLoading ? null : tools.length > 0
+  const tools = React.useMemo(() => toolsQuery.data ?? [], [toolsQuery.data])
+  const toolsAvailable = React.useMemo(
+    () => (toolsQuery.isLoading ? null : tools.length > 0),
+    [tools, toolsQuery.isLoading]
+  )
 
   React.useEffect(() => {
     setHealthState(healthState)

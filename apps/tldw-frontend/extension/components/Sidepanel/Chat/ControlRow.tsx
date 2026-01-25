@@ -42,6 +42,9 @@ interface ControlRowProps {
   isConnected: boolean
 }
 
+const isRecord = (value: unknown): value is Record<string, unknown> =>
+  typeof value === "object" && value !== null && !Array.isArray(value)
+
 export const ControlRow: React.FC<ControlRowProps> = ({
   selectedSystemPrompt,
   setSelectedSystemPrompt,
@@ -217,14 +220,16 @@ export const ControlRow: React.FC<ControlRowProps> = ({
       ) : (
         <div className="flex flex-wrap gap-1">
           {mcpTools.slice(0, 6).map((tool, index) => {
-            const toolFn = (tool as any)?.function
+            const toolRecord = isRecord(tool) ? tool : null
+            const toolFn =
+              toolRecord && isRecord(toolRecord.function) ? toolRecord.function : null
             const name =
-              (typeof tool?.name === "string" && tool.name) ||
+              (typeof toolRecord?.name === "string" && toolRecord.name) ||
               (typeof toolFn?.name === "string" && toolFn.name) ||
-              (typeof (tool as any)?.id === "string" && (tool as any).id) ||
+              (typeof toolRecord?.id === "string" && toolRecord.id) ||
               `tool-${index + 1}`
             const description =
-              (typeof tool?.description === "string" && tool.description) ||
+              (typeof toolRecord?.description === "string" && toolRecord.description) ||
               (typeof toolFn?.description === "string" && toolFn.description) ||
               ""
             return (

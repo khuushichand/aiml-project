@@ -54,10 +54,13 @@ export const JobFormModal: React.FC<JobFormModalProps> = ({
   useEffect(() => {
     if (open) {
       if (initialValues) {
-        const outputPrefs = initialValues.output_prefs as Record<string, unknown> | null
+        const outputPrefs =
+          initialValues.output_prefs && typeof initialValues.output_prefs === "object"
+            ? (initialValues.output_prefs as Record<string, unknown>)
+            : null
         const templatePrefs =
-          outputPrefs && typeof outputPrefs === "object"
-            ? (outputPrefs as Record<string, any>).template
+          outputPrefs && typeof outputPrefs.template === "object"
+            ? (outputPrefs.template as Record<string, unknown>)
             : null
         form.setFieldsValue({
           name: initialValues.name,
@@ -68,10 +71,15 @@ export const JobFormModal: React.FC<JobFormModalProps> = ({
         setFilters(initialValues.job_filters?.filters || [])
         setSchedule(initialValues.schedule_expr || null)
         setTimezone(initialValues.timezone || "UTC")
-        setOutputTemplateName(
-          (templatePrefs && typeof templatePrefs === "object" ? templatePrefs.default_name : null) ||
-            (outputPrefs && typeof outputPrefs === "object" ? (outputPrefs as Record<string, any>).template_name : null)
-        )
+        const defaultTemplateName =
+          templatePrefs && typeof templatePrefs.default_name === "string"
+            ? templatePrefs.default_name
+            : null
+        const legacyTemplateName =
+          outputPrefs && typeof outputPrefs.template_name === "string"
+            ? outputPrefs.template_name
+            : null
+        setOutputTemplateName(defaultTemplateName || legacyTemplateName)
       } else {
         form.resetFields()
         form.setFieldsValue({
@@ -108,14 +116,30 @@ export const JobFormModal: React.FC<JobFormModalProps> = ({
             : []
         const legacyTemplates =
           legacyResult.status === "fulfilled" && Array.isArray(legacyResult.value?.items)
-            ? legacyResult.value.items
+            ? (legacyResult.value.items as WatchlistTemplate[])
             : []
 
+        const getStringField = (value: unknown, key: string): string | null => {
+          if (!value || typeof value !== "object") return null
+          const record = value as Record<string, unknown>
+          const field = record[key]
+          return typeof field === "string" ? field : null
+        }
+
         const outputOptions = outputTemplates
-          .filter((tpl: any) => tpl.format === "md" || tpl.format === "html")
-          .map((tpl: any) => ({
+          .map((tpl) => {
+            const name = getStringField(tpl, "name")
+            const format = getStringField(tpl, "format")
+            if (!name || !format) return null
+            return { name, format }
+          })
+          .filter(
+            (tpl): tpl is { name: string; format: string } => Boolean(tpl)
+          )
+          .filter((tpl) => tpl.format === "md" || tpl.format === "html")
+          .map((tpl) => ({
             label: `${tpl.name} (${tpl.format})`,
-            value: String(tpl.name)
+            value: tpl.name
           }))
         const legacyOptions = legacyTemplates.map((tpl: WatchlistTemplate) => ({
           label: `${tpl.name} (${tpl.format})`,
@@ -145,7 +169,7 @@ export const JobFormModal: React.FC<JobFormModalProps> = ({
           errors.push(t("watchlists:jobs.outputPrefs.legacyTemplatesError", "Failed to load legacy templates"))
         }
         setTemplatesError(errors.length ? errors.join(" ") : null)
-      } catch (error) {
+      } catch {
         if (!cancelled) {
           setTemplatesError(t("watchlists:jobs.outputPrefs.templatesError", "Failed to load templates"))
         }

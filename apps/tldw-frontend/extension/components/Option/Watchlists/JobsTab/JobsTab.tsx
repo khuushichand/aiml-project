@@ -21,7 +21,7 @@ import {
 } from "@/services/watchlists"
 import type { WatchlistJob } from "@/types/watchlists"
 import { formatRelativeTime } from "@/utils/dateFormatters"
-import { CronDisplay, StatusTag } from "../shared"
+import { CronDisplay } from "../shared"
 import { JobFormModal } from "./JobFormModal"
 import { JobPreviewModal } from "./JobPreviewModal"
 
@@ -44,7 +44,6 @@ export const JobsTab: React.FC = () => {
   const setJobsPageSize = useWatchlistsStore((s) => s.setJobsPageSize)
   const openJobForm = useWatchlistsStore((s) => s.openJobForm)
   const closeJobForm = useWatchlistsStore((s) => s.closeJobForm)
-  const addJob = useWatchlistsStore((s) => s.addJob)
   const updateJobInList = useWatchlistsStore((s) => s.updateJobInList)
   const removeJob = useWatchlistsStore((s) => s.removeJob)
   const addRun = useWatchlistsStore((s) => s.addRun)

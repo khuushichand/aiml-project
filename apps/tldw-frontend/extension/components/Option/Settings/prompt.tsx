@@ -18,6 +18,11 @@ export const SettingPrompt = () => {
   const [isDirty, setIsDirty] = React.useState(false)
   const [ragForm] = Form.useForm()
   const [webForm] = Form.useForm()
+  const getErrorMessage = (error: unknown, fallback: string) => {
+    if (error instanceof Error) return error.message
+    if (typeof error === "string") return error
+    return fallback
+  }
 
   const handleTabChange = (newTab: "web" | "rag") => {
     if (isDirty) {
@@ -107,19 +112,20 @@ export const SettingPrompt = () => {
                     queryClient.invalidateQueries({
                       queryKey: ["fetchRagPrompt"]
                     })
-                  } catch (e: any) {
-                    console.error("Failed to save RAG prompts:", e)
+                  } catch (error: unknown) {
+                    console.error("Failed to save RAG prompts:", error)
                     notification.error({
                       message: t(
                         "managePrompts.notification.error",
                         "Error"
                       ),
-                      description:
-                        e?.message ||
+                      description: getErrorMessage(
+                        error,
                         t(
                           "managePrompts.notification.someError",
                           "Something went wrong. Please try again later"
-                        )
+                        ) as string
+                      )
                     })
                   }
                 })()
@@ -189,19 +195,20 @@ export const SettingPrompt = () => {
                     queryClient.invalidateQueries({
                       queryKey: ["fetchRagPrompt"]
                     })
-                  } catch (e: any) {
-                    console.error("Failed to save web search prompts:", e)
+                  } catch (error: unknown) {
+                    console.error("Failed to save web search prompts:", error)
                     notification.error({
                       message: t(
                         "managePrompts.notification.error",
                         "Error"
                       ),
-                      description:
-                        e?.message ||
+                      description: getErrorMessage(
+                        error,
                         t(
                           "managePrompts.notification.someError",
                           "Something went wrong. Please try again later"
-                        )
+                        ) as string
+                      )
                     })
                   }
                 })()

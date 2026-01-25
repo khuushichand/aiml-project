@@ -27,6 +27,18 @@ import {
   LAST_MEDIA_ID_SETTING
 } from '@/services/settings/ui-settings'
 
+const isRecord = (value: unknown): value is Record<string, unknown> =>
+  value !== null && typeof value === 'object'
+
+const getStringValue = (value: unknown): string | null =>
+  typeof value === 'string' ? value : null
+
+const getMediaId = (record: Record<string, unknown>): string | number => {
+  const raw = record.id ?? record.media_id ?? record.pk ?? record.uuid
+  if (typeof raw === 'string' || typeof raw === 'number') return raw
+  return String(raw ?? '')
+}
+
 const ViewMediaPage: React.FC = () => {
   const { t } = useTranslation(['review', 'common', 'settings'])
   const navigate = useNavigate()
@@ -115,30 +127,27 @@ const ViewMediaPage: React.FC = () => {
   return <MediaPageContent />
 }
 
-const deriveMediaMeta = (m: any): {
+const deriveMediaMeta = (m: Record<string, unknown>): {
   type: string
   created_at?: string
-  status?: any
+  status?: unknown
   source?: string | null
   duration?: number | null
 } => {
-  const rawType = m?.type ?? m?.media_type ?? ''
+  const rawType = m.type ?? m.media_type ?? ''
   const type = typeof rawType === 'string' ? rawType.toLowerCase().trim() : ''
   const status =
-    m?.status ??
-    m?.ingest_status ??
-    m?.ingestStatus ??
-    m?.processing_state ??
-    m?.processingStatus
+    m.status ??
+    m.ingest_status ??
+    m.ingestStatus ??
+    m.processing_state ??
+    m.processingStatus
 
   let source: string | null = null
-  const rawSource =
-    (m?.source as string | null | undefined) ??
-    (m?.origin as string | null | undefined) ??
-    (m?.provider as string | null | undefined)
-  if (typeof rawSource === 'string' && rawSource.trim().length > 0) {
+  const rawSource = getStringValue(m.source) || getStringValue(m.origin) || getStringValue(m.provider)
+  if (rawSource && rawSource.trim().length > 0) {
     source = rawSource.trim()
-  } else if (m?.url) {
+  } else if (m.url) {
     try {
       const u = new URL(String(m.url))
       const host = u.hostname.replace(/^www\./i, '')
@@ -158,10 +167,10 @@ const deriveMediaMeta = (m: any): {
 
   let duration: number | null = null
   const rawDuration =
-    (m?.duration as number | string | null | undefined) ??
-    (m?.media_duration as number | string | null | undefined) ??
-    (m?.length_seconds as number | string | null | undefined) ??
-    (m?.duration_seconds as number | string | null | undefined)
+    (m.duration as number | string | null | undefined) ??
+    (m.media_duration as number | string | null | undefined) ??
+    (m.length_seconds as number | string | null | undefined) ??
+    (m.duration_seconds as number | string | null | undefined)
   if (typeof rawDuration === 'number') {
     duration = rawDuration
   } else if (typeof rawDuration === 'string') {
@@ -173,31 +182,33 @@ const deriveMediaMeta = (m: any): {
 
   return {
     type,
-    created_at: m?.created_at,
+    created_at: getStringValue(m.created_at) ?? undefined,
     status,
     source,
     duration
   }
 }
 
-const extractKeywordsFromMedia = (m: any): string[] => {
+const extractKeywordsFromMedia = (m: Record<string, unknown>): string[] => {
+  const metadata = isRecord(m.metadata) ? m.metadata : {}
+  const processing = isRecord(m.processing) ? m.processing : {}
   const possibleKeywordFields = [
-    m?.metadata?.keywords,
-    m?.keywords,
-    m?.tags,
-    m?.metadata?.tags,
-    m?.processing?.keywords
+    metadata.keywords,
+    m.keywords,
+    m.tags,
+    metadata.tags,
+    processing.keywords
   ]
 
   for (const field of possibleKeywordFields) {
     if (field && Array.isArray(field) && field.length > 0) {
       const keywords = field
-        .map((k: any) => {
+        .map((k) => {
           if (typeof k === 'string') return k
-          if (k && typeof k === 'object' && k.keyword) return k.keyword
-          if (k && typeof k === 'object' && k.text) return k.text
-          if (k && typeof k === 'object' && k.tag) return k.tag
-          if (k && typeof k === 'object' && k.name) return k.name
+          if (isRecord(k) && k.keyword) return String(k.keyword)
+          if (isRecord(k) && k.text) return String(k.text)
+          if (isRecord(k) && k.tag) return String(k.tag)
+          if (isRecord(k) && k.name) return String(k.name)
           return null
         })
         .filter((k): k is string => k !== null && k.trim().length > 0)
@@ -221,7 +232,7 @@ const MediaPageContent: React.FC = () => {
 
   const [query, setQuery] = useState<string>('')
   const [debouncedQuery, setDebouncedQuery] = useState<string>('')
-  const [kinds, setKinds] = useState<{ media: boolean; notes: boolean }>({
+  const [kinds, _setKinds] = useState<{ media: boolean; notes: boolean }>({
     media: true,
     notes: false
   })
@@ -237,7 +248,8 @@ const MediaPageContent: React.FC = () => {
   const [keywordTokens, setKeywordTokens] = useState<string[]>([])
   const [keywordOptions, setKeywordOptions] = useState<string[]>([])
   const [selectedContent, setSelectedContent] = useState<string>('')
-  const [selectedDetail, setSelectedDetail] = useState<any>(null)
+  const [selectedDetail, setSelectedDetail] =
+    useState<Record<string, unknown> | null>(null)
   const [detailLoading, setDetailLoading] = useState(false)
   const [contentHeight, setContentHeight] = useState<number>(0)
 
@@ -263,10 +275,6 @@ const MediaPageContent: React.FC = () => {
       return Array.from(set)
     })
   }, [setFavorites])
-
-  const isFavorite = useCallback((id: string) => {
-    return favoritesSet.has(String(id))
-  }, [favoritesSet])
 
   // Measure content height whenever content changes - M3 fix
   useEffect(() => {
@@ -329,7 +337,6 @@ const MediaPageContent: React.FC = () => {
     contentDivRef.current = node
     if (node) {
       // Initial measurement using requestAnimationFrame - M3 fix
-      let rafId: number | null = null
       let lastHeight = 0
       let stableCount = 0
 
@@ -345,10 +352,10 @@ const MediaPageContent: React.FC = () => {
           stableCount = 0
           lastHeight = currentHeight
         }
-        rafId = requestAnimationFrame(measure)
+        requestAnimationFrame(measure)
       }
 
-      rafId = requestAnimationFrame(measure)
+      requestAnimationFrame(measure)
     }
   }, [])
 
@@ -363,17 +370,26 @@ const MediaPageContent: React.FC = () => {
       try {
         if (!hasQuery && !hasMediaFilters) {
           // Blank browse: GET listing with pagination
-          const listing = await bgRequest<any>({
-            path: `/api/v1/media/?page=${page}&results_per_page=${pageSize}&include_keywords=true` as any,
-            method: 'GET' as any
+          const listing = await bgRequest<unknown>({
+            path: `/api/v1/media/?page=${page}&results_per_page=${pageSize}&include_keywords=true`,
+            method: 'GET'
           })
-          const items = Array.isArray(listing?.items) ? listing.items : []
-          const pagination = listing?.pagination
-          const mediaServerTotal = Number(pagination?.total_items || items.length || 0)
+          const listingRecord = isRecord(listing) ? listing : {}
+          const items = Array.isArray(listingRecord.items)
+            ? listingRecord.items.filter(isRecord)
+            : []
+          const pagination = isRecord(listingRecord.pagination)
+            ? listingRecord.pagination
+            : undefined
+          const mediaServerTotal = Number(
+            (pagination && typeof pagination.total_items === 'number'
+              ? pagination.total_items
+              : items.length) || 0
+          )
           setMediaTotal(mediaServerTotal)
           actualMediaCount = mediaServerTotal
           for (const m of items) {
-            const id = m?.id ?? m?.media_id ?? m?.pk ?? m?.uuid
+            const id = getMediaId(m)
             const meta = deriveMediaMeta(m)
             const type = meta.type
             if (type && !availableMediaTypes.includes(type)) {
@@ -386,8 +402,8 @@ const MediaPageContent: React.FC = () => {
             results.push({
               kind: 'media',
               id,
-              title: m?.title || m?.filename || `Media ${id}`,
-              snippet: m?.snippet || m?.summary || '',
+              title: getStringValue(m.title) || getStringValue(m.filename) || `Media ${id}`,
+              snippet: getStringValue(m.snippet) || getStringValue(m.summary) || '',
               keywords,
               meta: meta,
               raw: m
@@ -395,30 +411,37 @@ const MediaPageContent: React.FC = () => {
           }
         } else {
           // Search with optional filters and pagination
-          const body: any = {
+          const body: Record<string, unknown> = {
             query: hasQuery ? query : null,
             fields: ['title', 'content'],
             sort_by: 'relevance'
           }
           if (mediaTypes.length > 0) body.media_types = mediaTypes
           if (keywordTokens.length > 0) body.must_have = keywordTokens
-          const mediaResp = await bgRequest<any>({
-            path: `/api/v1/media/search?page=${page}&results_per_page=${pageSize}&include_keywords=true` as any,
-            method: 'POST' as any,
+          const mediaResp = await bgRequest<unknown>({
+            path: `/api/v1/media/search?page=${page}&results_per_page=${pageSize}&include_keywords=true`,
+            method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body
           })
-          const items = Array.isArray(mediaResp?.items)
-            ? mediaResp.items
-            : Array.isArray(mediaResp?.results)
-              ? mediaResp.results
+          const mediaRecord = isRecord(mediaResp) ? mediaResp : {}
+          const items = Array.isArray(mediaRecord.items)
+            ? mediaRecord.items.filter(isRecord)
+            : Array.isArray(mediaRecord.results)
+              ? mediaRecord.results.filter(isRecord)
               : []
-          const pagination = mediaResp?.pagination
-          const mediaServerTotal = Number(pagination?.total_items || items.length || 0)
+          const pagination = isRecord(mediaRecord.pagination)
+            ? mediaRecord.pagination
+            : undefined
+          const mediaServerTotal = Number(
+            (pagination && typeof pagination.total_items === 'number'
+              ? pagination.total_items
+              : items.length) || 0
+          )
           setMediaTotal(mediaServerTotal)
           actualMediaCount = mediaServerTotal
           for (const m of items) {
-            const id = m?.id ?? m?.media_id ?? m?.pk ?? m?.uuid
+            const id = getMediaId(m)
             const meta = deriveMediaMeta(m)
             const type = meta.type
             if (type && !availableMediaTypes.includes(type)) {
@@ -431,8 +454,8 @@ const MediaPageContent: React.FC = () => {
             results.push({
               kind: 'media',
               id,
-              title: m?.title || m?.filename || `Media ${id}`,
-              snippet: m?.snippet || m?.summary || '',
+              title: getStringValue(m.title) || getStringValue(m.filename) || `Media ${id}`,
+              snippet: getStringValue(m.snippet) || getStringValue(m.summary) || '',
               keywords,
               meta: meta,
               raw: m
@@ -449,19 +472,16 @@ const MediaPageContent: React.FC = () => {
     if (kinds.notes) {
       try {
         // Helper to extract keywords from note
-        const extractNoteKeywords = (note: any): string[] => {
-          const possibleFields = [
-            note?.metadata?.keywords,
-            note?.keywords,
-            note?.tags
-          ]
+        const extractNoteKeywords = (note: Record<string, unknown>): string[] => {
+          const metadata = isRecord(note.metadata) ? note.metadata : {}
+          const possibleFields = [metadata.keywords, note.keywords, note.tags]
           for (const field of possibleFields) {
             if (field && Array.isArray(field) && field.length > 0) {
               return field
-                .map((k: any) => {
+                .map((k) => {
                   if (typeof k === 'string') return k
-                  if (k && typeof k === 'object' && k.keyword) return k.keyword
-                  if (k && typeof k === 'object' && k.text) return k.text
+                  if (isRecord(k) && k.keyword) return String(k.keyword)
+                  if (isRecord(k) && k.text) return String(k.text)
                   return null
                 })
                 .filter((k): k is string => k !== null && k.trim().length > 0)
@@ -475,40 +495,47 @@ const MediaPageContent: React.FC = () => {
           // Prefer POST /api/v1/notes/search/ with SearchRequest so the server can
           // apply keyword filtering; fall back to GET on older servers.
           const keywordFilterActive = keywordTokens.length > 0
-          let notesResp: any
+          let notesResp: unknown
           let usedKeywordServerFilter = false
 
           try {
-            const body: any = { query }
+            const body: Record<string, unknown> = { query }
             if (keywordFilterActive) {
               body.must_have = keywordTokens
               usedKeywordServerFilter = true
             }
-            notesResp = await bgRequest<any>({
-              path: `/api/v1/notes/search/?page=${page}&results_per_page=${pageSize}&include_keywords=true` as any,
-              method: 'POST' as any,
+            notesResp = await bgRequest<unknown>({
+              path: `/api/v1/notes/search/?page=${page}&results_per_page=${pageSize}&include_keywords=true`,
+              method: 'POST',
               headers: { 'Content-Type': 'application/json' },
               body
             })
           } catch {
             // Fallback: legacy GET search without keyword-aware pagination
             usedKeywordServerFilter = false
-            notesResp = await bgRequest<any>({
+            notesResp = await bgRequest<unknown>({
               path: `/api/v1/notes/search/?query=${encodeURIComponent(
                 query
-              )}&page=${page}&results_per_page=${pageSize}&include_keywords=true` as any,
-              method: 'GET' as any
+              )}&page=${page}&results_per_page=${pageSize}&include_keywords=true`,
+              method: 'GET'
             })
           }
 
-          const items = Array.isArray(notesResp) ? notesResp : (notesResp?.items || [])
-          const pagination = notesResp?.pagination
+          const notesRecord = isRecord(notesResp) ? notesResp : {}
+          const items = Array.isArray(notesResp)
+            ? notesResp.filter(isRecord)
+            : Array.isArray(notesRecord.items)
+              ? notesRecord.items.filter(isRecord)
+              : []
+          const pagination = isRecord(notesRecord.pagination)
+            ? notesRecord.pagination
+            : undefined
 
           // If the API cannot filter by keywords, apply client-side filtering and
           // base the total on the filtered subset so pagination reflects what is visible.
           let filteredItems = items
           if (keywordFilterActive && !usedKeywordServerFilter) {
-            filteredItems = items.filter((n: any) => {
+            filteredItems = items.filter((n) => {
               const noteKws = extractNoteKeywords(n)
               return keywordTokens.some((kw) =>
                 noteKws.some((nkw) => nkw.toLowerCase().includes(kw.toLowerCase()))
@@ -521,49 +548,64 @@ const MediaPageContent: React.FC = () => {
             setNotesTotal(notesClientTotal)
             actualNotesCount = notesClientTotal
           } else {
-            const notesServerTotal = Number(pagination?.total_items || items.length || 0)
+            const notesServerTotal = Number(
+              (pagination && typeof pagination.total_items === 'number'
+                ? pagination.total_items
+                : items.length) || 0
+            )
             setNotesTotal(notesServerTotal)
             actualNotesCount = notesServerTotal
           }
 
           for (const n of filteredItems) {
-            const id = n?.id ?? n?.note_id ?? n?.pk ?? n?.uuid
+            const id = getMediaId(n)
+            const metadata = isRecord(n.metadata) ? n.metadata : {}
             results.push({
               kind: 'note',
               id,
-              title: n?.title || `Note ${id}`,
-              snippet: n?.content?.substring(0, 200) || '',
+              title: getStringValue(n.title) || `Note ${id}`,
+              snippet: getStringValue(n.content)?.substring(0, 200) || '',
               keywords: extractNoteKeywords(n),
               meta: {
                 type: 'note',
-                source: n?.metadata?.conversation_id ? 'conversation' : null
+                source: metadata.conversation_id ? 'conversation' : null
               },
               raw: n
             })
           }
         } else {
           // Browse notes with pagination
-          const notesResp = await bgRequest<any>({
-            path: `/api/v1/notes/?page=${page}&results_per_page=${pageSize}` as any,
-            method: 'GET' as any
+          const notesResp = await bgRequest<unknown>({
+            path: `/api/v1/notes/?page=${page}&results_per_page=${pageSize}`,
+            method: 'GET'
           })
-          const items = Array.isArray(notesResp?.items) ? notesResp.items : []
-          const pagination = notesResp?.pagination
-          const notesServerTotal = Number(pagination?.total_items || items.length || 0)
+          const notesRecord = isRecord(notesResp) ? notesResp : {}
+          const items = Array.isArray(notesRecord.items)
+            ? notesRecord.items.filter(isRecord)
+            : []
+          const pagination = isRecord(notesRecord.pagination)
+            ? notesRecord.pagination
+            : undefined
+          const notesServerTotal = Number(
+            (pagination && typeof pagination.total_items === 'number'
+              ? pagination.total_items
+              : items.length) || 0
+          )
           setNotesTotal(notesServerTotal)
           actualNotesCount = notesServerTotal
 
           for (const n of items) {
-            const id = n?.id ?? n?.note_id ?? n?.pk ?? n?.uuid
+            const id = getMediaId(n)
+            const metadata = isRecord(n.metadata) ? n.metadata : {}
             results.push({
               kind: 'note',
               id,
-              title: n?.title || `Note ${id}`,
-              snippet: n?.content?.substring(0, 200) || '',
+              title: getStringValue(n.title) || `Note ${id}`,
+              snippet: getStringValue(n.content)?.substring(0, 200) || '',
               keywords: extractNoteKeywords(n),
               meta: {
                 type: 'note',
-                source: n?.metadata?.conversation_id ? 'conversation' : null
+                source: metadata.conversation_id ? 'conversation' : null
               },
               raw: n
             })
@@ -587,7 +629,9 @@ const MediaPageContent: React.FC = () => {
     keywordTokens,
     page,
     pageSize,
-    availableMediaTypes
+    availableMediaTypes,
+    message,
+    t
   ])
 
   const { data: results = [], refetch, isLoading, isFetching } = useQuery({
@@ -655,7 +699,7 @@ const MediaPageContent: React.FC = () => {
   useEffect(() => {
     ;(async () => {
       try {
-        const storage = new Storage({ area: 'local', serde: safeStorageSerde } as any)
+        const storage = new Storage({ area: 'local', serde: safeStorageSerde })
         const cacheKey = 'reviewMediaTypesCache'
         const cached = (await storage.get(cacheKey).catch(() => null)) as {
           types?: string[]
@@ -675,28 +719,35 @@ const MediaPageContent: React.FC = () => {
         }
 
         // Sample first up-to-3 pages to enrich types list
-        const first = await bgRequest<any>({
-          path: `/api/v1/media/?page=1&results_per_page=50` as any,
-          method: 'GET' as any
+        const first = await bgRequest<unknown>({
+          path: `/api/v1/media/?page=1&results_per_page=50`,
+          method: 'GET'
         })
+        const firstRecord = isRecord(first) ? first : {}
+        const pagination = isRecord(firstRecord.pagination)
+          ? firstRecord.pagination
+          : undefined
         const totalPages = Math.max(
           1,
-          Number(first?.pagination?.total_pages || 1)
+          Number(pagination?.total_pages || 1)
         )
         const pagesToFetch = [1, 2, 3].filter((p) => p <= totalPages)
         const listings = await Promise.all(
           pagesToFetch.map((p) =>
             p === 1
               ? Promise.resolve(first)
-              : bgRequest<any>({
-                  path: `/api/v1/media/?page=${p}&results_per_page=50` as any,
-                  method: 'GET' as any
+              : bgRequest<unknown>({
+                  path: `/api/v1/media/?page=${p}&results_per_page=50`,
+                  method: 'GET'
                 })
           )
         )
         const typeSet = new Set<string>()
         for (const listing of listings) {
-          const items = Array.isArray(listing?.items) ? listing.items : []
+          const listingRecord = isRecord(listing) ? listing : {}
+          const items = Array.isArray(listingRecord.items)
+            ? listingRecord.items.filter(isRecord)
+            : []
           for (const m of items) {
             const t = deriveMediaMeta(m).type
             if (t) typeSet.add(t)
@@ -717,7 +768,7 @@ const MediaPageContent: React.FC = () => {
         await refetch()
       } catch {}
     })()
-  }, []) // Intentionally empty - runs only on mount with initial (empty) filters
+  }, [refetch]) // Runs on mount (refetch is stable from React Query)
 
   // Load keyword suggestions for the filter dropdown
   // Note: /api/v1/media/keywords endpoint doesn't exist on the server
@@ -745,9 +796,9 @@ const MediaPageContent: React.FC = () => {
   const fetchSelectedDetails = useCallback(async (item: MediaResultItem) => {
     try {
       if (item.kind === 'media') {
-        const detail = await bgRequest<any>({
-          path: `/api/v1/media/${item.id}` as any,
-          method: 'GET' as any
+        const detail = await bgRequest<unknown>({
+          path: `/api/v1/media/${item.id}`,
+          method: 'GET'
         })
         return detail
       }
@@ -760,10 +811,10 @@ const MediaPageContent: React.FC = () => {
     return null
   }, [])
 
-  const contentFromDetail = useCallback((detail: any): string => {
+  const contentFromDetail = useCallback((detail: unknown): string => {
     if (!detail) return ''
 
-    const firstString = (...vals: any[]): string => {
+    const firstString = (...vals: unknown[]): string => {
       for (const v of vals) {
         if (typeof v === 'string' && v.trim().length > 0) return v
       }
@@ -771,14 +822,14 @@ const MediaPageContent: React.FC = () => {
     }
 
     if (typeof detail === 'string') return detail
-    if (typeof detail !== 'object') return ''
+    if (!isRecord(detail)) return ''
 
     // Check content object first (tldw API structure)
     if (detail.content && typeof detail.content === 'object') {
       const contentText = firstString(
-        detail.content.text,
-        detail.content.content,
-        detail.content.raw_text
+        (detail.content as Record<string, unknown>).text,
+        (detail.content as Record<string, unknown>).content,
+        (detail.content as Record<string, unknown>).raw_text
       )
       if (contentText) return contentText
     }
@@ -798,11 +849,11 @@ const MediaPageContent: React.FC = () => {
     const lv = detail.latest_version || detail.latestVersion
     if (lv && typeof lv === 'object') {
       const fromLatest = firstString(
-        lv.content,
-        lv.text,
-        lv.transcript,
-        lv.raw_text,
-        lv.rawText
+        (lv as Record<string, unknown>).content,
+        (lv as Record<string, unknown>).text,
+        (lv as Record<string, unknown>).transcript,
+        (lv as Record<string, unknown>).raw_text,
+        (lv as Record<string, unknown>).rawText
       )
       if (fromLatest) return fromLatest
     }
@@ -811,11 +862,11 @@ const MediaPageContent: React.FC = () => {
     const data = detail.data
     if (data && typeof data === 'object') {
       const fromData = firstString(
-        data.content,
-        data.text,
-        data.transcript,
-        data.raw_text,
-        data.rawText
+        (data as Record<string, unknown>).content,
+        (data as Record<string, unknown>).text,
+        (data as Record<string, unknown>).transcript,
+        (data as Record<string, unknown>).raw_text,
+        (data as Record<string, unknown>).rawText
       )
       if (fromData) return fromData
     }
@@ -824,9 +875,10 @@ const MediaPageContent: React.FC = () => {
   }, [])
 
   // Extract keywords from media detail
-  const extractKeywordsFromDetail = (detail: any): string[] => {
+  const extractKeywordsFromDetail = useCallback((detail: unknown): string[] => {
+    if (!isRecord(detail)) return []
     return extractKeywordsFromMedia(detail)
-  }
+  }, [])
 
   // Track selected ID to avoid re-fetching on keyword updates
   const [lastFetchedId, setLastFetchedId] = useState<string | number | null>(null)
@@ -873,7 +925,13 @@ const MediaPageContent: React.FC = () => {
         setDetailLoading(false)
       }
     })()
-  }, [selected?.id, fetchSelectedDetails, contentFromDetail])
+  }, [
+    selected,
+    lastFetchedId,
+    fetchSelectedDetails,
+    contentFromDetail,
+    extractKeywordsFromDetail
+  ])
 
   // Note: Removed auto-clear effect that cleared selection when item wasn't in current results.
   // This caused UX issues - selection was lost when changing filters or pages.
@@ -921,7 +979,7 @@ const MediaPageContent: React.FC = () => {
   }
 
   const handleDeleteItem = useCallback(
-    async (item: MediaResultItem, detail: any | null) => {
+    async (item: MediaResultItem, detail: unknown | null) => {
       const id = item.id
       const idStr = String(id)
       const wasFavorite = favoritesSet.has(idStr)
@@ -939,11 +997,15 @@ const MediaPageContent: React.FC = () => {
             return null
           }
           let expectedVersion: number | null = null
+          const detailRecord = isRecord(detail) ? detail : {}
+          const detailMeta = isRecord(detailRecord.metadata) ? detailRecord.metadata : {}
+          const rawRecord = isRecord(item.raw) ? item.raw : {}
+          const rawMeta = isRecord(rawRecord.metadata) ? rawRecord.metadata : {}
           const versionCandidates = [
-            detail?.version,
-            detail?.metadata?.version,
-            item.raw?.version,
-            item.raw?.metadata?.version
+            detailRecord.version,
+            detailMeta.version,
+            rawRecord.version,
+            rawMeta.version
           ]
           for (const candidate of versionCandidates) {
             const parsed = parseVersionCandidate(candidate)
@@ -954,13 +1016,15 @@ const MediaPageContent: React.FC = () => {
           }
           if (expectedVersion == null) {
             try {
-              const latest = await bgRequest<any>({
-                path: `/api/v1/notes/${id}` as any,
-                method: 'GET' as any
+              const latest = await bgRequest<unknown>({
+                path: `/api/v1/notes/${id}`,
+                method: 'GET'
               })
+              const latestRecord = isRecord(latest) ? latest : {}
+              const latestMeta = isRecord(latestRecord.metadata) ? latestRecord.metadata : {}
               expectedVersion =
-                parseVersionCandidate(latest?.version) ??
-                parseVersionCandidate(latest?.metadata?.version)
+                parseVersionCandidate(latestRecord.version) ??
+                parseVersionCandidate(latestMeta.version)
             } catch {
               throw new Error(
                 t('review:mediaPage.noteDeleteNeedsReload', {
@@ -977,14 +1041,14 @@ const MediaPageContent: React.FC = () => {
             )
           }
           await bgRequest({
-            path: `/api/v1/notes/${id}` as any,
-            method: 'DELETE' as any,
+            path: `/api/v1/notes/${id}`,
+            method: 'DELETE',
             headers: { 'expected-version': String(expectedVersion) }
           })
         } else {
           await bgRequest({
-            path: `/api/v1/media/${id}` as any,
-            method: 'DELETE' as any
+            path: `/api/v1/media/${id}`,
+            method: 'DELETE'
           })
         }
       } catch (err) {
@@ -1044,8 +1108,8 @@ const MediaPageContent: React.FC = () => {
           }),
           onUndo: async () => {
             await bgRequest({
-              path: `/api/v1/media/${id}/restore` as any,
-              method: 'POST' as any
+              path: `/api/v1/media/${id}/restore`,
+              method: 'POST'
             })
             if (wasFavorite) {
               setFavorites((prev: string[] | undefined) => {
@@ -1114,7 +1178,7 @@ const MediaPageContent: React.FC = () => {
 
     window.addEventListener('keydown', handleKeyDown)
     return () => window.removeEventListener('keydown', handleKeyDown)
-  }, [hasNext, hasPrevious, page, totalPages, results, selectedIndex])
+  }, [hasNext, hasPrevious, page, totalPages, displayResults, selectedIndex])
 
   // Calculate dynamic sidebar height
   const sidebarHeight = useMemo(() => {
@@ -1171,7 +1235,7 @@ const MediaPageContent: React.FC = () => {
       // ignore storage errors
     }
     setChatMode('normal')
-    setSelectedKnowledge(null as any)
+    setSelectedKnowledge(null)
     setRagMediaIds(null)
     navigate('/')
     message.success(
@@ -1195,7 +1259,7 @@ const MediaPageContent: React.FC = () => {
       )
       return
     }
-    setSelectedKnowledge(null as any)
+    setSelectedKnowledge(null)
     setRagMediaIds([idNum])
     setChatMode('rag')
     navigate('/')
@@ -1217,8 +1281,8 @@ const MediaPageContent: React.FC = () => {
   const handleCreateNoteWithContent = useCallback(async (noteContent: string, title: string) => {
     try {
       await bgRequest({
-        path: '/api/v1/notes/' as any,
-        method: 'POST' as any,
+        path: '/api/v1/notes/',
+        method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: {
           title: title,
@@ -1257,7 +1321,7 @@ const MediaPageContent: React.FC = () => {
       // ignore storage errors
     }
     setChatMode('normal')
-    setSelectedKnowledge(null as any)
+    setSelectedKnowledge(null)
     setRagMediaIds(null)
     navigate('/')
     message.success(t('review:reviewPage.sentToChat', 'Sent to chat'))

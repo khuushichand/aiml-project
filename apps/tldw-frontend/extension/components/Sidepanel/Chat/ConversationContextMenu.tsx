@@ -50,7 +50,7 @@ export const ConversationContextMenu: React.FC<
   onExportJSON,
   onExportMarkdown,
   onDelete,
-  currentStatus
+  currentStatus: _currentStatus
 }) => {
   const { t } = useTranslation(["common", "sidepanel"])
   const [renameModalOpen, setRenameModalOpen] = React.useState(false)

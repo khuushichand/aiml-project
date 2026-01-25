@@ -12,7 +12,7 @@ import {
   Tag
 } from "antd"
 import { Link, useNavigate } from "react-router-dom"
-import React, { useEffect, useState } from "react"
+import React, { useCallback, useEffect, useState } from "react"
 import { useTranslation } from "react-i18next"
 import { isFirefoxTarget } from "@/config/platform"
 import { tldwClient, TldwConfig } from "@/services/tldw/TldwApiClient"
@@ -61,6 +61,30 @@ const TIMEOUT_PRESETS: Record<TimeoutPresetKey, TimeoutValues> = {
 
 type CoreStatus = 'unknown' | 'checking' | 'connected' | 'failed'
 type RagStatus = 'healthy' | 'unhealthy' | 'unknown' | 'checking'
+
+type TldwConfigWithTimeouts = TldwConfig & {
+  requestTimeoutMs?: number
+  streamIdleTimeoutMs?: number
+  chatRequestTimeoutMs?: number
+  chatStreamIdleTimeoutMs?: number
+  ragRequestTimeoutMs?: number
+  mediaRequestTimeoutMs?: number
+  uploadRequestTimeoutMs?: number
+}
+
+type TldwSettingsFormValues = {
+  serverUrl: string
+  authMode: 'single-user' | 'multi-user'
+  apiKey?: string
+  username?: string
+  password?: string
+}
+
+const getErrorMessage = (error: unknown, fallback = ''): string => {
+  if (error instanceof Error) return error.message
+  if (typeof error === 'string') return error
+  return fallback
+}
 
 export const TldwSettings = () => {
   const { t } = useTranslation(["settings", "common"])
@@ -170,26 +194,37 @@ export const TldwSettings = () => {
     }
   }
 
-  useEffect(() => {
-    loadConfig()
-  }, [])
-
-  const loadConfig = async () => {
+  const loadConfig = useCallback(async () => {
     setLoading(true)
     setInitializingError(null)
     try {
       const config = await tldwClient.getConfig()
       if (config) {
+        const configWithTimeouts = config as TldwConfigWithTimeouts
         setAuthMode(config.authMode)
         setServerUrl(config.serverUrl)
         const nextTimeouts = { ...TIMEOUT_PRESETS.balanced }
-        if (typeof (config as any).requestTimeoutMs === 'number') nextTimeouts.request = Math.round((config as any).requestTimeoutMs / 1000)
-        if (typeof (config as any).streamIdleTimeoutMs === 'number') nextTimeouts.stream = Math.round((config as any).streamIdleTimeoutMs / 1000)
-        if (typeof (config as any).chatRequestTimeoutMs === 'number') nextTimeouts.chatRequest = Math.round((config as any).chatRequestTimeoutMs / 1000)
-        if (typeof (config as any).chatStreamIdleTimeoutMs === 'number') nextTimeouts.chatStream = Math.round((config as any).chatStreamIdleTimeoutMs / 1000)
-        if (typeof (config as any).ragRequestTimeoutMs === 'number') nextTimeouts.ragRequest = Math.round((config as any).ragRequestTimeoutMs / 1000)
-        if (typeof (config as any).mediaRequestTimeoutMs === 'number') nextTimeouts.media = Math.round((config as any).mediaRequestTimeoutMs / 1000)
-        if (typeof (config as any).uploadRequestTimeoutMs === 'number') nextTimeouts.upload = Math.round((config as any).uploadRequestTimeoutMs / 1000)
+        if (typeof configWithTimeouts.requestTimeoutMs === 'number') {
+          nextTimeouts.request = Math.round(configWithTimeouts.requestTimeoutMs / 1000)
+        }
+        if (typeof configWithTimeouts.streamIdleTimeoutMs === 'number') {
+          nextTimeouts.stream = Math.round(configWithTimeouts.streamIdleTimeoutMs / 1000)
+        }
+        if (typeof configWithTimeouts.chatRequestTimeoutMs === 'number') {
+          nextTimeouts.chatRequest = Math.round(configWithTimeouts.chatRequestTimeoutMs / 1000)
+        }
+        if (typeof configWithTimeouts.chatStreamIdleTimeoutMs === 'number') {
+          nextTimeouts.chatStream = Math.round(configWithTimeouts.chatStreamIdleTimeoutMs / 1000)
+        }
+        if (typeof configWithTimeouts.ragRequestTimeoutMs === 'number') {
+          nextTimeouts.ragRequest = Math.round(configWithTimeouts.ragRequestTimeoutMs / 1000)
+        }
+        if (typeof configWithTimeouts.mediaRequestTimeoutMs === 'number') {
+          nextTimeouts.media = Math.round(configWithTimeouts.mediaRequestTimeoutMs / 1000)
+        }
+        if (typeof configWithTimeouts.uploadRequestTimeoutMs === 'number') {
+          nextTimeouts.upload = Math.round(configWithTimeouts.uploadRequestTimeoutMs / 1000)
+        }
 
         setRequestTimeoutSec(nextTimeouts.request)
         setStreamIdleTimeoutSec(nextTimeouts.stream)
@@ -216,16 +251,22 @@ export const TldwSettings = () => {
     } catch (error) {
       console.error('Failed to load config:', error)
       setInitializingError(
-        (error as Error)?.message ||
-          t('settings:tldw.loadError', 'Unable to load tldw server settings. Check your connection and try again.')
+        getErrorMessage(
+          error,
+          t('settings:tldw.loadError', 'Unable to load tldw server settings. Check your connection and try again.') as string
+        )
       )
     } finally {
       setLoading(false)
       setInitializing(false)
     }
-  }
+  }, [form, t])
 
-  const handleSave = async (values: any) => {
+  useEffect(() => {
+    void loadConfig()
+  }, [loadConfig])
+
+  const handleSave = async (values: TldwSettingsFormValues) => {
     setLoading(true)
     try {
       const config: Partial<TldwConfig & {
@@ -373,9 +414,9 @@ export const TldwSettings = () => {
       try {
         setRagStatus("checking")
         await tldwClient.initialize()
-        const rag = await tldwClient.ragHealth()
+        await tldwClient.ragHealth()
         setRagStatus('healthy')
-      } catch (e) {
+      } catch {
         setRagStatus('unhealthy')
       }
       
@@ -405,7 +446,7 @@ export const TldwSettings = () => {
     } catch (error) {
       setConnectionStatus('error')
       setCoreStatus("failed")
-      const raw = (error as any)?.message || ''
+      const raw = getErrorMessage(error)
       const friendly =
         raw && /network|timeout|failed to fetch/i.test(raw)
           ? t(
@@ -454,8 +495,12 @@ export const TldwSettings = () => {
         if (granted) message.success(t('settings:siteAccessGranted', 'Host permission granted for {{origin}}', { origin }))
         else message.warning(t('settings:siteAccessDenied', 'Permission not granted for {{origin}}', { origin }))
       })
-    } catch (e: any) {
-      message.error(t('settings:siteAccessFailed', 'Failed to request site access: {{msg}}', { msg: e?.message || String(e) }))
+    } catch (error: unknown) {
+      message.error(
+        t('settings:siteAccessFailed', 'Failed to request site access: {{msg}}', {
+          msg: getErrorMessage(error, String(error))
+        })
+      )
     }
   }
 
@@ -477,7 +522,7 @@ export const TldwSettings = () => {
       
       // Test connection after login
       await testConnection()
-    } catch (error: any) {
+    } catch (error: unknown) {
       const friendly = mapMultiUserLoginErrorMessage(
         t,
         error,

@@ -42,7 +42,7 @@ export type UploadedFile = {
 };
 
 export type SessionFiles = {
-  id?: any 
+  id?: string
   sessionId: string;
   files: UploadedFile[];
   retrievalEnabled: boolean;
@@ -63,7 +63,7 @@ export type Message = {
   messageType?: string;
   clusterId?: string;
   modelId?: string;
-  generationInfo?: any;
+  generationInfo?: Record<string, unknown>;
   modelName?: string;
   modelImage?: string;
   documents?: ChatDocuments;
@@ -154,7 +154,7 @@ export type ProcessedMedia = {
   url: string
   title?: string
   content?: string
-  metadata?: Record<string, any>
+  metadata?: Record<string, unknown>
   createdAt: number
 }
 
@@ -222,7 +222,7 @@ export type DraftStatus =
 export type DraftRevision = {
   id: string
   content: string
-  metadata?: Record<string, any>
+  metadata?: Record<string, unknown>
   timestamp: number
   changeDescription?: string
 }
@@ -236,7 +236,7 @@ export type DraftSection = {
   content: string
   level?: number
   source: "server" | "heuristic"
-  meta?: Record<string, any>
+  meta?: Record<string, unknown>
 }
 
 export type DraftSource = {
@@ -271,8 +271,8 @@ export type ContentDraft = {
   originalContent: string
   contentFormat: "plain" | "markdown"
   originalContentFormat?: "plain" | "markdown"
-  metadata: Record<string, any>
-  originalMetadata?: Record<string, any>
+  metadata: Record<string, unknown>
+  originalMetadata?: Record<string, unknown>
   keywords: string[]
   sections?: DraftSection[]
   excludedSectionIds?: string[]
@@ -282,7 +282,7 @@ export type ContentDraft = {
     perform_analysis: boolean
     perform_chunking: boolean
     overwrite_existing: boolean
-    advancedValues: Record<string, any>
+    advancedValues: Record<string, unknown>
   }
   status: DraftStatus
   reviewNotes?: string
@@ -301,7 +301,7 @@ export type DraftBatch = {
   id: string
   name?: string
   source: "url_list" | "file_upload" | "quick_ingest" | "manual"
-  sourceDetails?: Record<string, any>
+  sourceDetails?: Record<string, unknown>
   totalItems?: number
   readyToSubmitCount?: number
   committedCount?: number

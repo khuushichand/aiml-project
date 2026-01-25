@@ -13,7 +13,6 @@ import { bgStream } from "@/services/background-proxy"
 import * as nativeClient from "@/services/native/native-client"
 import type {
   AgentEvent,
-  AgentMessage,
   AgentResult,
   AgentSession,
   AgentSettings,

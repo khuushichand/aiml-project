@@ -13,11 +13,22 @@ import {
 } from "@/services/evaluations"
 import { useEvaluationsStore } from "@/store/evaluations"
 
+const isRecord = (value: unknown): value is Record<string, unknown> =>
+  typeof value === "object" && value !== null
+
 // Helper to ensure API responses are ok
-const ensureOk = <T,>(resp: any): T => {
-  if (!resp?.ok) {
-    const err = new Error(resp?.error || `HTTP ${resp?.status}`)
-    ;(err as any).resp = resp
+const ensureOk = <T,>(resp: unknown): T => {
+  const record = isRecord(resp) ? resp : {}
+  if (record.ok !== true) {
+    const status = typeof record.status === "number" ? record.status : undefined
+    const message =
+      typeof record.error === "string"
+        ? record.error
+        : status
+          ? `HTTP ${status}`
+          : "Request failed"
+    const err = new Error(message)
+    ;(err as { resp?: unknown }).resp = resp
     throw err
   }
   return resp as T
@@ -34,18 +45,20 @@ export function useFetchHistory() {
         await getHistory(filters)
       ),
     onSuccess: (resp) => {
+      const data = isRecord(resp) ? resp.data : undefined
       const list =
-        resp?.data?.data ||
-        (Array.isArray(resp?.data) ? resp?.data : (resp?.data as any)?.items) ||
+        (isRecord(data) && Array.isArray(data.data) && data.data) ||
+        (Array.isArray(data) && data) ||
+        (isRecord(data) && Array.isArray(data.items) && data.items) ||
         []
       setHistoryResults(list as EvaluationHistoryItem[])
     },
-    onError: (error: any) => {
+    onError: (error: unknown) => {
       notification.error({
         message: t("evaluations:historyErrorTitle", {
           defaultValue: "Failed to fetch history"
         }),
-        description: error?.message
+        description: error instanceof Error ? error.message : undefined
       })
     }
   })

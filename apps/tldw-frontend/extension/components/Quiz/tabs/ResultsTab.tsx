@@ -36,8 +36,14 @@ export const ResultsTab: React.FC = () => {
     offset: 0
   })
 
-  const attempts = attemptsData?.items ?? []
-  const quizzes = quizzesData?.items ?? []
+  const attempts = React.useMemo(
+    () => attemptsData?.items ?? [],
+    [attemptsData?.items]
+  )
+  const quizzes = React.useMemo(
+    () => quizzesData?.items ?? [],
+    [quizzesData?.items]
+  )
   const totalAttempts = attemptsData?.count ?? 0
 
   const quizMap = React.useMemo(() => {

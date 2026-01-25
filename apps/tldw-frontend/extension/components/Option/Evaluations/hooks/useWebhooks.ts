@@ -14,11 +14,22 @@ import {
 } from "@/services/evaluations"
 import { useEvaluationsStore } from "@/store/evaluations"
 
+const isRecord = (value: unknown): value is Record<string, unknown> =>
+  typeof value === "object" && value !== null
+
 // Helper to ensure API responses are ok
-const ensureOk = <T,>(resp: any): T => {
-  if (!resp?.ok) {
-    const err = new Error(resp?.error || `HTTP ${resp?.status}`)
-    ;(err as any).resp = resp
+const ensureOk = <T,>(resp: unknown): T => {
+  const record = isRecord(resp) ? resp : {}
+  if (record.ok !== true) {
+    const status = typeof record.status === "number" ? record.status : undefined
+    const message =
+      typeof record.error === "string"
+        ? record.error
+        : status
+          ? `HTTP ${status}`
+          : "Request failed"
+    const err = new Error(message)
+    ;(err as { resp?: unknown }).resp = resp
     throw err
   }
   return resp as T
@@ -42,7 +53,11 @@ export function useRegisterWebhook() {
     mutationFn: async (payload: { url: string; events: string[] }) =>
       ensureOk<{ data: EvaluationWebhook }>(await registerWebhook(payload)),
     onSuccess: (resp) => {
-      setWebhookSecretText(resp?.data?.secret || null)
+      const secret =
+        isRecord(resp) && isRecord(resp.data) && typeof resp.data.secret === "string"
+          ? resp.data.secret
+          : null
+      setWebhookSecretText(secret)
       void queryClient.invalidateQueries({
         queryKey: ["evaluations", "webhooks"]
       })
@@ -52,12 +67,12 @@ export function useRegisterWebhook() {
         })
       })
     },
-    onError: (error: any) => {
+    onError: (error: unknown) => {
       notification.error({
         message: t("evaluations:webhookCreateErrorTitle", {
           defaultValue: "Failed to register webhook"
         }),
-        description: error?.message
+        description: error instanceof Error ? error.message : undefined
       })
     }
   })
@@ -79,12 +94,12 @@ export function useDeleteWebhook() {
         message: t("common:deleted", { defaultValue: "Deleted" })
       })
     },
-    onError: (error: any) => {
+    onError: (error: unknown) => {
       notification.error({
         message: t("evaluations:webhookDeleteErrorTitle", {
           defaultValue: "Failed to delete webhook"
         }),
-        description: error?.message
+        description: error instanceof Error ? error.message : undefined
       })
     }
   })

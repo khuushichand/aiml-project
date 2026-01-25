@@ -372,7 +372,10 @@ export const WritingPlayground: React.FC = () => {
   const providerCapabilities = availableProviders.find(
     (provider) => provider.name === selectedProvider
   )
-  const supportedFields = new Set(providerCapabilities?.supported_fields ?? [])
+  const supportedFields = React.useMemo(
+    () => new Set(providerCapabilities?.supported_fields ?? []),
+    [providerCapabilities?.supported_fields]
+  )
   const tokenizerInfo = providerCapabilities?.tokenizers?.[session.model]
   const tokenizerAvailable = Boolean(tokenizeSupported && tokenizerInfo?.available)
 
@@ -636,7 +639,16 @@ export const WritingPlayground: React.FC = () => {
         clearTimeout(saveTimerRef.current)
       }
     }
-  }, [session, sessionMeta, sessionNameDraft, online, updateSessionMutation, queryClient, selectedSessionId])
+  }, [
+    session,
+    sessionMeta,
+    sessionNameDraft,
+    online,
+    updateSessionMutation,
+    queryClient,
+    selectedSessionId,
+    sessionsSupported
+  ])
 
   React.useEffect(() => {
     if (!selectedSessionId || migrationDone || !online || !sessionsSupported) return
@@ -881,7 +893,8 @@ export const WritingPlayground: React.FC = () => {
     session.tokenHighlightMode,
     finalPromptText,
     session.prompt.length,
-    session.promptPreviewTokens
+    session.promptPreviewTokens,
+    predict
   ])
 
   React.useEffect(() => {
@@ -950,7 +963,16 @@ export const WritingPlayground: React.FC = () => {
       window.removeEventListener("keydown", handleKeyDown)
       window.removeEventListener("keyup", handleKeyUp)
     }
-  }, [modals, session.promptPreview, promptPreviewChunks])
+  }, [
+    modals,
+    session.promptPreview,
+    promptPreviewChunks,
+    predict,
+    redo,
+    ttsStop,
+    undo,
+    undoAndPredict
+  ])
 
   const onScroll = React.useCallback(
     (event: React.UIEvent<HTMLTextAreaElement>) => {
@@ -1411,8 +1433,21 @@ export const WritingPlayground: React.FC = () => {
     }
 
     if (!onChunk && !options?.abortController && fimPromptInfo) {
-      const didFill = await fillPredict()
-      if (didFill) return true
+      const { fimLeftChunks, fimRightChunks } = fimPromptInfo
+      await predict({
+        promptOverride: finalPromptText,
+        chunkCount: fimLeftChunks.length,
+        onChunk: (chunk) => {
+          fimLeftChunks.push(chunk)
+          setSession((prev) => ({
+            ...prev,
+            prompt: [...fimLeftChunks, ...fimRightChunks]
+          }))
+          return true
+        },
+        invalidateUndo: true
+      })
+      return true
     }
 
     const abortController = options?.abortController ?? new AbortController()
@@ -1501,27 +1536,10 @@ export const WritingPlayground: React.FC = () => {
     session.chatAPI,
     selectedTemplatePayload,
     buildRequestBody,
-    streamCompletion
+    streamCompletion,
+    fimPromptInfo,
+    ttsAddChunk
   ])
-
-  const fillPredict = React.useCallback(async () => {
-    if (!fimPromptInfo) return false
-    const { fimLeftChunks, fimRightChunks } = fimPromptInfo
-    await predict({
-      promptOverride: finalPromptText,
-      chunkCount: fimLeftChunks.length,
-      onChunk: (chunk) => {
-        fimLeftChunks.push(chunk)
-        setSession((prev) => ({
-          ...prev,
-          prompt: [...fimLeftChunks, ...fimRightChunks]
-        }))
-        return true
-      },
-      invalidateUndo: true
-    })
-    return true
-  }, [fimPromptInfo, predict, finalPromptText])
 
   const undo = React.useCallback(() => {
     if (!undoStackRef.current.length) return false
@@ -1641,7 +1659,7 @@ export const WritingPlayground: React.FC = () => {
     if (words.length > session.ttsMaxUserInput) {
       text = words.slice(-session.ttsMaxUserInput).join("")
     }
-    const strings = text.split(/(?<=[!\.\?\n])/)
+    const strings = text.split(/(?<=[!.?\n])/)
     let textToRead = ""
     for (const part of strings) {
       if (/\w/.test(part)) {

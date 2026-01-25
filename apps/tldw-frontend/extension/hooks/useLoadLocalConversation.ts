@@ -8,22 +8,24 @@ import {
   getPromptById,
   getSessionFiles
 } from "@/db/dexie/helpers"
+import type { UploadedFile } from "@/db/dexie/types"
+import type { ChatHistory, Message } from "@/store/option"
 import { lastUsedChatModelEnabled } from "@/services/model-settings"
 import { updatePageTitle } from "@/utils/update-page-title"
 
 interface LoadLocalConversationDeps {
   setServerChatId: (id: string | null) => void
   setHistoryId: (id: string) => void
-  setHistory: (history: any) => void
-  setMessages: (messages: any[]) => void
+  setHistory: (history: ChatHistory) => void
+  setMessages: (messages: Message[]) => void
   setSelectedModel: (id: string) => void
   setSelectedSystemPrompt: (id: string | null) => void
   setSystemPrompt: (prompt: string) => void
-  setContextFiles: (files: any[]) => void
+  setContextFiles: (files: UploadedFile[]) => void
 }
 
 interface UseLoadLocalConversationOptions {
-  t: (key: string, options?: any) => string
+  t: (key: string, options?: Record<string, unknown>) => string
   errorLogPrefix: string
   errorDefaultMessage: string
 }
@@ -92,7 +94,6 @@ export function useLoadLocalConversation(
           historyDetails?.title || t("common:untitled", { defaultValue: "Untitled" })
         )
       } catch (error) {
-        // eslint-disable-next-line no-console
         console.error(`${errorLogPrefix}:`, error)
         message.error(
           t("common:error.friendlyLocalHistorySummary", {

@@ -18,7 +18,7 @@ import {
  */
 export const StatusDot = () => {
   const { t } = useTranslation(["sidepanel"])
-  const { uxState, mode, isConnectedUx, isChecking, isConfigOrError } =
+  const { mode, isConnectedUx, isChecking, isConfigOrError } =
     useConnectionUxState()
   const { checkOnce } = useConnectionActions()
 

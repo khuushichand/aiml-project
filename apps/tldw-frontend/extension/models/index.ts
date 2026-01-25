@@ -157,7 +157,6 @@ export const pageAssistModel = async ({
     topK,
     topP,
     numCtx,
-    seed,
     numGpu,
     numPredict,
     useMMap,

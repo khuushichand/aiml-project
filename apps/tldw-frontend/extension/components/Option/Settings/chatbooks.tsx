@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from "react"
+import React, { useCallback, useEffect, useState } from "react"
 import { Alert, Input, Select, Switch } from "antd"
 import { useTranslation } from "react-i18next"
 import { Loader2, RotateCcw, Upload } from "lucide-react"
@@ -6,6 +6,45 @@ import { useAntdNotification } from "@/hooks/useAntdNotification"
 import { tldwClient } from "@/services/tldw/TldwApiClient"
 import { useServerCapabilities } from "@/hooks/useServerCapabilities"
 import { useMessageOption } from "@/hooks/useMessageOption"
+
+type ChatbookJob = {
+  job_id?: string
+  id?: string
+  name?: string
+  chatbook_name?: string
+  status?: string
+  items_imported?: number
+}
+
+const isRecord = (value: unknown): value is Record<string, unknown> =>
+  typeof value === "object" && value !== null && !Array.isArray(value)
+
+const normalizeJob = (value: unknown): ChatbookJob | null => {
+  if (!isRecord(value)) return null
+  return {
+    job_id: typeof value.job_id === "string" ? value.job_id : undefined,
+    id: typeof value.id === "string" ? value.id : undefined,
+    name: typeof value.name === "string" ? value.name : undefined,
+    chatbook_name:
+      typeof value.chatbook_name === "string" ? value.chatbook_name : undefined,
+    status: typeof value.status === "string" ? value.status : undefined,
+    items_imported:
+      typeof value.items_imported === "number" ? value.items_imported : undefined
+  }
+}
+
+const getJobsFromResponse = (response: unknown): ChatbookJob[] => {
+  if (Array.isArray(response)) {
+    return response
+      .map(normalizeJob)
+      .filter((job): job is ChatbookJob => job !== null)
+  }
+  if (isRecord(response)) {
+    const items = response.jobs ?? response.items ?? response.results
+    return getJobsFromResponse(items)
+  }
+  return []
+}
 
 export const ChatbooksSettings = () => {
   const { t } = useTranslation(["settings", "common"])
@@ -22,8 +61,8 @@ export const ChatbooksSettings = () => {
     useState(true)
   const [chatbookAsync, setChatbookAsync] = useState(true)
   const [chatbookExporting, setChatbookExporting] = useState(false)
-  const [chatbookExportJobs, setChatbookExportJobs] = useState<any[]>([])
-  const [chatbookImportJobs, setChatbookImportJobs] = useState<any[]>([])
+  const [chatbookExportJobs, setChatbookExportJobs] = useState<ChatbookJob[]>([])
+  const [chatbookImportJobs, setChatbookImportJobs] = useState<ChatbookJob[]>([])
   const [chatbookImporting, setChatbookImporting] = useState(false)
   const [chatbookImportConflict, setChatbookImportConflict] =
     useState("skip")
@@ -40,7 +79,7 @@ export const ChatbooksSettings = () => {
       .map((id) => id.trim())
       .filter(Boolean)
 
-  const loadChatbookJobs = async () => {
+  const loadChatbookJobs = useCallback(async () => {
     if (!capabilities?.hasChatbooks) return
     setChatbookJobsLoading(true)
     try {
@@ -49,20 +88,8 @@ export const ChatbooksSettings = () => {
         tldwClient.listChatbookExportJobs({ limit: 20, offset: 0 }),
         tldwClient.listChatbookImportJobs({ limit: 20, offset: 0 })
       ])
-      const exportItems =
-        (exports as any)?.jobs ||
-        (exports as any)?.items ||
-        (exports as any)?.results ||
-        exports ||
-        []
-      const importItems =
-        (imports as any)?.jobs ||
-        (imports as any)?.items ||
-        (imports as any)?.results ||
-        imports ||
-        []
-      setChatbookExportJobs(exportItems)
-      setChatbookImportJobs(importItems)
+      setChatbookExportJobs(getJobsFromResponse(exports))
+      setChatbookImportJobs(getJobsFromResponse(imports))
     } catch (error) {
       const msg = error instanceof Error ? error.message : String(error)
       notification.error({
@@ -75,7 +102,7 @@ export const ChatbooksSettings = () => {
     } finally {
       setChatbookJobsLoading(false)
     }
-  }
+  }, [capabilities?.hasChatbooks, notification, t])
 
   const handleChatbookExport = async () => {
     if (!capabilities?.hasChatbooks) return
@@ -219,7 +246,7 @@ export const ChatbooksSettings = () => {
     if (capabilities?.hasChatbooks) {
       void loadChatbookJobs()
     }
-  }, [capabilities?.hasChatbooks])
+  }, [capabilities?.hasChatbooks, loadChatbookJobs])
 
   return (
     <div className="space-y-6">
@@ -334,7 +361,7 @@ export const ChatbooksSettings = () => {
             </div>
           ) : (
             <div className="space-y-2">
-              {chatbookExportJobs.map((job: any) => (
+              {chatbookExportJobs.map((job) => (
                 <div
                   key={job.job_id || job.id}
                   className="rounded-md border border-border bg-surface2 p-2 text-xs"
@@ -466,7 +493,7 @@ export const ChatbooksSettings = () => {
             </div>
           ) : (
             <div className="space-y-2">
-              {chatbookImportJobs.map((job: any) => (
+              {chatbookImportJobs.map((job) => (
                 <div
                   key={job.job_id || job.id}
                   className="rounded-md border border-border bg-surface2 p-2 text-xs"

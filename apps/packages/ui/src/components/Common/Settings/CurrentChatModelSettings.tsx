@@ -275,7 +275,7 @@ export const CurrentChatModelSettings = ({
 
   React.useEffect(() => {
     if (!open) return
-    if (import.meta.env.DEV) {
+    if (import.meta?.env?.DEV) {
       console.count("CurrentChatModelSettings/recomputeActorPreview")
     }
     recomputeActorPreview()
@@ -365,7 +365,7 @@ export const CurrentChatModelSettings = ({
   const { isLoading } = useQuery({
     queryKey: ["fetchModelConfig2", open, selectedCharacterId],
     queryFn: async () => {
-      if (import.meta.env.DEV) {
+      if (import.meta?.env?.DEV) {
         console.count("CurrentChatModelSettings/fetchModelConfig")
       }
       const data = await getAllModelSettings()

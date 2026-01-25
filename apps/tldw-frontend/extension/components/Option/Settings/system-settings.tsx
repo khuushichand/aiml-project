@@ -21,6 +21,7 @@ import { isFireFox, isFireFoxPrivateMode } from "@/utils/is-private-mode"
 import { firefoxSyncDataForPrivateMode } from "@/db/dexie/firefox-sync"
 import { useAntdNotification } from "@/hooks/useAntdNotification"
 import { Highlight, themes } from "prism-react-renderer"
+import type { Language } from "prism-react-renderer"
 import { useSetting } from "@/hooks/useSetting"
 import {
   ACTION_ICON_CLICK_SETTING,
@@ -403,7 +404,7 @@ export const SystemSettings = () => {
                 </div>
                 <Highlight
                   code={sampleCode}
-                  language={"tsx" as any}
+                  language={"tsx" as Language}
                   theme={resolvePreviewTheme(opt.value)}>
                   {({ className, style, tokens, getLineProps, getTokenProps }) => (
                     <pre

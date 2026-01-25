@@ -165,8 +165,13 @@ export class TldwAuthService {
     // Validate against a protected endpoint that requires auth
     const base = String(serverUrl).replace(/\/$/, '')
     try {
-      // Use /api/v1/users/me which requires valid authentication
-      await bgRequest<any>({ path: `${base}/api/v1/users/me` as any, method: 'GET' as any, headers: { 'X-API-KEY': apiKey }, noAuth: true })
+      // Use /api/v1/users/me/profile which requires valid authentication
+      await bgRequest<any>({
+        path: `${base}/api/v1/users/me/profile` as any,
+        method: 'GET' as any,
+        headers: { 'X-API-KEY': apiKey },
+        noAuth: true
+      })
       return true
     } catch (error: any) {
       console.error('API key test failed:', error?.message || error)

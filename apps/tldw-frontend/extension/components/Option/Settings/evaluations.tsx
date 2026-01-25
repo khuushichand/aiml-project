@@ -27,6 +27,20 @@ const EVAL_TYPES = [
   "ocr"
 ]
 
+type EvaluationDefaultsFormValues = {
+  defaultEvalType: string
+  defaultTargetModel: string
+  defaultRunConfig?: string
+  defaultDatasetId?: string
+  specJson?: string
+}
+
+const isRecord = (value: unknown): value is Record<string, unknown> =>
+  typeof value === "object" && value !== null && !Array.isArray(value)
+
+const getErrorMessage = (error: unknown): string =>
+  error instanceof Error ? error.message : typeof error === "string" ? error : ""
+
 export const EvaluationsSettings = () => {
   const { t } = useTranslation(["settings", "common"])
   const isOnline = useServerOnline()
@@ -62,7 +76,7 @@ export const EvaluationsSettings = () => {
   }, [defaultsResp, form])
 
   const { mutateAsync: saveDefaults, isPending: saving } = useMutation({
-    mutationFn: async (values: any) => {
+    mutationFn: async (values: EvaluationDefaultsFormValues) => {
       const updates = {
         defaultEvalType: values.defaultEvalType,
         defaultTargetModel: values.defaultTargetModel,
@@ -90,16 +104,25 @@ export const EvaluationsSettings = () => {
     mutationFn: async () => getRateLimits(),
     onSuccess: (resp) => {
       if (resp?.ok && resp.data) {
-        const d: any = resp.data
+        const d = isRecord(resp.data) ? resp.data : {}
+        const usage = isRecord(d.usage) ? d.usage : null
+        const limits = isRecord(d.limits) ? d.limits : null
+        const evaluationsToday =
+          usage && typeof usage.evaluations_today === "number"
+            ? usage.evaluations_today
+            : 0
+        const evaluationsPerDay =
+          limits && typeof limits.evaluations_per_day === "number"
+            ? limits.evaluations_per_day
+            : "?"
+        const tier = typeof d.tier === "string" ? d.tier : ""
         setTestResult({
           ok: true,
           message:
             t("settings:evaluationsSettings.testOk", {
               defaultValue: "Evaluations API reachable"
             }) as string,
-          rate: `${d.tier || ""} · ${d.usage?.evaluations_today ?? 0}/${
-            d.limits?.evaluations_per_day ?? "?"
-          } today`
+          rate: `${tier} · ${evaluationsToday}/${evaluationsPerDay} today`
         })
       } else {
         setTestResult({
@@ -112,11 +135,11 @@ export const EvaluationsSettings = () => {
         })
       }
     },
-    onError: (e: any) => {
+    onError: (error: unknown) => {
       setTestResult({
         ok: false,
         message:
-          e?.message ||
+          getErrorMessage(error) ||
           (t("settings:evaluationsSettings.testFail", {
             defaultValue: "Unable to reach Evaluations API"
           }) as string)

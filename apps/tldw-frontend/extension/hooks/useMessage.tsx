@@ -24,12 +24,11 @@ import { pageAssistModel } from "@/models"
 import { getPrompt } from "@/services/application"
 import { humanMessageFormatter } from "@/utils/human-message"
 import { generateHistory } from "@/utils/generate-history"
-import { tldwClient, type ConversationState } from "@/services/tldw/TldwApiClient"
+import { tldwClient } from "@/services/tldw/TldwApiClient"
 import { getScreenshotFromCurrentTab } from "@/libs/get-screenshot"
 import {
   isReasoningEnded,
   isReasoningStarted,
-  mergeReasoningContent,
   removeReasoning
 } from "@/libs/reasoning"
 import { getModelNicknameByID } from "@/db/dexie/nickname"
@@ -38,6 +37,7 @@ import type { Character } from "@/types/character"
 import { useSelectedCharacter } from "@/hooks/useSelectedCharacter"
 import { createBranchMessage } from "./handlers/messageHandlers"
 import { consumeStreamingChunk } from "@/utils/streaming-chunks"
+import { extractGenerationInfo } from "@/utils/llm-helpers"
 import {
   createSaveMessageOnError,
   createSaveMessageOnSuccess,
@@ -63,6 +63,40 @@ import type { UploadedFile } from "@/db/dexie/types"
 type ServerBackedMessage = Message & {
   serverMessageId?: string
   serverMessageVersion?: number
+}
+
+type RagDoc = {
+  content?: string
+  text?: string
+  chunk?: string
+  metadata?: Record<string, unknown>
+}
+
+type RagSource = {
+  name: string
+  type: string
+  mode: string
+  url: string
+  pageContent: string
+  metadata: Record<string, unknown>
+}
+
+const isRecord = (value: unknown): value is Record<string, unknown> =>
+  typeof value === "object" && value !== null
+
+const toOptionalString = (value: unknown): string | null =>
+  typeof value === "string" ? value : null
+
+const toStringOrNumber = (value: unknown): string | number | null =>
+  typeof value === "string" || typeof value === "number" ? value : null
+
+const toOptionalNumber = (value: unknown): number | null => {
+  if (typeof value === "number" && Number.isFinite(value)) return value
+  if (typeof value === "string" && value.trim().length > 0) {
+    const parsed = Number(value)
+    if (Number.isFinite(parsed)) return parsed
+  }
+  return null
 }
 
 export const useMessage = () => {
@@ -123,7 +157,6 @@ export const useMessage = () => {
     setHistory,
     streaming,
     setStreaming,
-    isFirstMessage,
     setIsFirstMessage,
     historyId,
     setHistoryId,
@@ -148,7 +181,6 @@ export const useMessage = () => {
     setServerChatId,
     serverChatTitle,
     setServerChatTitle,
-    serverChatCharacterId,
     setServerChatCharacterId,
     serverChatMetaLoaded,
     setServerChatMetaLoaded,
@@ -171,7 +203,7 @@ export const useMessage = () => {
     "en-US"
   )
 
-  const resetServerChatState = () => {
+  const resetServerChatState = React.useCallback(() => {
     setServerChatState("in-progress")
     setServerChatVersion(null)
     setServerChatTitle(null)
@@ -181,7 +213,17 @@ export const useMessage = () => {
     setServerChatClusterId(null)
     setServerChatSource(null)
     setServerChatExternalRef(null)
-  }
+  }, [
+    setServerChatClusterId,
+    setServerChatExternalRef,
+    setServerChatMetaLoaded,
+    setServerChatSource,
+    setServerChatState,
+    setServerChatTitle,
+    setServerChatTopic,
+    setServerChatVersion,
+    setServerChatCharacterId
+  ])
 
   React.useEffect(() => {
     if (!serverChatId || serverChatMetaLoaded) return
@@ -189,20 +231,25 @@ export const useMessage = () => {
       try {
         await tldwClient.initialize().catch(() => null)
         const chat = await tldwClient.getChat(serverChatId)
-        setServerChatTitle(String((chat as any)?.title || ""))
-        setServerChatCharacterId(
-          (chat as any)?.character_id ?? (chat as any)?.characterId ?? null
+        const meta = isRecord(chat) ? chat : {}
+        const title = toOptionalString(meta.title) ?? ""
+        const characterId = toStringOrNumber(
+          meta.character_id ?? meta.characterId
         )
+        setServerChatTitle(title)
+        setServerChatCharacterId(characterId)
         setServerChatState(
-          (chat as any)?.state ??
-            (chat as any)?.conversation_state ??
-            "in-progress"
+          normalizeConversationState(
+            toOptionalString(meta.state) ??
+              toOptionalString(meta.conversation_state) ??
+              "in-progress"
+          )
         )
-        setServerChatVersion((chat as any)?.version ?? null)
-        setServerChatTopic((chat as any)?.topic_label ?? null)
-        setServerChatClusterId((chat as any)?.cluster_id ?? null)
-        setServerChatSource((chat as any)?.source ?? null)
-        setServerChatExternalRef((chat as any)?.external_ref ?? null)
+        setServerChatVersion(typeof meta.version === "number" ? meta.version : null)
+        setServerChatTopic(toOptionalString(meta.topic_label))
+        setServerChatClusterId(toOptionalString(meta.cluster_id))
+        setServerChatSource(toOptionalString(meta.source))
+        setServerChatExternalRef(toOptionalString(meta.external_ref))
         setServerChatMetaLoaded(true)
       } catch {
         // ignore metadata hydration failures
@@ -227,7 +274,7 @@ export const useMessage = () => {
     // Reset server chat when character changes
     setServerChatId(null)
     resetServerChatState()
-  }, [selectedCharacter?.id])
+  }, [resetServerChatState, selectedCharacter?.id, setServerChatId])
 
   // Local embedding store removed; rely on tldw_server RAG
 
@@ -293,7 +340,7 @@ export const useMessage = () => {
 
     const model = selectedModel.trim()
     setStreaming(true)
-    const userDefaultModelSettings = await getAllDefaultModelSettings()
+    await getAllDefaultModelSettings()
 
     const ollama = await pageAssistModel({
       model
@@ -380,7 +427,7 @@ export const useMessage = () => {
     }
     let fullText = ""
     let contentToSave = ""
-    let embedURL: string, embedHTML: string, embedType: string
+    let embedURL: string, embedHTML: string
     let embedPDF: { content: string; page: number }[] = []
 
     const {
@@ -392,7 +439,6 @@ export const useMessage = () => {
 
     embedHTML = html
     embedURL = websiteUrl
-    embedType = type
     embedPDF = pdf
     if (messages.length === 0) {
       setCurrentURL(websiteUrl)
@@ -437,15 +483,8 @@ export const useMessage = () => {
         query = removeReasoning(query)
       }
 
-      let context: string = ""
-      let source: {
-        name: any
-        type: any
-        mode: string
-        url: string
-        pageContent: string
-        metadata: Record<string, any>
-      }[] = []
+      let context = ""
+      let source: RagSource[] = []
 
       if (resolvedChatWithWebsiteEmbedding) {
         try {
@@ -454,18 +493,38 @@ export const useMessage = () => {
           if (embedURL) {
             try { await tldwClient.addMedia(embedURL, {}) } catch {}
           }
-          const ragRes = await tldwClient.ragSearch(query, { top_k: 4, filters: { url: embedURL } })
-          const docs = ragRes?.results || ragRes?.documents || ragRes?.docs || []
+          const ragRes = await tldwClient.ragSearch(query, {
+            top_k: 4,
+            filters: { url: embedURL }
+          })
+          const ragRecord = isRecord(ragRes) ? ragRes : {}
+          const rawDocs =
+            (Array.isArray(ragRecord.results) && ragRecord.results) ||
+            (Array.isArray(ragRecord.documents) && ragRecord.documents) ||
+            (Array.isArray(ragRecord.docs) && ragRecord.docs) ||
+            []
+          const docs: RagDoc[] = rawDocs.filter(isRecord).map((doc) => ({
+            content: typeof doc.content === "string" ? doc.content : undefined,
+            text: typeof doc.text === "string" ? doc.text : undefined,
+            chunk: typeof doc.chunk === "string" ? doc.chunk : undefined,
+            metadata: isRecord(doc.metadata) ? doc.metadata : undefined
+          }))
           context = formatDocs(
-            docs.map((d: any) => ({ pageContent: d.content || d.text || d.chunk || "", metadata: d.metadata || {} }))
+            docs.map((doc) => ({
+              pageContent: doc.content || doc.text || doc.chunk || "",
+              metadata: doc.metadata || {}
+            }))
           )
-          source = docs.map((d: any) => ({
-            name: d.metadata?.source || d.metadata?.title || "untitled",
-            type: d.metadata?.type || "unknown",
+          source = docs.map((doc) => ({
+            name:
+              doc.metadata?.source ||
+              doc.metadata?.title ||
+              "untitled",
+            type: doc.metadata?.type || "unknown",
             mode: "chat",
-            url: d.metadata?.url || "",
-            pageContent: d.content || d.text || d.chunk || "",
-            metadata: d.metadata || {}
+            url: doc.metadata?.url || "",
+            pageContent: doc.content || doc.text || doc.chunk || "",
+            metadata: doc.metadata || {}
           }))
         } catch (e) {
           console.error('tldw ragSearch failed, falling back to inline context', e)
@@ -511,7 +570,7 @@ export const useMessage = () => {
 
       const applicationChatHistory = generateHistory(history, model)
 
-      let generationInfo: any | undefined = undefined
+      let generationInfo: Record<string, unknown> | undefined = undefined
 
       const chunks = await ollama.stream(
         [...applicationChatHistory, humanMessage],
@@ -519,12 +578,8 @@ export const useMessage = () => {
           signal: signal,
           callbacks: [
             {
-              handleLLMEnd(output: any): any {
-                try {
-                  generationInfo = output?.generations?.[0][0]?.generationInfo
-                } catch (e) {
-                  console.error("handleLLMEnd error", e)
-                }
+              handleLLMEnd(output: unknown) {
+                generationInfo = extractGenerationInfo(output)
               }
             }
           ]
@@ -822,7 +877,7 @@ export const useMessage = () => {
         useOCR
       })
 
-      let generationInfo: any | undefined = undefined
+      let generationInfo: Record<string, unknown> | undefined = undefined
 
       const chunks = await ollama.stream(
         [...applicationChatHistory, humanMessage],
@@ -830,12 +885,8 @@ export const useMessage = () => {
           signal: signal,
           callbacks: [
             {
-              handleLLMEnd(output: any): any {
-                try {
-                  generationInfo = output?.generations?.[0][0]?.generationInfo
-                } catch (e) {
-                  console.error("handleLLMEnd error", e)
-                }
+              handleLLMEnd(output: unknown) {
+                generationInfo = extractGenerationInfo(output)
               }
             }
           ]
@@ -1077,6 +1128,20 @@ export const useMessage = () => {
 
         let rawId: string | number | undefined
         if (created && typeof created === "object") {
+          const createdMeta = created as {
+            id?: string | number
+            chat_id?: string | number
+            version?: number
+            state?: string | null
+            conversation_state?: string | null
+            topic_label?: string | null
+            cluster_id?: string | null
+            source?: string | null
+            external_ref?: string | null
+            title?: string | null
+            character_id?: string | number | null
+            characterId?: string | number | null
+          }
           const {
             id,
             chat_id,
@@ -1087,17 +1152,7 @@ export const useMessage = () => {
             cluster_id,
             source,
             external_ref
-          } = created as {
-            id?: string | number
-            chat_id?: string | number
-            version?: number
-            state?: string | null
-            conversation_state?: string | null
-            topic_label?: string | null
-            cluster_id?: string | null
-            source?: string | null
-            external_ref?: string | null
-          }
+          } = createdMeta
           rawId = id ?? chat_id
           const normalizedState = normalizeConversationState(
             state ?? conversation_state ?? null
@@ -1118,9 +1173,12 @@ export const useMessage = () => {
         }
         chatId = normalizedId
         setServerChatId(normalizedId)
-        setServerChatTitle(String((created as any)?.title || ""))
+        setServerChatTitle(String(createdMeta.title || ""))
         setServerChatCharacterId(
-          (created as any)?.character_id ?? selectedCharacter?.id ?? null
+          createdMeta.character_id ??
+            createdMeta.characterId ??
+            selectedCharacter?.id ??
+            null
         )
         setServerChatMetaLoaded(true)
         invalidateServerChatHistory()
@@ -1233,7 +1291,7 @@ export const useMessage = () => {
       }
       if (signal?.aborted) {
         const abortError = new Error("AbortError")
-        ;(abortError as any).name = "AbortError"
+        abortError.name = "AbortError"
         throw abortError
       }
       setMessages((prev) =>
@@ -1482,18 +1540,14 @@ export const useMessage = () => {
         })
       }
 
-      let generationInfo: any | undefined = undefined
+      let generationInfo: Record<string, unknown> | undefined = undefined
 
       const chunks = await ollama.stream([humanMessage], {
         signal: signal,
         callbacks: [
           {
-            handleLLMEnd(output: any): any {
-              try {
-                generationInfo = output?.generations?.[0][0]?.generationInfo
-              } catch (e) {
-                console.error("handleLLMEnd error", e)
-              }
+            handleLLMEnd(output: unknown) {
+              generationInfo = extractGenerationInfo(output)
             }
           }
         ]
@@ -1891,20 +1945,35 @@ export const useMessage = () => {
           } catch {}
         }
         try {
-          const res: any = await tldwClient.listChatMessages(serverChatId, { include_deleted: 'false' })
-          const list: any[] = Array.isArray(res) ? res : (res?.messages || [])
-          const serverIds = list.map((m: any) => m.id)
+          const res = await tldwClient.listChatMessages(serverChatId, {
+            include_deleted: "false"
+          })
+          const resRecord = isRecord(res) ? res : {}
+          const rawList =
+            Array.isArray(res) ? res : Array.isArray(resRecord.messages) ? resRecord.messages : []
+          const list = rawList.map((item) => {
+            if (!isRecord(item)) {
+              return { id: null, version: null }
+            }
+            return {
+              id: toStringOrNumber(item.id),
+              version: toOptionalNumber(item.version)
+            }
+          })
+          const serverIds = list.map((m) => m.id)
           const targetSrvId = currentHumanMessage?.serverMessageId
           const startIdx = targetSrvId ? serverIds.indexOf(targetSrvId) : -1
           if (startIdx >= 0) {
             for (let i = startIdx + 1; i < list.length; i++) {
               const m = list[i]
               try {
-                await tldwClient.deleteMessage(
-                  m.id,
-                  Number(m.version),
-                  serverChatId ?? undefined
-                )
+                if (m.id != null && m.version != null) {
+                  await tldwClient.deleteMessage(
+                    m.id,
+                    m.version,
+                    serverChatId ?? undefined
+                  )
+                }
               } catch {}
             }
           }

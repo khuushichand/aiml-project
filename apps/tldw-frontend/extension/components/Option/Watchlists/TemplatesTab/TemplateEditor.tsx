@@ -85,8 +85,8 @@ export const TemplateEditor: React.FC<TemplateEditorProps> = ({
           : t("watchlists:templates.created", "Template created")
       )
       onClose(true)
-    } catch (err: any) {
-      if (err.errorFields) return // Validation error
+    } catch (err: unknown) {
+      if (err && typeof err === "object" && "errorFields" in err) return // Validation error
       console.error("Failed to save template:", err)
       message.error(t("watchlists:templates.saveError", "Failed to save template"))
     } finally {

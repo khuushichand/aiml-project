@@ -17,7 +17,6 @@ import {
   createSessionFromInput,
   extractSessionMetadata,
   isSessionExpired,
-  generateSessionId,
   dateToISOString,
 } from "./utils"
 

@@ -89,7 +89,7 @@ export const GenerateTab: React.FC<GenerateTabProps> = ({ onNavigateToTake }) =>
         t("option:quiz.generateSuccess", { defaultValue: "Quiz generated successfully!" })
       )
       onNavigateToTake()
-    } catch (error) {
+    } catch {
       messageApi.error(
         t("option:quiz.generateError", { defaultValue: "Failed to generate quiz" })
       )

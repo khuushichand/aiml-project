@@ -24,6 +24,12 @@ export type ActorWorldBooksState = {
   loadEntriesForWorldBook: (worldBookId: string) => Promise<void>
 }
 
+const isRecord = (value: unknown): value is Record<string, unknown> =>
+  typeof value === "object" && value !== null
+
+const toStringArray = (value: unknown): string[] =>
+  Array.isArray(value) ? value.map((item) => String(item)) : []
+
 export function useActorWorldBooks(): ActorWorldBooksState {
   const isOnline = useServerOnline()
   const [entriesByWorldBook, setEntriesByWorldBook] =
@@ -40,12 +46,14 @@ export function useActorWorldBooks(): ActorWorldBooksState {
     queryFn: async () => {
       await tldwClient.initialize()
       const res = await tldwClient.listWorldBooks(false)
-      const raw = (res?.world_books || []) as any[]
-      return raw.map((wb) => ({
-        id: String(wb.id),
-        name: wb.name,
-        description: wb.description
-      }))
+      const raw = Array.isArray(res?.world_books) ? res.world_books : []
+      return raw
+        .filter(isRecord)
+        .map((wb) => ({
+          id: String(wb.id ?? ""),
+          name: String(wb.name ?? ""),
+          description: typeof wb.description === "string" ? wb.description : undefined
+        }))
     },
     enabled: isOnline,
     staleTime: 60_000
@@ -61,13 +69,15 @@ export function useActorWorldBooks(): ActorWorldBooksState {
     try {
       await tldwClient.initialize()
       const res = await tldwClient.listWorldBookEntries(id, true)
-      const rawEntries = (res?.entries || []) as any[]
-      const entries: ActorWorldBookEntry[] = rawEntries.map((entry) => ({
-        entry_id: String(entry.entry_id),
-        keywords: entry.keywords || [],
-        content: entry.content || "",
-        enabled: entry.enabled
-      }))
+      const rawEntries = Array.isArray(res?.entries) ? res.entries : []
+      const entries: ActorWorldBookEntry[] = rawEntries
+        .filter(isRecord)
+        .map((entry) => ({
+          entry_id: String(entry.entry_id ?? ""),
+          keywords: toStringArray(entry.keywords),
+          content: typeof entry.content === "string" ? entry.content : "",
+          enabled: typeof entry.enabled === "boolean" ? entry.enabled : undefined
+        }))
       setEntriesByWorldBook((prev) => ({
         ...prev,
         [id]: entries

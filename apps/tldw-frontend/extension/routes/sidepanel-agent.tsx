@@ -44,8 +44,7 @@ import { AgentLoop } from "@/services/agent/agent-loop"
 import type {
   AgentEvent,
   AgentSettings,
-  PendingApproval,
-  ToolCall
+  PendingApproval
 } from "@/services/agent/types"
 import { DEFAULT_AGENT_SETTINGS } from "@/services/agent/types"
 

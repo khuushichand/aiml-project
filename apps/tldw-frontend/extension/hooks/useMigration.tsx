@@ -1,7 +1,6 @@
 import { useEffect } from "react"
 import { useMutation } from "@tanstack/react-query"
 import { hasLegacyData, runAllMigrations } from "~/db/dexie/migration"
-import { Storage } from "@plasmohq/storage"
 import { createSafeStorage } from "@/utils/safe-storage"
 import { useAntdMessage } from "./useAntdMessage"
 
@@ -97,7 +96,7 @@ export const useMigration = () => {
 
   useEffect(() => {
     migrationMutation.mutate()
-  }, [])
+  }, [migrationMutation])
 
   return {
     isLoading: migrationMutation.isPending,

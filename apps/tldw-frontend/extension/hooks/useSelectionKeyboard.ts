@@ -66,7 +66,7 @@ export function useSelectionKeyboard<T>({
       setLastSelectedIndex(index)
       onSelectionChange(Array.from(selectedSet))
     },
-    [items, selectedIds, getItemId, onSelectionChange]
+    [items, selectedIds, getItemId, onSelectionChange, setLastSelectedIndex]
   )
 
   const selectRange = useCallback(

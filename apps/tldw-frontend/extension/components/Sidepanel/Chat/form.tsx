@@ -3,7 +3,7 @@ import React from "react"
 import useDynamicTextareaSize from "~/hooks/useDynamicTextareaSize"
 import { useMessage } from "~/hooks/useMessage"
 import { toBase64 } from "~/libs/to-base64"
-import { Checkbox, Dropdown, Switch, Tooltip, message, Modal } from "antd"
+import { Checkbox, Dropdown, Switch, Tooltip, message } from "antd"
 import { useWebUI } from "~/store/webui"
 import { defaultEmbeddingModelForRag } from "~/services/tldw-server"
 import {
@@ -12,8 +12,6 @@ import {
   StopCircleIcon,
   X,
   CornerUpLeft,
-  EyeIcon,
-  EyeOffIcon,
   Gauge,
   Search,
   FileText,
@@ -24,7 +22,6 @@ import { getVariable } from "@/utils/select-variable"
 import { useSpeechRecognition } from "@/hooks/useSpeechRecognition"
 import { useTldwStt } from "@/hooks/useTldwStt"
 import { useMicStream } from "@/hooks/useMicStream"
-import { BsIncognito } from "react-icons/bs"
 import { handleChatInputKeyDown } from "@/utils/key-down"
 import { getIsSimpleInternetSearch } from "@/services/search"
 import { useStorage } from "@plasmohq/storage/hook"
@@ -64,11 +61,9 @@ import {
 import { ConnectionPhase } from "@/types/connection"
 import { useServerCapabilities } from "@/hooks/useServerCapabilities"
 import { useTldwAudioStatus } from "@/hooks/useTldwAudioStatus"
-import { tldwClient } from "@/services/tldw/TldwApiClient"
 import { useAntdNotification } from "@/hooks/useAntdNotification"
 import { useSetting } from "@/hooks/useSetting"
 import { useFocusComposerOnConnect } from "@/hooks/useComposerFocus"
-import { useQuickIngestStore } from "@/store/quick-ingest"
 import { useUiModeStore } from "@/store/ui-mode"
 import { useStoreMessageOption, type State as MessageOptionState } from "@/store/option"
 import { useShallow } from "zustand/react/shallow"
@@ -88,6 +83,12 @@ type Props = {
   onHeightChange?: (height: number) => void
   draftKey?: string
 }
+
+const isRecord = (value: unknown): value is Record<string, unknown> =>
+  typeof value === "object" && value !== null && !Array.isArray(value)
+
+const getErrorMessage = (error: unknown): string =>
+  error instanceof Error ? error.message : typeof error === "string" ? error : ""
 
 export const SidepanelForm = ({
   dropedFile,
@@ -120,8 +121,6 @@ export const SidepanelForm = ({
   )
   // STT settings consolidated into a single hook
   const sttSettings = useSttSettings()
-  const queuedQuickIngestCount = useQuickIngestStore((s) => s.queuedCount)
-  const quickIngestHadFailure = useQuickIngestStore((s) => s.hadRecentFailure)
   const uiMode = useUiModeStore((state) => state.mode)
   const isProMode = uiMode === "pro"
   const { replyTarget, clearReplyTarget, ragPinnedResults } = useStoreMessageOption(
@@ -176,11 +175,11 @@ export const SidepanelForm = ({
     handleMentionsOpen
   } = useTabMentions(textareaRef, { includeActive: true })
 
-  const stopListening = async () => {
+  const stopListening = React.useCallback(() => {
     if (isListening) {
       stopSpeechRecognition()
     }
-  }
+  }, [isListening, stopSpeechRecognition])
 
   // Draft persistence - saves/restores message draft to local-only storage
   const { draftSaved } = useDraftPersistence({
@@ -205,7 +204,7 @@ export const SidepanelForm = ({
       ),
       duration: 6
     })
-  }, [isFireFoxPrivateMode, notification, t])
+  }, [notification, t])
 
   React.useEffect(() => {
     if (!onHeightChange) return
@@ -230,28 +229,20 @@ export const SidepanelForm = ({
   }, [onHeightChange])
 
   // tldw WS STT
+  const { sendAudio, close: sttClose, lastError: sttError } = useTldwStt()
   const {
-    connect: sttConnect,
-    sendAudio,
-    close: sttClose,
-    connected: sttConnected,
-    lastError: sttError
-  } = useTldwStt()
-  const {
-    start: micStart,
     stop: micStop,
-    active: micActive
   } = useMicStream((chunk) => {
     try {
       sendAudio(chunk)
     } catch {}
   })
-  const [wsSttActive, setWsSttActive] = React.useState(false)
+  const [, setWsSttActive] = React.useState(false)
   const [ingestOpen, setIngestOpen] = React.useState(false)
   const [autoProcessQueuedIngest, setAutoProcessQueuedIngest] =
     React.useState(false)
   const quickIngestBtnRef = React.useRef<HTMLButtonElement>(null)
-  const { phase, isConnected, serverUrl } = useConnectionState()
+  const { phase, isConnected } = useConnectionState()
   const { uxState } = useConnectionUxState()
   const isConnectionReady = isConnected && phase === ConnectionPhase.CONNECTED
   const { capabilities, loading: capsLoading } = useServerCapabilities()
@@ -425,54 +416,55 @@ export const SidepanelForm = ({
     fileInputRef.current?.click()
   }
 
-  const onInputChange = async (
-    e: React.ChangeEvent<HTMLInputElement> | File
-  ) => {
-    try {
-      let file: File
-      if (e instanceof File) {
-        file = e
-      } else if (e.target.files && e.target.files[0]) {
-        file = e.target.files[0]
-      } else {
-        return
-      }
+  const onInputChange = React.useCallback(
+    async (e: React.ChangeEvent<HTMLInputElement> | File) => {
+      try {
+        let file: File
+        if (e instanceof File) {
+          file = e
+        } else if (e.target.files && e.target.files[0]) {
+          file = e.target.files[0]
+        } else {
+          return
+        }
 
-      // Validate that the file is an image
-      if (!file.type.startsWith("image/")) {
+        // Validate that the file is an image
+        if (!file.type.startsWith("image/")) {
+          message.error({
+            content: t(
+              "sidepanel:composer.imageTypeError",
+              "Please select an image file"
+            ),
+            duration: 3
+          })
+          return
+        }
+
+        const base64 = await toBase64(file)
+        form.setFieldValue("image", base64)
+
+        // Show success feedback
+        message.success({
+          content: t("sidepanel:composer.imageUploaded", {
+            defaultValue: "Image added: {{name}}",
+            name: file.name.length > 20 ? `${file.name.slice(0, 17)}...` : file.name
+          }),
+          duration: 2
+        })
+      } catch {
         message.error({
-          content: t(
-            "sidepanel:composer.imageTypeError",
-            "Please select an image file"
-          ),
+          content: t("sidepanel:composer.imageUploadError", "Failed to process image"),
           duration: 3
         })
-        return
       }
-
-      const base64 = await toBase64(file)
-      form.setFieldValue("image", base64)
-
-      // Show success feedback
-      message.success({
-        content: t("sidepanel:composer.imageUploaded", {
-          defaultValue: "Image added: {{name}}",
-          name: file.name.length > 20 ? `${file.name.slice(0, 17)}...` : file.name
-        }),
-        duration: 2
-      })
-    } catch (err) {
-      message.error({
-        content: t("sidepanel:composer.imageUploadError", "Failed to process image"),
-        duration: 3
-      })
-    }
-  }
+    },
+    [form, t]
+  )
   const textAreaFocus = React.useCallback(() => {
     if (textareaRef.current) {
       textareaRef.current.focus()
     }
-  }, [])
+  }, [textareaRef])
 
   // When sidepanel connection transitions to CONNECTED, focus the composer
   useFocusComposerOnConnect(phase)
@@ -678,8 +670,8 @@ export const SidepanelForm = ({
           try {
             const source = await processFileUpload(file)
             const content =
-              source && typeof (source as any).content === "string"
-                ? (source as any).content
+              isRecord(source) && typeof source.content === "string"
+                ? source.content
                 : null
             if (!content) {
               failedFiles.push(file.name)
@@ -715,10 +707,10 @@ export const SidepanelForm = ({
             })
           })
         }
-      } catch (error: any) {
+      } catch (error: unknown) {
         notification.error({
           message: t("sidepanel:composer.fileAddError", "Failed to add file"),
-          description: error?.message || ""
+          description: getErrorMessage(error)
         })
       } finally {
         event.target.value = ""
@@ -866,7 +858,7 @@ export const SidepanelForm = ({
 
   useFocusShortcuts(textareaRef, true)
 
-  const ensureEmbeddingModelAvailable = async (): Promise<boolean> => {
+  const ensureEmbeddingModelAvailable = React.useCallback(async (): Promise<boolean> => {
     // Fast path: no RAG or web search enabled
     if (chatMode !== "rag" && !webSearch) {
       return true
@@ -896,7 +888,7 @@ export const SidepanelForm = ({
     }
 
     return true
-  }
+  }, [chatMode, chatWithWebsiteEmbedding, form, t, webSearch])
 
   const buildPinnedMessage = React.useCallback(
     (message: string, options?: { ignorePinnedResults?: boolean }) => {
@@ -1092,10 +1084,6 @@ export const SidepanelForm = ({
     window.open("/options.html#/settings/health", "_blank")
   }, [])
 
-  const handleWebSearchToggle = React.useCallback(() => {
-    setWebSearch(!webSearch)
-  }, [setWebSearch, webSearch])
-
   const handleSpeechToggle = React.useCallback(() => {
     if (isListening) {
       stopListening()
@@ -1114,75 +1102,10 @@ export const SidepanelForm = ({
     stopListening
   ])
 
-  const handleLiveCaptionsToggle = React.useCallback(async () => {
-    if (wsSttActive) {
-      try {
-        micStop()
-      } catch {}
-      try {
-        sttClose()
-      } catch {}
-      setWsSttActive(false)
-    } else {
-      try {
-        sttConnect()
-        await micStart()
-        setWsSttActive(true)
-      } catch (e: any) {
-        notification.error({
-          message: t(
-            "playground:actions.streamErrorTitle",
-            "Live captions unavailable"
-          ),
-          description:
-            e?.message ||
-            t(
-              "playground:actions.streamMicError",
-              "Unable to start live captions. Check microphone permissions and server health, then try again."
-            )
-        })
-        try {
-          micStop()
-        } catch {}
-        try {
-          sttClose()
-        } catch {}
-        setWsSttActive(false)
-      }
-    }
-  }, [micStart, micStop, notification, sttClose, sttConnect, t, wsSttActive])
-
-  const handleVisionToggle = React.useCallback(() => {
-    setChatMode(chatMode === "vision" ? "normal" : "vision")
-  }, [chatMode, setChatMode])
-
-  const handleImageUpload = React.useCallback(() => {
-    fileInputRef.current?.click()
-  }, [])
-
   const handleRagToggle = React.useCallback(() => {
     window.dispatchEvent(new CustomEvent("tldw:toggle-rag"))
   }, [])
 
-  const handleQuickIngestOpen = React.useCallback(() => {
-    setAutoProcessQueuedIngest(false)
-    setIngestOpen(true)
-  }, [])
-
-  const handleProcessQueuedIngest = React.useCallback(() => {
-    if (!isConnectionReady) return
-
-    // Snapshot the current queue size; if it has been cleared between
-    // render and click, we still open the modal but skip auto-processing.
-    if (queuedQuickIngestCount <= 0) {
-      setAutoProcessQueuedIngest(false)
-      setIngestOpen(true)
-      return
-    }
-
-    setAutoProcessQueuedIngest(true)
-    setIngestOpen(true)
-  }, [isConnectionReady, queuedQuickIngestCount])
 
   React.useEffect(() => {
     if (!sttError) return
@@ -1200,13 +1123,13 @@ export const SidepanelForm = ({
       sttClose()
     } catch {}
     setWsSttActive(false)
-  }, [micStop, setWsSttActive, sttClose, sttError, t])
+  }, [micStop, notification, setWsSttActive, sttClose, sttError, t])
 
   React.useEffect(() => {
     if (dropedFile) {
       onInputChange(dropedFile)
     }
-  }, [dropedFile])
+  }, [dropedFile, onInputChange])
 
   useDynamicTextareaSize(textareaRef, form.values.message, textareaMaxHeight)
 
@@ -1214,7 +1137,7 @@ export const SidepanelForm = ({
     if (isListening) {
       form.setFieldValue("message", transcript)
     }
-  }, [transcript])
+  }, [form, isListening, transcript])
 
   React.useEffect(() => {
     if (selectedQuickPrompt) {
@@ -1231,30 +1154,41 @@ export const SidepanelForm = ({
         }
       }
     }
-  }, [selectedQuickPrompt])
+  }, [form, selectedQuickPrompt, setSelectedQuickPrompt, textareaRef])
   const { mutateAsync: sendMessage, isPending: isSending } = useMutation({
     mutationFn: onSubmit,
     onSuccess: () => {
       textAreaFocus()
     },
-    onError: (error) => {
+    onError: () => {
       textAreaFocus()
     }
   })
 
-  const submitQueuedInSidepanel = async (message: string, image: string) => {
-    if (!isConnectionReady) return
-    await stopListening()
-    stopServerDictation()
-    if (!selectedModel || selectedModel.length === 0) {
-      form.setFieldError("message", t("formError.noModel"))
-      return
-    }
-    await sendMessage({
-      image,
-      message
-    })
-  }
+  const submitQueuedInSidepanel = React.useCallback(
+    async (message: string, image: string) => {
+      if (!isConnectionReady) return
+      stopListening()
+      stopServerDictation()
+      if (!selectedModel || selectedModel.length === 0) {
+        form.setFieldError("message", t("formError.noModel"))
+        return
+      }
+      await sendMessage({
+        image,
+        message
+      })
+    },
+    [
+      form,
+      isConnectionReady,
+      selectedModel,
+      sendMessage,
+      stopListening,
+      stopServerDictation,
+      t
+    ]
+  )
 
   const handleFlushQueue = React.useCallback(async () => {
     if (!isConnectionReady || isFlushingQueue) return
@@ -1332,13 +1266,14 @@ export const SidepanelForm = ({
         el.removeEventListener("dragover", handleDragOver)
       }
     }
-  }, [])
-
-  React.useEffect(() => {
-    if (defaultInternetSearchOn) {
-      setWebSearch(true)
-    }
-  }, [defaultInternetSearchOn])
+  }, [
+    defaultChatWithWebsite,
+    defaultInternetSearchOn,
+    form,
+    setChatMode,
+    setWebSearch,
+    textareaRef
+  ])
 
   // Clear error messages when user starts typing (they're taking action)
   // Errors persist until user interaction rather than auto-dismissing
@@ -1346,14 +1281,14 @@ export const SidepanelForm = ({
     if (form.values.message && form.errors.message) {
       form.clearFieldError("message")
     }
-  }, [form.values.message, form.errors.message, form.clearFieldError])
+  }, [form, form.errors.message, form.values.message])
 
   // Clear "no model" error when a model is selected
   React.useEffect(() => {
     if (selectedModel && form.errors.message) {
       form.clearFieldError("message")
     }
-  }, [selectedModel, form.errors.message, form.clearFieldError])
+  }, [form, form.errors.message, selectedModel])
 
   // Debounce placeholder changes to prevent flashing on flaky connections
   React.useEffect(() => {

@@ -1,7 +1,7 @@
 import React, { useState } from "react"
 import { useTranslation } from "react-i18next"
 import { Alert, Button, Input, message } from "antd"
-import { Settings, RefreshCw, WifiOff, KeyRound, Loader2, Check, Eye, EyeOff } from "lucide-react"
+import { Settings, RefreshCw, WifiOff, KeyRound, Loader2, Check } from "lucide-react"
 import {
   useConnectionState,
   useConnectionUxState,
@@ -75,7 +75,7 @@ export const ConnectionBanner: React.FC<ConnectionBannerProps> = ({
       setTimeout(() => {
         void checkOnce()
       }, 500)
-    } catch (err) {
+    } catch {
       message.error(t("sidepanel:connectionBanner.apiKeySaveError", "Failed to save API key"))
     } finally {
       setIsSaving(false)

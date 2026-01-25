@@ -5,7 +5,6 @@ import {
   useConnectionState,
   useConnectionUxState
 } from "@/hooks/useConnectionState"
-import { ConnectionPhase } from "@/types/connection"
 import { useFocusComposerOnConnect } from "@/hooks/useComposerFocus"
 import { OnboardingWizard } from "@/components/Option/Onboarding/OnboardingWizard"
 import OptionLayout from "~/components/Layouts/Layout"
@@ -13,7 +12,7 @@ import { Playground } from "~/components/Option/Playground/Playground"
 
 const OptionIndex = () => {
   const { phase } = useConnectionState()
-  const { uxState, hasCompletedFirstRun } = useConnectionUxState()
+  const { hasCompletedFirstRun } = useConnectionUxState()
   const { checkOnce, beginOnboarding, markFirstRunComplete } = useConnectionActions()
   const onboardingInitiated = React.useRef(false)
 

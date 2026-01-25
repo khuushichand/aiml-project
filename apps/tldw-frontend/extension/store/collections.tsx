@@ -12,7 +12,6 @@ import type {
   Highlight,
   HighlightColor,
   OutputTemplate,
-  TemplateType,
   TemplateFormat,
   ImportSource,
   ExportFormat as CollectionExportFormat,

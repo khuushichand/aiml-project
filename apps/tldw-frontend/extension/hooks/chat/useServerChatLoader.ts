@@ -84,17 +84,6 @@ export const useServerChatLoader = ({
   }>({ chatId: null, timer: null })
 
   React.useEffect(() => {
-    return () => {
-      if (serverChatDebounceRef.current.timer) {
-        clearTimeout(serverChatDebounceRef.current.timer)
-      }
-      if (serverChatLoadRef.current.controller) {
-        serverChatLoadRef.current.controller.abort()
-      }
-    }
-  }, [])
-
-  React.useEffect(() => {
     messagesRef.current = messages
   }, [messages])
 
@@ -128,9 +117,11 @@ export const useServerChatLoader = ({
       clearTimeout(serverChatDebounceRef.current.timer)
     }
 
+    let activeController: AbortController | null = null
     serverChatDebounceRef.current.chatId = serverChatId
-    serverChatDebounceRef.current.timer = setTimeout(() => {
+    const debounceTimer = setTimeout(() => {
       const controller = new AbortController()
+      activeController = controller
       serverChatLoadRef.current = {
         chatId: serverChatId,
         controller,
@@ -378,10 +369,12 @@ export const useServerChatLoader = ({
       void loadServerChat()
     }, 200)
 
+    serverChatDebounceRef.current.timer = debounceTimer
+
     return () => {
-      if (serverChatDebounceRef.current.timer) {
-        clearTimeout(serverChatDebounceRef.current.timer)
-        serverChatDebounceRef.current.timer = null
+      clearTimeout(debounceTimer)
+      if (activeController) {
+        activeController.abort()
       }
     }
   }, [

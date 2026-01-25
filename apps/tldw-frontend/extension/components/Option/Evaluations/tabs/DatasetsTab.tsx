@@ -89,7 +89,7 @@ export const DatasetsTab: React.FC = () => {
         }
       }
 
-      let metadata: Record<string, any> | undefined
+      let metadata: Record<string, unknown> | undefined
       if (values.metadataJson) {
         try {
           metadata = JSON.parse(values.metadataJson)
@@ -314,7 +314,7 @@ export const DatasetsTab: React.FC = () => {
               onChange={(value) => form.setFieldsValue({ samplesJson: value })}
               placeholder={t("evaluations:samplesJsonPlaceholder", {
                 defaultValue:
-                  '[{\"input\": {\"question\": \"Q1\"}, \"expected\": {\"answer\": \"A\"}}]'
+                  '[{"input": {"question": "Q1"}, "expected": {"answer": "A"}}]'
               })}
             />
           </Form.Item>

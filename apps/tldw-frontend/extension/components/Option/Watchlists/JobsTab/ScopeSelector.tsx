@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from "react"
+import React, { useCallback, useEffect, useState } from "react"
 import { Select, Tabs, Tag } from "antd"
 import { Folder, Rss, Tags } from "lucide-react"
 import { useTranslation } from "react-i18next"
@@ -28,14 +28,14 @@ export const ScopeSelector: React.FC<ScopeSelectorProps> = ({
   const [loading, setLoading] = useState(false)
 
   // Determine active mode based on current value
-  const getActiveMode = (): ScopeMode => {
+  const getActiveMode = useCallback((): ScopeMode => {
     if (value.sources?.length) return "sources"
     if (value.groups?.length) return "groups"
     if (value.tags?.length) return "tags"
     return "sources"
-  }
+  }, [value])
 
-  const [activeMode, setActiveMode] = useState<ScopeMode>(getActiveMode)
+  const [activeMode, setActiveMode] = useState<ScopeMode>(() => getActiveMode())
 
   // Load data on mount
   useEffect(() => {
@@ -62,7 +62,7 @@ export const ScopeSelector: React.FC<ScopeSelectorProps> = ({
   // Sync active tab when value changes
   useEffect(() => {
     setActiveMode(getActiveMode())
-  }, [value])
+  }, [getActiveMode])
 
   // Handle mode change
   const handleModeChange = (mode: string) => {

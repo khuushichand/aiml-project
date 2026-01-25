@@ -80,7 +80,7 @@ const normalizeLanguage = (lng: string) => {
     return "en"
 }
 
-const localeContext = (require as any).context(
+const localeContext = require.context(
     "../assets/locale",
     true,
     /\.json$/

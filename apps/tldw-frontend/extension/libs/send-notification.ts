@@ -1,4 +1,3 @@
-import { Storage } from "@plasmohq/storage"
 import { createSafeStorage } from "@/utils/safe-storage"
 
 const storage = createSafeStorage()

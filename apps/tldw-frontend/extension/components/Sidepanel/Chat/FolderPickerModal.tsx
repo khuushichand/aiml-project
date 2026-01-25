@@ -53,7 +53,7 @@ export const FolderPickerModal: React.FC<FolderPickerModalProps> = ({
 
   const folderTree = React.useMemo(() => {
     return getFolderTree()
-  }, [getFolderTree, folders])
+  }, [getFolderTree])
 
   const treeData: TreeProps["treeData"] = React.useMemo(() => {
     const buildTreeData = (

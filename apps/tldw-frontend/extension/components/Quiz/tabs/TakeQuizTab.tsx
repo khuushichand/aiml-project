@@ -60,7 +60,7 @@ export const TakeQuizTab: React.FC<TakeQuizTabProps> = ({
     setActiveQuizId(null)
   }
 
-  const handleStart = async (quizId: number) => {
+  const handleStart = React.useCallback(async (quizId: number) => {
     try {
       setActiveQuizId(quizId)
       setResult(null)
@@ -68,12 +68,12 @@ export const TakeQuizTab: React.FC<TakeQuizTabProps> = ({
       const newAttempt = await startAttemptMutation.mutateAsync(quizId)
       setAttempt(newAttempt)
       setQuestions(newAttempt.questions ?? [])
-    } catch (error) {
+    } catch {
       messageApi.error(
         t("option:quiz.startError", { defaultValue: "Failed to start quiz" })
       )
     }
-  }
+  }, [messageApi, startAttemptMutation, t])
 
   React.useEffect(() => {
     if (startQuizId == null || lastAutoStartId.current === startQuizId) {
@@ -82,7 +82,7 @@ export const TakeQuizTab: React.FC<TakeQuizTabProps> = ({
     lastAutoStartId.current = startQuizId
     handleStart(startQuizId)
     onStartHandled?.()
-  }, [startQuizId, onStartHandled])
+  }, [startQuizId, onStartHandled, handleStart])
 
   const updateAnswer = (questionId: number, value: AnswerValue) => {
     setAnswers((prev) => ({ ...prev, [questionId]: value }))
@@ -117,7 +117,7 @@ export const TakeQuizTab: React.FC<TakeQuizTabProps> = ({
         answers: payload
       })
       setResult(submission)
-    } catch (error) {
+    } catch {
       messageApi.error(
         t("option:quiz.submitError", { defaultValue: "Failed to submit quiz" })
       )

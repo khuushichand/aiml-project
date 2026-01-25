@@ -21,14 +21,17 @@ interface TrelloPreview {
   isTrello: boolean
 }
 
+const isRecord = (value: unknown): value is Record<string, unknown> =>
+  typeof value === "object" && value !== null && !Array.isArray(value)
+
 export const ImportPanel = ({ onImported }: ImportPanelProps) => {
-  const [fileData, setFileData] = useState<Record<string, any> | null>(null)
+  const [fileData, setFileData] = useState<Record<string, unknown> | null>(null)
   const [preview, setPreview] = useState<TrelloPreview | null>(null)
   const [importResult, setImportResult] = useState<BoardImportResponse | null>(null)
 
   // Import mutation
   const importMutation = useMutation({
-    mutationFn: (data: Record<string, any>) => importBoard(data),
+    mutationFn: (data: Record<string, unknown>) => importBoard(data),
     onSuccess: (result) => {
       message.success("Board imported successfully!")
       setImportResult(result)
@@ -42,59 +45,82 @@ export const ImportPanel = ({ onImported }: ImportPanelProps) => {
   })
 
   // Parse and preview the uploaded file
-  const parseFile = useCallback((content: string): TrelloPreview | null => {
-    try {
-      const data = JSON.parse(content)
+  const parseFile = useCallback((data: Record<string, unknown>): TrelloPreview | null => {
+    const listsValue = data.lists
+    const cardsValue = data.cards
+    const labelsValue = data.labels
+    const checklistsValue = data.checklists
+    const formatValue = typeof data.format === "string" ? data.format : null
+    const boardValue = isRecord(data.board) ? data.board : null
 
-      // Check if it's a Trello export
-      const isTrello = !!(data.lists && data.cards && !data.format)
+    const nameFromBoard =
+      boardValue && typeof boardValue.name === "string" ? boardValue.name : undefined
+    const descFromBoard =
+      boardValue && typeof boardValue.description === "string"
+        ? boardValue.description
+        : undefined
 
-      // Check if it's our own format
-      const isOwnFormat = data.format === "tldw_kanban_v1"
+    const name =
+      typeof data.name === "string" ? data.name : nameFromBoard ?? "Imported Board"
+    const desc =
+      typeof data.desc === "string"
+        ? data.desc
+        : typeof data.description === "string"
+          ? data.description
+          : descFromBoard
 
-      if (isTrello) {
-        // Trello format
-        return {
-          name: data.name || "Imported Board",
-          desc: data.desc,
-          lists: Array.isArray(data.lists) ? data.lists.length : 0,
-          cards: Array.isArray(data.cards) ? data.cards.length : 0,
-          labels: Array.isArray(data.labels) ? data.labels.length : 0,
-          checklists: Array.isArray(data.checklists)
-            ? data.checklists.length
-            : 0,
-          isTrello: true
-        }
-      } else if (isOwnFormat) {
-        // Our format
-        const lists = data.lists || []
-        let cardCount = 0
-        for (const list of lists) {
-          cardCount += (list.cards || []).length
-        }
-        return {
-          name: data.board?.name || "Imported Board",
-          desc: data.board?.description,
-          lists: lists.length,
-          cards: cardCount,
-          labels: (data.labels || []).length,
-          checklists: 0, // Count from cards
-          isTrello: false
+    // Check if it's a Trello export
+    const isTrello = Array.isArray(listsValue) && Array.isArray(cardsValue) && !formatValue
+
+    // Check if it's our own format
+    const isOwnFormat = formatValue === "tldw_kanban_v1"
+
+    if (isTrello) {
+      // Trello format
+      return {
+        name,
+        desc,
+        lists: Array.isArray(listsValue) ? listsValue.length : 0,
+        cards: Array.isArray(cardsValue) ? cardsValue.length : 0,
+        labels: Array.isArray(labelsValue) ? labelsValue.length : 0,
+        checklists: Array.isArray(checklistsValue)
+          ? checklistsValue.length
+          : 0,
+        isTrello: true
+      }
+    }
+
+    if (isOwnFormat) {
+      // Our format
+      const lists = Array.isArray(listsValue) ? listsValue : []
+      let cardCount = 0
+      for (const list of lists) {
+        if (!isRecord(list)) continue
+        const listCards = list.cards
+        if (Array.isArray(listCards)) {
+          cardCount += listCards.length
         }
       }
-
-      // Unknown format - try to make sense of it
       return {
-        name: data.name || data.board?.name || "Imported Board",
-        desc: data.desc || data.description,
-        lists: Array.isArray(data.lists) ? data.lists.length : 0,
-        cards: Array.isArray(data.cards) ? data.cards.length : 0,
-        labels: Array.isArray(data.labels) ? data.labels.length : 0,
+        name,
+        desc,
+        lists: lists.length,
+        cards: cardCount,
+        labels: Array.isArray(labelsValue) ? labelsValue.length : 0,
         checklists: 0,
         isTrello: false
       }
-    } catch (e) {
-      return null
+    }
+
+    // Unknown format - try to make sense of it
+    return {
+      name,
+      desc,
+      lists: Array.isArray(listsValue) ? listsValue.length : 0,
+      cards: Array.isArray(cardsValue) ? cardsValue.length : 0,
+      labels: Array.isArray(labelsValue) ? labelsValue.length : 0,
+      checklists: 0,
+      isTrello: false
     }
   }, [])
 
@@ -104,11 +130,17 @@ export const ImportPanel = ({ onImported }: ImportPanelProps) => {
       reader.onload = (e) => {
         const content = e.target?.result as string
         try {
-          const data = JSON.parse(content)
+          const data = JSON.parse(content) as unknown
+          if (!isRecord(data)) {
+            message.error("Invalid JSON file")
+            setFileData(null)
+            setPreview(null)
+            return
+          }
           setFileData(data)
-          const preview = parseFile(content)
-          if (preview) {
-            setPreview(preview)
+          const previewData = parseFile(data)
+          if (previewData) {
+            setPreview(previewData)
           } else {
             message.error("Could not parse file. Please ensure it's a valid Trello or tldw export.")
             setFileData(null)

@@ -3,7 +3,6 @@ import { PlaygroundMessage } from "~/components/Common/Playground/Message"
 import { useMessage } from "~/hooks/useMessage"
 import { EmptySidePanel } from "../Chat/empty"
 import { useWebUI } from "@/store/webui"
-import { useUiModeStore } from "@/store/ui-mode"
 import { useVirtualizer } from "@tanstack/react-virtual"
 import { useStorage } from "@plasmohq/storage/hook"
 import { applyVariantToMessage } from "@/utils/message-variants"
@@ -53,7 +52,6 @@ export const SidePanelBody = ({
   const serverChatCharacterId = useStoreMessageOption(
     (state) => state.serverChatCharacterId
   )
-  const uiMode = useUiModeStore((state) => state.mode)
   const scrollAnchorRef = React.useRef<number | null>(null)
   const topPaddingClass = "pt-12"
   const stableHistoryId =
@@ -108,6 +106,7 @@ export const SidePanelBody = ({
   }
 
   const parentEl = scrollParentRef?.current || null
+  // eslint-disable-next-line react-hooks/incompatible-library
   const rowVirtualizer = useVirtualizer({
     count: messages.length,
     getScrollElement: () => parentEl,

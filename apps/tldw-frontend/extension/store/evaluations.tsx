@@ -7,12 +7,7 @@ import { create } from "zustand"
 import type {
   DatasetResponse,
   DatasetSample,
-  EvaluationDetail,
-  EvaluationHistoryItem,
-  EvaluationRateLimitStatus,
-  EvaluationRunDetail,
-  EvaluationSummary,
-  EvaluationWebhook
+  EvaluationHistoryItem
 } from "@/services/evaluations"
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -43,7 +38,7 @@ interface FormState {
   evalIdempotencyKey: string
   adhocEndpoint: string
   adhocPayloadText: string
-  adhocResult: any
+  adhocResult: unknown
 }
 
 interface DataState {
@@ -93,7 +88,7 @@ interface FormActions {
   setEvalIdempotencyKey: (key: string) => void
   setAdhocEndpoint: (endpoint: string) => void
   setAdhocPayloadText: (text: string) => void
-  setAdhocResult: (result: any) => void
+  setAdhocResult: (result: unknown) => void
   regenerateRunIdempotencyKey: () => void
   regenerateEvalIdempotencyKey: () => void
 }
@@ -145,7 +140,7 @@ export type EvaluationsState = SelectionState &
 // ─────────────────────────────────────────────────────────────────────────────
 
 const generateUUID = (): string =>
-  (crypto as any)?.randomUUID?.() || Math.random().toString(36).slice(2)
+  globalThis.crypto?.randomUUID?.() ?? Math.random().toString(36).slice(2)
 
 const initialSelectionState: SelectionState = {
   selectedEvalId: null,

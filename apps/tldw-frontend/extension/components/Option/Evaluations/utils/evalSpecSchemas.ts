@@ -29,7 +29,7 @@ export interface EvalSpecSchema {
   label: string
   description?: string
   builder: EvalSpecBuilderKind
-  defaultSpec: Record<string, any>
+  defaultSpec: Record<string, unknown>
   metricOptions?: string[]
   thresholdFields?: EvalSpecThresholdField[]
   booleanFields?: EvalSpecBooleanField[]

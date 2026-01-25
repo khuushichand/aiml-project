@@ -9,6 +9,9 @@ export type PromptSearchResult = {
   content: string
 }
 
+const isRecord = (value: unknown): value is Record<string, unknown> =>
+  value !== null && typeof value === "object"
+
 const dedupePromptResults = (
   items: PromptSearchResult[]
 ): PromptSearchResult[] => {
@@ -61,16 +64,29 @@ export const usePromptSearch = () => {
 
         if (includeServer) {
           await tldwClient.initialize().catch(() => null)
-          const res = await tldwClient.searchPrompts(trimmed).catch(() => [])
-          const list: any[] = Array.isArray(res)
-            ? res
-            : res?.results || res?.prompts || []
+          const res = await tldwClient.searchPrompts(trimmed).catch(() => null)
+          const list: Record<string, unknown>[] = Array.isArray(res)
+            ? res.filter(isRecord)
+            : isRecord(res) && Array.isArray(res.results)
+              ? res.results.filter(isRecord)
+              : isRecord(res) && Array.isArray(res.prompts)
+                ? res.prompts.filter(isRecord)
+                : []
           merged = merged.concat(
-            list.map((entry) => ({
-              id: entry.id,
-              title: String(entry.title || entry.name || "Untitled"),
-              content: String(entry.content || entry.prompt || "")
-            }))
+            list.map((entry) => {
+              const rawId = entry.id
+              const id =
+                typeof rawId === "string"
+                  ? rawId
+                  : typeof rawId === "number"
+                    ? String(rawId)
+                    : undefined
+              return {
+                id,
+                title: String(entry.title || entry.name || "Untitled"),
+                content: String(entry.content || entry.prompt || "")
+              }
+            })
           )
         }
 

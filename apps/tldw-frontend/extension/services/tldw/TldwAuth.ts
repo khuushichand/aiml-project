@@ -171,9 +171,9 @@ export class TldwAuthService {
     // Validate against a protected endpoint that requires auth
     const base = String(serverUrl).replace(/\/$/, '')
     try {
-      // Use /api/v1/users/me which requires valid authentication
+      // Use /api/v1/users/me/profile which requires valid authentication
       await bgRequest<unknown>({
-        path: `${base}/api/v1/users/me`,
+        path: `${base}/api/v1/users/me/profile`,
         method: 'GET',
         headers: { 'X-API-KEY': apiKey },
         noAuth: true

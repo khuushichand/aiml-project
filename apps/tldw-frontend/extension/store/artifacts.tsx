@@ -26,7 +26,7 @@ type ArtifactState = {
   setPinned: (value: boolean) => void
 }
 
-export const useArtifactsStore = create<ArtifactState>((set, get) => ({
+export const useArtifactsStore = create<ArtifactState>((set) => ({
   active: null,
   isOpen: false,
   isPinned: false,
@@ -54,5 +54,5 @@ export const useArtifactsStore = create<ArtifactState>((set, get) => ({
 }))
 
 if (typeof window !== "undefined") {
-  ;(window as any).__tldw_useArtifactsStore = useArtifactsStore
+  ;(window as Record<string, unknown>).__tldw_useArtifactsStore = useArtifactsStore
 }

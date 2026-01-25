@@ -4,6 +4,7 @@ import { fileURLToPath } from 'url';
 /** @type {import('next').NextConfig} */
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
+const paTesseractPath = path.resolve(__dirname, 'node_modules/pa-tesseract.js');
 
 const nextConfig = {
   reactStrictMode: true,
@@ -21,6 +22,7 @@ const nextConfig = {
       '@': '../../packages/ui/src',
       '~': '../../packages/ui/src',
       '@web': '.',
+      'pa-tesseract.js': './node_modules/pa-tesseract.js',
       'react-router-dom': './extension/shims/react-router-dom.tsx',
       '@plasmohq/storage': './extension/shims/plasmo-storage.ts',
       '@plasmohq/storage/hook': './extension/shims/plasmo-storage-hook.tsx',
@@ -36,6 +38,7 @@ const nextConfig = {
     config.resolve.alias['@'] = path.resolve(__dirname, '../../packages/ui/src');
     config.resolve.alias['~'] = path.resolve(__dirname, '../../packages/ui/src');
     config.resolve.alias['@web'] = path.resolve(__dirname, '.');
+    config.resolve.alias['pa-tesseract.js'] = paTesseractPath;
     config.resolve.alias['react-router-dom'] = path.resolve(
       __dirname,
       'extension/shims/react-router-dom.tsx'

@@ -37,13 +37,39 @@ import { useServerOnline } from "@/hooks/useServerOnline"
 import FeatureEmptyState from "@/components/Common/FeatureEmptyState"
 import ConnectFeatureBanner from "@/components/Common/ConnectFeatureBanner"
 import { useMessageOption } from "@/hooks/useMessageOption"
+import type { Prompt as StoredPrompt } from "@/db/dexie/types"
+
+type PromptFormValues = {
+  id?: string
+  title?: string
+  name?: string
+  content?: string
+  author?: string
+  details?: string
+  system_prompt?: string
+  user_prompt?: string
+  tags?: string[]
+  keywords?: string[]
+  is_system?: boolean
+  favorite?: boolean
+}
+
+type CopilotPrompt = {
+  key: string
+  prompt: string
+}
+
+const isRecord = (value: unknown): value is Record<string, unknown> =>
+  typeof value === "object" && value !== null && !Array.isArray(value)
+
 
 export const PromptBody = () => {
   const queryClient = useQueryClient()
   const [drawerOpen, setDrawerOpen] = useState(false)
   const [drawerMode, setDrawerMode] = useState<"create" | "edit">("create")
   const [editId, setEditId] = useState("")
-  const [drawerInitialValues, setDrawerInitialValues] = useState<any>(null)
+  const [drawerInitialValues, setDrawerInitialValues] =
+    useState<PromptFormValues | null>(null)
   const { t } = useTranslation(["settings", "common", "option"])
   const navigate = useNavigate()
   const isOnline = useServerOnline()
@@ -71,12 +97,12 @@ export const PromptBody = () => {
 
   const { setSelectedQuickPrompt, setSelectedSystemPrompt } = useMessageOption()
 
-  const { data, status } = useQuery({
+  const { data, status } = useQuery<StoredPrompt[]>({
     queryKey: ["fetchAllPrompts"],
     queryFn: getAllPrompts
   })
 
-  const { data: copilotData, status: copilotStatus } = useQuery({
+  const { data: copilotData, status: copilotStatus } = useQuery<CopilotPrompt[]>({
     queryKey: ["fetchCopilotPrompts"],
     queryFn: getAllCopilotPrompts,
     enabled: isOnline
@@ -116,7 +142,7 @@ export const PromptBody = () => {
       )
     })
     return true
-  }, [isFireFoxPrivateMode, t])
+  }, [t])
 
   React.useEffect(() => {
     if (!isOnline && selectedSegment === "copilot") {
@@ -125,11 +151,12 @@ export const PromptBody = () => {
   }, [isOnline, selectedSegment])
 
   const getPromptKeywords = React.useCallback(
-    (prompt: any) => prompt?.keywords ?? prompt?.tags ?? [],
+    (prompt?: StoredPrompt | PromptFormValues | null) =>
+      prompt?.keywords ?? prompt?.tags ?? [],
     []
   )
 
-  const getPromptTexts = React.useCallback((prompt: any) => {
+  const getPromptTexts = React.useCallback((prompt?: StoredPrompt | PromptFormValues | null) => {
     const systemText =
       prompt?.system_prompt ||
       (prompt?.is_system ? prompt?.content : undefined)
@@ -139,7 +166,7 @@ export const PromptBody = () => {
     return { systemText, userText }
   }, [])
 
-  const getPromptType = React.useCallback((prompt: any) => {
+  const getPromptType = React.useCallback((prompt?: StoredPrompt | PromptFormValues | null) => {
     const { systemText, userText } = getPromptTexts(prompt)
     const hasSystem = typeof systemText === "string" && systemText.trim().length > 0
     const hasUser = typeof userText === "string" && userText.trim().length > 0
@@ -149,7 +176,7 @@ export const PromptBody = () => {
     return prompt?.is_system ? "system" : "quick"
   }, [getPromptTexts])
 
-  const normalizePromptPayload = React.useCallback((values: any) => {
+  const normalizePromptPayload = React.useCallback((values: PromptFormValues) => {
     const keywords = values?.keywords ?? values?.tags ?? []
     const promptName = values?.name || values?.title
     const hasSystemPrompt = !!(values?.system_prompt?.trim())
@@ -258,7 +285,7 @@ export const PromptBody = () => {
 
   const { mutate: updatePromptMutation, isPending: isUpdatingPrompt } =
     useMutation({
-      mutationFn: async (data: any) => {
+      mutationFn: async (data: PromptFormValues) => {
         return await updatePrompt({
           ...data,
           id: editId
@@ -286,7 +313,7 @@ export const PromptBody = () => {
 
   const { mutate: updateCopilotPrompt, isPending: isUpdatingCopilotPrompt } =
     useMutation({
-      mutationFn: async (data: any) => {
+      mutationFn: async (data: CopilotPrompt) => {
         return await setAllCopilotPrompts([
           {
             key: data.key,
@@ -316,14 +343,14 @@ export const PromptBody = () => {
 
   const allTags = useMemo(() => {
     const set = new Set<string>()
-    ;(data || []).forEach((p: any) =>
-      (getPromptKeywords(p) || []).forEach((t: string) => set.add(t))
+    ;(data || []).forEach((prompt) =>
+      (getPromptKeywords(prompt) || []).forEach((tag) => set.add(tag))
     )
     return Array.from(set.values())
   }, [data, getPromptKeywords])
 
   const filteredData = useMemo(() => {
-    let items = (data || []) as any[]
+    let items = [...(data || [])]
     if (typeFilter !== "all") {
       items = items.filter((p) => {
         const promptType = getPromptType(p)
@@ -334,7 +361,7 @@ export const PromptBody = () => {
     }
     if (tagFilter.length > 0) {
       items = items.filter((p) =>
-        (getPromptKeywords(p) || []).some((t: string) => tagFilter.includes(t))
+        (getPromptKeywords(p) || []).some((tag) => tagFilter.includes(tag))
       )
     }
     if (searchText.trim().length > 0) {
@@ -351,7 +378,7 @@ export const PromptBody = () => {
             p.author,
             ...(getPromptKeywords(p) || [])
           ]
-          return haystack.some((field: any) =>
+          return haystack.some((field) =>
             typeof field === "string" ? field.toLowerCase().includes(q) : false
           )
         }
@@ -368,7 +395,7 @@ export const PromptBody = () => {
 
   React.useEffect(() => {
     // Only clear selection for items that are no longer visible
-    const visibleIds = new Set(filteredData.map((p: any) => p.id))
+    const visibleIds = new Set(filteredData.map((prompt) => prompt.id))
     setSelectedRowKeys((prev) => {
       const stillVisible = prev.filter((key) => visibleIds.has(key as string))
       if (stillVisible.length !== prev.length) {
@@ -400,7 +427,7 @@ export const PromptBody = () => {
       a.download = `prompts_${safeStamp}.json`
       a.click()
       URL.revokeObjectURL(url)
-    } catch (e) {
+    } catch {
       notification.error({
         message: t("managePrompts.notification.error"),
         description: t("managePrompts.notification.someError")
@@ -411,7 +438,9 @@ export const PromptBody = () => {
   const triggerBulkExport = async () => {
     try {
       if (guardPrivateMode()) return
-      const selectedItems = (data || []).filter((p: any) => selectedRowKeys.includes(p.id))
+      const selectedItems = (data || []).filter((prompt) =>
+        selectedRowKeys.includes(prompt.id)
+      )
       const blob = new Blob([JSON.stringify(selectedItems, null, 2)], {
         type: "application/json"
       })
@@ -422,7 +451,7 @@ export const PromptBody = () => {
       a.click()
       URL.revokeObjectURL(url)
       setSelectedRowKeys([])
-    } catch (e) {
+    } catch {
       notification.error({
         message: t("managePrompts.notification.error"),
         description: t("managePrompts.notification.someError")
@@ -434,8 +463,12 @@ export const PromptBody = () => {
     try {
       if (guardPrivateMode()) return
       const text = await file.text()
-      const json = JSON.parse(text)
-      const prompts = Array.isArray(json) ? json : json?.prompts || []
+      const json = JSON.parse(text) as unknown
+      const prompts = Array.isArray(json)
+        ? json
+        : isRecord(json) && Array.isArray(json.prompts)
+          ? json.prompts
+          : []
       if (importMode === "replace") {
         const ok = await confirmDanger({
           title: t("common:confirmTitle", { defaultValue: "Please confirm" }),
@@ -457,7 +490,7 @@ export const PromptBody = () => {
         message: t("managePrompts.notification.addSuccess"),
         description: t("managePrompts.notification.addSuccessDesc")
       })
-    } catch (e) {
+    } catch {
       notification.error({
         message: t("managePrompts.notification.error"),
         description: t("managePrompts.notification.someError")
@@ -491,7 +524,7 @@ export const PromptBody = () => {
     setDrawerOpen(true)
   }
 
-  const openEditDrawer = (record: any) => {
+  const openEditDrawer = (record: StoredPrompt) => {
     if (guardPrivateMode()) return
     setEditId(record.id)
     setDrawerMode("edit")
@@ -507,7 +540,7 @@ export const PromptBody = () => {
     setDrawerOpen(true)
   }
 
-  const handleDrawerSubmit = (values: any) => {
+  const handleDrawerSubmit = (values: PromptFormValues) => {
     const payload = normalizePromptPayload(values)
     if (drawerMode === "create") {
       savePromptMutation(payload)
@@ -591,7 +624,7 @@ export const PromptBody = () => {
                 </button>
                 <Select
                   value={importMode}
-                  onChange={(v) => setImportMode(v as any)}
+                  onChange={(v) => setImportMode(v as "merge" | "replace")}
                   data-testid="prompts-import-mode"
                   options={[
                     { label: t("managePrompts.importMode.merge", { defaultValue: "Merge" }), value: "merge" },
@@ -631,7 +664,7 @@ export const PromptBody = () => {
               </Tooltip>
               <Select
                 value={typeFilter}
-                onChange={(v) => setTypeFilter(v as any)}
+                onChange={(v) => setTypeFilter(v as "all" | "system" | "quick")}
                 data-testid="prompts-type-filter"
                 style={{ width: 130 }}
                 options={[
@@ -691,7 +724,7 @@ export const PromptBody = () => {
                 dataIndex: "favorite",
                 key: "favorite",
                 width: 48,
-                render: (_: any, record: any) => (
+                render: (_value: unknown, record: StoredPrompt) => (
                   <button
                     onClick={() =>
                       updatePromptDirect({
@@ -717,7 +750,7 @@ export const PromptBody = () => {
                 title: t("managePrompts.columns.title"),
                 dataIndex: "title",
                 key: "title",
-                render: (_: any, record: any) => (
+                render: (_value: unknown, record: StoredPrompt) => (
                   <div className="flex max-w-64 flex-col">
                     <span className="line-clamp-1 font-medium">
                       {record?.name || record?.title}
@@ -741,7 +774,7 @@ export const PromptBody = () => {
               {
                 title: t("managePrompts.columns.prompt"),
                 key: "content",
-                render: (_: any, record: any) => {
+                render: (_value: unknown, record: StoredPrompt) => {
                   const { systemText, userText } = getPromptTexts(record)
                   return (
                     <div className="flex max-w-[26rem] flex-col gap-1">
@@ -773,7 +806,7 @@ export const PromptBody = () => {
                 title: t("managePrompts.tags.label", { defaultValue: "Keywords" }),
                 dataIndex: "keywords",
                 key: "keywords",
-                render: (_: any, record: any) => {
+                render: (_value: unknown, record: StoredPrompt) => {
                   const tags = getPromptKeywords(record)
                   return (
                     <div className="flex max-w-64 flex-wrap gap-1">
@@ -788,7 +821,7 @@ export const PromptBody = () => {
                 title: t("managePrompts.columns.type"),
                 key: "type",
                 width: 80,
-                render: (_: any, record: any) => {
+                render: (_value: unknown, record: StoredPrompt) => {
                   const promptType = getPromptType(record)
                   const hasSystem = promptType === "system" || promptType === "mixed"
                   const hasQuick = promptType === "quick" || promptType === "mixed"

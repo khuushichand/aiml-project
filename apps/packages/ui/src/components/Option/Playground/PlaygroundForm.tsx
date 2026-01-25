@@ -232,7 +232,7 @@ export const PlaygroundForm = ({ droppedFiles }: Props) => {
   )
   React.useEffect(() => {
     const next = voiceChatTriggerPhrases.join(", ")
-    if (import.meta.env.DEV) {
+    if (import.meta?.env?.DEV) {
       console.count("PlaygroundForm/voiceChatTriggerPhrases")
     }
     setVoiceChatTriggerInput((prev) => (prev === next ? prev : next))
@@ -1204,7 +1204,7 @@ export const PlaygroundForm = ({ droppedFiles }: Props) => {
   }, [textAreaFocus])
 
   React.useEffect(() => {
-    if (import.meta.env.DEV) {
+    if (import.meta?.env?.DEV) {
       console.count("PlaygroundForm/defaultInternetSearchOn")
     }
     if (defaultInternetSearchOn && !webSearch) {
@@ -1219,7 +1219,7 @@ export const PlaygroundForm = ({ droppedFiles }: Props) => {
   }, [isConnectionReady])
 
   React.useEffect(() => {
-    if (import.meta.env.DEV) {
+    if (import.meta?.env?.DEV) {
       console.count("PlaygroundForm/queuedMessagesBanner")
     }
     const next = queuedMessages.length > 0

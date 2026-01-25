@@ -9,7 +9,7 @@ import { UploadCloud } from "lucide-react"
 import { useTranslation } from "react-i18next"
 
 interface DatasetUploadProps {
-  onSamplesLoaded: (samples: any[]) => void
+  onSamplesLoaded: (samples: unknown[]) => void
   className?: string
 }
 
@@ -20,7 +20,7 @@ export const DatasetUpload: React.FC<DatasetUploadProps> = ({
   const { t } = useTranslation(["evaluations", "common"])
   const [error, setError] = useState<string | null>(null)
 
-  const parseJsonl = (text: string): any[] => {
+  const parseJsonl = (text: string): unknown[] => {
     return text
       .split(/\r?\n/)
       .map((line) => line.trim())
@@ -36,10 +36,15 @@ export const DatasetUpload: React.FC<DatasetUploadProps> = ({
       const samples = isJsonl
         ? parseJsonl(text)
         : (() => {
-            const parsed = JSON.parse(text)
+            const parsed: unknown = JSON.parse(text)
             if (Array.isArray(parsed)) return parsed
-            if (parsed?.samples && Array.isArray(parsed.samples)) {
-              return parsed.samples
+            if (
+              parsed &&
+              typeof parsed === "object" &&
+              "samples" in parsed &&
+              Array.isArray((parsed as { samples?: unknown }).samples)
+            ) {
+              return (parsed as { samples: unknown[] }).samples
             }
             throw new Error(
               t("evaluations:datasetUploadParseError", {
@@ -56,8 +61,9 @@ export const DatasetUpload: React.FC<DatasetUploadProps> = ({
         )
       }
       onSamplesLoaded(samples)
-    } catch (e: any) {
-      setError(e?.message || "Failed to parse dataset file.")
+    } catch (e) {
+      const message = e instanceof Error ? e.message : "Failed to parse dataset file."
+      setError(message)
     }
     return false
   }

@@ -54,7 +54,7 @@ export const ActorPopout: React.FC<Props> = ({ open, setOpen }) => {
 
   React.useEffect(() => {
     if (!open || settings) return
-    if (import.meta.env.DEV) {
+    if (import.meta?.env?.DEV) {
       console.count("ActorPopout/initSettings")
     }
     const base = createDefaultActorSettings()
@@ -121,7 +121,7 @@ export const ActorPopout: React.FC<Props> = ({ open, setOpen }) => {
 
   React.useEffect(() => {
     if (open && !hydratedRef.current) {
-      if (import.meta.env.DEV) {
+      if (import.meta?.env?.DEV) {
         console.count("ActorPopout/hydrate")
       }
       hydratedRef.current = true

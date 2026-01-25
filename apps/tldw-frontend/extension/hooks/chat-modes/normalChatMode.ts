@@ -9,6 +9,8 @@ import { maybeInjectActorMessage } from "@/utils/actor"
 import { tldwClient } from "@/services/tldw/TldwApiClient"
 import { getSearchSettings } from "@/services/search"
 import type { SaveMessageData, SaveMessageErrorData } from "@/types/chat-modes"
+import type { ChatModelSettings } from "@/store/model"
+import type { UploadedFile } from "@/db/dexie/types"
 import {
   runChatPipeline,
   type ChatModeDefinition
@@ -25,7 +27,7 @@ type NormalChatModeParams = {
   selectedModel: string
   useOCR: boolean
   selectedSystemPrompt: string
-  currentChatModelSettings: any
+  currentChatModelSettings: ChatModelSettings | null
   toolChoice?: ToolChoice
   setMessages: (messages: Message[] | ((prev: Message[]) => Message[])) => void
   saveMessageOnSuccess: (data: SaveMessageData) => Promise<string | null>
@@ -36,7 +38,7 @@ type NormalChatModeParams = {
   setAbortController: (controller: AbortController | null) => void
   historyId: string | null
   setHistoryId: (id: string) => void
-  uploadedFiles?: any[]
+  uploadedFiles?: UploadedFile[]
   actorSettings?: ActorSettings
   webSearch?: boolean
   setIsSearchingInternet?: (value: boolean) => void
@@ -68,8 +70,7 @@ const normalChatModeDefinition: ChatModeDefinition<NormalChatModeParams> = {
       ctx.uploadedFiles?.map((file) => ({
         type: "file",
         filename: file.filename,
-        fileSize: file.size,
-        processed: file.processed
+        fileSize: file.size
       })) || [],
     messageType: ctx.userMessageType,
     clusterId: ctx.clusterId,
@@ -206,9 +207,9 @@ const normalChatModeDefinition: ChatModeDefinition<NormalChatModeParams> = {
       )
     }
 
+    const systemPrompt = ctx.currentChatModelSettings?.systemPrompt
     const isTempSystemprompt =
-      ctx.currentChatModelSettings.systemPrompt &&
-      ctx.currentChatModelSettings.systemPrompt?.trim().length > 0
+      systemPrompt && systemPrompt.trim().length > 0
 
     if (!isTempSystemprompt && selectedPrompt) {
       const selectedPromptContent =
@@ -221,13 +222,13 @@ const normalChatModeDefinition: ChatModeDefinition<NormalChatModeParams> = {
       promptContent = selectedPromptContent
     }
 
-    if (isTempSystemprompt) {
+    if (isTempSystemprompt && systemPrompt) {
       applicationChatHistory.unshift(
         await systemPromptFormatter({
-          content: ctx.currentChatModelSettings.systemPrompt
+          content: systemPrompt
         })
       )
-      promptContent = ctx.currentChatModelSettings.systemPrompt
+      promptContent = systemPrompt
     }
 
     const templatesActive = !!ctx.selectedSystemPrompt

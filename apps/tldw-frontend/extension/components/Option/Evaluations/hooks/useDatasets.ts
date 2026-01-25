@@ -16,11 +16,22 @@ import {
 } from "@/services/evaluations"
 import { useEvaluationsStore } from "@/store/evaluations"
 
+const isRecord = (value: unknown): value is Record<string, unknown> =>
+  typeof value === "object" && value !== null
+
 // Helper to ensure API responses are ok
-const ensureOk = <T,>(resp: any): T => {
-  if (!resp?.ok) {
-    const err = new Error(resp?.error || `HTTP ${resp?.status}`)
-    ;(err as any).resp = resp
+const ensureOk = <T,>(resp: unknown): T => {
+  const record = isRecord(resp) ? resp : {}
+  if (record.ok !== true) {
+    const status = typeof record.status === "number" ? record.status : undefined
+    const message =
+      typeof record.error === "string"
+        ? record.error
+        : status
+          ? `HTTP ${status}`
+          : "Request failed"
+    const err = new Error(message)
+    ;(err as { resp?: unknown }).resp = resp
     throw err
   }
   return resp as T
@@ -49,19 +60,16 @@ export function useCreateDataset() {
   const { t } = useTranslation(["evaluations", "common"])
   const queryClient = useQueryClient()
   const notification = useAntdNotification()
-  const { closeCreateDataset, setInlineDatasetEnabled } = useEvaluationsStore(
-    (s) => ({
-      closeCreateDataset: s.closeCreateDataset,
-      setInlineDatasetEnabled: s.setInlineDatasetEnabled
-    })
-  )
+  const { setInlineDatasetEnabled } = useEvaluationsStore((s) => ({
+    setInlineDatasetEnabled: s.setInlineDatasetEnabled
+  }))
 
   return useMutation({
     mutationFn: async (payload: {
       name: string
       description?: string
       samples: DatasetSample[]
-      metadata?: Record<string, any>
+      metadata?: Record<string, unknown>
     }) => ensureOk<{ data: DatasetResponse }>(await createDataset(payload)),
     onSuccess: (resp) => {
       void queryClient.invalidateQueries({
@@ -81,14 +89,19 @@ export function useCreateDataset() {
         })
       })
     },
-    onError: (error: any) => {
-      const retryAfter = error?.resp?.retryAfterMs
+    onError: (error: unknown) => {
+      const retryAfter =
+        isRecord(error) &&
+        isRecord(error.resp) &&
+        typeof error.resp.retryAfterMs === "number"
+          ? error.resp.retryAfterMs
+          : null
       notification.error({
         message: t("evaluations:datasetCreateErrorTitle", {
           defaultValue: "Failed to create dataset"
         }),
         description:
-          error?.message ||
+          (error instanceof Error ? error.message : null) ||
           t("evaluations:datasetCreateErrorDescription", {
             defaultValue:
               "The server rejected this dataset. Check the fields and try again."
@@ -167,12 +180,12 @@ export function useLoadDatasetSamples() {
         typeof data?.sample_count === "number" ? data.sample_count : null
       )
     },
-    onError: (error: any) => {
+    onError: (error: unknown) => {
       notification.error({
         message: t("evaluations:datasetLoadErrorTitle", {
           defaultValue: "Failed to load dataset"
         }),
-        description: error?.message
+        description: error instanceof Error ? error.message : undefined
       })
     }
   })
@@ -206,7 +219,10 @@ export function parseSamplesJson(
       return { samples: parsed, error: null }
     }
     return { samples: null, error: "Samples must be an array" }
-  } catch (e: any) {
-    return { samples: null, error: e?.message || "Invalid JSON" }
+  } catch (e) {
+    return {
+      samples: null,
+      error: e instanceof Error ? e.message : "Invalid JSON"
+    }
   }
 }

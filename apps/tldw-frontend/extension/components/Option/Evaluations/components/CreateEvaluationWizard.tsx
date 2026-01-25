@@ -127,8 +127,9 @@ export const CreateEvaluationWizard: React.FC<CreateEvaluationWizardProps> = ({
       try {
         JSON.parse(evalSpecText || "{}")
         setCurrentStep(2)
-      } catch (e: any) {
-        onSpecError(e?.message || "Invalid JSON")
+      } catch (e) {
+        const message = e instanceof Error ? e.message : "Invalid JSON"
+        onSpecError(message)
       }
     }
   }
@@ -348,7 +349,7 @@ export const CreateEvaluationWizard: React.FC<CreateEvaluationWizardProps> = ({
                 onChange={onInlineDatasetText}
                 placeholder={t("evaluations:inlineDatasetPlaceholder", {
                   defaultValue:
-                    '[{\"input\": {\"question\": \"Q1\"}, \"expected\": {\"answer\": \"A\"}}]'
+                    '[{"input": {"question": "Q1"}, "expected": {"answer": "A"}}]'
                 })}
               />
             )}

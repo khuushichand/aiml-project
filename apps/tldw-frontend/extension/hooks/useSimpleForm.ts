@@ -9,7 +9,7 @@ type UseSimpleFormOptions<T> = {
   validate?: Validators<T>
 }
 
-const shallowEqual = <T extends Record<string, any>>(a: T, b: T): boolean => {
+const shallowEqual = <T extends Record<string, unknown>>(a: T, b: T): boolean => {
   if (a === b) return true
   const aKeys = Object.keys(a)
   const bKeys = Object.keys(b)
@@ -21,7 +21,12 @@ const shallowEqual = <T extends Record<string, any>>(a: T, b: T): boolean => {
   return true
 }
 
-export const useSimpleForm = <T extends Record<string, any>>({
+const isEventWithTarget = (
+  value: unknown
+): value is { target?: { checked?: unknown; value?: unknown } } =>
+  typeof value === "object" && value !== null && "target" in value
+
+export const useSimpleForm = <T extends Record<string, unknown>>({
   initialValues,
   validate
 }: UseSimpleFormOptions<T>) => {
@@ -113,17 +118,21 @@ export const useSimpleForm = <T extends Record<string, any>>({
       return {
         value: isCheckbox ? undefined : (values[field] as T[K]),
         checked: isCheckbox ? Boolean(values[field]) : undefined,
-        onChange: (event: any) => {
+        onChange: (event: unknown) => {
           if (isCheckbox) {
-            const next =
-              typeof event === "boolean"
-                ? event
-                : Boolean(event?.target?.checked)
-            setFieldValue(field, next as T[K])
+            if (typeof event === "boolean") {
+              setFieldValue(field, event as T[K])
+              return
+            }
+            if (isEventWithTarget(event)) {
+              setFieldValue(field, Boolean(event.target?.checked) as T[K])
+              return
+            }
+            setFieldValue(field, Boolean(event) as T[K])
             return
           }
-          if (event && event.target) {
-            setFieldValue(field, event.target.value as T[K])
+          if (isEventWithTarget(event)) {
+            setFieldValue(field, event.target?.value as T[K])
             return
           }
           setFieldValue(field, event as T[K])

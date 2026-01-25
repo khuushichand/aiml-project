@@ -103,7 +103,7 @@ export const CreateTab: React.FC<CreateTabProps> = ({ onNavigateToTake }) => {
       form.resetFields()
       setQuestions([])
       onNavigateToTake()
-    } catch (error) {
+    } catch {
       messageApi.error(
         t("option:quiz.createError", { defaultValue: "Failed to create quiz" })
       )

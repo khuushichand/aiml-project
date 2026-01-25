@@ -42,10 +42,8 @@ export const Playground = () => {
   )
   const {
     messages,
-    history,
     historyId,
     serverChatId,
-    isLoading,
     setHistoryId,
     setHistory,
     setMessages,
@@ -95,6 +93,7 @@ export const Playground = () => {
     if (!drop.current) {
       return
     }
+    const dropEl = drop.current
     const handleDragOver = (e: DragEvent) => {
       e.preventDefault()
       e.stopPropagation()
@@ -161,18 +160,16 @@ export const Playground = () => {
       setDropState("idle")
     }
 
-    drop.current.addEventListener("dragover", handleDragOver)
-    drop.current.addEventListener("drop", handleDrop)
-    drop.current.addEventListener("dragenter", handleDragEnter)
-    drop.current.addEventListener("dragleave", handleDragLeave)
+    dropEl.addEventListener("dragover", handleDragOver)
+    dropEl.addEventListener("drop", handleDrop)
+    dropEl.addEventListener("dragenter", handleDragEnter)
+    dropEl.addEventListener("dragleave", handleDragLeave)
 
     return () => {
-      if (drop.current) {
-        drop.current.removeEventListener("dragover", handleDragOver)
-        drop.current.removeEventListener("drop", handleDrop)
-        drop.current.removeEventListener("dragenter", handleDragEnter)
-        drop.current.removeEventListener("dragleave", handleDragLeave)
-      }
+      dropEl.removeEventListener("dragover", handleDragOver)
+      dropEl.removeEventListener("drop", handleDrop)
+      dropEl.removeEventListener("dragenter", handleDragEnter)
+      dropEl.removeEventListener("dragleave", handleDragLeave)
     }
   }, [showDropFeedback, t])
 

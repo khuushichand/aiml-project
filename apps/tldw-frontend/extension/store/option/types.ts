@@ -7,7 +7,7 @@ import type { RagPinnedResult } from "@/utils/rag-format"
 export type Knowledge = {
   id: string
   title: string
-  [key: string]: any
+  [key: string]: unknown
 }
 
 export type WebSearch = {
@@ -32,9 +32,9 @@ export type ReplyTarget = {
 export type MessageVariant = {
   id?: string
   message: string
-  sources?: any[]
+  sources?: Record<string, unknown>[]
   images?: string[]
-  generationInfo?: any
+  generationInfo?: Record<string, unknown>
   reasoning_time_taken?: number
   createdAt?: number
   serverMessageId?: string
@@ -46,14 +46,14 @@ export type Message = {
   name: string
   role?: "user" | "assistant" | "system"
   message: string
-  sources: any[]
+  sources: Record<string, unknown>[]
   images?: string[]
   search?: WebSearch
   reasoning_time_taken?: number
   createdAt?: number
   id?: string
   messageType?: string
-  generationInfo?: any
+  generationInfo?: Record<string, unknown>
   modelName?: string
   modelImage?: string
   documents?: ChatDocuments
@@ -153,8 +153,8 @@ export type State = {
   ragSources: string[]
   setRagSources: (sources: string[]) => void
   // Advanced RAG options (free-form UnifiedRAGRequest fields)
-  ragAdvancedOptions: Record<string, any>
-  setRagAdvancedOptions: (opts: Record<string, any>) => void
+  ragAdvancedOptions: Record<string, unknown>
+  setRagAdvancedOptions: (opts: Record<string, unknown>) => void
   // Session-only pinned RAG results for the Search & Context modal
   ragPinnedResults: RagPinnedResult[]
   setRagPinnedResults: (results: RagPinnedResult[]) => void

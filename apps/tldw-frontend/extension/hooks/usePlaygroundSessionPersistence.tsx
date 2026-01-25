@@ -170,7 +170,7 @@ export function usePlaygroundSessionPersistence() {
       setMessages(formatToMessage(chatData.messages))
 
       // Restore system prompt if present
-      const lastUsedPrompt = (chatData.historyInfo as any)?.last_used_prompt
+      const lastUsedPrompt = chatData.historyInfo.last_used_prompt
       if (lastUsedPrompt?.prompt_id) {
         const prompt = await getPromptById(lastUsedPrompt.prompt_id)
         if (prompt) {

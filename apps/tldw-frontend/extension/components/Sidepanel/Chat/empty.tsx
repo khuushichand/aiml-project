@@ -1,6 +1,5 @@
 import React from "react"
 import { useTranslation } from "react-i18next"
-import { Button, Tooltip } from "antd"
 import { browser } from "wxt/browser"
 import {
   useConnectionState,

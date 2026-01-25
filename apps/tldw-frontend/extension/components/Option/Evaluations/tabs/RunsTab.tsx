@@ -46,6 +46,8 @@ import {
 } from "../components"
 
 const { Text } = Typography
+const isRecord = (value: unknown): value is Record<string, unknown> =>
+  typeof value === "object" && value !== null
 
 export const RunsTab: React.FC = () => {
   const { t } = useTranslation(["evaluations", "common"])
@@ -121,7 +123,10 @@ export const RunsTab: React.FC = () => {
 
   const evaluations = evalListResp?.data?.data || []
   const rateLimits = rateLimitsResp?.data
-  const runs = runsListResp?.data?.data || []
+  const runs = useMemo(
+    () => runsListResp?.data?.data ?? [],
+    [runsListResp?.data?.data]
+  )
   const runDetail = runDetailResp?.data
   const compareRunA = compareRunAResp?.data
   const compareRunB = compareRunBResp?.data
@@ -169,22 +174,28 @@ export const RunsTab: React.FC = () => {
     const values = await runForm.validateFields().catch(() => null)
     if (!values) return
 
-    let config: Record<string, any> | undefined
+    let config: Record<string, unknown> | undefined
     if (values.configJson) {
       try {
-        config = JSON.parse(values.configJson)
+        const parsed: unknown = JSON.parse(values.configJson)
+        if (isRecord(parsed)) {
+          config = parsed
+        }
       } catch {
         return
       }
     }
 
-    let datasetOverride: { samples: any[] } | undefined
+    let datasetOverride: { samples: unknown[] } | undefined
     if (values.datasetOverrideJson) {
       try {
-        const parsed = JSON.parse(values.datasetOverrideJson)
+        const parsed: unknown = JSON.parse(values.datasetOverrideJson)
         if (Array.isArray(parsed)) {
           datasetOverride = { samples: parsed }
-        } else if (parsed?.samples && Array.isArray(parsed.samples)) {
+        } else if (
+          isRecord(parsed) &&
+          Array.isArray(parsed.samples)
+        ) {
           datasetOverride = { samples: parsed.samples }
         }
       } catch {
@@ -318,10 +329,10 @@ export const RunsTab: React.FC = () => {
                                 setDatasetOverrideText(v)
                                 runForm.setFieldsValue({ datasetOverrideJson: v })
                               }}
-                              placeholder={t("evaluations:datasetOverridePlaceholder", {
-                                defaultValue:
-                                  '[{\"input\": {\"question\": \"Q1\"}, \"expected\": {\"answer\": \"A\"}}]'
-                              })}
+                      placeholder={t("evaluations:datasetOverridePlaceholder", {
+                        defaultValue:
+                          '[{"input": {"question": "Q1"}, "expected": {"answer": "A"}}]'
+                      })}
                             />
                           </Form.Item>
                           <Form.Item

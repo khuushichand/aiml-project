@@ -134,6 +134,7 @@ export const SidepanelHeaderSimple = ({
         </Tooltip>
         <StatusDot />
         <div className="flex items-center text-text">
+          {/* eslint-disable-next-line @next/next/no-img-element */}
           <img
             className="h-5 w-auto"
             src={logoImage.src}

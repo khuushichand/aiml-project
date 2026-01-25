@@ -265,6 +265,6 @@ export const useCharacterGreeting = ({
     setHistory,
     setMessages,
     setSelectedCharacter,
-    userDisplayName
+    resolvedUserDisplayName
   ])
 }

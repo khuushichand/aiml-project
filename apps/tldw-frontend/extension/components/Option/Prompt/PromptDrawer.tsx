@@ -6,17 +6,19 @@ interface PromptDrawerProps {
   open: boolean
   onClose: () => void
   mode: "create" | "edit"
-  initialValues?: {
-    name?: string
-    author?: string
-    details?: string
-    system_prompt?: string
-    user_prompt?: string
-    keywords?: string[]
-  }
-  onSubmit: (values: any) => void
+  initialValues?: PromptFormValues
+  onSubmit: (values: PromptFormValues) => void
   isLoading: boolean
   allTags: string[]
+}
+
+type PromptFormValues = {
+  name?: string
+  author?: string
+  details?: string
+  system_prompt?: string
+  user_prompt?: string
+  keywords?: string[]
 }
 
 export const PromptDrawer: React.FC<PromptDrawerProps> = ({
@@ -40,7 +42,7 @@ export const PromptDrawer: React.FC<PromptDrawerProps> = ({
     }
   }, [open, initialValues, mode, form])
 
-  const handleFinish = (values: any) => {
+  const handleFinish = (values: PromptFormValues) => {
     onSubmit(values)
   }
 

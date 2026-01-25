@@ -1,4 +1,4 @@
-import React, { useState, useRef, useEffect, useMemo } from "react"
+import React, { useState, useRef, useEffect, useMemo, useCallback } from "react"
 import { Search, RotateCw, ChevronDown } from "lucide-react"
 import { LoadingIndicator } from "./LoadingIndicator"
 import { Empty } from "antd"
@@ -76,6 +76,28 @@ export const PageAssistSelect: React.FC<SelectProps> = ({
     
   }, [isOpen, value])
 
+  const extractTextFromJSX = useCallback((element: React.ReactElement): string => {
+    if (typeof element.props.children === "string") {
+      return element.props.children
+    }
+
+    if (Array.isArray(element.props.children)) {
+      return element.props.children
+        .map((child: React.ReactNode) => {
+          if (typeof child === "string") return child
+          if (React.isValidElement(child)) return extractTextFromJSX(child)
+          return ""
+        })
+        .join(" ")
+    }
+
+    if (React.isValidElement(element.props.children)) {
+      return extractTextFromJSX(element.props.children)
+    }
+
+    return ""
+  }, [])
+
   useEffect(() => {
     if (!options) return
 
@@ -99,29 +121,7 @@ export const PageAssistSelect: React.FC<SelectProps> = ({
     })
     setFilteredOptions(filtered)
     setActiveIndex(-1)
-  }, [searchTerm, options, filterOption])
-
-  const extractTextFromJSX = (element: React.ReactElement): string => {
-    if (typeof element.props.children === "string") {
-      return element.props.children
-    }
-
-    if (Array.isArray(element.props.children)) {
-      return element.props.children
-        .map((child: React.ReactNode) => {
-          if (typeof child === "string") return child
-          if (React.isValidElement(child)) return extractTextFromJSX(child)
-          return ""
-        })
-        .join(" ")
-    }
-
-    if (React.isValidElement(element.props.children)) {
-      return extractTextFromJSX(element.props.children)
-    }
-
-    return ""
-  }
+  }, [searchTerm, options, filterOption, extractTextFromJSX])
 
   const handleRefresh = (e: React.MouseEvent) => {
     e.stopPropagation()

@@ -1,4 +1,4 @@
-type BrowserListener = (...args: any[]) => void
+type BrowserListener = (...args: unknown[]) => void
 type BrowserTab = {
   id?: number
   title?: string
@@ -14,11 +14,12 @@ const createEventTarget = () => {
     addListener: (listener: BrowserListener) => listeners.add(listener),
     removeListener: (listener: BrowserListener) => listeners.delete(listener),
     hasListener: (listener: BrowserListener) => listeners.has(listener),
-    trigger: (...args: any[]) => listeners.forEach((listener) => listener(...args))
+    trigger: (...args: unknown[]) =>
+      listeners.forEach((listener) => listener(...args))
   }
 }
 
-const noopAsync = async (..._args: any[]) => undefined
+const noopAsync = async (..._args: unknown[]) => undefined
 
 const runtime = {
   id: undefined,
@@ -35,7 +36,7 @@ const runtime = {
     version: "0.0.0"
   }),
   lastError: undefined,
-  sendMessage: async (..._args: any[]) => undefined,
+  sendMessage: async (..._args: unknown[]) => undefined,
   sendNativeMessage: async (
     _host?: string,
     _message?: unknown
@@ -94,14 +95,17 @@ const getStorageBackend = () => {
 }
 
 const storageArea = {
-  get: (keys?: string | string[] | null, callback?: (items: any) => void) => {
+  get: (
+    keys?: string | string[] | null,
+    callback?: (items: Record<string, unknown>) => void
+  ) => {
     const backend = getStorageBackend()
-    const result: Record<string, string | null> = {}
+    const result: Record<string, unknown> = {}
     if (!backend) {
       callback?.(result)
       return Promise.resolve(result)
     }
-    const parseValue = (raw: string | null) => {
+    const parseValue = (raw: string | null): unknown => {
       if (raw == null) return raw
       try {
         return JSON.parse(raw)

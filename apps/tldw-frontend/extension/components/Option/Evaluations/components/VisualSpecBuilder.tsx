@@ -19,26 +19,33 @@ interface VisualSpecBuilderProps {
   onValidationError?: (error: string | null) => void
 }
 
-const getValueAtPath = (obj: Record<string, any>, path: string) => {
+const isRecord = (value: unknown): value is Record<string, unknown> =>
+  typeof value === "object" && value !== null && !Array.isArray(value)
+
+const getValueAtPath = (obj: Record<string, unknown>, path: string) => {
   const parts = path.split(".")
-  let cursor: any = obj
+  let cursor: unknown = obj
   for (const part of parts) {
-    if (!cursor || typeof cursor !== "object") return undefined
+    if (!isRecord(cursor)) return undefined
     cursor = cursor[part]
   }
   return cursor
 }
 
-const setValueAtPath = (obj: Record<string, any>, path: string, value: any) => {
+const setValueAtPath = (
+  obj: Record<string, unknown>,
+  path: string,
+  value: unknown
+) => {
   const parts = path.split(".")
-  const next = JSON.parse(JSON.stringify(obj)) as Record<string, any>
-  let cursor: any = next
+  const next = JSON.parse(JSON.stringify(obj)) as Record<string, unknown>
+  let cursor: Record<string, unknown> = next
   for (let i = 0; i < parts.length - 1; i += 1) {
     const key = parts[i]
-    if (!cursor[key] || typeof cursor[key] !== "object") {
+    if (!isRecord(cursor[key])) {
       cursor[key] = {}
     }
-    cursor = cursor[key]
+    cursor = cursor[key] as Record<string, unknown>
   }
   cursor[parts[parts.length - 1]] = value
   return next
@@ -63,22 +70,22 @@ export const VisualSpecBuilder: React.FC<VisualSpecBuilderProps> = ({
 
   const { specObject, parseError } = useMemo(() => {
     try {
-      const parsed = JSON.parse(specText || "{}")
-      return { specObject: parsed, parseError: null }
-    } catch (e: any) {
+      const parsed: unknown = JSON.parse(specText || "{}")
+      return { specObject: isRecord(parsed) ? parsed : {}, parseError: null }
+    } catch (e) {
       return {
         specObject: schema?.defaultSpec || {},
-        parseError: e?.message || "Invalid JSON"
+        parseError: e instanceof Error ? e.message : "Invalid JSON"
       }
     }
   }, [specText, schema])
 
-  const updateSpec = (next: Record<string, any>) => {
+  const updateSpec = (next: Record<string, unknown>) => {
     onSpecChange(JSON.stringify(next, null, 2))
     onValidationError?.(null)
   }
 
-  const updateSpecAtPath = (path: string, value: any) => {
+  const updateSpecAtPath = (path: string, value: unknown) => {
     const next = setValueAtPath(specObject, path, value)
     updateSpec(next)
   }

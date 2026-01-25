@@ -6,7 +6,6 @@ import {
   Empty,
   Input,
   List,
-  Space,
   Spin,
   Tag,
   Tooltip,
@@ -41,7 +40,6 @@ import { useConnectionActions } from "@/hooks/useConnectionState"
 import { useAntdNotification } from "@/hooks/useAntdNotification"
 import { useDemoMode } from "@/context/demo-mode"
 import { useAntdMessage } from "@/hooks/useAntdMessage"
-import { useScrollToServerCard } from "@/hooks/useScrollToServerCard"
 import { MarkdownErrorBoundary } from "@/components/Common/MarkdownErrorBoundary"
 import { PromptDropdown } from "@/components/Review/PromptDropdown"
 import { usePromptSearch } from "@/components/Review/usePromptSearch"
@@ -54,19 +52,42 @@ import {
 import { resolveApiProviderForModel } from "@/utils/resolve-api-provider"
 const Markdown = React.lazy(() => import("@/components/Common/Markdown"))
 
-type MediaItem = any
-type NoteItem = any
+type NoteItem = {
+  id: string | number
+  title?: string
+  content?: string
+  [key: string]: unknown
+}
 
 type ResultItem = {
   kind: "media" | "note"
   id: string | number
   title?: string
   snippet?: string
-  meta?: Record<string, any>
-  raw: any
+  meta?: Record<string, unknown>
+  raw: Record<string, unknown>
 }
 
 type ReviewPageProps = { allowGeneration?: boolean; forceOffline?: boolean }
+
+const isRecord = (value: unknown): value is Record<string, unknown> =>
+  value !== null && typeof value === "object"
+
+const getStringValue = (value: unknown): string | null =>
+  typeof value === "string" ? value : null
+
+const getMediaId = (record: Record<string, unknown>): string | number => {
+  const raw = record.id ?? record.media_id ?? record.pk ?? record.uuid
+  if (typeof raw === "string" || typeof raw === "number") return raw
+  return String(raw ?? "")
+}
+
+const getErrorMessage = (error: unknown, fallback: string): string => {
+  if (isRecord(error) && typeof error.message === "string") {
+    return error.message
+  }
+  return fallback
+}
 
 export const ReviewPage: React.FC<ReviewPageProps> = ({
   allowGeneration = true,
@@ -109,7 +130,8 @@ export const ReviewPage: React.FC<ReviewPageProps> = ({
   const [autoReviewOnSelect, setAutoReviewOnSelect] =
     React.useState<boolean>(false)
   const [selectedContent, setSelectedContent] = React.useState<string>("")
-  const [selectedDetail, setSelectedDetail] = React.useState<any>(null)
+  const [selectedDetail, setSelectedDetail] =
+    React.useState<Record<string, unknown> | null>(null)
   const [debugOpen, setDebugOpen] = React.useState<boolean>(false)
   const [mediaJsonOpen, setMediaJsonOpen] = React.useState<boolean>(false)
   const [mediaExpanded, setMediaExpanded] = React.useState<boolean>(false)
@@ -185,7 +207,7 @@ export const ReviewPage: React.FC<ReviewPageProps> = ({
   React.useEffect(() => {
     setContentCollapsed(false)
     setAnalysisCollapsed(false)
-  }, [selected])
+  }, [selected, fetchSelectedDetails, contentFromDetail])
   const {
     query: reviewPromptQuery,
     setQuery: setReviewPromptQuery,
@@ -222,8 +244,6 @@ export const ReviewPage: React.FC<ReviewPageProps> = ({
   const modeToastPrev = React.useRef<"review" | "summary" | null>(null)
   const serverOnline = useServerOnline()
   const isOnline = forceOffline ? false : serverOnline
-  const returnToPath = isViewMediaMode ? "/media" : "/review"
-  const scrollToServerCard = useScrollToServerCard(returnToPath)
   const [storageScope, setStorageScope] = React.useState<{
     host: string
     user: string
@@ -234,23 +254,23 @@ export const ReviewPage: React.FC<ReviewPageProps> = ({
     let cancelled = false
     const storage = createSafeStorage()
 
-    const applyScope = (cfg?: any) => {
+    const applyScope = (cfg?: Record<string, unknown> | null) => {
       if (cancelled) return
-      if (!cfg) {
+      if (!cfg || !isRecord(cfg)) {
         setStorageScope(null)
         return
       }
-      const host = String(cfg?.serverUrl || "")
+      const host = String(cfg.serverUrl || "")
         .replace(/\/+$/, "")
         .replace(/^https?:\/\//, "")
       const user =
-        cfg?.authMode === "multi-user" && cfg?.accessToken ? "user" : "single"
+        cfg.authMode === "multi-user" && cfg.accessToken ? "user" : "single"
       setStorageScope({ host, user })
     }
-    const handleConfigChange = (value: { newValue?: any }) =>
+    const handleConfigChange = (value: { newValue?: Record<string, unknown> }) =>
       applyScope(value?.newValue)
 
-    storage.get<any>("tldwConfig").then(applyScope).catch(() => {
+    storage.get<Record<string, unknown>>("tldwConfig").then(applyScope).catch(() => {
       // ignore storage read issues
     })
     storage.watch({ tldwConfig: handleConfigChange })
@@ -259,7 +279,7 @@ export const ReviewPage: React.FC<ReviewPageProps> = ({
       cancelled = true
       storage.unwatch({ tldwConfig: handleConfigChange })
     }
-  }, [])
+  }, [scopedKey])
 
   const scopedKey = React.useCallback(
     (base: string) => {
@@ -315,31 +335,28 @@ export const ReviewPage: React.FC<ReviewPageProps> = ({
   }
 
   const deriveMediaMeta = (
-    m: any
+    m: Record<string, unknown>
   ): {
     type: string
     created_at?: string
-    status?: any
+    status?: unknown
     source?: string | null
     duration?: number | null
   } => {
-    const rawType = m?.type ?? m?.media_type ?? ""
+    const rawType = m.type ?? m.media_type ?? ""
     const type = typeof rawType === "string" ? rawType.toLowerCase().trim() : ""
     const status =
-      m?.status ??
-      m?.ingest_status ??
-      m?.ingestStatus ??
-      m?.processing_state ??
-      m?.processingStatus
+      m.status ??
+      m.ingest_status ??
+      m.ingestStatus ??
+      m.processing_state ??
+      m.processingStatus
 
     let source: string | null = null
-    const rawSource =
-      (m?.source as string | null | undefined) ??
-      (m?.origin as string | null | undefined) ??
-      (m?.provider as string | null | undefined)
-    if (typeof rawSource === "string" && rawSource.trim().length > 0) {
+    const rawSource = getStringValue(m.source) || getStringValue(m.origin) || getStringValue(m.provider)
+    if (rawSource && rawSource.trim().length > 0) {
       source = rawSource.trim()
-    } else if (m?.url) {
+    } else if (m.url) {
       try {
         const u = new URL(String(m.url))
         const host = u.hostname.replace(/^www\./i, "")
@@ -359,10 +376,10 @@ export const ReviewPage: React.FC<ReviewPageProps> = ({
 
     let duration: number | null = null
     const rawDuration =
-      (m?.duration as number | string | null | undefined) ??
-      (m?.media_duration as number | string | null | undefined) ??
-      (m?.length_seconds as number | string | null | undefined) ??
-      (m?.duration_seconds as number | string | null | undefined)
+      (m.duration as number | string | null | undefined) ??
+      (m.media_duration as number | string | null | undefined) ??
+      (m.length_seconds as number | string | null | undefined) ??
+      (m.duration_seconds as number | string | null | undefined)
     if (typeof rawDuration === "number") {
       duration = rawDuration
     } else if (typeof rawDuration === "string") {
@@ -374,7 +391,7 @@ export const ReviewPage: React.FC<ReviewPageProps> = ({
 
     return {
       type,
-      created_at: m?.created_at,
+      created_at: getStringValue(m.created_at) ?? undefined,
       status,
       source,
       duration
@@ -383,7 +400,7 @@ export const ReviewPage: React.FC<ReviewPageProps> = ({
 
   const deriveStatusBadge = React.useCallback(
     (
-      status: any
+      status: unknown
     ): {
       label: string | null
       color: string
@@ -428,15 +445,24 @@ export const ReviewPage: React.FC<ReviewPageProps> = ({
       try {
         if (!hasQuery && !hasMediaFilters) {
           // Blank browse: GET listing with pagination
-          const listing = await bgRequest<any>({
-            path: `/api/v1/media/?page=${page}&results_per_page=${pageSize}` as any,
-            method: "GET" as any
+          const listing = await bgRequest<unknown>({
+            path: `/api/v1/media/?page=${page}&results_per_page=${pageSize}`,
+            method: "GET"
           })
-          const items = Array.isArray(listing?.items) ? listing.items : []
-          const pagination = listing?.pagination
-          setMediaTotal(Number(pagination?.total_items || items.length || 0))
+          const listingRecord = isRecord(listing) ? listing : {}
+          const items = Array.isArray(listingRecord.items)
+            ? listingRecord.items.filter(isRecord)
+            : []
+          const pagination = isRecord(listingRecord.pagination)
+            ? listingRecord.pagination
+            : undefined
+          const totalItems =
+            pagination && typeof pagination.total_items === "number"
+              ? pagination.total_items
+              : items.length
+          setMediaTotal(Number(totalItems || 0))
           for (const m of items) {
-            const id = m?.id ?? m?.media_id ?? m?.pk ?? m?.uuid
+            const id = getMediaId(m)
             const meta = deriveMediaMeta(m)
             const type = meta.type
             if (type && !availableMediaTypes.includes(type)) {
@@ -447,36 +473,46 @@ export const ReviewPage: React.FC<ReviewPageProps> = ({
             results.push({
               kind: "media",
               id,
-              title: m?.title || m?.filename || `Media ${id}`,
-              snippet: m?.snippet || m?.summary || "",
+              title:
+                getStringValue(m.title) ||
+                getStringValue(m.filename) ||
+                `Media ${id}`,
+              snippet: getStringValue(m.snippet) || getStringValue(m.summary) || "",
               meta: meta,
               raw: m
             })
           }
         } else {
           // Search with optional filters and pagination
-          const body: any = {
+          const body: Record<string, unknown> = {
             query: hasQuery ? query : null,
             fields: ["title", "content"],
             sort_by: "relevance"
           }
           if (mediaTypes.length > 0) body.media_types = mediaTypes
           if (keywordTokens.length > 0) body.must_have = keywordTokens
-          const mediaResp = await bgRequest<any>({
-            path: `/api/v1/media/search?page=${page}&results_per_page=${pageSize}` as any,
-            method: "POST" as any,
+          const mediaResp = await bgRequest<unknown>({
+            path: `/api/v1/media/search?page=${page}&results_per_page=${pageSize}`,
+            method: "POST",
             headers: { "Content-Type": "application/json" },
             body
           })
-          const items = Array.isArray(mediaResp?.items)
-            ? mediaResp.items
-            : Array.isArray(mediaResp?.results)
-              ? mediaResp.results
+          const mediaRecord = isRecord(mediaResp) ? mediaResp : {}
+          const items = Array.isArray(mediaRecord.items)
+            ? mediaRecord.items.filter(isRecord)
+            : Array.isArray(mediaRecord.results)
+              ? mediaRecord.results.filter(isRecord)
               : []
-          const pagination = mediaResp?.pagination
-          setMediaTotal(Number(pagination?.total_items || items.length || 0))
+          const pagination = isRecord(mediaRecord.pagination)
+            ? mediaRecord.pagination
+            : undefined
+          const totalItems =
+            pagination && typeof pagination.total_items === "number"
+              ? pagination.total_items
+              : items.length
+          setMediaTotal(Number(totalItems || 0))
           for (const m of items) {
-            const id = m?.id ?? m?.media_id ?? m?.pk ?? m?.uuid
+            const id = getMediaId(m)
             const meta = deriveMediaMeta(m)
             const type = meta.type
             if (type && !availableMediaTypes.includes(type)) {
@@ -487,14 +523,17 @@ export const ReviewPage: React.FC<ReviewPageProps> = ({
             results.push({
               kind: "media",
               id,
-              title: m?.title || m?.filename || `Media ${id}`,
-              snippet: m?.snippet || m?.summary || "",
+              title:
+                getStringValue(m.title) ||
+                getStringValue(m.filename) ||
+                `Media ${id}`,
+              snippet: getStringValue(m.snippet) || getStringValue(m.summary) || "",
               meta: meta,
               raw: m
             })
           }
         }
-      } catch (e) {
+      } catch {
         // ignore
       }
     }
@@ -503,9 +542,9 @@ export const ReviewPage: React.FC<ReviewPageProps> = ({
       try {
         const cfg = await tldwClient.getConfig()
         const base = String(cfg?.serverUrl || "").replace(/\/$/, "")
-        const abs = await bgRequest<any>({
-          path: `${base}/api/v1/notes/search/?query=${encodeURIComponent(query)}` as any,
-          method: "GET" as any
+        const abs = await bgRequest<unknown>({
+          path: `${base}/api/v1/notes/search/?query=${encodeURIComponent(query)}`,
+          method: "GET"
         })
         if (Array.isArray(abs)) {
           for (const n of abs) {
@@ -519,7 +558,7 @@ export const ReviewPage: React.FC<ReviewPageProps> = ({
             })
           }
         }
-      } catch (e) {
+      } catch {
         // ignore
       }
     }
@@ -581,9 +620,9 @@ export const ReviewPage: React.FC<ReviewPageProps> = ({
 
         if (isOnline) {
           // Sample first up-to-3 pages to enrich types list
-          const first = await bgRequest<any>({
-            path: `/api/v1/media/?page=1&results_per_page=50` as any,
-            method: "GET" as any
+          const first = await bgRequest<unknown>({
+            path: `/api/v1/media/?page=1&results_per_page=50`,
+            method: "GET"
           })
           const totalPages = Math.max(
             1,
@@ -594,9 +633,9 @@ export const ReviewPage: React.FC<ReviewPageProps> = ({
             pagesToFetch.map((p) =>
               p === 1
                 ? Promise.resolve(first)
-                : bgRequest<any>({
-                    path: `/api/v1/media/?page=${p}&results_per_page=50` as any,
-                    method: "GET" as any
+                : bgRequest<unknown>({
+                    path: `/api/v1/media/?page=${p}&results_per_page=50`,
+                    method: "GET"
                   })
             )
           )
@@ -638,18 +677,22 @@ export const ReviewPage: React.FC<ReviewPageProps> = ({
     ;(async () => {
       try {
         const storage = createSafeStorage()
-        const data = (await storage
+        const data = await storage
           .get(scopedKey("review:prompts"))
-          .catch(() => null)) as any
-        if (data && typeof data === "object") {
-          if (typeof data.reviewSystemPrompt === "string")
+          .catch(() => null)
+        if (isRecord(data)) {
+          if (typeof data.reviewSystemPrompt === "string") {
             setReviewSystemPrompt(data.reviewSystemPrompt)
-          if (typeof data.reviewUserPrefix === "string")
+          }
+          if (typeof data.reviewUserPrefix === "string") {
             setReviewUserPrefix(data.reviewUserPrefix)
-          if (typeof data.summarySystemPrompt === "string")
+          }
+          if (typeof data.summarySystemPrompt === "string") {
             setSummarySystemPrompt(data.summarySystemPrompt)
-          if (typeof data.summaryUserPrefix === "string")
+          }
+          if (typeof data.summaryUserPrefix === "string") {
             setSummaryUserPrefix(data.summaryUserPrefix)
+          }
         }
       } catch {}
     })()
@@ -688,23 +731,23 @@ export const ReviewPage: React.FC<ReviewPageProps> = ({
     ;(async () => {
       try {
         const storage = createSafeStorage()
-        const saved = (await storage
+        const saved = await storage
           .get(scopedKey("review:autoReviewOnSelect"))
-          .catch(() => null)) as any
+          .catch(() => null)
         if (typeof saved === "boolean") setAutoReviewOnSelect(saved)
-        const savedPromptsOpen = (await storage
+        const savedPromptsOpen = await storage
           .get(scopedKey("review:promptsOpen"))
-          .catch(() => null)) as any
+          .catch(() => null)
         if (typeof savedPromptsOpen === "boolean")
           setPromptsOpen(savedPromptsOpen)
-        const savedFiltersOpen = (await storage
+        const savedFiltersOpen = await storage
           .get(scopedKey("review:filtersOpen"))
-          .catch(() => null)) as any
+          .catch(() => null)
         if (typeof savedFiltersOpen === "boolean")
           setFiltersOpen(savedFiltersOpen)
-        const savedMode = (await storage
+        const savedMode = await storage
           .get(scopedKey("review:defaultMode"))
-          .catch(() => null)) as any
+          .catch(() => null)
         if (savedMode === "review" || savedMode === "summary")
           setAnalysisMode(savedMode)
       } catch {}
@@ -753,7 +796,7 @@ export const ReviewPage: React.FC<ReviewPageProps> = ({
       )
     }
     modeToastPrev.current = analysisMode
-  }, [analysisMode, scopedKey, allowGeneration])
+  }, [analysisMode, scopedKey, allowGeneration, message, t])
 
   const loadKeywordSuggestions = React.useCallback(
     async (text: string) => {
@@ -782,53 +825,12 @@ export const ReviewPage: React.FC<ReviewPageProps> = ({
     [preloadedKeywords]
   )
 
-  // Generate analysis text and return it (shared by actions)
-  const generateAnalysis = async (
-    mode: "review" | "summary"
-  ): Promise<string | null> => {
-    if (!selected) return null
-    const detail = await fetchSelectedDetails(selected)
-    const content = contentFromDetail(detail)
-    if (!content) return null
-    const system = mode === "review" ? reviewSystemPrompt : summarySystemPrompt
-    const userPrefix = mode === "review" ? reviewUserPrefix : summaryUserPrefix
-    setLastPrompt(system)
-    const modelId = selectedModel || "default"
-    const normalizedModel = modelId.replace(/^tldw:/, "").trim() || modelId
-    const resolvedApiProvider = await resolveApiProviderForModel({
-      modelId
-    })
-    const body = {
-      model: normalizedModel,
-      ...(resolvedApiProvider ? { api_provider: resolvedApiProvider } : {}),
-      stream: false,
-      messages: [
-        { role: "system", content: system },
-        {
-          role: "user",
-          content: `${userPrefix ? userPrefix + "\n\n" : ""}${content}`
-        }
-      ]
-    }
-    const resp = await bgRequest<any>({
-      path: "/api/v1/chat/completions",
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body
-    })
-    const text =
-      resp?.choices?.[0]?.message?.content ||
-      resp?.content ||
-      (typeof resp === "string" ? resp : "")
-    return String(text || "")
-  }
-
   const fetchSelectedDetails = React.useCallback(async (item: ResultItem) => {
     try {
       if (item.kind === "media") {
-        const detail = await bgRequest<any>({
-          path: `/api/v1/media/${item.id}` as any,
-          method: "GET" as any
+        const detail = await bgRequest<unknown>({
+          path: `/api/v1/media/${item.id}`,
+          method: "GET"
         })
         return detail
       }
@@ -840,17 +842,17 @@ export const ReviewPage: React.FC<ReviewPageProps> = ({
     return null
   }, [])
 
-  const contentFromDetail = (detail: any): string => {
+  const contentFromDetail = React.useCallback((detail: unknown): string => {
     if (!detail) return ""
     // Helper: return first non-empty string from provided values
-    const firstString = (...vals: any[]): string => {
+    const firstString = (...vals: unknown[]): string => {
       for (const v of vals) {
         if (typeof v === "string" && v.trim().length > 0) return v
       }
       return ""
     }
     if (typeof detail === "string") return detail
-    if (typeof detail !== "object") return ""
+    if (!isRecord(detail)) return ""
 
     // Common fields on root and nested structures
     const fromRoot = firstString(
@@ -888,21 +890,81 @@ export const ReviewPage: React.FC<ReviewPageProps> = ({
 
     // As a last resort, try common nested objects directly
     for (const key of ["content", "text", "raw_text", "rawText", "summary"]) {
-      const v = (detail as any)[key]
+      const v = detail[key]
       if (v && typeof v === "object") {
         const nested = firstString(
-          v.content,
-          v.text,
-          v.raw_text,
-          v.rawText,
-          v.summary
+          (v as Record<string, unknown>).content,
+          (v as Record<string, unknown>).text,
+          (v as Record<string, unknown>).raw_text,
+          (v as Record<string, unknown>).rawText,
+          (v as Record<string, unknown>).summary
         )
         if (nested) return nested
       }
     }
 
     return ""
-  }
+  }, [])
+
+  // Generate analysis text and return it (shared by actions)
+  const generateAnalysis = React.useCallback(
+    async (mode: "review" | "summary"): Promise<string | null> => {
+      if (!selected) return null
+      const detail = await fetchSelectedDetails(selected)
+      const content = contentFromDetail(detail)
+      if (!content) return null
+      const system = mode === "review" ? reviewSystemPrompt : summarySystemPrompt
+      const userPrefix = mode === "review" ? reviewUserPrefix : summaryUserPrefix
+      setLastPrompt(system)
+      const modelId = selectedModel || "default"
+      const normalizedModel = modelId.replace(/^tldw:/, "").trim() || modelId
+      const resolvedApiProvider = await resolveApiProviderForModel({
+        modelId
+      })
+      const body = {
+        model: normalizedModel,
+        ...(resolvedApiProvider ? { api_provider: resolvedApiProvider } : {}),
+        stream: false,
+        messages: [
+          { role: "system", content: system },
+          {
+            role: "user",
+            content: `${userPrefix ? userPrefix + "\n\n" : ""}${content}`
+          }
+        ]
+      }
+      const resp = await bgRequest<unknown>({
+        path: "/api/v1/chat/completions",
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body
+      })
+      const responseRecord = isRecord(resp) ? resp : {}
+      const choices = Array.isArray(responseRecord.choices)
+        ? responseRecord.choices
+        : []
+      const firstChoice = choices[0]
+      const messageContent =
+        isRecord(firstChoice) && isRecord(firstChoice.message)
+          ? firstChoice.message.content
+          : null
+      const text =
+        getStringValue(messageContent) ||
+        getStringValue(responseRecord.content) ||
+        (typeof resp === "string" ? resp : "")
+      return String(text || "")
+    },
+    [
+      selected,
+      fetchSelectedDetails,
+      contentFromDetail,
+      reviewSystemPrompt,
+      summarySystemPrompt,
+      reviewUserPrefix,
+      summaryUserPrefix,
+      selectedModel
+    ]
+  )
 
   // Load selected item content for display
   React.useEffect(() => {
@@ -922,7 +984,7 @@ export const ReviewPage: React.FC<ReviewPageProps> = ({
         setSelectedDetail(null)
       }
     })()
-  }, [selected])
+  }, [selected, fetchSelectedDetails, contentFromDetail])
 
   const loadExistingAnalyses = React.useCallback(async (item: ResultItem) => {
     try {
@@ -932,18 +994,18 @@ export const ReviewPage: React.FC<ReviewPageProps> = ({
         return
       }
       // Fetch media versions (holds prompt/analysis per version)
-      const versions = await bgRequest<any[]>({
-        path: `/api/v1/media/${item.id}/versions?include_content=false&limit=50&page=1` as any,
-        method: "GET" as any
+      const versions = await bgRequest<unknown[]>({
+        path: `/api/v1/media/${item.id}/versions?include_content=false&limit=50&page=1`,
+        method: "GET"
       })
       const arr = Array.isArray(versions) ? versions : []
       setExistingAnalyses(arr)
       // Restore previously selected version index if present
       try {
         const storage = createSafeStorage()
-        const idx = (await storage
+        const idx = await storage
           .get(scopedKey(`review:selectedVersion:${item.id}`))
-          .catch(() => null)) as any
+          .catch(() => null)
         const sel =
           typeof idx === "number" && idx >= 0 && idx < arr.length
             ? idx
@@ -958,7 +1020,7 @@ export const ReviewPage: React.FC<ReviewPageProps> = ({
       setExistingAnalyses([])
       setSelectedExistingIndex(-1)
     }
-  }, [])
+  }, [scopedKey])
 
   // Persist selected version index per media
   React.useEffect(() => {
@@ -980,9 +1042,9 @@ export const ReviewPage: React.FC<ReviewPageProps> = ({
       try {
         if (!selected || selected.kind !== "media") return
         const storage = createSafeStorage()
-        const saved = (await storage
+        const saved = await storage
           .get(scopedKey(`review:withAnalysisOnly:${selected.id}`))
-          .catch(() => null)) as any
+          .catch(() => null)
         if (typeof saved === "boolean") setOnlyWithAnalysis(saved)
       } catch {}
     })()
@@ -1002,17 +1064,26 @@ export const ReviewPage: React.FC<ReviewPageProps> = ({
   }, [onlyWithAnalysis, selected, scopedKey])
 
   // Helpers to read version analysis/timestamp/label
-  const getVersionAnalysis = (v: any): string =>
-    String(v?.analysis_content || v?.analysis || "")
-  const getVersionPrompt = (v: any): string => String(v?.prompt || "")
-  const getVersionNumber = (v: any): number | undefined =>
-    typeof v?.version_number === "number"
-      ? v.version_number
-      : typeof v?.version === "number"
-        ? v.version
-        : undefined
-  const getVersionTimestamp = (v: any): string =>
-    String(v?.created_at || v?.updated_at || v?.timestamp || "")
+  const getVersionAnalysis = (v: unknown): string => {
+    if (!isRecord(v)) return ""
+    return String(v.analysis_content || v.analysis || "")
+  }
+  const getVersionPrompt = (v: unknown): string => {
+    if (!isRecord(v)) return ""
+    return String(v.prompt || "")
+  }
+  const getVersionNumber = (v: unknown): number | undefined => {
+    if (!isRecord(v)) return undefined
+    const byNumber = v.version_number
+    const byLegacy = v.version
+    if (typeof byNumber === "number") return byNumber
+    if (typeof byLegacy === "number") return byLegacy
+    return undefined
+  }
+  const getVersionTimestamp = (v: unknown): string => {
+    if (!isRecord(v)) return ""
+    return String(v.created_at || v.updated_at || v.timestamp || "")
+  }
 
   // Visible versions given filter
   const displayedVersionIndices = React.useMemo(() => {
@@ -1023,11 +1094,6 @@ export const ReviewPage: React.FC<ReviewPageProps> = ({
       )
       .map(({ i }) => i)
   }, [existingAnalyses, onlyWithAnalysis])
-
-  const displayedVersions = React.useMemo(
-    () => displayedVersionIndices.map((i) => existingAnalyses[i]),
-    [displayedVersionIndices, existingAnalyses]
-  )
 
   const selectedDisplayPos = React.useMemo(
     () =>
@@ -1096,9 +1162,9 @@ export const ReviewPage: React.FC<ReviewPageProps> = ({
   const fetchVersionWithContent = React.useCallback(
     async (mediaId: string | number, versionNumber: number) => {
       try {
-        const data = await bgRequest<any>({
-          path: `/api/v1/media/${mediaId}/versions/${versionNumber}?include_content=true` as any,
-          method: "GET" as any
+        const data = await bgRequest<unknown>({
+          path: `/api/v1/media/${mediaId}/versions/${versionNumber}?include_content=true`,
+          method: "GET"
         })
         return data
       } catch {
@@ -1159,9 +1225,9 @@ export const ReviewPage: React.FC<ReviewPageProps> = ({
           return
         }
         const storage = createSafeStorage()
-        const saved = (await storage
+        const saved = await storage
           .get(scopedKey(`review:expandedPrompts:${selected.id}`))
-          .catch(() => null)) as any
+          .catch(() => null)
         if (Array.isArray(saved)) setExpandedPrompts(new Set(saved.map(String)))
       } catch {}
     })()
@@ -1198,9 +1264,12 @@ export const ReviewPage: React.FC<ReviewPageProps> = ({
         return
       }
       setAnalysis(String(text || ""))
-    } catch (e: any) {
+    } catch (e: unknown) {
       message.error(
-        e?.message || t("review:reviewPage.analysisFailed", "Analysis failed")
+        getErrorMessage(
+          e,
+          t("review:reviewPage.analysisFailed", "Analysis failed")
+        )
       )
     } finally {
       setLoadingAnalysis(false)
@@ -1228,9 +1297,9 @@ export const ReviewPage: React.FC<ReviewPageProps> = ({
         return
       }
       setAnalysis(text)
-      await bgRequest<any>({
-        path: `/api/v1/media/${selected.id}` as any,
-        method: "PUT" as any,
+      await bgRequest<unknown>({
+        path: `/api/v1/media/${selected.id}`,
+        method: "PUT",
         headers: { "Content-Type": "application/json" },
         body: { analysis: text, ...(lastPrompt ? { prompt: lastPrompt } : {}) }
       })
@@ -1238,10 +1307,12 @@ export const ReviewPage: React.FC<ReviewPageProps> = ({
         t("review:reviewPage.analysisAttached", "Analysis attached to media")
       )
       await loadExistingAnalyses(selected)
-    } catch (e: any) {
+    } catch (e: unknown) {
       message.error(
-        e?.message ||
+        getErrorMessage(
+          e,
           t("review:reviewPage.analyzeSaveFailed", "Failed to analyze & save")
+        )
       )
     } finally {
       setLoadingAnalysis(false)
@@ -1259,7 +1330,7 @@ export const ReviewPage: React.FC<ReviewPageProps> = ({
         }
       } catch {}
     })()
-  }, [autoReviewOnSelect, selected, allowGeneration])
+  }, [autoReviewOnSelect, selected, allowGeneration, generateAnalysis])
 
   // Preload keyword suggestions (top list)
   React.useEffect(() => {
@@ -1292,7 +1363,7 @@ export const ReviewPage: React.FC<ReviewPageProps> = ({
           media_id: selected.kind === "media" ? selected.id : undefined
         }
       }
-      await bgRequest<any>({
+      await bgRequest<unknown>({
         path: "/api/v1/notes/",
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -1300,9 +1371,9 @@ export const ReviewPage: React.FC<ReviewPageProps> = ({
       })
       message.success(t("review:reviewPage.savedToNotes", "Saved to notes"))
       if (selected.kind === "media") await loadExistingAnalyses(selected)
-    } catch (e: any) {
+    } catch (e: unknown) {
       message.error(
-        e?.message || t("review:reviewPage.saveFailed", "Save failed")
+        getErrorMessage(e, t("review:reviewPage.saveFailed", "Save failed"))
       )
     }
   }
@@ -1321,9 +1392,9 @@ export const ReviewPage: React.FC<ReviewPageProps> = ({
       return
     }
     try {
-      await bgRequest<any>({
-        path: `/api/v1/media/${selected.id}` as any,
-        method: "PUT" as any,
+      await bgRequest<unknown>({
+        path: `/api/v1/media/${selected.id}`,
+        method: "PUT",
         headers: { "Content-Type": "application/json" },
         body: {
           analysis: analysis,
@@ -1334,10 +1405,12 @@ export const ReviewPage: React.FC<ReviewPageProps> = ({
       message.success(
         t("review:reviewPage.analysisAttached", "Analysis attached to media")
       )
-    } catch (e: any) {
+    } catch (e: unknown) {
       message.error(
-        e?.message ||
+        getErrorMessage(
+          e,
           t("review:reviewPage.saveToMediaFailed", "Failed to save to media")
+        )
       )
     }
   }
@@ -1371,7 +1444,7 @@ export const ReviewPage: React.FC<ReviewPageProps> = ({
           media_id: selected.kind === "media" ? selected.id : undefined
         }
       }
-      await bgRequest<any>({
+      await bgRequest<unknown>({
         path: "/api/v1/notes/",
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -1381,10 +1454,12 @@ export const ReviewPage: React.FC<ReviewPageProps> = ({
         t("review:reviewPage.analyze.saved", "Analysis saved as note")
       )
       if (selected.kind === "media") await loadExistingAnalyses(selected)
-    } catch (e: any) {
+    } catch (e: unknown) {
       message.error(
-        e?.message ||
+        getErrorMessage(
+          e,
           t("review:reviewPage.analyze.failed", "Failed to analyze & save note")
+        )
       )
     } finally {
       setLoadingAnalysis(false)
@@ -1739,7 +1814,7 @@ export const ReviewPage: React.FC<ReviewPageProps> = ({
                     setPage(1)
                     refetch()
                   }}
-                  icon={(<SearchIcon className="w-4 h-4" />) as any}>
+                  icon={<SearchIcon className="w-4 h-4" />}>
                   {t("review:reviewPage.search", "Search")}
                 </Button>
               </div>
@@ -2098,7 +2173,7 @@ export const ReviewPage: React.FC<ReviewPageProps> = ({
                     pageSize={pageSize}
                     total={mediaTotal}
                     showSizeChanger
-                    pageSizeOptions={[10, 20, 50, 100] as any}
+                    pageSizeOptions={[10, 20, 50, 100]}
                     onChange={(p, ps) => {
                       setPage(p)
                       setPageSize(ps)
@@ -2282,7 +2357,7 @@ export const ReviewPage: React.FC<ReviewPageProps> = ({
                               ) as string
                             }>
                             <Button
-                              icon={(<SendIcon className="w-4 h-4" />) as any}
+                              icon={<SendIcon className="w-4 h-4" />}
                               onClick={() => {
                                 const title =
                                   selected.title || String(selected.id)
@@ -2313,7 +2388,7 @@ export const ReviewPage: React.FC<ReviewPageProps> = ({
                                   // ignore storage errors
                                 }
                                 setChatMode("normal")
-                                setSelectedKnowledge(null as any)
+                                setSelectedKnowledge(null)
                                 setRagMediaIds(null)
                                 navigate("/")
                                 message.success(
@@ -2348,7 +2423,7 @@ export const ReviewPage: React.FC<ReviewPageProps> = ({
                                   )
                                   return
                                 }
-                                setSelectedKnowledge(null as any)
+                                setSelectedKnowledge(null)
                                 setRagMediaIds([idNum])
                                 setChatMode("rag")
                                 navigate("/")
@@ -2386,9 +2461,7 @@ export const ReviewPage: React.FC<ReviewPageProps> = ({
                               ) as string
                             }>
                             <Button
-                              icon={
-                                (<SparklesIcon className="w-4 h-4" />) as any
-                              }
+                              icon={<SparklesIcon className="w-4 h-4" />}
                               onClick={() => runOneOff("review")}
                               loading={loadingAnalysis}>
                               {t("review:reviewPage.review", "Get review")}
@@ -2402,9 +2475,7 @@ export const ReviewPage: React.FC<ReviewPageProps> = ({
                               ) as string
                             }>
                             <Button
-                              icon={
-                                (<FileTextIcon className="w-4 h-4" />) as any
-                              }
+                              icon={<FileTextIcon className="w-4 h-4" />}
                               onClick={() => runOneOff("summary")}
                               loading={loadingAnalysis}>
                               {t("review:reviewPage.summary", "Get summary")}
@@ -2476,9 +2547,7 @@ export const ReviewPage: React.FC<ReviewPageProps> = ({
                             ) as string
                           }>
                           <Button
-                            icon={
-                              (<PaperclipIcon className="w-4 h-4" />) as any
-                            }
+                            icon={<PaperclipIcon className="w-4 h-4" />}
                             onClick={saveAnalysisToMedia}
                             disabled={!analysis.trim()}>
                             {t(
@@ -2496,7 +2565,7 @@ export const ReviewPage: React.FC<ReviewPageProps> = ({
                           ) as string
                         }>
                         <Button
-                          icon={(<SaveIcon className="w-4 h-4" />) as any}
+                          icon={<SaveIcon className="w-4 h-4" />}
                           onClick={saveAnalysis}
                           disabled={!analysis.trim()}>
                           {t("review:reviewPage.saveAnalysis", "Save to notes")}
@@ -2560,9 +2629,9 @@ export const ReviewPage: React.FC<ReviewPageProps> = ({
                                     : summarySystemPrompt
                                 const prompt = lastPrompt || sys
                                 try {
-                                  await bgRequest<any>({
-                                    path: `/api/v1/media/${selected.id}/versions` as any,
-                                    method: "POST" as any,
+                                  await bgRequest<unknown>({
+                                    path: `/api/v1/media/${selected.id}/versions`,
+                                    method: "POST",
                                     headers: {
                                       "Content-Type": "application/json"
                                     },
@@ -2579,13 +2648,15 @@ export const ReviewPage: React.FC<ReviewPageProps> = ({
                                     )
                                   )
                                   await loadExistingAnalyses(selected)
-                                } catch (e: any) {
+                                } catch (e: unknown) {
                                   message.error(
-                                    e?.message ||
+                                    getErrorMessage(
+                                      e,
                                       t(
                                         "review:reviewPage.createVersionFailed",
                                         "Create version failed"
                                       )
+                                    )
                                   )
                                 }
                               } else if (key === "duplicateVersion") {
@@ -2633,9 +2704,9 @@ export const ReviewPage: React.FC<ReviewPageProps> = ({
                                     )
                                     return
                                   }
-                                  await bgRequest<any>({
-                                    path: `/api/v1/media/${selected.id}/versions` as any,
-                                    method: "POST" as any,
+                                  await bgRequest<unknown>({
+                                    path: `/api/v1/media/${selected.id}/versions`,
+                                    method: "POST",
                                     headers: {
                                       "Content-Type": "application/json"
                                     },
@@ -2652,13 +2723,15 @@ export const ReviewPage: React.FC<ReviewPageProps> = ({
                                     )
                                   )
                                   await loadExistingAnalyses(selected)
-                                } catch (e: any) {
+                                } catch (e: unknown) {
                                   message.error(
-                                    e?.message ||
+                                    getErrorMessage(
+                                      e,
                                       t(
                                         "review:reviewPage.cloneFailed",
                                         "Clone failed"
                                       )
+                                    )
                                   )
                                 }
                               } else if (key === "restoreVersion") {
@@ -2707,9 +2780,9 @@ export const ReviewPage: React.FC<ReviewPageProps> = ({
                                 })
                                 if (!ok) return
                                 try {
-                                  await bgRequest<any>({
-                                    path: `/api/v1/media/${selected.id}/versions/rollback` as any,
-                                    method: "POST" as any,
+                                  await bgRequest<unknown>({
+                                    path: `/api/v1/media/${selected.id}/versions/rollback`,
+                                    method: "POST",
                                     headers: {
                                       "Content-Type": "application/json"
                                     },
@@ -2722,13 +2795,15 @@ export const ReviewPage: React.FC<ReviewPageProps> = ({
                                     )
                                   )
                                   await loadExistingAnalyses(selected)
-                                } catch (e: any) {
+                                } catch (e: unknown) {
                                   message.error(
-                                    e?.message ||
+                                    getErrorMessage(
+                                      e,
                                       t(
                                         "review:reviewPage.restoreFailed",
                                         "Restore failed"
                                       )
+                                    )
                                   )
                                 }
                               }
@@ -3048,7 +3123,7 @@ export const ReviewPage: React.FC<ReviewPageProps> = ({
                               )
                             }
                           }}
-                          icon={(<CopyIcon className="w-4 h-4" />) as any}
+                          icon={<CopyIcon className="w-4 h-4" />}
                         />
                       </Tooltip>
                       <Button
@@ -3160,7 +3235,7 @@ export const ReviewPage: React.FC<ReviewPageProps> = ({
                               )
                             }
                           }}
-                          icon={(<CopyIcon className="w-4 h-4" />) as any}
+                          icon={<CopyIcon className="w-4 h-4" />}
                         />
                       </Tooltip>
                       <Tooltip
@@ -3201,7 +3276,7 @@ export const ReviewPage: React.FC<ReviewPageProps> = ({
                               )
                             }
                           }}
-                          icon={(<SendIcon className="w-4 h-4" />) as any}
+                          icon={<SendIcon className="w-4 h-4" />}
                         />
                       </Tooltip>
                     </div>
@@ -3497,9 +3572,9 @@ export const ReviewPage: React.FC<ReviewPageProps> = ({
                                       )
                                       return
                                     }
-                                    await bgRequest<any>({
-                                      path: `/api/v1/media/${selected?.id}/versions/${vv}` as any,
-                                      method: "DELETE" as any
+                                    await bgRequest<unknown>({
+                                      path: `/api/v1/media/${selected?.id}/versions/${vv}`,
+                                      method: "DELETE"
                                     })
                                     notification.open({
                                       message: t(
@@ -3517,9 +3592,9 @@ export const ReviewPage: React.FC<ReviewPageProps> = ({
                                           size="small"
                                           onClick={async () => {
                                             try {
-                                              await bgRequest<any>({
-                                                path: `/api/v1/media/${selected?.id}/versions/rollback` as any,
-                                                method: "POST" as any,
+                                              await bgRequest<unknown>({
+                                                path: `/api/v1/media/${selected?.id}/versions/rollback`,
+                                                method: "POST",
                                                 headers: {
                                                   "Content-Type":
                                                     "application/json"
@@ -3536,13 +3611,15 @@ export const ReviewPage: React.FC<ReviewPageProps> = ({
                                                 await loadExistingAnalyses(
                                                   selected
                                                 )
-                                            } catch (e: any) {
+                                            } catch (e: unknown) {
                                               message.error(
-                                                e?.message ||
+                                                getErrorMessage(
+                                                  e,
                                                   t(
                                                     "review:reviewPage.undoFailed",
                                                     "Undo failed"
                                                   )
+                                                )
                                               )
                                             }
                                           }}>
@@ -3556,13 +3633,15 @@ export const ReviewPage: React.FC<ReviewPageProps> = ({
                                     })
                                     if (selected)
                                       await loadExistingAnalyses(selected)
-                                  } catch (e: any) {
+                                  } catch (e: unknown) {
                                     message.error(
-                                      e?.message ||
+                                      getErrorMessage(
+                                        e,
                                         t(
                                           "review:reviewPage.deleteFailed",
                                           "Delete failed"
                                         )
+                                      )
                                     )
                                   }
                                 }}>

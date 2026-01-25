@@ -740,7 +740,7 @@ export const useChatActions = ({
 
       if (signal?.aborted) {
         const abortError = new Error("AbortError")
-        ;(abortError as any).name = "AbortError"
+        abortError.name = "AbortError"
         throw abortError
       }
 
@@ -763,7 +763,7 @@ export const useChatActions = ({
           content: finalContent
         })) as { id?: string | number; version?: number } | null
         setMessages((prev) =>
-          ((prev as any[]).map((m) => {
+          prev.map((m) => {
             if (m.id !== generateMessageId) return m
             const serverMessageId =
               createdAsst?.id != null ? String(createdAsst.id) : undefined
@@ -771,7 +771,7 @@ export const useChatActions = ({
               serverMessageId,
               serverMessageVersion: createdAsst?.version
             })
-          }) as Message[])
+          })
         )
       } catch (e) {
         console.error("Failed to persist assistant message to server:", e)
@@ -1103,8 +1103,8 @@ export const useChatActions = ({
     try {
       if (isContinue) {
         await continueChatMode(
-          chatHistory || messages,
-          memory || history,
+          baseMessages,
+          baseHistory,
           signal,
           chatModeParams
         )
@@ -1116,8 +1116,8 @@ export const useChatActions = ({
           message,
           image,
           isRegenerate,
-          chatHistory || messages,
-          memory || history,
+          baseMessages,
+          baseHistory,
           signal,
           contextFiles,
           chatModeParamsWithRegen
@@ -1143,8 +1143,8 @@ export const useChatActions = ({
           image,
           processingTabs,
           isRegenerate,
-          chatHistory || messages,
-          memory || history,
+          baseMessages,
+          baseHistory,
           signal,
           chatModeParamsWithRegen
         )
@@ -1156,8 +1156,8 @@ export const useChatActions = ({
           message,
           image,
           isRegenerate,
-          chatHistory || messages,
-          memory || history,
+          baseMessages,
+          baseHistory,
           signal,
           chatModeParamsWithRegen
         )
@@ -1167,8 +1167,6 @@ export const useChatActions = ({
           ...chatModeParamsWithRegen,
           uploadedFiles: uploadedFiles
         }
-        const baseMessages = chatHistory || messages
-        const baseHistory = memory || history
 
         if (!compareModeActive) {
           const resolvedSelectedCharacter = await resolveSelectedCharacter()

@@ -1,5 +1,5 @@
 import React from "react"
-import { Button, Input, Select, Space, Switch, Tag } from "antd"
+import { Button, Input, Select, Switch, Tag } from "antd"
 import { Plus, Trash2 } from "lucide-react"
 import { useTranslation } from "react-i18next"
 import type { FilterAction, FilterType, WatchlistFilter } from "@/types/watchlists"

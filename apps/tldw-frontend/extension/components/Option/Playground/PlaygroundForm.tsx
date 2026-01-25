@@ -16,7 +16,6 @@ import {
   Modal,
   Button
 } from "antd"
-import { Image } from "antd"
 import { useWebUI } from "~/store/webui"
 import { defaultEmbeddingModelForRag } from "~/services/tldw-server"
 import {
@@ -25,7 +24,6 @@ import {
   GitBranch,
   ImageIcon,
   MicIcon,
-  Hash,
   SlidersHorizontal,
   StopCircleIcon,
   X,
@@ -55,7 +53,6 @@ import { PASTED_TEXT_CHAR_LIMIT } from "@/utils/constant"
 import { isFireFoxPrivateMode } from "@/utils/is-private-mode"
 import { CurrentChatModelSettings } from "@/components/Common/Settings/CurrentChatModelSettings"
 import { ActorPopout } from "@/components/Common/Settings/ActorPopout"
-import { PromptSelect } from "@/components/Common/PromptSelect"
 import {
   PromptInsertModal,
   type PromptInsertItem
@@ -68,7 +65,7 @@ import { useServerCapabilities } from "@/hooks/useServerCapabilities"
 import { useTldwAudioStatus } from "@/hooks/useTldwAudioStatus"
 import { useMcpTools } from "@/hooks/useMcpTools"
 import { tldwChat, tldwModels, type ChatMessage } from "@/services/tldw"
-import { tldwClient, type ConversationState } from "@/services/tldw/TldwApiClient"
+import { tldwClient } from "@/services/tldw/TldwApiClient"
 import { CharacterSelect } from "@/components/Common/CharacterSelect"
 import { ProviderIcons } from "@/components/Common/ProviderIcon"
 import type { Character } from "@/types/character"
@@ -89,9 +86,10 @@ import { clearSetting, getSetting } from "@/services/settings/registry"
 import { DISCUSS_MEDIA_PROMPT_SETTING } from "@/services/settings/ui-settings"
 import { Button as TldwButton } from "@/components/Common/Button"
 import { useSimpleForm } from "@/hooks/useSimpleForm"
+import type { TFunction } from "i18next"
 
 const getPersistenceModeLabel = (
-  t: (...args: any[]) => any,
+  t: TFunction,
   temporaryChat: boolean,
   isConnectionReady: boolean,
   serverChatId: string | null
@@ -118,6 +116,28 @@ type CollapsedRange = {
   start: number
   end: number
 }
+
+type ComposerModel = {
+  model: string
+  nickname?: string
+  provider?: string
+  context_length?: number
+  contextLength?: number
+  details?: Record<string, unknown>
+}
+
+type DiscussMediaPayload = {
+  title?: string
+  mediaId?: string
+  url?: string
+  content?: string
+}
+
+const isRecord = (value: unknown): value is Record<string, unknown> =>
+  typeof value === "object" && value !== null && !Array.isArray(value)
+
+const getErrorMessage = (error: unknown): string =>
+  error instanceof Error ? error.message : typeof error === "string" ? error : ""
 
 type Props = {
   droppedFiles: File[]
@@ -158,7 +178,6 @@ export const PlaygroundForm = ({ droppedFiles }: Props) => {
     textareaRef,
     setSelectedQuickPrompt,
     selectedSystemPrompt,
-    setSelectedSystemPrompt,
     temporaryChat,
     setTemporaryChat,
     clearChat,
@@ -308,7 +327,7 @@ export const PlaygroundForm = ({ droppedFiles }: Props) => {
     handleMentionsOpen
   } = useTabMentions(textareaRef)
 
-  const { data: composerModels } = useQuery({
+  const { data: composerModels } = useQuery<ComposerModel[]>({
     queryKey: ["playground:chatModels"],
     queryFn: () => fetchChatModels({ returnEmpty: true }),
     enabled: true
@@ -347,7 +366,7 @@ export const PlaygroundForm = ({ droppedFiles }: Props) => {
         "API / model"
       )
     }
-    const models = (composerModels as any[]) || []
+    const models = Array.isArray(composerModels) ? composerModels : []
     const match = models.find((m) => m.model === selectedModel)
     return (
       match?.nickname ||
@@ -358,7 +377,7 @@ export const PlaygroundForm = ({ droppedFiles }: Props) => {
 
   const selectedModelMeta = React.useMemo(() => {
     if (!selectedModel) return null
-    const models = (composerModels as any[]) || []
+    const models = Array.isArray(composerModels) ? composerModels : []
     return models.find((model) => model.model === selectedModel) || null
   }, [composerModels, selectedModel])
 
@@ -421,7 +440,7 @@ export const PlaygroundForm = ({ droppedFiles }: Props) => {
 
   const compareModelLabelById = React.useMemo(() => {
     const map = new Map<string, string>()
-    const models = (composerModels as any[]) || []
+    const models = Array.isArray(composerModels) ? composerModels : []
     models.forEach((model) => {
       const label = model.nickname || model.model
       if (model.model && !map.has(model.model)) {
@@ -463,7 +482,7 @@ export const PlaygroundForm = ({ droppedFiles }: Props) => {
   }, [compareModeActive, compareSelectedModels.length, t])
 
   const compareModelOptions = React.useMemo(() => {
-    const models = (composerModels as any[]) || []
+    const models = Array.isArray(composerModels) ? composerModels : []
     return models.map((model) => ({
       value: model.model,
       label: (
@@ -479,8 +498,8 @@ export const PlaygroundForm = ({ droppedFiles }: Props) => {
 
   // Grouped menu items for quick model selection dropdown
   const modelDropdownItems = React.useMemo(() => {
-    const models = (composerModels as any[]) || []
-    const groups = new Map<string, any[]>()
+    const models = Array.isArray(composerModels) ? composerModels : []
+    const groups = new Map<string, Array<{ key: string; label: React.ReactNode; onClick: () => void }>>()
 
     for (const model of models) {
       const groupKey = model.provider?.toLowerCase() || "other"
@@ -622,7 +641,7 @@ export const PlaygroundForm = ({ droppedFiles }: Props) => {
         el.blur()
       }
     }
-  }, [])
+  }, [textareaRef])
 
   const form = useSimpleForm({
     initialValues: {
@@ -843,7 +862,7 @@ export const PlaygroundForm = ({ droppedFiles }: Props) => {
         })
       }
     },
-    [collapseLargeMessage, form.setFieldValue]
+    [collapseLargeMessage, form]
   )
 
   const collapsedDisplayMeta = React.useMemo(() => {
@@ -885,15 +904,6 @@ export const PlaygroundForm = ({ droppedFiles }: Props) => {
     setValueWithMetadata: restoreMessageValue
   })
 
-  const numberFormatter = React.useMemo(() => new Intl.NumberFormat(), [])
-  const formatNumber = React.useCallback(
-    (value: number | null) => {
-      if (typeof value !== "number" || !Number.isFinite(value)) return "—"
-      return numberFormatter.format(Math.round(value))
-    },
-    [numberFormatter]
-  )
-
   const estimateTokensForText = React.useCallback((text: string) => {
     const trimmed = text.trim()
     if (!trimmed) return 0
@@ -931,54 +941,6 @@ export const PlaygroundForm = ({ droppedFiles }: Props) => {
     conversationTokenCountRef.current = count
     return count
   }, [isSending, messages, systemPrompt])
-
-  const promptTokenLabel = React.useMemo(
-    () =>
-      `${t("playground:tokens.prompt", "prompt")} ${formatNumber(draftTokenCount)}`,
-    [draftTokenCount, formatNumber, t]
-  )
-  const convoTokenLabel = React.useMemo(
-    () =>
-      `${t("playground:tokens.total", "tokens")} ${formatNumber(conversationTokenCount)}`,
-    [conversationTokenCount, formatNumber, t]
-  )
-  const contextTokenLabel = React.useMemo(
-    () => `${formatNumber(resolvedMaxContext)} ctx`,
-    [formatNumber, resolvedMaxContext]
-  )
-  const tokenUsageLabel = React.useMemo(
-    () => `${promptTokenLabel} · ${convoTokenLabel} / ${contextTokenLabel}`,
-    [contextTokenLabel, convoTokenLabel, promptTokenLabel]
-  )
-  const tokenUsageCompactLabel = React.useMemo(() => {
-    const prompt = formatNumber(draftTokenCount)
-    const convo = formatNumber(conversationTokenCount)
-    const ctx = formatNumber(resolvedMaxContext)
-    return `${prompt} · ${convo}/${ctx} ctx`
-  }, [conversationTokenCount, draftTokenCount, formatNumber, resolvedMaxContext])
-  const tokenUsageDisplay = isProMode
-    ? tokenUsageLabel
-    : tokenUsageCompactLabel
-  const contextLabel = React.useMemo(
-    () =>
-      t(
-        "common:modelSettings.form.numCtx.label",
-        "Context Window Size (num_ctx)"
-      ),
-    [t]
-  )
-  const tokenUsageTooltip = React.useMemo(
-    () =>
-      `${apiModelLabel} · ${promptTokenLabel} · ${convoTokenLabel} · ${contextLabel} ${formatNumber(resolvedMaxContext)}`,
-    [
-      apiModelLabel,
-      contextLabel,
-      convoTokenLabel,
-      formatNumber,
-      promptTokenLabel,
-      resolvedMaxContext
-    ]
-  )
 
   const showModelLabel = !isProMode
   const modelUsageBadge = (
@@ -1073,16 +1035,16 @@ export const PlaygroundForm = ({ droppedFiles }: Props) => {
 
   React.useEffect(() => {
     const handler = (event: Event) => {
-      const detail = (event as CustomEvent).detail as any
+      const detail = (event as CustomEvent<DiscussMediaPayload>).detail
       if (!detail) return
       const hint = buildDiscussMediaHint(detail || {})
       if (!hint) return
       setMessageValue(hint, { collapseLarge: true, forceCollapse: true })
       textAreaFocus()
     }
-    window.addEventListener("tldw:discuss-media", handler as any)
+    window.addEventListener("tldw:discuss-media", handler)
     return () => {
-      window.removeEventListener("tldw:discuss-media", handler as any)
+      window.removeEventListener("tldw:discuss-media", handler)
     }
   }, [setMessageValue, textAreaFocus])
 
@@ -1131,7 +1093,7 @@ export const PlaygroundForm = ({ droppedFiles }: Props) => {
         }
       }
     },
-    [form, handleFileUpload, otherUnsupportedTypes, toBase64]
+    [form, handleFileUpload]
   )
 
   const onInputChange = React.useCallback(
@@ -1157,7 +1119,7 @@ export const PlaygroundForm = ({ droppedFiles }: Props) => {
         }
       }
     },
-    [form, handleFileUpload, onFileInputChange, otherUnsupportedTypes, toBase64]
+    [form, handleFileUpload, onFileInputChange]
   )
 
   const syncCollapsedCaret = React.useCallback(
@@ -1231,6 +1193,7 @@ export const PlaygroundForm = ({ droppedFiles }: Props) => {
       form.values.message,
       getDisplayCaretFromMessage,
       getCollapsedDisplayMeta,
+      getMessageCaretFromDisplay,
       isMessageCollapsed,
       textareaRef
     ]
@@ -1252,7 +1215,8 @@ export const PlaygroundForm = ({ droppedFiles }: Props) => {
     collapsedRange,
     form.values.message,
     isMessageCollapsed,
-    syncCollapsedCaret
+    syncCollapsedCaret,
+    textareaRef
   ])
 
   const commitCollapsedEdit = React.useCallback(
@@ -1615,7 +1579,7 @@ export const PlaygroundForm = ({ droppedFiles }: Props) => {
         queryKey: ["fetchChatHistory"]
       })
     },
-    onError: (error) => {
+    onError: () => {
       textAreaFocus()
     }
   })
@@ -1884,14 +1848,16 @@ export const PlaygroundForm = ({ droppedFiles }: Props) => {
         titleSource.length > 80 ? `${titleSource.slice(0, 77)}…` : titleSource
 
       let characterId: string | number | null =
-        (selectedCharacter as any)?.id ?? null
+        selectedCharacter?.id ?? null
 
       if (!characterId) {
         const DEFAULT_NAME = "Helpful AI Assistant"
         try {
           const characters = await tldwClient.listCharacters()
-          const existing = (characters || []).find((c: any) => {
-            const name = String(c?.name || "").trim().toLowerCase()
+          const list = Array.isArray(characters) ? characters : []
+          const existing = list.find((c) => {
+            if (!isRecord(c)) return false
+            const name = String(c.name || "").trim().toLowerCase()
             return name === DEFAULT_NAME.toLowerCase()
           })
           let target = existing
@@ -1901,7 +1867,9 @@ export const PlaygroundForm = ({ droppedFiles }: Props) => {
             })
           }
           characterId =
-            target && typeof target.id !== "undefined" ? target.id : null
+            isRecord(target) && typeof target.id !== "undefined"
+              ? target.id
+              : null
         } catch {
           characterId = null
         }
@@ -1945,20 +1913,30 @@ export const PlaygroundForm = ({ droppedFiles }: Props) => {
             ? serverChatSource.trim()
             : undefined
       })
-      const rawId = (created as any)?.id ?? (created as any)?.chat_id ?? created
+      const createdRecord = isRecord(created) ? created : null
+      const rawId =
+        (createdRecord?.id ?? createdRecord?.chat_id) ?? created
       const cid = rawId != null ? String(rawId) : ""
       if (!cid) {
         throw new Error("Failed to create server chat")
       }
       setServerChatId(cid)
       setServerChatState(
-        (created as any)?.state ??
-          (created as any)?.conversation_state ??
+        (typeof createdRecord?.state === "string" && createdRecord.state) ??
+          (typeof createdRecord?.conversation_state === "string"
+            ? createdRecord.conversation_state
+            : null) ??
           serverChatState ??
           "in-progress"
       )
-      setServerChatSource((created as any)?.source ?? serverChatSource ?? null)
-      setServerChatVersion((created as any)?.version ?? null)
+      setServerChatSource(
+        (typeof createdRecord?.source === "string" ? createdRecord.source : null) ??
+          serverChatSource ??
+          null
+      )
+      setServerChatVersion(
+        typeof createdRecord?.version === "number" ? createdRecord.version : null
+      )
       invalidateServerChatHistory()
 
       for (const msg of snapshot) {
@@ -1996,10 +1974,10 @@ export const PlaygroundForm = ({ droppedFiles }: Props) => {
         setServerPersistenceHintSeen(true)
         setShowServerPersistenceHint(true)
       }
-    } catch (e: any) {
+    } catch (error: unknown) {
       notification.error({
         message: t("error"),
-        description: e?.message || t("somethingWentWrong")
+        description: getErrorMessage(error) || t("somethingWentWrong")
       })
     }
   }, [
@@ -2244,38 +2222,6 @@ export const PlaygroundForm = ({ droppedFiles }: Props) => {
     }
   }, [isListening, resetTranscript, speechToTextLanguage, startListening, stopSpeechRecognition])
 
-  const persistChatMetadata = React.useCallback(
-    async (patch: Record<string, any>) => {
-      if (!serverChatId) return
-      try {
-        const updated = await tldwClient.updateChat(serverChatId, patch)
-        setServerChatState(
-          (updated as any)?.state ??
-            (updated as any)?.conversation_state ??
-            "in-progress"
-        )
-        setServerChatSource((updated as any)?.source ?? null)
-        setServerChatVersion((updated as any)?.version ?? null)
-        invalidateServerChatHistory()
-      } catch (e: any) {
-        notification.error({
-          message: t("error", { defaultValue: "Error" }),
-          description:
-            e?.message ||
-            t("somethingWentWrong", { defaultValue: "Something went wrong" })
-        })
-      }
-    },
-    [
-      invalidateServerChatHistory,
-      serverChatId,
-      setServerChatSource,
-      setServerChatState,
-      setServerChatVersion,
-      t
-    ]
-  )
-
   const handleServerDictationToggle = React.useCallback(async () => {
     if (isServerDictating) {
       stopServerDictation()
@@ -2321,7 +2267,7 @@ export const PlaygroundForm = ({ droppedFiles }: Props) => {
           if (blob.size === 0) {
             return
           }
-          const sttOptions: Record<string, any> = {
+          const sttOptions: Record<string, unknown> = {
             language: speechToTextLanguage
           }
           if (sttModel && sttModel.trim().length > 0) {
@@ -2370,13 +2316,17 @@ export const PlaygroundForm = ({ droppedFiles }: Props) => {
           if (res) {
             if (typeof res === "string") {
               text = res
-            } else if (typeof (res as any).text === "string") {
-              text = (res as any).text
-            } else if (typeof (res as any).transcript === "string") {
-              text = (res as any).transcript
-            } else if (Array.isArray((res as any).segments)) {
-              text = (res as any).segments
-                .map((s: any) => s?.text || "")
+            } else if (isRecord(res) && typeof res.text === "string") {
+              text = res.text
+            } else if (isRecord(res) && typeof res.transcript === "string") {
+              text = res.transcript
+            } else if (isRecord(res) && Array.isArray(res.segments)) {
+              text = res.segments
+                .map((segment) =>
+                  isRecord(segment) && typeof segment.text === "string"
+                    ? segment.text
+                    : ""
+                )
                 .join(" ")
                 .trim()
             }
@@ -2392,10 +2342,10 @@ export const PlaygroundForm = ({ droppedFiles }: Props) => {
               )
             })
           }
-        } catch (e: any) {
+        } catch (error: unknown) {
           notification.error({
             message: t("playground:actions.speechErrorTitle", "Dictation failed"),
-            description: e?.message || t(
+            description: getErrorMessage(error) || t(
               "playground:actions.speechErrorBody",
               "Transcription request failed. Check tldw server health."
             )
@@ -2411,7 +2361,7 @@ export const PlaygroundForm = ({ droppedFiles }: Props) => {
       serverRecorderRef.current = recorder
       recorder.start()
       setIsServerDictating(true)
-    } catch (e: any) {
+    } catch {
       notification.error({
         message: t("playground:actions.speechErrorTitle", "Dictation failed"),
         description: t(
@@ -2425,6 +2375,16 @@ export const PlaygroundForm = ({ droppedFiles }: Props) => {
     isServerDictating,
     speechToTextLanguage,
     sttModel,
+    sttPrompt,
+    sttTask,
+    sttResponseFormat,
+    sttTemperature,
+    sttSegK,
+    sttSegMinSegmentSize,
+    sttSegLambdaBalance,
+    sttSegUtteranceExpansionWidth,
+    sttSegEmbeddingsProvider,
+    sttSegEmbeddingsModel,
     sttTimestampGranularities,
     sttUseSegmentation,
     setMessageValue,
@@ -2562,15 +2522,16 @@ export const PlaygroundForm = ({ droppedFiles }: Props) => {
         ) : (
           <div className="flex flex-wrap gap-1">
             {mcpTools.slice(0, 6).map((tool, index) => {
-              const toolFn = (tool as any)?.function
+              const toolRecord = isRecord(tool) ? tool : {}
+              const toolFn = isRecord(toolRecord.function) ? toolRecord.function : {}
               const name =
-                (typeof tool?.name === "string" && tool.name) ||
-                (typeof toolFn?.name === "string" && toolFn.name) ||
-                (typeof (tool as any)?.id === "string" && (tool as any).id) ||
+                (typeof toolRecord.name === "string" && toolRecord.name) ||
+                (typeof toolFn.name === "string" && toolFn.name) ||
+                (typeof toolRecord.id === "string" && toolRecord.id) ||
                 `tool-${index + 1}`
               const description =
-                (typeof tool?.description === "string" && tool.description) ||
-                (typeof toolFn?.description === "string" && toolFn.description) ||
+                (typeof toolRecord.description === "string" && toolRecord.description) ||
+                (typeof toolFn.description === "string" && toolFn.description) ||
                 ""
               return (
                 <span
@@ -3023,11 +2984,6 @@ export const PlaygroundForm = ({ droppedFiles }: Props) => {
     }
   }, [])
 
-  const hasContext =
-    form.values.image.length > 0 ||
-    selectedDocuments.length > 0 ||
-    uploadedFiles.length > 0
-
   const toolsButton = (
     <Popover
       trigger="click"
@@ -3196,7 +3152,7 @@ export const PlaygroundForm = ({ droppedFiles }: Props) => {
                     active={compareModeActive}
                     onToggle={() => setCompareMode(!compareMode)}
                     selectedModels={compareSelectedModels}
-                    availableModels={(composerModels as any[]) || []}
+                    availableModels={Array.isArray(composerModels) ? composerModels : []}
                     maxModels={compareMaxModels || 4}
                     onAddModel={(modelId) => {
                       if (!compareSelectedModels.includes(modelId)) {
@@ -3907,7 +3863,7 @@ export const PlaygroundForm = ({ droppedFiles }: Props) => {
                                     {t("playground:composer.contextTabs", {
                                       defaultValue: "{{count}} tabs",
                                       count: selectedDocuments.length
-                                    } as any) as string}
+                                    }) as string}
                                   </span>
                                 </button>
                               )}
@@ -3936,7 +3892,7 @@ export const PlaygroundForm = ({ droppedFiles }: Props) => {
                                     {t("playground:composer.contextFiles", {
                                       defaultValue: "{{count}} files",
                                       count: uploadedFiles.length
-                                    } as any) as string}
+                                    }) as string}
                                   </span>
                                 </button>
                               )}
@@ -3998,7 +3954,7 @@ export const PlaygroundForm = ({ droppedFiles }: Props) => {
                                                     ? "translate"
                                                     : "transcribe",
                                                 format: (sttResponseFormat || "json").toUpperCase()
-                                              } as any
+                                              }
                                             )
                                           : t(
                                               "playground:tooltip.speechToTextBrowser",

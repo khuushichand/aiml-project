@@ -144,19 +144,25 @@ const ensurePlaceholderConfig = async (): Promise<string | null> => {
   }
 }
 
-const deriveKnowledgeStatusFromHealth = (raw: any): KnowledgeStatus => {
+const isRecord = (value: unknown): value is Record<string, unknown> =>
+  typeof value === "object" && value !== null && !Array.isArray(value)
+
+const deriveKnowledgeStatusFromHealth = (raw: unknown): KnowledgeStatus => {
   try {
-    if (!raw || typeof raw !== "object") {
+    if (!isRecord(raw)) {
       return "ready"
     }
-    const components = (raw as any).components
-    if (components && typeof components === "object") {
+    const components = raw.components
+    if (isRecord(components)) {
       const search =
-        (components as any).search_index || (components as any).searchIndex
-      if (search && typeof search === "object") {
-        const status = String((search as any).status || "").toLowerCase()
-        const message = String((search as any).message || "")
-        const rawCount = (search as any).fts_table_count
+        (isRecord(components.search_index) && components.search_index) ||
+        (isRecord(components.searchIndex) && components.searchIndex) ||
+        null
+      if (search && isRecord(search)) {
+        const status =
+          typeof search.status === "string" ? search.status.toLowerCase() : ""
+        const message = typeof search.message === "string" ? search.message : ""
+        const rawCount = search.fts_table_count
         const ftsCount =
           typeof rawCount === "number" && Number.isFinite(rawCount)
             ? rawCount
@@ -636,23 +642,23 @@ export const useConnectionStore = create<ConnectionStore>((set, get) => ({
 
 if (typeof window !== "undefined") {
   // Expose for Playwright tests and debugging only.
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  ;(window as any).__tldw_useConnectionStore = useConnectionStore
+  ;(window as Record<string, unknown>).__tldw_useConnectionStore =
+    useConnectionStore
 
   // Optional helper so tests can derive the UX state from a raw
   // ConnectionState snapshot without re‑implementing the logic.
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  ;(window as any).__tldw_deriveUx = (state: any) => {
+  ;(window as Record<string, unknown>).__tldw_deriveUx = (
+    state: ConnectionState
+  ) => {
     try {
-      return deriveConnectionUxState(state as ConnectionState)
+      return deriveConnectionUxState(state)
     } catch {
       return "unknown"
     }
   }
 
   // Allow tests to flip the offline bypass without rebuilding the extension.
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  ;(window as any).__tldw_enableOfflineBypass = async () => {
+  ;(window as Record<string, unknown>).__tldw_enableOfflineBypass = async () => {
     try {
       await useConnectionStore.getState().enableOfflineBypass()
       return true
@@ -661,8 +667,7 @@ if (typeof window !== "undefined") {
     }
   }
 
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  ;(window as any).__tldw_disableOfflineBypass = async () => {
+  ;(window as Record<string, unknown>).__tldw_disableOfflineBypass = async () => {
     try {
       await useConnectionStore.getState().disableOfflineBypass()
       return true
@@ -672,8 +677,7 @@ if (typeof window !== "undefined") {
   }
 
   // Allow tests to force the unconfigured/waiting state without network calls.
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  ;(window as any).__tldw_forceUnconfigured = async () => {
+  ;(window as Record<string, unknown>).__tldw_forceUnconfigured = async () => {
     try {
       if (typeof chrome !== "undefined" && chrome?.storage?.local) {
         await new Promise<void>((resolve) =>

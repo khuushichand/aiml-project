@@ -1,4 +1,4 @@
-import { useEffect, useCallback, useRef } from "react"
+import { useEffect, useRef } from "react"
 
 /**
  * Platform-aware keyboard shortcut system.
@@ -88,8 +88,6 @@ export function matchesShortcut(
   if (eventKey !== shortcutKey) return false
 
   // Check modifiers - handle platform-specific modifier
-  const platformMod = getPlatformModifier()
-
   for (const mod of modifiers) {
     if (mod === "meta") {
       // On Mac, check metaKey; on Windows/Linux, check ctrlKey
@@ -145,20 +143,20 @@ function isInputElement(target: EventTarget | null): boolean {
  * Hook to register a single keyboard shortcut
  */
 export function useShortcut(
-  shortcut: Omit<Shortcut, "id"> & { id?: string },
-  deps: React.DependencyList = []
+  shortcut: Omit<Shortcut, "id"> & { id?: string }
 ) {
   const actionRef = useRef(shortcut.action)
   actionRef.current = shortcut.action
+  const { key, modifiers, allowInInput } = shortcut
 
   useEffect(() => {
     const handler = (event: KeyboardEvent) => {
       // Skip if in input and not allowed
-      if (!shortcut.allowInInput && isInputElement(event.target)) {
+      if (!allowInInput && isInputElement(event.target)) {
         return
       }
 
-      if (matchesShortcut(event, shortcut)) {
+      if (matchesShortcut(event, { key, modifiers })) {
         event.preventDefault()
         event.stopPropagation()
         actionRef.current()
@@ -167,7 +165,7 @@ export function useShortcut(
 
     document.addEventListener("keydown", handler)
     return () => document.removeEventListener("keydown", handler)
-  }, [shortcut.key, JSON.stringify(shortcut.modifiers), ...deps])
+  }, [allowInInput, key, modifiers])
 }
 
 /**
