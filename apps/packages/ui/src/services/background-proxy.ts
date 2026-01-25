@@ -438,12 +438,208 @@ export interface BgStreamInit<
   abortSignal?: AbortSignal
 }
 
+const deriveStreamIdleTimeout = (cfg: any, path: string, override?: number) => {
+  if (override && override > 0) return override
+  const p = String(path || "")
+  const defaultIdle = 45000
+  if (p.includes("/api/v1/chat/completions")) {
+    return Number(cfg?.chatStreamIdleTimeoutMs) > 0
+      ? Number(cfg.chatStreamIdleTimeoutMs)
+      : Number(cfg?.streamIdleTimeoutMs) > 0
+        ? Number(cfg.streamIdleTimeoutMs)
+        : defaultIdle
+  }
+  return Number(cfg?.streamIdleTimeoutMs) > 0
+    ? Number(cfg.streamIdleTimeoutMs)
+    : defaultIdle
+}
+
+const parseStreamError = async (resp: Response): Promise<string> => {
+  const ct = resp.headers.get("content-type") || ""
+  if (ct.includes("application/json")) {
+    const json = await resp.json().catch(() => null)
+    if (json && (json.detail || json.error || json.message)) {
+      return String(json.detail || json.error || json.message)
+    }
+  }
+  const text = await resp.text().catch(() => null)
+  if (text) return text
+  return resp.statusText
+}
+
 export async function* bgStream<
   P extends AllowedPath = AllowedPath,
   M extends AllowedMethodFor<P> = AllowedMethodFor<P>
 >(
   { path, method = 'POST' as UpperLower<M>, headers = {}, body, streamIdleTimeoutMs, abortSignal }: BgStreamInit<P, M>
 ): AsyncGenerator<string> {
+  const hasRuntimePort = Boolean(browser?.runtime?.connect && browser?.runtime?.id)
+  if (!hasRuntimePort) {
+    const storage = createSafeStorage()
+    const cfg = await storage.get<any>("tldwConfig").catch(() => null)
+    const isAbsolute = typeof path === "string" && /^https?:/i.test(path)
+    if (!cfg?.serverUrl && !isAbsolute) {
+      throw new Error("tldw server not configured")
+    }
+    const baseUrl = cfg?.serverUrl ? String(cfg.serverUrl).replace(/\/$/, "") : ""
+    const url = isAbsolute
+      ? String(path)
+      : `${baseUrl}${String(path).startsWith("/") ? "" : "/"}${String(path)}`
+    const resolvedHeaders: Record<string, string> = { ...(headers || {}) }
+    for (const k of Object.keys(resolvedHeaders)) {
+      const kl = k.toLowerCase()
+      if (kl === "x-api-key" || kl === "authorization") delete resolvedHeaders[k]
+    }
+
+    if (cfg?.authMode === "single-user") {
+      const key = String(cfg?.apiKey || "").trim()
+      if (!key) {
+        throw new Error(
+          "Add or update your API key in Settings -> tldw server, then try again."
+        )
+      }
+      resolvedHeaders["X-API-KEY"] = key
+    } else if (cfg?.authMode === "multi-user") {
+      const token = String(cfg?.accessToken || "").trim()
+      if (token) {
+        resolvedHeaders["Authorization"] = `Bearer ${token}`
+      } else {
+        throw new Error("Not authenticated. Please login under Settings > tldw.")
+      }
+    }
+
+    resolvedHeaders["Accept"] = resolvedHeaders["Accept"] || "text/event-stream"
+    resolvedHeaders["Cache-Control"] =
+      resolvedHeaders["Cache-Control"] || "no-cache"
+    resolvedHeaders["Connection"] =
+      resolvedHeaders["Connection"] || "keep-alive"
+
+    const controller = new AbortController()
+    const idleMs = deriveStreamIdleTimeout(cfg, path as string, Number(streamIdleTimeoutMs))
+    let idleTimer: ReturnType<typeof setTimeout> | null = null
+    let idleError: Error | null = null
+    const resetIdle = () => {
+      if (idleTimer) clearTimeout(idleTimer)
+      idleTimer = setTimeout(() => {
+        idleError = new Error("Stream timeout: no updates received")
+        try {
+          controller.abort()
+        } catch {}
+      }, idleMs)
+    }
+
+    const onAbort = () => {
+      try {
+        controller.abort()
+      } catch {}
+    }
+    if (abortSignal) {
+      if (abortSignal.aborted) onAbort()
+      else abortSignal.addEventListener("abort", onAbort, { once: true })
+    }
+
+    const fetchStream = async (): Promise<Response> => {
+      return await fetch(url, {
+        method,
+        headers: resolvedHeaders,
+        body:
+          body != null
+            ? typeof body === "string"
+              ? body
+              : JSON.stringify(body)
+            : undefined,
+        signal: controller.signal
+      })
+    }
+
+    let resp = await fetchStream()
+    if (resp.status === 401 && cfg?.authMode === "multi-user" && cfg?.refreshToken) {
+      try {
+        const refreshResp = await fetch(`${baseUrl}/api/v1/auth/refresh`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ refresh_token: cfg.refreshToken })
+        })
+        if (refreshResp.ok) {
+          const tokens = await refreshResp.json().catch(() => null)
+          if (tokens?.access_token) {
+            const updated = { ...(cfg || {}), accessToken: tokens.access_token }
+            await storage.set("tldwConfig", updated)
+            resolvedHeaders["Authorization"] = `Bearer ${tokens.access_token}`
+            resp = await fetchStream()
+          }
+        }
+      } catch {
+        // ignore refresh failures and continue with original response
+      }
+    }
+
+    if (!resp.ok) {
+      const msg = await parseStreamError(resp)
+      throw new Error(formatErrorMessage(msg, `HTTP ${resp.status}`))
+    }
+    if (!resp.body) {
+      throw new Error("No response body")
+    }
+
+    const reader = resp.body.getReader()
+    const decoder = new TextDecoder()
+    let buffer = ""
+    resetIdle()
+    try {
+      while (true) {
+        const { done, value } = await reader.read()
+        if (done) break
+        resetIdle()
+        buffer += decoder.decode(value, { stream: true })
+        const lines = buffer.split("\n")
+        buffer = lines.pop() || ""
+        for (const line of lines) {
+          const trimmed = line.trim()
+          if (!trimmed) continue
+          resetIdle()
+          if (trimmed.startsWith("data:")) {
+            const data = trimmed.slice(5).trim()
+            if (data === "[DONE]") {
+              if (idleTimer) clearTimeout(idleTimer)
+              return
+            }
+            yield data
+          } else if (trimmed.startsWith("{") || trimmed.startsWith("[")) {
+            yield trimmed
+          }
+        }
+      }
+      const tail = buffer.trim()
+      if (tail) {
+        if (tail.startsWith("data:")) {
+          const data = tail.slice(5).trim()
+          if (data !== "[DONE]") {
+            yield data
+          }
+        } else if (tail.startsWith("{") || tail.startsWith("[")) {
+          yield tail
+        }
+      }
+    } catch (e: any) {
+      if (idleError) {
+        throw idleError
+      }
+      if (abortSignal?.aborted) {
+        throw new Error("Aborted")
+      }
+      throw e
+    } finally {
+      if (idleTimer) clearTimeout(idleTimer)
+      if (abortSignal) {
+        try {
+          abortSignal.removeEventListener("abort", onAbort)
+        } catch {}
+      }
+    }
+    return
+  }
+
   const port = browser.runtime.connect({ name: 'tldw:stream' })
   const encoder = new TextEncoder()
   const queue: string[] = []
