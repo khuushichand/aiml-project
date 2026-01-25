@@ -147,6 +147,11 @@ export const StudioPane: React.FC<StudioPaneProps> = ({ onHide }) => {
   const [tldwVoices, setTldwVoices] = useState<TldwVoice[]>([])
   const [loadingVoices, setLoadingVoices] = useState(false)
 
+  // Local state for collapsible sections
+  const [studioExpanded, setStudioExpanded] = useState(true)
+  const [outputsExpanded, setOutputsExpanded] = useState(true)
+  const [notesExpanded, setNotesExpanded] = useState(true)
+
   const inferredTldwProviderKey = inferTldwProviderFromModel(audioSettings.model)
 
   // Fetch voices when provider changes to tldw
@@ -449,8 +454,24 @@ export const StudioPane: React.FC<StudioPaneProps> = ({ onHide }) => {
         )}
       </div>
 
-      {/* Output grid */}
-      <div className="border-b border-border p-4">
+      {/* Studio Section - Collapsible */}
+      <div className="border-b border-border">
+        <button
+          type="button"
+          onClick={() => setStudioExpanded(!studioExpanded)}
+          className="flex w-full items-center justify-between px-4 py-3 text-left transition hover:bg-surface2/50"
+        >
+          <h3 className="text-xs font-semibold uppercase text-text-muted">
+            {t("playground:studio.outputTypes", "Output Types")}
+          </h3>
+          {studioExpanded ? (
+            <ChevronUp className="h-4 w-4 text-text-muted" />
+          ) : (
+            <ChevronDown className="h-4 w-4 text-text-muted" />
+          )}
+        </button>
+        {studioExpanded && (
+          <div className="px-4 pb-4">
         <div className="grid grid-cols-2 gap-3">
           {OUTPUT_BUTTONS.map(({ type, label, icon: Icon }) => {
             const isGenerating =
@@ -599,14 +620,33 @@ export const StudioPane: React.FC<StudioPaneProps> = ({ onHide }) => {
             </div>
           )}
         </div>
+        </div>
+        )}
       </div>
 
-      {/* Generated artifacts list */}
-      <div className="custom-scrollbar flex-1 overflow-y-auto">
-        <div className="p-4">
-          <h3 className="mb-2 text-xs font-semibold uppercase text-text-muted">
+      {/* Generated Outputs Section - Collapsible */}
+      <div className="border-b border-border">
+        <button
+          type="button"
+          onClick={() => setOutputsExpanded(!outputsExpanded)}
+          className="flex w-full items-center justify-between px-4 py-3 text-left transition hover:bg-surface2/50"
+        >
+          <h3 className="text-xs font-semibold uppercase text-text-muted">
             {t("playground:studio.generatedOutputs", "Generated Outputs")}
+            {generatedArtifacts.length > 0 && (
+              <span className="ml-2 rounded-full bg-primary/10 px-2 py-0.5 text-xs font-medium text-primary">
+                {generatedArtifacts.length}
+              </span>
+            )}
           </h3>
+          {outputsExpanded ? (
+            <ChevronUp className="h-4 w-4 text-text-muted" />
+          ) : (
+            <ChevronDown className="h-4 w-4 text-text-muted" />
+          )}
+        </button>
+        {outputsExpanded && (
+          <div className="custom-scrollbar max-h-64 overflow-y-auto px-4 pb-4">
           {generatedArtifacts.length === 0 ? (
             <Empty
               image={Empty.PRESENTED_IMAGE_SIMPLE}
@@ -702,11 +742,27 @@ export const StudioPane: React.FC<StudioPaneProps> = ({ onHide }) => {
               })}
             </div>
           )}
-        </div>
+          </div>
+        )}
       </div>
 
-      {/* Quick Notes Section */}
-      <QuickNotesSection />
+      {/* Quick Notes Section - Collapsible */}
+      <div className="flex-1">
+        {notesExpanded ? (
+          <QuickNotesSection onCollapse={() => setNotesExpanded(false)} />
+        ) : (
+          <button
+            type="button"
+            onClick={() => setNotesExpanded(true)}
+            className="flex w-full items-center justify-between border-t border-border px-4 py-3 text-left transition hover:bg-surface2/50"
+          >
+            <h3 className="text-xs font-semibold uppercase text-text-muted">
+              {t("playground:studio.quickNotes", "Quick Notes")}
+            </h3>
+            <ChevronDown className="h-4 w-4 text-text-muted" />
+          </button>
+        )}
+      </div>
     </div>
   )
 }

@@ -7,7 +7,8 @@ import {
   X,
   Search,
   FileText,
-  AlertCircle
+  AlertCircle,
+  ChevronUp
 } from "lucide-react"
 import { useWorkspaceStore } from "@/store/workspace"
 import { bgRequest } from "@/services/background-proxy"
@@ -30,10 +31,15 @@ interface NotesSearchResponse {
   total?: number
 }
 
+interface QuickNotesSectionProps {
+  /** Callback to collapse this section */
+  onCollapse?: () => void
+}
+
 /**
  * QuickNotesSection - Enhanced notes editor with load/save functionality
  */
-export const QuickNotesSection: React.FC = () => {
+export const QuickNotesSection: React.FC<QuickNotesSectionProps> = ({ onCollapse }) => {
   const { t } = useTranslation(["playground", "common"])
   const [messageApi, contextHolder] = message.useMessage()
 
@@ -300,6 +306,15 @@ export const QuickNotesSection: React.FC = () => {
             title={t("common:clear", "Clear")}
             disabled={!currentNote.content && !currentNote.title && !currentNote.id}
           />
+          {onCollapse && (
+            <Button
+              type="text"
+              size="small"
+              icon={<ChevronUp className="h-3.5 w-3.5" />}
+              onClick={onCollapse}
+              title={t("common:collapse", "Collapse")}
+            />
+          )}
         </div>
       </div>
 

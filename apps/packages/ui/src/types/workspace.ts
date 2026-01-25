@@ -223,6 +223,20 @@ export const DEFAULT_WORKSPACE_NOTE: WorkspaceNote = {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
+// Saved Workspaces (for workspace switcher)
+// ─────────────────────────────────────────────────────────────────────────────
+
+export interface SavedWorkspace {
+  id: string
+  name: string
+  tag: string
+  createdAt: Date
+  lastAccessedAt: Date
+  /** Number of sources in this workspace */
+  sourceCount: number
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 // Slides/Presentation Types
 // ─────────────────────────────────────────────────────────────────────────────
 

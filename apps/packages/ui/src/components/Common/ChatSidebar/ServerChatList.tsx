@@ -88,6 +88,14 @@ export function ServerChatList({
   )
   const selectServerChat = useSelectServerChat()
   const clearChat = useClearChat()
+  const { resetWizard, addSource, setWizardStep } = useDataTablesStore(
+    (state) => ({
+      resetWizard: state.resetWizard,
+      addSource: state.addSource,
+      setWizardStep: state.setWizardStep
+    }),
+    shallow
+  )
   const [openMenuFor, setOpenMenuFor] = React.useState<string | null>(null)
   const [renamingChat, setRenamingChat] =
     React.useState<ServerChatHistoryItem | null>(null)
@@ -189,6 +197,7 @@ export function ServerChatList({
     Error,
     UpdateChatRequestPayload
   >({
+    mutationKey: ["updateChatMetadata"],
     mutationFn: updateChatRequest,
     onSettled: invalidateServerChatHistory
   })
@@ -197,6 +206,7 @@ export function ServerChatList({
     Error,
     UpdateChatRequestPayload
   >({
+    mutationKey: ["renameChat"],
     mutationFn: updateChatRequest,
     onSettled: invalidateServerChatHistory
   })
@@ -205,6 +215,7 @@ export function ServerChatList({
     Error,
     UpdateChatRequestPayload
   >({
+    mutationKey: ["updateChatTopic"],
     mutationFn: updateChatRequest,
     onSettled: invalidateServerChatHistory
   })
@@ -291,26 +302,45 @@ export function ServerChatList({
         window.location.pathname.endsWith("options.html")
       const navigateFn = (window as Window & { __tldwNavigate?: (path: string) => void })
         .__tldwNavigate
-      const dataTableStore = useDataTablesStore.getState()
 
-      await startCreateTableFromChat(
-        {
-          id: chat.id,
-          title: chat.title,
-          topic_label: chat.topic_label
-        },
-        {
-          isOptionsPage,
-          navigate: navigateFn,
-          resetWizard: dataTableStore.resetWizard,
-          addSource: dataTableStore.addSource,
-          setWizardStep: dataTableStore.setWizardStep,
-          queuePrefill: queueDataTablesPrefill,
-          openOptionsPage: () => openExtensionUrl("/options.html#/data-tables")
-        }
-      )
+      try {
+        await startCreateTableFromChat(
+          {
+            id: chat.id,
+            title: chat.title,
+            topic_label: chat.topic_label
+          },
+          {
+            isOptionsPage,
+            navigate: navigateFn,
+            resetWizard,
+            addSource,
+            setWizardStep,
+            queuePrefill: queueDataTablesPrefill,
+            openOptionsPage: () => openExtensionUrl("/options.html#/data-tables")
+          }
+        )
+      } catch (error) {
+        console.error("[ServerChatList] Failed to start table creation", {
+          error,
+          chatId: chat.id
+        })
+        resetWizard()
+        message.error(
+          t("dataTables:createFromChatError", {
+            defaultValue: "Failed to start table creation."
+          })
+        )
+      }
     },
-    [openExtensionUrl]
+    [
+      addSource,
+      openExtensionUrl,
+      queueDataTablesPrefill,
+      resetWizard,
+      setWizardStep,
+      t
+    ]
   )
 
   React.useEffect(() => {
@@ -435,7 +465,6 @@ export function ServerChatList({
               setServerChatState(resolvedState)
               setServerChatVersion(updated?.version ?? null)
             }
-            queryClient.invalidateQueries({ queryKey: ["serverChatHistory"] })
           },
           onError: () => {
             message.error(
@@ -448,7 +477,6 @@ export function ServerChatList({
       )
     },
     [
-      queryClient,
       serverChatId,
       setServerChatState,
       setServerChatVersion,

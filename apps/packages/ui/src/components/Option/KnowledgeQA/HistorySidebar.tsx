@@ -130,7 +130,7 @@ export function HistorySidebar({ className }: HistorySidebarProps) {
           <ChevronRight className="w-5 h-5 text-text-muted" />
         </button>
 
-        <div className="mt-4 space-y-2">
+        <div className="mt-4 flex flex-col gap-2">
           <button
             onClick={() => setHistorySidebarOpen(true)}
             className="p-2 rounded-lg hover:bg-muted transition-colors"

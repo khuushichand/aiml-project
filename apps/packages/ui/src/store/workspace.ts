@@ -12,6 +12,7 @@ import type {
   ArtifactType,
   AudioGenerationSettings,
   GeneratedArtifact,
+  SavedWorkspace,
   WorkspaceConfig,
   WorkspaceNote,
   WorkspaceSource,
@@ -130,6 +131,10 @@ interface AudioSettingsState {
   audioSettings: AudioGenerationSettings
 }
 
+interface WorkspaceListState {
+  savedWorkspaces: SavedWorkspace[]
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 // Action Types
 // ─────────────────────────────────────────────────────────────────────────────
@@ -202,6 +207,19 @@ interface AudioSettingsActions {
   resetAudioSettings: () => void
 }
 
+interface WorkspaceListActions {
+  /** Save current workspace state to the saved workspaces list */
+  saveCurrentWorkspace: () => void
+  /** Switch to a different workspace by ID */
+  switchWorkspace: (id: string) => void
+  /** Create a new workspace (optionally with a name), saving current first */
+  createNewWorkspace: (name?: string) => void
+  /** Delete a workspace from the saved list */
+  deleteWorkspace: (id: string) => void
+  /** Get the list of saved workspaces sorted by last accessed */
+  getSavedWorkspaces: () => SavedWorkspace[]
+}
+
 interface ResetActions {
   reset: () => void
   resetSources: () => void
@@ -217,11 +235,13 @@ export type WorkspaceState = WorkspaceIdentityState &
   StudioState &
   UIState &
   AudioSettingsState &
+  WorkspaceListState &
   WorkspaceIdentityActions &
   SourcesActions &
   StudioActions &
   UIActions &
   AudioSettingsActions &
+  WorkspaceListActions &
   ResetActions
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -272,12 +292,17 @@ const initialAudioSettingsState: AudioSettingsState = {
   audioSettings: { ...DEFAULT_AUDIO_SETTINGS }
 }
 
+const initialWorkspaceListState: WorkspaceListState = {
+  savedWorkspaces: []
+}
+
 const initialState = {
   ...initialIdentityState,
   ...initialSourcesState,
   ...initialStudioState,
   ...initialUIState,
-  ...initialAudioSettingsState
+  ...initialAudioSettingsState,
+  ...initialWorkspaceListState
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -306,6 +331,9 @@ interface PersistedWorkspaceState {
 
   // Audio generation settings
   audioSettings: AudioGenerationSettings
+
+  // Saved workspaces list
+  savedWorkspaces: SavedWorkspace[]
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -570,6 +598,130 @@ export const useWorkspaceStore = createWithEqualityFn<WorkspaceState>()(
       set({ audioSettings: { ...DEFAULT_AUDIO_SETTINGS } }),
 
     // ─────────────────────────────────────────────────────────────────────────
+    // Workspace List Actions
+    // ─────────────────────────────────────────────────────────────────────────
+
+    saveCurrentWorkspace: () => {
+      const state = get()
+      // Don't save if workspace has no ID (uninitialized)
+      if (!state.workspaceId) return
+
+      const savedWorkspace: SavedWorkspace = {
+        id: state.workspaceId,
+        name: state.workspaceName || "Untitled Workspace",
+        tag: state.workspaceTag,
+        createdAt: state.workspaceCreatedAt || new Date(),
+        lastAccessedAt: new Date(),
+        sourceCount: state.sources.length
+      }
+
+      set((s) => {
+        // Remove existing entry for this workspace if it exists
+        const filtered = s.savedWorkspaces.filter((w) => w.id !== savedWorkspace.id)
+        // Add at the beginning (most recent)
+        return {
+          savedWorkspaces: [savedWorkspace, ...filtered].slice(0, 10) // Keep max 10 workspaces
+        }
+      })
+    },
+
+    switchWorkspace: (id) => {
+      const state = get()
+      const targetWorkspace = state.savedWorkspaces.find((w) => w.id === id)
+      if (!targetWorkspace) return
+
+      // Save current workspace first (if it has an ID)
+      if (state.workspaceId) {
+        const currentSaved: SavedWorkspace = {
+          id: state.workspaceId,
+          name: state.workspaceName || "Untitled Workspace",
+          tag: state.workspaceTag,
+          createdAt: state.workspaceCreatedAt || new Date(),
+          lastAccessedAt: new Date(),
+          sourceCount: state.sources.length
+        }
+
+        set((s) => {
+          const filtered = s.savedWorkspaces.filter((w) => w.id !== currentSaved.id)
+          return {
+            savedWorkspaces: [currentSaved, ...filtered].slice(0, 10)
+          }
+        })
+      }
+
+      // Load workspace from localStorage (the store persists all state under a single key)
+      // For now, we just update the workspace identity and clear other state
+      // A full implementation would need separate storage per workspace
+      set({
+        workspaceId: targetWorkspace.id,
+        workspaceName: targetWorkspace.name,
+        workspaceTag: targetWorkspace.tag,
+        workspaceCreatedAt: targetWorkspace.createdAt,
+        // Reset workspace-specific state (sources, artifacts, notes)
+        // In a full implementation, these would be loaded from workspace-specific storage
+        ...initialSourcesState,
+        ...initialStudioState
+      })
+
+      // Update last accessed time
+      set((s) => ({
+        savedWorkspaces: s.savedWorkspaces.map((w) =>
+          w.id === id ? { ...w, lastAccessedAt: new Date() } : w
+        )
+      }))
+    },
+
+    createNewWorkspace: (name = "New Research") => {
+      const state = get()
+
+      // Save current workspace first (if it has an ID)
+      if (state.workspaceId) {
+        const currentSaved: SavedWorkspace = {
+          id: state.workspaceId,
+          name: state.workspaceName || "Untitled Workspace",
+          tag: state.workspaceTag,
+          createdAt: state.workspaceCreatedAt || new Date(),
+          lastAccessedAt: new Date(),
+          sourceCount: state.sources.length
+        }
+
+        set((s) => {
+          const filtered = s.savedWorkspaces.filter((w) => w.id !== currentSaved.id)
+          return {
+            savedWorkspaces: [currentSaved, ...filtered].slice(0, 10)
+          }
+        })
+      }
+
+      // Create new workspace
+      const newId = generateWorkspaceId()
+      const slug = createSlug(name) || newId.slice(0, 8)
+
+      set({
+        workspaceId: newId,
+        workspaceName: name,
+        workspaceTag: `workspace:${slug}`,
+        workspaceCreatedAt: new Date(),
+        // Reset workspace-specific state
+        ...initialSourcesState,
+        ...initialStudioState
+      })
+    },
+
+    deleteWorkspace: (id) => {
+      set((state) => ({
+        savedWorkspaces: state.savedWorkspaces.filter((w) => w.id !== id)
+      }))
+    },
+
+    getSavedWorkspaces: () => {
+      const state = get()
+      return [...state.savedWorkspaces].sort(
+        (a, b) => new Date(b.lastAccessedAt).getTime() - new Date(a.lastAccessedAt).getTime()
+      )
+    },
+
+    // ─────────────────────────────────────────────────────────────────────────
     // Reset Actions
     // ─────────────────────────────────────────────────────────────────────────
 
@@ -614,7 +766,10 @@ export const useWorkspaceStore = createWithEqualityFn<WorkspaceState>()(
         rightPaneCollapsed: state.rightPaneCollapsed,
 
         // Audio generation settings
-        audioSettings: state.audioSettings
+        audioSettings: state.audioSettings,
+
+        // Saved workspaces list
+        savedWorkspaces: state.savedWorkspaces
       }),
       // Rehydrate dates properly and handle migration
       onRehydrateStorage: () => (state) => {
@@ -648,6 +803,22 @@ export const useWorkspaceStore = createWithEqualityFn<WorkspaceState>()(
           // Migration: ensure currentNote exists (for users with older persisted state)
           if (!state.currentNote) {
             state.currentNote = { ...DEFAULT_WORKSPACE_NOTE }
+          }
+          // Migration: ensure savedWorkspaces exists and dates are properly converted
+          if (!state.savedWorkspaces) {
+            state.savedWorkspaces = []
+          } else {
+            state.savedWorkspaces = state.savedWorkspaces.map((workspace) => ({
+              ...workspace,
+              createdAt:
+                typeof workspace.createdAt === "string"
+                  ? new Date(workspace.createdAt)
+                  : workspace.createdAt,
+              lastAccessedAt:
+                typeof workspace.lastAccessedAt === "string"
+                  ? new Date(workspace.lastAccessedAt)
+                  : workspace.lastAccessedAt
+            }))
           }
         }
       }

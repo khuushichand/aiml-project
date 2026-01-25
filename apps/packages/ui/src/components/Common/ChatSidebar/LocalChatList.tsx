@@ -228,19 +228,23 @@ export function LocalChatList({
 
   const chatHistories = useMemo(
     () =>
-      chatHistoriesData?.pages.reduce(
-        (acc, page) => {
-          page.groups.forEach((group) => {
-            const existingGroup = acc.find((g) => g.label === group.label)
-            if (existingGroup) {
-              existingGroup.items.push(...group.items)
-            } else {
-              acc.push({ ...group })
+      chatHistoriesData?.pages.reduce<ChatGroup[]>(
+        (acc, page) =>
+          page.groups.reduce<ChatGroup[]>((pageAcc, group) => {
+            const existingIndex = pageAcc.findIndex((g) => g.label === group.label)
+            if (existingIndex === -1) {
+              return [...pageAcc, { ...group, items: [...group.items] }]
             }
-          })
-          return acc
-        },
-        [] as ChatGroup[]
+
+            const existingGroup = pageAcc[existingIndex]
+            const mergedGroup: ChatGroup = {
+              ...existingGroup,
+              items: [...existingGroup.items, ...group.items]
+            }
+
+            return pageAcc.map((entry, index) => (index === existingIndex ? mergedGroup : entry))
+          }, acc),
+        []
       ) || [],
     [chatHistoriesData]
   )
@@ -483,6 +487,7 @@ export function LocalChatList({
       >
         <Input
           autoFocus
+          disabled={renameLoading}
           value={renameValue}
           onChange={(e) => {
             setRenameValue(e.target.value)

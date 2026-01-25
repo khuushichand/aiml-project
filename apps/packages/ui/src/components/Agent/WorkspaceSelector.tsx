@@ -139,7 +139,8 @@ export const WorkspaceSelector: FC<WorkspaceSelectorProps> = ({
   }, [recordUsage, setSelectedId, t])
 
   // Auto-select last used workspace on mount
-  useAutoSelectWorkspace(workspaces || [], selectedId, handleSelect)
+  const canAutoSelectWorkspace = isHostInstalled === true
+  useAutoSelectWorkspace(workspaces || [], selectedId, handleSelect, canAutoSelectWorkspace)
 
   // Handle adding new workspace
   const handleAddWorkspace = async () => {

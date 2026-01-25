@@ -480,6 +480,13 @@ body {
   color: #bbbdc1;
 }
 
+@media (prefers-reduced-motion: reduce) {
+  .animated-gradient-border,
+  .shimmer-text {
+    animation: none !important;
+  }
+}
+
 /* Icon defaults (lucide/react) */
 .icon {
   width: 20px;
