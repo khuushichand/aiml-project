@@ -5340,11 +5340,7 @@ test.describe("Real server end-to-end workflows", () => {
         180000
       )
       mediaId = mediaMatch?.id ?? null
-      const mediaTitle = String(
-        mediaMatch?.title || mediaMatch?.filename || fileName
-      )
-      const expectedTitle = mediaTitle.replace(/\.txt$/i, "")
-      const mediaTitle = String(
+      const expectedTitle = String(
         mediaMatch?.title || mediaMatch?.filename || fileName
       ).replace(/\.txt$/i, "")
 
@@ -5364,7 +5360,7 @@ test.describe("Real server end-to-end workflows", () => {
 
       const resultRow = page
         .getByRole("button", {
-          name: new RegExp(escapeRegExp(mediaTitle), "i")
+          name: new RegExp(escapeRegExp(expectedTitle), "i")
         })
         .first()
       await expect(resultRow).toBeVisible({ timeout: 30000 })
@@ -5497,7 +5493,8 @@ test.describe("Real server end-to-end workflows", () => {
       await generateAnalysis.click()
 
       await expect(modal).toBeHidden({ timeout: 180000 })
-      await expect(page.getByText(token)).toBeVisible({ timeout: 60000 })
+      const analysisOutput = page.getByRole("main").getByText(token).first()
+      await expect(analysisOutput).toBeVisible({ timeout: 60000 })
     }
 
     try {
@@ -5549,6 +5546,9 @@ test.describe("Real server end-to-end workflows", () => {
         180000
       )
       mediaId = mediaMatch?.id ?? null
+      const expectedTitle = String(
+        mediaMatch?.title || mediaMatch?.filename || fileName
+      ).replace(/\.txt$/i, "")
 
       await driver.goto(page, "/media", {
         waitUntil: "domcontentloaded"
@@ -5585,26 +5585,16 @@ test.describe("Real server end-to-end workflows", () => {
       await page.getByRole("button", { name: /^Search$/i }).click()
 
       const reviewRow = page
-        .locator(".ant-list-item")
-        .filter({ hasText: expectedTitle })
+        .getByTestId("media-review-results-list")
+        .getByRole("button", {
+          name: new RegExp(escapeRegExp(expectedTitle), "i")
+        })
         .first()
       await expect(reviewRow).toBeVisible({ timeout: 30000 })
       await reviewRow.click()
 
-      const getReviewButton = page.getByRole("button", {
-        name: /Get review/i
-      })
-      await expect(getReviewButton).toBeVisible({ timeout: 15000 })
-      await getReviewButton.click()
-
-      const analysisEditor = page.getByPlaceholder(
-        /Run Review or Summarize/i
-      )
-      await expect
-        .poll(async () => analysisEditor.inputValue(), {
-          timeout: 120000
-        })
-        .toMatch(/\S+/)
+      const reviewAnalysis = page.getByText(token1).first()
+      await expect(reviewAnalysis).toBeVisible({ timeout: 60000 })
 
       await driver.goto(page, "/media", {
         waitUntil: "domcontentloaded"

@@ -195,6 +195,57 @@ scopes:
     ownership_predicates:
       - same_org
     doc_url: https://docs.example.com/privileges/chat-analytics
+  - id: chat.messages.rag_context
+    description: Persist and retrieve RAG context (citations, retrieved docs, settings) for chat messages.
+    resource_tags:
+      - chat
+      - rag
+      - messages
+    sensitivity_tier: moderate
+    rate_limit_class: standard
+    default_roles:
+      - admin
+      - analyst
+      - developer
+      - viewer
+    feature_flag_id: null
+    ownership_predicates:
+      - same_org
+    doc_url: https://docs.example.com/privileges/chat-messages-rag-context
+  - id: chat.conversations.messages
+    description: Retrieve conversation messages with optional RAG context.
+    resource_tags:
+      - chat
+      - conversations
+      - rag
+    sensitivity_tier: low
+    rate_limit_class: standard
+    default_roles:
+      - admin
+      - analyst
+      - developer
+      - viewer
+    feature_flag_id: null
+    ownership_predicates:
+      - same_org
+    doc_url: https://docs.example.com/privileges/chat-conversations-messages
+  - id: chat.conversations.citations
+    description: Retrieve aggregated citations for a conversation.
+    resource_tags:
+      - chat
+      - conversations
+      - rag
+    sensitivity_tier: low
+    rate_limit_class: standard
+    default_roles:
+      - admin
+      - analyst
+      - developer
+      - viewer
+    feature_flag_id: null
+    ownership_predicates:
+      - same_org
+    doc_url: https://docs.example.com/privileges/chat-conversations-citations
   - id: audio.speech
     description: Generate speech audio from text using TTS providers.
     resource_tags:

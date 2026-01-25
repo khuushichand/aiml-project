@@ -3618,6 +3618,9 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
                     elif current_initial_version == 15 and target_version >= 16:
                         self._migrate_from_v15_to_v16(conn)
                         current_db_version = self._get_db_version(conn)
+                    elif current_initial_version == 16 and target_version >= 17:
+                        self._migrate_from_v16_to_v17(conn)
+                        current_db_version = self._get_db_version(conn)
                     else:
                         raise SchemaError(
                             f"Migration path undefined for '{self._SCHEMA_NAME}' from version {current_initial_version} to {target_version}. "

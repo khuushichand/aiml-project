@@ -28,6 +28,7 @@ import { tldwClient } from "@/services/tldw/TldwApiClient"
 import { generateQuiz } from "@/services/quizzes"
 import { createFlashcard, createDeck, listDecks } from "@/services/flashcards"
 import { fetchTldwVoiceCatalog, type TldwVoice } from "@/services/tldw/audio-voices"
+import { inferTldwProviderFromModel } from "@/services/tts-provider"
 import type { ArtifactType, GeneratedArtifact, AudioTtsProvider } from "@/types/workspace"
 import { QuickNotesSection } from "./QuickNotesSection"
 
@@ -146,16 +147,26 @@ export const StudioPane: React.FC<StudioPaneProps> = ({ onHide }) => {
   const [tldwVoices, setTldwVoices] = useState<TldwVoice[]>([])
   const [loadingVoices, setLoadingVoices] = useState(false)
 
+  const inferredTldwProviderKey = inferTldwProviderFromModel(audioSettings.model)
+
   // Fetch voices when provider changes to tldw
   useEffect(() => {
-    if (audioSettings.provider === "tldw") {
-      setLoadingVoices(true)
-      fetchTldwVoiceCatalog("tldw")
-        .then((voices) => setTldwVoices(voices))
-        .catch(() => setTldwVoices([]))
-        .finally(() => setLoadingVoices(false))
+    if (audioSettings.provider !== "tldw") {
+      setTldwVoices([])
+      setLoadingVoices(false)
+      return
     }
-  }, [audioSettings.provider])
+    if (!inferredTldwProviderKey) {
+      setTldwVoices([])
+      setLoadingVoices(false)
+      return
+    }
+    setLoadingVoices(true)
+    fetchTldwVoiceCatalog(inferredTldwProviderKey)
+      .then((voices) => setTldwVoices(voices))
+      .catch(() => setTldwVoices([]))
+      .finally(() => setLoadingVoices(false))
+  }, [audioSettings.provider, inferredTldwProviderKey])
 
   const hasSelectedSources = selectedSourceIds.length > 0
 
