@@ -34,9 +34,9 @@ function KnowledgeQAContent() {
     return (
       <div className="flex-1 flex items-center justify-center">
         <div className="text-center max-w-md">
-          <WifiOff className="w-16 h-16 mx-auto mb-4 text-muted-foreground" />
+          <WifiOff className="w-16 h-16 mx-auto mb-4 text-text-muted" />
           <h2 className="text-xl font-semibold mb-2">Server Offline</h2>
-          <p className="text-muted-foreground">
+          <p className="text-text-muted">
             Cannot connect to the server. Please ensure the tldw server is running
             and try again.
           </p>
@@ -50,9 +50,9 @@ function KnowledgeQAContent() {
     return (
       <div className="flex-1 flex items-center justify-center">
         <div className="text-center max-w-md">
-          <AlertCircle className="w-16 h-16 mx-auto mb-4 text-muted-foreground" />
+          <AlertCircle className="w-16 h-16 mx-auto mb-4 text-text-muted" />
           <h2 className="text-xl font-semibold mb-2">RAG Not Available</h2>
-          <p className="text-muted-foreground">
+          <p className="text-text-muted">
             Knowledge search requires the RAG module to be enabled on the server.
             Please check your server configuration.
           </p>
@@ -82,7 +82,7 @@ function KnowledgeQAContent() {
             <div className="mb-8 text-center">
               <BookOpen className="w-16 h-16 mx-auto mb-4 text-primary" />
               <h1 className="text-3xl font-bold mb-2">Knowledge QA</h1>
-              <p className="text-muted-foreground max-w-md">
+              <p className="text-text-muted max-w-md">
                 Ask questions about your documents and get AI-powered answers
                 with citations from your knowledge base.
               </p>

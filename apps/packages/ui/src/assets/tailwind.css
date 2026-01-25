@@ -48,24 +48,24 @@
 }
 
 :root {
-  /* Light theme defaults */
-  --color-bg: #f4f2ee;
-  --color-surface: #ffffff;
-  --color-surface-2: #f0ede7;
-  --color-elevated: #fbfaf7;
-  --color-primary: #2f6fed;
-  --color-primary-strong: #2456c7;
-  --color-accent: #1fb59f;
-  --color-success: #22a07b;
-  --color-warn: #d97706;
-  --color-danger: #e0586d;
-  --color-muted: #667085;
-  --color-border: #e2ddd3;
-  --color-border-strong: #cfc8ba;
-  --color-text: #1f2328;
-  --color-text-muted: #5b6472;
-  --color-text-subtle: #8a94a3;
-  --color-focus: #1fb59f;
+  /* Light theme defaults - RGB values for Tailwind opacity support */
+  --color-bg: 244 242 238;
+  --color-surface: 255 255 255;
+  --color-surface-2: 240 237 231;
+  --color-elevated: 251 250 247;
+  --color-primary: 47 111 237;
+  --color-primary-strong: 36 86 199;
+  --color-accent: 31 181 159;
+  --color-success: 34 160 123;
+  --color-warn: 217 119 6;
+  --color-danger: 224 88 109;
+  --color-muted: 102 112 133;
+  --color-border: 226 221 211;
+  --color-border-strong: 207 200 186;
+  --color-text: 31 35 40;
+  --color-text-muted: 91 100 114;
+  --color-text-subtle: 138 148 163;
+  --color-focus: 31 181 159;
   --moderation-hero-start: #fdf7ec;
   --moderation-hero-end: #f6efdf;
   --moderation-hero-border: #e8dcc8;
@@ -76,23 +76,24 @@
 }
 
 .dark {
-  --color-bg: #0f1113;
-  --color-surface: #171a1f;
-  --color-surface-2: #1d2128;
-  --color-elevated: #232832;
-  --color-primary: #5c8dff;
-  --color-primary-strong: #3e6ae0;
-  --color-accent: #4fd1b0;
-  --color-success: #3bd696;
-  --color-warn: #f7b955;
-  --color-danger: #ff6b8b;
-  --color-muted: #9aa3b2;
-  --color-border: #2b313b;
-  --color-border-strong: #3b4350;
-  --color-text: #e7e9ee;
-  --color-text-muted: #b3bac6;
-  --color-text-subtle: #9098a6;
-  --color-focus: #4fd1b0;
+  /* Dark theme - RGB values for Tailwind opacity support */
+  --color-bg: 15 17 19;
+  --color-surface: 23 26 31;
+  --color-surface-2: 29 33 40;
+  --color-elevated: 35 40 50;
+  --color-primary: 92 141 255;
+  --color-primary-strong: 62 106 224;
+  --color-accent: 79 209 176;
+  --color-success: 59 214 150;
+  --color-warn: 247 185 85;
+  --color-danger: 255 107 139;
+  --color-muted: 154 163 178;
+  --color-border: 43 49 59;
+  --color-border-strong: 59 67 80;
+  --color-text: 231 233 238;
+  --color-text-muted: 179 186 198;
+  --color-text-subtle: 144 152 166;
+  --color-focus: 79 209 176;
   --moderation-hero-start: #141a22;
   --moderation-hero-end: #0f141a;
   --moderation-hero-border: #2a3442;
@@ -103,8 +104,8 @@
 }
 
 body {
-  background: var(--color-bg);
-  color: var(--color-text);
+  background: rgb(var(--color-bg));
+  color: rgb(var(--color-text));
   font-family: "Arimo", "Inter", system-ui, -apple-system, sans-serif;
 }
 
@@ -242,9 +243,9 @@ body {
 .ant-input-textarea textarea,
 .ant-select-selector,
 .ant-picker {
-  background-color: var(--color-surface-2);
-  border-color: var(--color-border);
-  color: var(--color-text);
+  background-color: rgb(var(--color-surface-2));
+  border-color: rgb(var(--color-border));
+  color: rgb(var(--color-text));
   transition: background-color 0.15s ease, border-color 0.15s ease, box-shadow 0.15s ease;
 }
 
@@ -253,7 +254,7 @@ body {
 .ant-input-number:hover,
 .ant-select-selector:hover,
 .ant-picker:hover {
-  border-color: var(--color-primary);
+  border-color: rgb(var(--color-primary));
 }
 
 .ant-input:focus,
@@ -262,14 +263,14 @@ body {
 .ant-input-number-focused,
 .ant-select-focused .ant-select-selector,
 .ant-picker-focused {
-  border-color: var(--color-primary);
-  box-shadow: 0 0 0 2px color-mix(in srgb, var(--color-focus) 40%, transparent);
+  border-color: rgb(var(--color-primary));
+  box-shadow: 0 0 0 2px rgb(var(--color-focus) / 0.4);
 }
 
 .ant-input::placeholder,
 .ant-input-textarea::placeholder,
 .ant-input-textarea textarea::placeholder {
-  color: var(--color-text-muted);
+  color: rgb(var(--color-text-muted));
 }
 
 .dark .ant-input,
@@ -280,9 +281,9 @@ body {
 .dark .ant-input-textarea textarea,
 .dark .ant-select-selector,
 .dark .ant-picker {
-  background-color: var(--color-surface-2);
-  border-color: var(--color-border);
-  color: var(--color-text);
+  background-color: rgb(var(--color-surface-2));
+  border-color: rgb(var(--color-border));
+  color: rgb(var(--color-text));
 }
 
 .dark .ant-input:hover,
@@ -290,7 +291,7 @@ body {
 .dark .ant-input-number:hover,
 .dark .ant-select-selector:hover,
 .dark .ant-picker:hover {
-  border-color: var(--color-primary);
+  border-color: rgb(var(--color-primary));
 }
 
 .dark .ant-input:focus,
@@ -299,15 +300,15 @@ body {
 .dark .ant-input-number-focused,
 .dark .ant-select-focused .ant-select-selector,
 .dark .ant-picker-focused {
-  border-color: var(--color-primary);
-  box-shadow: 0 0 0 2px color-mix(in srgb, var(--color-focus) 40%, transparent);
+  border-color: rgb(var(--color-primary));
+  box-shadow: 0 0 0 2px rgb(var(--color-focus) / 0.4);
 }
 
 .dark .ant-input::placeholder,
 .dark .ant-input-textarea::placeholder,
 .dark .ant-input-textarea textarea::placeholder,
 .dark .ant-select-selection-placeholder {
-  color: var(--color-text-muted);
+  color: rgb(var(--color-text-muted));
 }
 
 .focus-ring:focus-visible {
@@ -443,7 +444,7 @@ body {
 
 /* For Firefox */
 .custom-scrollbar {
-  scrollbar-color: var(--color-border) var(--color-surface-2);
+  scrollbar-color: rgb(var(--color-border)) rgb(var(--color-surface-2));
 }
 
 .dark .custom-scrollbar {
@@ -484,7 +485,7 @@ body {
   width: 20px;
   height: 20px;
   stroke-width: 1.75;
-  color: var(--color-text);
+  color: rgb(var(--color-text));
 }
 /* =====================================
    Design tokens — change once, theme everywhere
@@ -695,7 +696,7 @@ body {
 
 /* Keyboard focus indicator for onboarding path selection cards */
 .onboarding-path-radio .ant-radio-wrapper:focus-within {
-  outline: 2px solid var(--color-focus);
+  outline: 2px solid rgb(var(--color-focus));
   outline-offset: 2px;
 }
 
@@ -705,7 +706,7 @@ body {
   }
 
   .onboarding-path-radio .ant-radio-wrapper:has(.ant-radio-input:focus-visible) {
-    outline: 2px solid var(--color-focus);
+    outline: 2px solid rgb(var(--color-focus));
     outline-offset: 2px;
   }
 }

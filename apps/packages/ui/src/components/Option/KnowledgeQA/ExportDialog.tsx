@@ -125,7 +125,7 @@ export function ExportDialog({ open, onClose, className }: ExportDialogProps) {
         className={cn(
           "fixed left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2",
           "w-full max-w-lg max-h-[90vh]",
-          "bg-background rounded-xl shadow-xl border border-border",
+          "bg-surface rounded-xl shadow-xl border border-border",
           "flex flex-col z-50",
           className
         )}
@@ -151,9 +151,24 @@ export function ExportDialog({ open, onClose, className }: ExportDialogProps) {
             <label className="text-sm font-medium">Export Format</label>
             <div className="grid grid-cols-3 gap-2">
               {[
-                { value: "markdown", label: "Markdown", icon: FileText },
-                { value: "pdf", label: "PDF", icon: FileDown },
-                { value: "chatbook", label: "Chatbook", icon: Book },
+                {
+                  value: "markdown",
+                  label: "Markdown",
+                  icon: FileText,
+                  description: "Plain text with formatting, ideal for notes and documentation",
+                },
+                {
+                  value: "pdf",
+                  label: "PDF",
+                  icon: FileDown,
+                  description: "Print-ready document, opens your browser's print dialog",
+                },
+                {
+                  value: "chatbook",
+                  label: "Chatbook",
+                  icon: Book,
+                  description: "Portable format for sharing with the tldw community",
+                },
               ].map((fmt) => {
                 const Icon = fmt.icon
                 const isSelected = options.format === fmt.value
@@ -166,8 +181,9 @@ export function ExportDialog({ open, onClose, className }: ExportDialogProps) {
                         format: fmt.value as ExportFormat,
                       }))
                     }
+                    aria-pressed={isSelected}
                     className={cn(
-                      "flex flex-col items-center gap-2 p-4 rounded-lg border transition-all",
+                      "flex flex-col items-center gap-2 p-4 rounded-lg border transition-all text-center",
                       isSelected
                         ? "border-primary bg-primary/5 ring-1 ring-primary"
                         : "border-border hover:border-primary/30"
@@ -176,10 +192,13 @@ export function ExportDialog({ open, onClose, className }: ExportDialogProps) {
                     <Icon
                       className={cn(
                         "w-6 h-6",
-                        isSelected ? "text-primary" : "text-muted-foreground"
+                        isSelected ? "text-primary" : "text-text-muted"
                       )}
                     />
                     <span className="text-sm font-medium">{fmt.label}</span>
+                    <span className="text-[10px] text-text-muted leading-tight">
+                      {fmt.description}
+                    </span>
                   </button>
                 )
               })}
@@ -200,7 +219,7 @@ export function ExportDialog({ open, onClose, className }: ExportDialogProps) {
                       citationStyle: e.target.value as RagCitationStyle,
                     }))
                   }
-                  className="w-full px-3 py-2 rounded-md border border-border bg-background focus:outline-none focus:ring-2 focus:ring-primary"
+                  className="w-full px-3 py-2 rounded-md border border-border bg-surface focus:outline-none focus:ring-2 focus:ring-primary"
                 >
                   <option value="apa">APA</option>
                   <option value="mla">MLA</option>
@@ -297,7 +316,7 @@ export function ExportDialog({ open, onClose, className }: ExportDialogProps) {
           <button
             onClick={handleExport}
             disabled={isExporting}
-            className="flex items-center gap-2 px-4 py-2 text-sm font-medium rounded-md bg-primary text-primary-foreground hover:bg-primary/90 transition-colors disabled:opacity-50"
+            className="flex items-center gap-2 px-4 py-2 text-sm font-medium rounded-md bg-primary text-white hover:bg-primaryStrong transition-colors disabled:opacity-50"
           >
             {isExporting ? (
               <>

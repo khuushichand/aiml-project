@@ -36,14 +36,15 @@ function renderAnswerWithCitations(
       <button
         key={`citation-${match.index}`}
         onClick={() => onCitationClick(citationNum)}
+        aria-label={`Jump to source ${citationNum}`}
         className={cn(
           "inline-flex items-center justify-center",
           "min-w-[1.5rem] h-5 px-1.5 mx-0.5",
           "text-xs font-medium rounded",
           "transition-colors duration-200",
           isCited
-            ? "bg-primary text-primary-foreground hover:bg-primary/80"
-            : "bg-muted text-muted-foreground hover:bg-muted/80"
+            ? "bg-primary text-white hover:bg-primaryStrong"
+            : "bg-surface2 text-text-muted border border-border hover:bg-muted hover:text-text"
         )}
         title={`Jump to source ${citationNum}`}
       >
@@ -80,7 +81,7 @@ export function AnswerPanel({ className }: AnswerPanelProps) {
           <Loader2 className="w-5 h-5 animate-spin text-primary" />
           <div>
             <p className="font-medium">Searching your knowledge base...</p>
-            <p className="text-sm text-muted-foreground">
+            <p className="text-sm text-text-muted">
               Finding relevant documents and generating an answer
             </p>
           </div>
@@ -92,12 +93,12 @@ export function AnswerPanel({ className }: AnswerPanelProps) {
   // Error state
   if (error) {
     return (
-      <div className={cn("p-6 rounded-xl bg-destructive/10 border border-destructive/20", className)}>
+      <div className={cn("p-6 rounded-xl bg-danger/10 border border-danger/20", className)}>
         <div className="flex items-start gap-3">
-          <AlertCircle className="w-5 h-5 text-destructive mt-0.5" />
+          <AlertCircle className="w-5 h-5 text-danger mt-0.5" />
           <div>
-            <p className="font-medium text-destructive">Search failed</p>
-            <p className="text-sm text-muted-foreground mt-1">{error}</p>
+            <p className="font-medium text-danger">Search failed</p>
+            <p className="text-sm text-text-muted mt-1">{error}</p>
           </div>
         </div>
       </div>
@@ -115,9 +116,9 @@ export function AnswerPanel({ className }: AnswerPanelProps) {
     return (
       <div className={cn("p-6 rounded-xl bg-muted/30 border border-border", className)}>
         <div className="flex items-start gap-3">
-          <Sparkles className="w-5 h-5 text-muted-foreground mt-0.5" />
+          <Sparkles className="w-5 h-5 text-text-muted mt-0.5" />
           <div>
-            <p className="text-muted-foreground">
+            <p className="text-text-muted">
               Found {results.length} relevant source{results.length !== 1 ? "s" : ""}.
               Enable answer generation in settings to get a synthesized response.
             </p>
@@ -135,7 +136,7 @@ export function AnswerPanel({ className }: AnswerPanelProps) {
         <Sparkles className="w-4 h-4 text-primary" />
         <span className="font-medium text-sm">AI Answer</span>
         {citations.length > 0 && (
-          <span className="ml-auto text-xs text-muted-foreground">
+          <span className="ml-auto text-xs text-text-muted">
             {citations.length} citation{citations.length !== 1 ? "s" : ""}
           </span>
         )}
@@ -153,13 +154,14 @@ export function AnswerPanel({ className }: AnswerPanelProps) {
       {/* Citation summary */}
       {citations.length > 0 && (
         <div className="px-6 py-3 bg-muted/20 border-t border-primary/10">
-          <div className="flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
-            <span>Sources:</span>
+          <div className="flex flex-wrap items-center gap-2 text-xs">
+            <span className="text-text-muted">Sources:</span>
             {citations.map((citation) => (
               <button
                 key={citation.index}
                 onClick={() => handleCitationClick(citation.index)}
-                className="px-2 py-0.5 bg-background rounded hover:bg-muted transition-colors"
+                aria-label={`Jump to source ${citation.index}`}
+                className="px-2 py-0.5 bg-surface text-text-muted border border-border rounded hover:bg-surface2 hover:text-text transition-colors"
               >
                 [{citation.index}]
               </button>

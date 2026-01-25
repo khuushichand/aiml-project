@@ -124,68 +124,30 @@ export const WorkspaceHeader: React.FC<WorkspaceHeaderProps> = ({
       </div>
 
       <div className="flex items-center gap-2">
-        {/* Left pane toggle (hidden on mobile) */}
-        {!hideToggles && (
-          <Tooltip
-            title={
-              leftPaneOpen
-                ? t("playground:workspace.hideSources", "Hide sources")
-                : t("playground:workspace.showSources", "Show sources")
-            }
-          >
+        {/* Left pane expand button (only shown when collapsed) */}
+        {!hideToggles && !leftPaneOpen && (
+          <Tooltip title={t("playground:workspace.showSources", "Show sources")}>
             <button
               type="button"
               onClick={onToggleLeftPane}
-              className={`hidden rounded-lg p-2 transition-colors lg:block ${
-                leftPaneOpen
-                  ? "text-text-muted hover:bg-surface2 hover:text-text"
-                  : "bg-primary/10 text-primary"
-              }`}
-              aria-pressed={leftPaneOpen}
-              aria-label={
-                leftPaneOpen
-                  ? t("playground:workspace.hideSources", "Hide sources")
-                  : t("playground:workspace.showSources", "Show sources")
-              }
+              className="hidden rounded-lg bg-primary/10 p-2 text-primary transition-colors hover:bg-primary/20 lg:block"
+              aria-label={t("playground:workspace.showSources", "Show sources")}
             >
-              {leftPaneOpen ? (
-                <PanelLeftClose className="h-4 w-4" />
-              ) : (
-                <PanelLeftOpen className="h-4 w-4" />
-              )}
+              <PanelLeftOpen className="h-4 w-4" />
             </button>
           </Tooltip>
         )}
 
-        {/* Right pane toggle (hidden on mobile) */}
-        {!hideToggles && (
-          <Tooltip
-            title={
-              rightPaneOpen
-                ? t("playground:workspace.hideStudio", "Hide studio")
-                : t("playground:workspace.showStudio", "Show studio")
-            }
-          >
+        {/* Right pane expand button (only shown when collapsed) */}
+        {!hideToggles && !rightPaneOpen && (
+          <Tooltip title={t("playground:workspace.showStudio", "Show studio")}>
             <button
               type="button"
               onClick={onToggleRightPane}
-              className={`hidden rounded-lg p-2 transition-colors lg:block ${
-                rightPaneOpen
-                  ? "text-text-muted hover:bg-surface2 hover:text-text"
-                  : "bg-primary/10 text-primary"
-              }`}
-              aria-pressed={rightPaneOpen}
-              aria-label={
-                rightPaneOpen
-                  ? t("playground:workspace.hideStudio", "Hide studio")
-                  : t("playground:workspace.showStudio", "Show studio")
-              }
+              className="hidden rounded-lg bg-primary/10 p-2 text-primary transition-colors hover:bg-primary/20 lg:block"
+              aria-label={t("playground:workspace.showStudio", "Show studio")}
             >
-              {rightPaneOpen ? (
-                <PanelRightClose className="h-4 w-4" />
-              ) : (
-                <PanelRightOpen className="h-4 w-4" />
-              )}
+              <PanelRightOpen className="h-4 w-4" />
             </button>
           </Tooltip>
         )}

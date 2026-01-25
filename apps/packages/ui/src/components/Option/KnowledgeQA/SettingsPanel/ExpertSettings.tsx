@@ -157,14 +157,14 @@ function SettingsSection({
         className="flex items-center gap-3 w-full px-4 py-3 hover:bg-muted/50 transition-colors"
       >
         {isOpen ? (
-          <ChevronDown className="w-4 h-4 text-muted-foreground" />
+          <ChevronDown className="w-4 h-4 text-text-muted" />
         ) : (
-          <ChevronRight className="w-4 h-4 text-muted-foreground" />
+          <ChevronRight className="w-4 h-4 text-text-muted" />
         )}
         <Icon className="w-4 h-4 text-primary" />
         <div className="flex-1 text-left">
           <div className="font-medium text-sm">{config.title}</div>
-          <div className="text-xs text-muted-foreground">{config.description}</div>
+          <div className="text-xs text-text-muted">{config.description}</div>
         </div>
       </button>
 
@@ -216,7 +216,7 @@ function SectionContent({ sectionId, settings, updateSetting }: SectionContentPr
     case "performance":
       return <PerformanceSection settings={settings} updateSetting={updateSetting} />
     default:
-      return <div className="text-sm text-muted-foreground">Section not found</div>
+      return <div className="text-sm text-text-muted">Section not found</div>
   }
 }
 
@@ -232,13 +232,19 @@ function SettingToggle({
   checked: boolean
   onChange: (checked: boolean) => void
 }) {
+  // Generate a unique ID for accessibility
+  const labelId = `toggle-${label.toLowerCase().replace(/\s+/g, '-')}`
+
   return (
     <div className="flex items-start justify-between gap-4">
       <div>
-        <div className="text-sm font-medium">{label}</div>
-        {description && <div className="text-xs text-muted-foreground">{description}</div>}
+        <div id={labelId} className="text-sm font-medium">{label}</div>
+        {description && <div className="text-xs text-text-muted">{description}</div>}
       </div>
       <button
+        role="switch"
+        aria-checked={checked}
+        aria-labelledby={labelId}
         onClick={() => onChange(!checked)}
         className={cn(
           "relative inline-flex h-5 w-9 items-center rounded-full transition-colors flex-shrink-0",
@@ -277,7 +283,7 @@ function SettingSlider({
     <div className="space-y-1.5">
       <div className="flex items-center justify-between">
         <div className="text-sm font-medium">{label}</div>
-        <div className="text-sm text-muted-foreground">{value}</div>
+        <div className="text-sm text-text-muted">{value}</div>
       </div>
       <input
         type="range"
@@ -288,7 +294,7 @@ function SettingSlider({
         onChange={(e) => onChange(parseFloat(e.target.value))}
         className="w-full accent-primary"
       />
-      {description && <div className="text-xs text-muted-foreground">{description}</div>}
+      {description && <div className="text-xs text-text-muted">{description}</div>}
     </div>
   )
 }
@@ -312,7 +318,7 @@ function SettingSelect({
       <select
         value={value}
         onChange={(e) => onChange(e.target.value)}
-        className="w-full px-3 py-1.5 text-sm rounded-md border border-border bg-background focus:outline-none focus:ring-2 focus:ring-primary"
+        className="w-full px-3 py-1.5 text-sm rounded-md border border-border bg-surface focus:outline-none focus:ring-2 focus:ring-primary"
       >
         {options.map((opt) => (
           <option key={opt.value} value={opt.value}>
@@ -320,7 +326,7 @@ function SettingSelect({
           </option>
         ))}
       </select>
-      {description && <div className="text-xs text-muted-foreground">{description}</div>}
+      {description && <div className="text-xs text-text-muted">{description}</div>}
     </div>
   )
 }
@@ -395,7 +401,7 @@ function QuerySection({ settings, updateSetting }: SectionSettingsProps) {
       />
       {settings.expand_query && (
         <div className="pl-4 border-l-2 border-primary/20 space-y-2">
-          <div className="text-xs font-medium text-muted-foreground">Expansion Strategies</div>
+          <div className="text-xs font-medium text-text-muted">Expansion Strategies</div>
           {["acronym", "synonym", "semantic", "domain", "entity"].map((strategy) => (
             <label key={strategy} className="flex items-center gap-2 text-sm">
               <input

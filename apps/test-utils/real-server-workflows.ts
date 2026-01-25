@@ -5340,6 +5340,13 @@ test.describe("Real server end-to-end workflows", () => {
         180000
       )
       mediaId = mediaMatch?.id ?? null
+      const mediaTitle = String(
+        mediaMatch?.title || mediaMatch?.filename || fileName
+      )
+      const expectedTitle = mediaTitle.replace(/\.txt$/i, "")
+      const mediaTitle = String(
+        mediaMatch?.title || mediaMatch?.filename || fileName
+      ).replace(/\.txt$/i, "")
 
       await driver.goto(page, "/media", {
         waitUntil: "domcontentloaded"
@@ -5356,8 +5363,9 @@ test.describe("Real server end-to-end workflows", () => {
         .click()
 
       const resultRow = page
-        .locator('[role="button"]')
-        .filter({ hasText: fileName })
+        .getByRole("button", {
+          name: new RegExp(escapeRegExp(mediaTitle), "i")
+        })
         .first()
       await expect(resultRow).toBeVisible({ timeout: 30000 })
       await resultRow.click()
@@ -5551,11 +5559,15 @@ test.describe("Real server end-to-end workflows", () => {
         /Search media \(title\/content\)/i
       )
       await searchInput.fill(String(unique))
-      await page.getByRole("button", { name: /^Search$/i }).click()
+      await page
+        .locator("#media-search-panel")
+        .getByRole("button", { name: /^Search$/i })
+        .click()
 
       const resultRow = page
-        .locator('[role="button"]')
-        .filter({ hasText: fileName })
+        .getByRole("button", {
+          name: new RegExp(escapeRegExp(expectedTitle), "i")
+        })
         .first()
       await expect(resultRow).toBeVisible({ timeout: 30000 })
       await resultRow.click()
@@ -5574,7 +5586,7 @@ test.describe("Real server end-to-end workflows", () => {
 
       const reviewRow = page
         .locator(".ant-list-item")
-        .filter({ hasText: fileName })
+        .filter({ hasText: expectedTitle })
         .first()
       await expect(reviewRow).toBeVisible({ timeout: 30000 })
       await reviewRow.click()
@@ -5600,7 +5612,10 @@ test.describe("Real server end-to-end workflows", () => {
       await waitForConnected(page, "workflow-analysis-reanalyze")
 
       await searchInput.fill(String(unique))
-      await page.getByRole("button", { name: /^Search$/i }).click()
+      await page
+        .locator("#media-search-panel")
+        .getByRole("button", { name: /^Search$/i })
+        .click()
       await expect(resultRow).toBeVisible({ timeout: 30000 })
       await resultRow.click()
 

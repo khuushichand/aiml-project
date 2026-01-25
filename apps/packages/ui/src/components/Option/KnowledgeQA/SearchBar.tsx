@@ -23,14 +23,28 @@ export function SearchBar({ className, autoFocus = true }: SearchBarProps) {
   const { query, setQuery, search, isSearching, clearResults } = useKnowledgeQA()
   const inputRef = useRef<HTMLInputElement>(null)
   const [placeholderIndex, setPlaceholderIndex] = useState(0)
+  const [isFocused, setIsFocused] = useState(false)
+  const [cycleCount, setCycleCount] = useState(0)
+  const MAX_CYCLES = 3 // Stop rotating after 3 full cycles
 
-  // Rotate placeholder examples
+  // Rotate placeholder examples - slower interval, pause on focus, stop after cycles
   useEffect(() => {
+    // Stop rotation if focused, has query, or exceeded max cycles
+    if (isFocused || query || cycleCount >= MAX_CYCLES) return
+
     const interval = setInterval(() => {
-      setPlaceholderIndex((prev) => (prev + 1) % EXAMPLE_QUERIES.length)
-    }, 4000)
+      setPlaceholderIndex((prev) => {
+        const next = (prev + 1) % EXAMPLE_QUERIES.length
+        // Increment cycle count when we loop back to start
+        if (next === 0) {
+          setCycleCount((c) => c + 1)
+        }
+        return next
+      })
+    }, 8000) // 8 seconds instead of 4 for better readability
+
     return () => clearInterval(interval)
-  }, [])
+  }, [isFocused, query, cycleCount])
 
   // Handle keyboard shortcuts
   useEffect(() => {
@@ -89,7 +103,7 @@ export function SearchBar({ className, autoFocus = true }: SearchBarProps) {
               <Sparkles className="w-5 h-5 text-primary" />
             </div>
           ) : (
-            <Search className="w-5 h-5 text-muted-foreground group-focus-within:text-primary transition-colors" />
+            <Search className="w-5 h-5 text-text-muted group-focus-within:text-primary transition-colors" />
           )}
         </div>
 
@@ -99,13 +113,15 @@ export function SearchBar({ className, autoFocus = true }: SearchBarProps) {
           type="text"
           value={query}
           onChange={(e) => setQuery(e.target.value)}
+          onFocus={() => setIsFocused(true)}
+          onBlur={() => setIsFocused(false)}
           placeholder={EXAMPLE_QUERIES[placeholderIndex]}
           disabled={isSearching}
           className={cn(
             "w-full pl-12 pr-20 py-4 text-lg",
-            "bg-background border border-border rounded-xl",
+            "bg-surface border border-border rounded-xl",
             "focus:outline-none focus:ring-2 focus:ring-primary focus:border-transparent",
-            "placeholder:text-muted-foreground/60",
+            "placeholder:text-text-subtle",
             "transition-all duration-200",
             "shadow-sm hover:shadow-md focus:shadow-md",
             isSearching && "opacity-75 cursor-not-allowed"
@@ -118,7 +134,7 @@ export function SearchBar({ className, autoFocus = true }: SearchBarProps) {
           <button
             type="button"
             onClick={handleClear}
-            className="absolute right-14 top-1/2 -translate-y-1/2 p-1 text-muted-foreground hover:text-foreground transition-colors"
+            className="absolute right-14 top-1/2 -translate-y-1/2 p-1 text-text-muted hover:text-text transition-colors"
             aria-label="Clear search"
           >
             <X className="w-4 h-4" />
@@ -132,11 +148,11 @@ export function SearchBar({ className, autoFocus = true }: SearchBarProps) {
           className={cn(
             "absolute right-2 top-1/2 -translate-y-1/2",
             "px-4 py-2 rounded-lg",
-            "bg-primary text-primary-foreground",
+            "bg-primary text-white",
             "font-medium text-sm",
             "transition-all duration-200",
             "disabled:opacity-50 disabled:cursor-not-allowed",
-            "hover:bg-primary/90"
+            "hover:bg-primaryStrong"
           )}
         >
           {isSearching ? "..." : "Ask"}
@@ -144,7 +160,7 @@ export function SearchBar({ className, autoFocus = true }: SearchBarProps) {
       </div>
 
       {/* Keyboard hint */}
-      <div className="flex justify-center mt-2 text-xs text-muted-foreground">
+      <div className="flex justify-center mt-2 text-xs text-text-muted">
         <span>
           Press <kbd className="px-1.5 py-0.5 bg-muted rounded font-mono">/</kbd> to focus,{" "}
           <kbd className="px-1.5 py-0.5 bg-muted rounded font-mono">Cmd+K</kbd> for new search

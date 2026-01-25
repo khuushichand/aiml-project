@@ -86,14 +86,21 @@ export function SourceList({ className }: SourceListProps) {
     return () => window.removeEventListener("keydown", handleKeyDown)
   }, [results.length, focusedSourceIndex, focusSource])
 
-  // Handle "Ask About This"
+  // Handle "Ask About This" - populate query without auto-submitting
   const handleAskAbout = useCallback(
     (result: RagResult) => {
       const title = result.metadata?.title || "this document"
       setQuery(`Tell me more about ${title}`)
-      search()
+      // Focus the search input so user can review/modify before submitting
+      // The search input has a known ID or can be found by its aria-label
+      const searchInput = document.querySelector('input[aria-label="Search your knowledge base"]') as HTMLInputElement
+      if (searchInput) {
+        searchInput.focus()
+        // Move cursor to end of input
+        searchInput.setSelectionRange(searchInput.value.length, searchInput.value.length)
+      }
     },
-    [setQuery, search]
+    [setQuery]
   )
 
   if (results.length === 0) {
@@ -105,7 +112,7 @@ export function SourceList({ className }: SourceListProps) {
       {/* Header */}
       <div className="flex items-center justify-between">
         <div className="flex items-center gap-2">
-          <FileText className="w-5 h-5 text-muted-foreground" />
+          <FileText className="w-5 h-5 text-text-muted" />
           <h3 className="font-semibold">
             Sources ({results.length})
           </h3>
@@ -114,7 +121,7 @@ export function SourceList({ className }: SourceListProps) {
         {/* Sort toggle */}
         <button
           onClick={() => setSortMode(sortMode === "relevance" ? "title" : "relevance")}
-          className="flex items-center gap-1.5 px-2.5 py-1.5 text-xs font-medium rounded-md bg-muted text-muted-foreground hover:text-foreground hover:bg-muted/80 transition-colors"
+          className="flex items-center gap-1.5 px-2.5 py-1.5 text-xs font-medium rounded-md bg-muted text-text-muted hover:text-text hover:bg-surface2 transition-colors"
         >
           {sortMode === "relevance" ? (
             <>
@@ -131,13 +138,13 @@ export function SourceList({ className }: SourceListProps) {
       </div>
 
       {/* Keyboard hint */}
-      <div className="text-xs text-muted-foreground">
+      <div className="text-xs text-text-muted">
         Press <kbd className="px-1 py-0.5 bg-muted rounded font-mono">1-9</kbd> to jump to source,{" "}
         <kbd className="px-1 py-0.5 bg-muted rounded font-mono">Tab</kbd> to navigate
       </div>
 
-      {/* Source cards */}
-      <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-1 xl:grid-cols-2">
+      {/* Source cards - consistent 2-column layout above md breakpoint */}
+      <div className="grid gap-4 md:grid-cols-2">
         {sortedResults.map((result, index) => {
           // Find original index for citation matching
           const originalIndex = results.indexOf(result)

@@ -157,7 +157,7 @@ export const WorkspacePlayground: React.FC = () => {
         {/* Left pane - Sources (desktop) */}
         {leftPaneOpen && (
           <aside className="hidden w-72 shrink-0 border-r border-border bg-surface lg:flex lg:flex-col">
-            <SourcesPane />
+            <SourcesPane onHide={() => setLeftPaneOpen(false)} />
           </aside>
         )}
 
@@ -187,7 +187,7 @@ export const WorkspacePlayground: React.FC = () => {
         {/* Right pane - Studio (desktop) */}
         {rightPaneOpen && (
           <aside className="hidden w-80 shrink-0 border-l border-border bg-surface lg:flex lg:flex-col">
-            <StudioPane />
+            <StudioPane onHide={() => setRightPaneOpen(false)} />
           </aside>
         )}
 

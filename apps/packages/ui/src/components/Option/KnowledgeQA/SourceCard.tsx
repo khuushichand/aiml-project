@@ -84,7 +84,7 @@ export function SourceCard({
         "group rounded-lg border transition-all duration-200",
         isFocused
           ? "border-primary bg-primary/5 ring-2 ring-primary/20"
-          : "border-border bg-card hover:border-primary/30",
+          : "border-border bg-surface hover:border-primary/30",
         className
       )}
     >
@@ -95,8 +95,8 @@ export function SourceCard({
           className={cn(
             "flex-shrink-0 w-7 h-7 rounded-md flex items-center justify-center text-sm font-medium",
             isCited
-              ? "bg-primary text-primary-foreground"
-              : "bg-muted text-muted-foreground"
+              ? "bg-primary text-white"
+              : "bg-muted text-text-muted"
           )}
         >
           {index}
@@ -105,12 +105,12 @@ export function SourceCard({
         {/* Title and metadata */}
         <div className="flex-1 min-w-0">
           <div className="flex items-start gap-2">
-            <Icon className="w-4 h-4 text-muted-foreground mt-0.5 flex-shrink-0" />
+            <Icon className="w-4 h-4 text-text-muted mt-0.5 flex-shrink-0" />
             <div className="min-w-0 flex-1">
               <h4 className="font-medium text-sm truncate" title={title}>
                 {title}
               </h4>
-              <div className="flex items-center gap-2 mt-1 text-xs text-muted-foreground">
+              <div className="flex items-center gap-2 mt-1 text-xs text-text-muted">
                 {score !== undefined && (
                   <span className="px-1.5 py-0.5 bg-muted rounded">
                     {Math.round(score * 100)}% match
@@ -133,7 +133,7 @@ export function SourceCard({
 
       {/* Content excerpt */}
       <div className="px-4 pb-3">
-        <p className="text-sm text-muted-foreground leading-relaxed">
+        <p className="text-sm text-text-muted leading-relaxed">
           {excerpt}
         </p>
       </div>
@@ -143,7 +143,9 @@ export function SourceCard({
         <div className="flex items-center gap-1">
           <button
             onClick={() => onAskAbout(result)}
-            className="flex items-center gap-1.5 px-2.5 py-1.5 text-xs font-medium rounded-md bg-primary text-primary-foreground hover:bg-primary/90 transition-colors"
+            title="Create a question about this source"
+            aria-label={`Ask about ${title}`}
+            className="flex items-center gap-1.5 px-2.5 py-1.5 text-xs font-medium rounded-md bg-primary text-white hover:bg-primaryStrong transition-colors"
           >
             <MessageSquare className="w-3.5 h-3.5" />
             Ask About This
@@ -151,7 +153,7 @@ export function SourceCard({
 
           <button
             onClick={handleCopy}
-            className="flex items-center gap-1.5 px-2.5 py-1.5 text-xs font-medium rounded-md bg-muted text-muted-foreground hover:text-foreground hover:bg-muted/80 transition-colors"
+            className="flex items-center gap-1.5 px-2.5 py-1.5 text-xs font-medium rounded-md bg-muted text-text-muted hover:text-text hover:bg-surface2 transition-colors"
             title="Copy content"
           >
             {copied ? (
@@ -171,7 +173,7 @@ export function SourceCard({
         {url && (
           <button
             onClick={handleOpenExternal}
-            className="flex items-center gap-1.5 px-2.5 py-1.5 text-xs font-medium rounded-md text-muted-foreground hover:text-foreground transition-colors"
+            className="flex items-center gap-1.5 px-2.5 py-1.5 text-xs font-medium rounded-md text-text-muted hover:text-text transition-colors"
             title="Open original"
           >
             <ExternalLink className="w-3.5 h-3.5" />

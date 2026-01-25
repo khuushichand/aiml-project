@@ -201,6 +201,28 @@ export const DEFAULT_AUDIO_SETTINGS: AudioGenerationSettings = {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
+// Workspace Note Types (for Quick Notes feature)
+// ─────────────────────────────────────────────────────────────────────────────
+
+export interface WorkspaceNote {
+  id?: number // undefined = new note, number = existing note
+  title: string
+  content: string
+  keywords: string[]
+  version?: number // For optimistic locking on updates
+  isDirty: boolean // Has unsaved changes
+}
+
+export const DEFAULT_WORKSPACE_NOTE: WorkspaceNote = {
+  id: undefined,
+  title: "",
+  content: "",
+  keywords: [],
+  version: undefined,
+  isDirty: false
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 // Slides/Presentation Types
 // ─────────────────────────────────────────────────────────────────────────────
 

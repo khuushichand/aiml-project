@@ -19,17 +19,17 @@ import {
   Trash2,
   ChevronDown,
   ChevronUp,
-  Settings2
+  Settings2,
+  PanelRightClose
 } from "lucide-react"
-import { Button, Empty, Tooltip, Input, Modal, message, Slider, Select, Collapse } from "antd"
+import { Button, Empty, Tooltip, Input, Modal, message, Slider, Select } from "antd"
 import { useWorkspaceStore } from "@/store/workspace"
 import { tldwClient } from "@/services/tldw/TldwApiClient"
 import { generateQuiz } from "@/services/quizzes"
 import { createFlashcard, createDeck, listDecks } from "@/services/flashcards"
 import { fetchTldwVoiceCatalog, type TldwVoice } from "@/services/tldw/audio-voices"
 import type { ArtifactType, GeneratedArtifact, AudioTtsProvider } from "@/types/workspace"
-
-const { TextArea } = Input
+import { QuickNotesSection } from "./QuickNotesSection"
 
 // Icon mapping for artifact types
 const ARTIFACT_TYPE_ICONS: Record<ArtifactType, React.ElementType> = {
@@ -113,10 +113,15 @@ const SLIDES_EXPORT_FORMATS: { value: string; label: string; ext: string }[] = [
   { value: "json", label: "JSON", ext: "json" }
 ]
 
+interface StudioPaneProps {
+  /** Callback to hide/collapse the pane */
+  onHide?: () => void
+}
+
 /**
  * StudioPane - Right pane for generating outputs
  */
-export const StudioPane: React.FC = () => {
+export const StudioPane: React.FC<StudioPaneProps> = ({ onHide }) => {
   const { t } = useTranslation(["playground", "common"])
   const [messageApi, contextHolder] = message.useMessage()
 
@@ -124,7 +129,6 @@ export const StudioPane: React.FC = () => {
   const selectedSourceIds = useWorkspaceStore((s) => s.selectedSourceIds)
   const getSelectedMediaIds = useWorkspaceStore((s) => s.getSelectedMediaIds)
   const generatedArtifacts = useWorkspaceStore((s) => s.generatedArtifacts)
-  const notes = useWorkspaceStore((s) => s.notes)
   const isGeneratingOutput = useWorkspaceStore((s) => s.isGeneratingOutput)
   const generatingOutputType = useWorkspaceStore((s) => s.generatingOutputType)
   const workspaceTag = useWorkspaceStore((s) => s.workspaceTag)
@@ -134,7 +138,6 @@ export const StudioPane: React.FC = () => {
   const addArtifact = useWorkspaceStore((s) => s.addArtifact)
   const updateArtifactStatus = useWorkspaceStore((s) => s.updateArtifactStatus)
   const removeArtifact = useWorkspaceStore((s) => s.removeArtifact)
-  const setNotes = useWorkspaceStore((s) => s.setNotes)
   const setIsGeneratingOutput = useWorkspaceStore((s) => s.setIsGeneratingOutput)
   const setAudioSettings = useWorkspaceStore((s) => s.setAudioSettings)
 
@@ -279,22 +282,6 @@ export const StudioPane: React.FC = () => {
     }
   }
 
-  const handleSaveNote = async () => {
-    if (!notes.trim()) return
-
-    try {
-      await tldwClient.createNote(notes, {
-        workspace_tag: workspaceTag || undefined
-      })
-      messageApi.success(t("playground:studio.noteSaved", "Note saved"))
-      setNotes("")
-    } catch (error) {
-      messageApi.error(
-        t("playground:studio.noteSaveError", "Failed to save note")
-      )
-    }
-  }
-
   const handleViewArtifact = (artifact: GeneratedArtifact) => {
     if (artifact.type === "audio_overview" && artifact.audioUrl) {
       // Show audio player modal for audio artifacts
@@ -428,18 +415,32 @@ export const StudioPane: React.FC = () => {
       {contextHolder}
 
       {/* Header */}
-      <div className="border-b border-border px-4 py-3">
-        <h2 className="text-sm font-semibold text-text">
-          {t("playground:studio.title", "Studio")}
-        </h2>
-        <p className="mt-0.5 text-xs text-text-muted">
-          {t("playground:studio.subtitle", "Generate outputs from your sources")}
-        </p>
+      <div className="flex items-start justify-between border-b border-border px-4 py-3">
+        <div>
+          <h2 className="text-sm font-semibold text-text">
+            {t("playground:studio.title", "Studio")}
+          </h2>
+          <p className="mt-0.5 text-xs text-text-muted">
+            {t("playground:studio.subtitle", "Generate outputs from your sources")}
+          </p>
+        </div>
+        {onHide && (
+          <Tooltip title={t("playground:workspace.hideStudio", "Hide studio")}>
+            <button
+              type="button"
+              onClick={onHide}
+              className="hidden rounded p-1.5 text-text-muted transition hover:bg-surface2 hover:text-text lg:block"
+              aria-label={t("playground:workspace.hideStudio", "Hide studio")}
+            >
+              <PanelRightClose className="h-4 w-4" />
+            </button>
+          </Tooltip>
+        )}
       </div>
 
       {/* Output grid */}
       <div className="border-b border-border p-4">
-        <div className="grid grid-cols-3 gap-2">
+        <div className="grid grid-cols-2 gap-3">
           {OUTPUT_BUTTONS.map(({ type, label, icon: Icon }) => {
             const isGenerating =
               isGeneratingOutput && generatingOutputType === type
@@ -693,29 +694,8 @@ export const StudioPane: React.FC = () => {
         </div>
       </div>
 
-      {/* Notes area */}
-      <div className="border-t border-border p-4">
-        <h3 className="mb-2 text-xs font-semibold uppercase text-text-muted">
-          {t("playground:studio.quickNotes", "Quick Notes")}
-        </h3>
-        <TextArea
-          value={notes}
-          onChange={(e) => setNotes(e.target.value)}
-          placeholder={t(
-            "playground:studio.notesPlaceholder",
-            "Jot down notes, ideas, or observations..."
-          )}
-          autoSize={{ minRows: 3, maxRows: 6 }}
-          className="text-sm"
-        />
-        {notes.trim() && (
-          <div className="mt-2 flex justify-end">
-            <Button size="small" type="primary" onClick={handleSaveNote}>
-              {t("playground:studio.saveNote", "Save Note")}
-            </Button>
-          </div>
-        )}
-      </div>
+      {/* Quick Notes Section */}
+      <QuickNotesSection />
     </div>
   )
 }

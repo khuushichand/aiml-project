@@ -17,13 +17,13 @@ export function BasicSettings() {
         <select
           value={settings.search_mode}
           onChange={(e) => updateSetting("search_mode", e.target.value as typeof settings.search_mode)}
-          className="w-full px-3 py-2 rounded-md border border-border bg-background focus:outline-none focus:ring-2 focus:ring-primary"
+          className="w-full px-3 py-2 rounded-md border border-border bg-surface focus:outline-none focus:ring-2 focus:ring-primary"
         >
           <option value="hybrid">Hybrid (Recommended)</option>
           <option value="vector">Vector Only</option>
           <option value="fts">Full-Text Only</option>
         </select>
-        <p className="text-xs text-muted-foreground">
+        <p className="text-xs text-text-muted">
           Hybrid combines full-text and semantic search for best results
         </p>
       </div>
@@ -32,7 +32,7 @@ export function BasicSettings() {
       <div className="space-y-2">
         <div className="flex items-center justify-between">
           <label className="text-sm font-medium">Number of Sources</label>
-          <span className="text-sm text-muted-foreground">{settings.top_k}</span>
+          <span className="text-sm text-text-muted">{settings.top_k}</span>
         </div>
         <input
           type="range"
@@ -42,7 +42,7 @@ export function BasicSettings() {
           onChange={(e) => updateSetting("top_k", parseInt(e.target.value, 10))}
           className="w-full accent-primary"
         />
-        <p className="text-xs text-muted-foreground">
+        <p className="text-xs text-text-muted">
           How many documents to retrieve (5-10 for quick, 20+ for thorough)
         </p>
       </div>
@@ -78,8 +78,11 @@ export function BasicSettings() {
       {/* Generation Toggle */}
       <div className="space-y-2">
         <div className="flex items-center justify-between">
-          <label className="text-sm font-medium">Generate Answer</label>
+          <label id="generate-answer-label" className="text-sm font-medium">Generate Answer</label>
           <button
+            role="switch"
+            aria-checked={settings.enable_generation}
+            aria-labelledby="generate-answer-label"
             onClick={() => updateSetting("enable_generation", !settings.enable_generation)}
             className={cn(
               "relative inline-flex h-6 w-11 items-center rounded-full transition-colors",
@@ -94,7 +97,7 @@ export function BasicSettings() {
             />
           </button>
         </div>
-        <p className="text-xs text-muted-foreground">
+        <p className="text-xs text-text-muted">
           Use AI to synthesize an answer from retrieved documents
         </p>
       </div>
@@ -103,8 +106,11 @@ export function BasicSettings() {
       {settings.enable_generation && (
         <div className="space-y-2">
           <div className="flex items-center justify-between">
-            <label className="text-sm font-medium">Include Citations</label>
+            <label id="include-citations-label" className="text-sm font-medium">Include Citations</label>
             <button
+              role="switch"
+              aria-checked={settings.enable_citations}
+              aria-labelledby="include-citations-label"
               onClick={() => updateSetting("enable_citations", !settings.enable_citations)}
               className={cn(
                 "relative inline-flex h-6 w-11 items-center rounded-full transition-colors",
@@ -119,7 +125,7 @@ export function BasicSettings() {
               />
             </button>
           </div>
-          <p className="text-xs text-muted-foreground">
+          <p className="text-xs text-text-muted">
             Add inline citations [1], [2] to reference sources
           </p>
         </div>
@@ -128,8 +134,11 @@ export function BasicSettings() {
       {/* Reranking Toggle */}
       <div className="space-y-2">
         <div className="flex items-center justify-between">
-          <label className="text-sm font-medium">Enable Reranking</label>
+          <label id="enable-reranking-label" className="text-sm font-medium">Enable Reranking</label>
           <button
+            role="switch"
+            aria-checked={settings.enable_reranking}
+            aria-labelledby="enable-reranking-label"
             onClick={() => updateSetting("enable_reranking", !settings.enable_reranking)}
             className={cn(
               "relative inline-flex h-6 w-11 items-center rounded-full transition-colors",
@@ -144,7 +153,7 @@ export function BasicSettings() {
             />
           </button>
         </div>
-        <p className="text-xs text-muted-foreground">
+        <p className="text-xs text-text-muted">
           Improve relevance by reranking results (slightly slower)
         </p>
       </div>
@@ -154,7 +163,7 @@ export function BasicSettings() {
         <div className="space-y-2">
           <div className="flex items-center justify-between">
             <label className="text-sm font-medium">Answer Length</label>
-            <span className="text-sm text-muted-foreground">
+            <span className="text-sm text-text-muted">
               {settings.max_generation_tokens} tokens
             </span>
           </div>
@@ -167,7 +176,7 @@ export function BasicSettings() {
             onChange={(e) => updateSetting("max_generation_tokens", parseInt(e.target.value, 10))}
             className="w-full accent-primary"
           />
-          <div className="flex justify-between text-xs text-muted-foreground">
+          <div className="flex justify-between text-xs text-text-muted">
             <span>Brief</span>
             <span>Detailed</span>
           </div>

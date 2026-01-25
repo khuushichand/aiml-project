@@ -13,10 +13,11 @@ import type {
   AudioGenerationSettings,
   GeneratedArtifact,
   WorkspaceConfig,
+  WorkspaceNote,
   WorkspaceSource,
   WorkspaceSourceType
 } from "@/types/workspace"
-import { DEFAULT_AUDIO_SETTINGS } from "@/types/workspace"
+import { DEFAULT_AUDIO_SETTINGS, DEFAULT_WORKSPACE_NOTE } from "@/types/workspace"
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Storage Configuration
@@ -110,7 +111,8 @@ interface SourcesState {
 
 interface StudioState {
   generatedArtifacts: GeneratedArtifact[]
-  notes: string
+  notes: string // Legacy simple notes field
+  currentNote: WorkspaceNote // Full note with title, keywords, versioning
   isGeneratingOutput: boolean
   generatingOutputType: ArtifactType | null
 }
@@ -174,6 +176,13 @@ interface StudioActions {
     isGenerating: boolean,
     outputType?: ArtifactType | null
   ) => void
+  // Note management actions
+  setCurrentNote: (note: WorkspaceNote | null) => void
+  updateNoteContent: (content: string) => void
+  updateNoteTitle: (title: string) => void
+  updateNoteKeywords: (keywords: string[]) => void
+  clearCurrentNote: () => void
+  loadNote: (note: { id: number; title: string; content: string; keywords?: string[]; version?: number }) => void
 }
 
 interface UIActions {
@@ -245,6 +254,7 @@ const initialSourcesState: SourcesState = {
 const initialStudioState: StudioState = {
   generatedArtifacts: [],
   notes: "",
+  currentNote: { ...DEFAULT_WORKSPACE_NOTE },
   isGeneratingOutput: false,
   generatingOutputType: null
 }
@@ -288,6 +298,7 @@ interface PersistedWorkspaceState {
   // Studio outputs (generated artifacts persist, but audioUrl blobs don't survive reload)
   generatedArtifacts: GeneratedArtifact[]
   notes: string
+  currentNote: WorkspaceNote
 
   // Pane visibility preferences
   leftPaneCollapsed: boolean
@@ -476,6 +487,40 @@ export const useWorkspaceStore = createWithEqualityFn<WorkspaceState>()(
         generatingOutputType: isGenerating ? outputType : null
       }),
 
+    // Note management actions
+    setCurrentNote: (note) =>
+      set({ currentNote: note || { ...DEFAULT_WORKSPACE_NOTE } }),
+
+    updateNoteContent: (content) =>
+      set((state) => ({
+        currentNote: { ...state.currentNote, content, isDirty: true }
+      })),
+
+    updateNoteTitle: (title) =>
+      set((state) => ({
+        currentNote: { ...state.currentNote, title, isDirty: true }
+      })),
+
+    updateNoteKeywords: (keywords) =>
+      set((state) => ({
+        currentNote: { ...state.currentNote, keywords, isDirty: true }
+      })),
+
+    clearCurrentNote: () =>
+      set({ currentNote: { ...DEFAULT_WORKSPACE_NOTE } }),
+
+    loadNote: (note) =>
+      set({
+        currentNote: {
+          id: note.id,
+          title: note.title,
+          content: note.content,
+          keywords: note.keywords || [],
+          version: note.version,
+          isDirty: false
+        }
+      }),
+
     // ─────────────────────────────────────────────────────────────────────────
     // UI Actions
     // ─────────────────────────────────────────────────────────────────────────
@@ -562,6 +607,7 @@ export const useWorkspaceStore = createWithEqualityFn<WorkspaceState>()(
           audioUrl: undefined
         })),
         notes: state.notes,
+        currentNote: state.currentNote,
 
         // Pane preferences
         leftPaneCollapsed: state.leftPaneCollapsed,
@@ -598,6 +644,10 @@ export const useWorkspaceStore = createWithEqualityFn<WorkspaceState>()(
           // Migration: ensure audioSettings exists (for users with older persisted state)
           if (!state.audioSettings) {
             state.audioSettings = { ...DEFAULT_AUDIO_SETTINGS }
+          }
+          // Migration: ensure currentNote exists (for users with older persisted state)
+          if (!state.currentNote) {
+            state.currentNote = { ...DEFAULT_WORKSPACE_NOTE }
           }
         }
       }

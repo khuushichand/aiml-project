@@ -45,10 +45,11 @@ export function FollowUpInput({ className }: FollowUpInputProps) {
         <button
           type="button"
           onClick={handleNewTopic}
+          aria-label="Start new topic"
           className="flex items-center justify-center w-10 h-10 rounded-lg border border-border hover:border-primary/30 hover:bg-muted/50 transition-colors"
           title="Start new topic"
         >
-          <Plus className="w-5 h-5 text-muted-foreground" />
+          <Plus className="w-5 h-5 text-text-muted" />
         </button>
 
         {/* Input */}
@@ -61,9 +62,9 @@ export function FollowUpInput({ className }: FollowUpInputProps) {
             disabled={isSearching}
             className={cn(
               "w-full pl-4 pr-12 py-3",
-              "bg-background border border-border rounded-lg",
+              "bg-surface border border-border rounded-lg",
               "focus:outline-none focus:ring-2 focus:ring-primary focus:border-transparent",
-              "placeholder:text-muted-foreground/60",
+              "placeholder:text-text-subtle",
               "transition-all duration-200",
               isSearching && "opacity-75 cursor-not-allowed"
             )}
@@ -76,10 +77,10 @@ export function FollowUpInput({ className }: FollowUpInputProps) {
             className={cn(
               "absolute right-2 top-1/2 -translate-y-1/2",
               "p-2 rounded-md",
-              "bg-primary text-primary-foreground",
+              "bg-primary text-white",
               "transition-all duration-200",
               "disabled:opacity-50 disabled:cursor-not-allowed",
-              "hover:bg-primary/90"
+              "hover:bg-primaryStrong"
             )}
           >
             {isSearching ? (
@@ -91,9 +92,8 @@ export function FollowUpInput({ className }: FollowUpInputProps) {
         </div>
       </form>
 
-      <p className="mt-2 text-xs text-muted-foreground text-center">
-        Your follow-up questions maintain context from the current search.
-        Click <Plus className="inline w-3 h-3" /> to start a new topic.
+      <p className="mt-2 text-xs text-text-muted text-center">
+        Follow-up questions maintain context. Click &quot;New Topic&quot; to start fresh.
       </p>
     </div>
   )

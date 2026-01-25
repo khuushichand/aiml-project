@@ -1,7 +1,7 @@
 import React from "react"
 import { useTranslation } from "react-i18next"
-import { Plus, Search, FileText, Video, Headphones, Globe, File, Type } from "lucide-react"
-import { Input, Checkbox, Empty, Button } from "antd"
+import { Plus, Search, FileText, Video, Headphones, Globe, File, Type, PanelLeftClose } from "lucide-react"
+import { Input, Checkbox, Empty, Button, Tooltip } from "antd"
 import { useWorkspaceStore } from "@/store/workspace"
 import type { WorkspaceSourceType } from "@/types/workspace"
 import { AddSourceModal } from "./AddSourceModal"
@@ -16,10 +16,15 @@ const SOURCE_TYPE_ICONS: Record<WorkspaceSourceType, React.ElementType> = {
   text: Type
 }
 
+interface SourcesPaneProps {
+  /** Callback to hide/collapse the pane */
+  onHide?: () => void
+}
+
 /**
  * SourcesPane - Left pane for managing research sources
  */
-export const SourcesPane: React.FC = () => {
+export const SourcesPane: React.FC<SourcesPaneProps> = ({ onHide }) => {
   const { t } = useTranslation(["playground", "common"])
 
   // Store state
@@ -63,14 +68,28 @@ export const SourcesPane: React.FC = () => {
         <h2 className="text-sm font-semibold text-text">
           {t("playground:sources.title", "Sources")}
         </h2>
-        <Button
-          type="primary"
-          size="small"
-          icon={<Plus className="h-3.5 w-3.5" />}
-          onClick={() => openAddSourceModal()}
-        >
-          {t("playground:sources.add", "Add")}
-        </Button>
+        <div className="flex items-center gap-2">
+          <Button
+            type="primary"
+            size="small"
+            icon={<Plus className="h-3.5 w-3.5" />}
+            onClick={() => openAddSourceModal()}
+          >
+            {t("playground:sources.add", "Add")}
+          </Button>
+          {onHide && (
+            <Tooltip title={t("playground:workspace.hideSources", "Hide sources")}>
+              <button
+                type="button"
+                onClick={onHide}
+                className="hidden rounded p-1.5 text-text-muted transition hover:bg-surface2 hover:text-text lg:block"
+                aria-label={t("playground:workspace.hideSources", "Hide sources")}
+              >
+                <PanelLeftClose className="h-4 w-4" />
+              </button>
+            </Tooltip>
+          )}
+        </div>
       </div>
 
       {/* Search and select controls */}
