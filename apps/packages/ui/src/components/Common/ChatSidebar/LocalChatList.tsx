@@ -313,6 +313,21 @@ export function LocalChatList({
           }
         })
       }
+    },
+    onError: (error) => {
+      const errorMessage =
+        error && typeof error === "object" && "message" in error
+          ? String((error as { message?: unknown }).message)
+          : t("common:unknownError", { defaultValue: "Unknown error" })
+      // eslint-disable-next-line no-console
+      console.error("Failed to delete chat history:", error)
+      message.error(
+        t("common:deleteHistoryError", {
+          defaultValue: "Failed to delete chat: {{error}}",
+          error: errorMessage
+        })
+      )
+      queryClient.invalidateQueries({ queryKey: ["fetchChatHistory"] })
     }
   })
 
@@ -358,6 +373,21 @@ export function LocalChatList({
       return await pinHistory(data.id, data.is_pinned)
     },
     onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["fetchChatHistory"] })
+    },
+    onError: (error) => {
+      const errorMessage =
+        error && typeof error === "object" && "message" in error
+          ? String((error as { message?: unknown }).message)
+          : t("common:unknownError", { defaultValue: "Unknown error" })
+      // eslint-disable-next-line no-console
+      console.error("Failed to update pinned chat history:", error)
+      message.error(
+        t("common:pinHistoryError", {
+          defaultValue: "Failed to update pin status: {{error}}",
+          error: errorMessage
+        })
+      )
       queryClient.invalidateQueries({ queryKey: ["fetchChatHistory"] })
     }
   })

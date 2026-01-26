@@ -12,7 +12,7 @@ import FeatureEmptyState from "@/components/Common/FeatureEmptyState"
 const { TextArea } = Input
 
 /**
- * ChatContextIndicator - Shows how many sources are being used
+ * ChatContextIndicator - Shows sources as horizontally scrollable tags
  */
 const ChatContextIndicator: React.FC = () => {
   const { t } = useTranslation(["playground"])
@@ -23,44 +23,32 @@ const ChatContextIndicator: React.FC = () => {
   if (selectedSources.length === 0) return null
 
   return (
-    <div className="border-b border-border bg-surface px-4 py-2">
-      <Tooltip
-        title={
-          <div className="max-w-xs">
-            <p className="mb-1 font-medium">
-              {t("playground:chat.usingSourcesTitle", "Active sources:")}
-            </p>
-            <ul className="space-y-0.5 text-xs">
-              {selectedSources.slice(0, 5).map((source) => (
-                <li key={source.id} className="flex items-center gap-1">
-                  <FileText className="h-3 w-3" />
-                  <span className="truncate">{source.title}</span>
-                </li>
-              ))}
-              {selectedSources.length > 5 && (
-                <li className="text-text-muted">
-                  {t("playground:chat.moreSourcesCount", "+{{count}} more", {
-                    count: selectedSources.length - 5
-                  })}
-                </li>
-              )}
-            </ul>
-          </div>
-        }
-      >
-        <Tag color="blue" className="cursor-help">
+    <div className="shrink-0 border-b border-border bg-surface px-4 py-2">
+      <div className="flex items-center gap-2">
+        <span className="shrink-0 text-xs font-medium text-text-muted">
           <FileText className="mr-1 inline h-3 w-3" />
-          {t("playground:chat.usingSources", "Using {{count}} source(s)", {
-            count: selectedSources.length
-          })}
-        </Tag>
-      </Tooltip>
-      <span className="ml-2 text-xs text-text-muted">
+          {t("playground:chat.usingSourcesLabel", "Sources:")}
+        </span>
+        {/* Horizontally scrollable source tags */}
+        <div className="custom-scrollbar flex min-w-0 flex-1 gap-1.5 overflow-x-auto pb-0.5">
+          {selectedSources.map((source) => (
+            <Tooltip key={source.id} title={source.title}>
+              <Tag
+                color="blue"
+                className="shrink-0 cursor-default !m-0 max-w-[150px] truncate"
+              >
+                {source.title}
+              </Tag>
+            </Tooltip>
+          ))}
+        </div>
+      </div>
+      <p className="mt-1 text-xs text-text-muted">
         {t(
           "playground:chat.ragModeHint",
           "Answers will be grounded in your selected sources"
         )}
-      </span>
+      </p>
     </div>
   )
 }

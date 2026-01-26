@@ -18,7 +18,7 @@ and this project adheres to Some kind of Versioning
 
 
 
-## [0.1.18] 2026-01-X
+## [0.1.18] 2026-01-25
 
 ### Added
 - Slides Module
