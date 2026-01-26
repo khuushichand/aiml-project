@@ -28,8 +28,7 @@ export async function seedAuth(
           "tldwConfig",
           JSON.stringify({
             serverUrl: cfg.serverUrl,
-            authMode: "single-user",
-            apiKey: cfg.apiKey
+            authMode: "single-user"
           })
         )
       } catch {}

@@ -70,11 +70,6 @@ export function getApiKey(): string | null {
 export function setApiKey(key: string): void {
   if (typeof window !== 'undefined') {
     inMemoryApiKey = key;
-    try {
-      sessionStorage.setItem(API_KEY_STORAGE_KEY, key);
-    } catch (error) {
-      console.warn('Failed to persist API key to sessionStorage:', error);
-    }
     emitAuthChange();
   }
 }
