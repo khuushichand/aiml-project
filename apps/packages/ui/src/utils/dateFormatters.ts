@@ -1,10 +1,19 @@
 import type { TFunction } from "i18next"
 
+interface FormatRelativeTimeOptions {
+  compact?: boolean
+}
+
 export const formatRelativeTime = (
   isoString: string,
-  t: TFunction
+  t: TFunction,
+  options: FormatRelativeTimeOptions = {}
 ): string => {
   const date = new Date(isoString)
+  if (Number.isNaN(date.getTime())) {
+    return t("relativeTime.unknown", "Unknown")
+  }
+  const { compact = false } = options
   const now = new Date()
   const diffMs = now.getTime() - date.getTime()
   const diffMins = Math.floor(diffMs / (1000 * 60))
@@ -13,6 +22,33 @@ export const formatRelativeTime = (
 
   if (diffMins < 1) {
     return t("relativeTime.justNow", "Just now")
+  }
+
+  if (compact) {
+    const agoShort = t("relativeTime.agoShort", "ago")
+
+    if (diffMins < 60) {
+      return t("relativeTime.minutesAgoShort", {
+        count: diffMins,
+        defaultValue: `${diffMins}m ${agoShort}`
+      })
+    }
+
+    if (diffHours < 24) {
+      return t("relativeTime.hoursAgoShort", {
+        count: diffHours,
+        defaultValue: `${diffHours}h ${agoShort}`
+      })
+    }
+
+    if (diffDays < 7) {
+      return t("relativeTime.daysAgoShort", {
+        count: diffDays,
+        defaultValue: `${diffDays}d ${agoShort}`
+      })
+    }
+
+    return date.toLocaleDateString()
   }
 
   if (diffMins < 60) {
@@ -41,4 +77,3 @@ export const formatRelativeTime = (
 
   return date.toLocaleDateString()
 }
-

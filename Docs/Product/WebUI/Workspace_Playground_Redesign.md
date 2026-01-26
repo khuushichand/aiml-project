@@ -59,11 +59,13 @@
 
  3.1 Three-Pane Layout
 
+ ```text
  +------------------+------------------------+------------------+
  |   Sources Pane   |      Chat Pane         |   Studio Pane    |
  |   (collapsible)  |      (flex-1)          |   (collapsible)  |
  |     ~280px       |                        |     ~320px       |
  +------------------+------------------------+------------------+
+ ```
 
  CSS Structure (following ModelPlayground pattern):
  <div className="flex h-full flex-col bg-bg text-text">
@@ -269,6 +271,7 @@
  4.3 Studio Pane (Right)
 
  Output Grid (3x3):
+ ```text
  +-------------+-------------+-------------+
  | Audio       | Summary     | Mind Map    |
  | Overview    |             |             |
@@ -277,6 +280,7 @@
  +-------------+-------------+-------------+
  | Timeline    | Slides      | Data Table  |
  +-------------+-------------+-------------+
+ ```
 
  Generation Flow:
  1. Click output type button

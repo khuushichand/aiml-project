@@ -5,6 +5,7 @@ import { useParams, useRouter } from 'next/navigation';
 import { PermissionGuard } from '@/components/PermissionGuard';
 import { ResponsiveLayout } from '@/components/ResponsiveLayout';
 import { Button } from '@/components/ui/button';
+import { Checkbox } from '@/components/ui/checkbox';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
@@ -17,7 +18,7 @@ import {
   ArrowLeft, Building2, Users, UserPlus, Mail, Trash2, Key, Shield, Copy, Plus, Eye, EyeOff, ListChecks
 } from 'lucide-react';
 import { api } from '@/lib/api-client';
-import { Organization, OrgMember, Team, ProviderSecret, User } from '@/types';
+import { Organization, OrgMember, Team, ProviderSecret, User, WatchlistSettings } from '@/types';
 import Link from 'next/link';
 import { UserPicker } from '@/components/users/UserPicker';
 
@@ -56,12 +57,6 @@ export default function OrganizationDetailPage() {
   const [showByokApiKey, setShowByokApiKey] = useState(false);
 
   // Watchlist Settings
-  type WatchlistSettings = {
-    watchlists_enabled?: boolean;
-    default_threshold?: number;
-    notification_email?: string;
-    alert_on_breach?: boolean;
-  };
   const [watchlistSettings, setWatchlistSettings] = useState<WatchlistSettings | null>(null);
   const [watchlistLoading, setWatchlistLoading] = useState(false);
   const [watchlistSaving, setWatchlistSaving] = useState(false);
@@ -290,14 +285,15 @@ export default function OrganizationDetailPage() {
   };
 
   const handleSaveWatchlistSettings = async () => {
+    const threshold = parseInt(editWatchlistThreshold, 10);
+    if (Number.isNaN(threshold) || threshold < 1) {
+      setError('Threshold must be at least 1');
+      setWatchlistSaving(false);
+      return;
+    }
     try {
       setWatchlistSaving(true);
       setError('');
-      const threshold = parseInt(editWatchlistThreshold, 10);
-      if (Number.isNaN(threshold) || threshold < 1) {
-        setError('Threshold must be at least 1');
-        return;
-      }
       await api.updateOrgWatchlistSettings(orgId, {
         watchlists_enabled: editWatchlistEnabled,
         default_threshold: threshold,
@@ -832,11 +828,9 @@ export default function OrganizationDetailPage() {
                             <Label>Enable Watchlists</Label>
                             <p className="text-xs text-muted-foreground">Track usage and spending</p>
                           </div>
-                          <input
-                            type="checkbox"
+                          <Checkbox
                             checked={editWatchlistEnabled}
-                            onChange={(e) => setEditWatchlistEnabled(e.target.checked)}
-                            className="h-4 w-4"
+                            onCheckedChange={setEditWatchlistEnabled}
                           />
                         </div>
                         <div className="space-y-1 p-3 border rounded-lg">
@@ -856,12 +850,10 @@ export default function OrganizationDetailPage() {
                             <Label>Alert on Breach</Label>
                             <p className="text-xs text-muted-foreground">Send notifications when exceeded</p>
                           </div>
-                          <input
-                            type="checkbox"
+                          <Checkbox
                             checked={editWatchlistAlertOnBreach}
-                            onChange={(e) => setEditWatchlistAlertOnBreach(e.target.checked)}
+                            onCheckedChange={setEditWatchlistAlertOnBreach}
                             disabled={!editWatchlistEnabled}
-                            className="h-4 w-4"
                           />
                         </div>
                       </div>

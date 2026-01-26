@@ -8,6 +8,7 @@ import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Select } from '@/components/ui/select';
 import { Label } from '@/components/ui/label';
+import { Checkbox } from '@/components/ui/checkbox';
 import { Alert, AlertDescription } from '@/components/ui/alert';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import { Badge } from '@/components/ui/badge';
@@ -15,6 +16,7 @@ import { useConfirm } from '@/components/ui/confirm-dialog';
 import { useToast } from '@/components/ui/toast';
 import { api } from '@/lib/api-client';
 import { formatDateTime } from '@/lib/format';
+import { parseOptionalInt } from '@/lib/number';
 import { RefreshCw, Trash2, Edit2, Plus, Gauge, X } from 'lucide-react';
 
 type ResourcePolicy = {
@@ -91,7 +93,7 @@ export default function ResourceGovernorPage() {
     try {
       setLoading(true);
       setError('');
-      const data = (await api.getResourceGovernorPolicy({ include_ids: true })) as PoliciesResponse;
+      const data = (await api.getResourceGovernorPolicy({ include_ids: true }, signal)) as PoliciesResponse;
       const items = data.policies || data.items || [];
       let filtered = Array.isArray(items) ? items : [];
       if (scopeFilter) {
@@ -162,13 +164,6 @@ export default function ResourceGovernorPage() {
   const handleCancelForm = () => {
     setShowForm(false);
     resetForm();
-  };
-
-  const parseOptionalInt = (value: string): number | null => {
-    const trimmed = value.trim();
-    if (!trimmed) return null;
-    const parsed = parseInt(trimmed, 10);
-    return Number.isFinite(parsed) && parsed >= 0 ? parsed : null;
   };
 
   const handleSavePolicy = async () => {
@@ -444,12 +439,10 @@ export default function ResourceGovernorPage() {
                     />
                   </div>
                   <div className="flex items-center gap-2 pt-6">
-                    <input
-                      type="checkbox"
-                      checked={formEnabled}
-                      onChange={(e) => setFormEnabled(e.target.checked)}
+                    <Checkbox
                       id="policy-enabled"
-                      className="h-4 w-4"
+                      checked={formEnabled}
+                      onCheckedChange={(checked) => setFormEnabled(checked)}
                     />
                     <Label htmlFor="policy-enabled">Enabled</Label>
                   </div>

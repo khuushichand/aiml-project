@@ -4720,6 +4720,21 @@ async def upsert_role_rate_limit(role_id: int, payload: RateLimitUpsertRequest, 
         raise HTTPException(status_code=500, detail="Failed to upsert role rate limit")
 
 
+@router.delete("/roles/{role_id}/rate-limits", response_model=MessageResponse)
+async def clear_role_rate_limits(role_id: int, db=Depends(get_db_transaction)) -> MessageResponse:
+    try:
+        is_pg = await is_postgres_backend()
+        if is_pg:
+            await db.execute("DELETE FROM rbac_role_rate_limits WHERE role_id = $1", role_id)
+        else:
+            await db.execute("DELETE FROM rbac_role_rate_limits WHERE role_id = ?", (role_id,))
+            await db.commit()
+        return MessageResponse(message="Role rate limits cleared", details={"role_id": role_id})
+    except Exception as e:
+        logger.error(f"Failed to clear role rate limits: {e}")
+        raise HTTPException(status_code=500, detail="Failed to clear role rate limits")
+
+
 @router.post("/users/{user_id}/rate-limits", response_model=RateLimitResponse)
 async def upsert_user_rate_limit(
     user_id: int,

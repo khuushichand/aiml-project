@@ -493,11 +493,11 @@ export const api = {
   // ============================================
   // Resource Governor
   // ============================================
-  getResourceGovernorPolicy: (params?: { include_ids?: boolean }) => {
+  getResourceGovernorPolicy: (params?: { include_ids?: boolean }, signal?: AbortSignal) => {
     const queryParams = params ? new URLSearchParams(
       Object.entries(params).map(([k, v]) => [k, String(v)])
     ).toString() : '';
-    return requestJson(`/resource-governor/policy${queryParams ? `?${queryParams}` : ''}`);
+    return requestJson(`/resource-governor/policy${queryParams ? `?${queryParams}` : ''}`, { signal });
   },
   updateResourceGovernorPolicy: (data: Record<string, unknown>) =>
     requestJson('/resource-governor/policy', {
@@ -517,6 +517,12 @@ export const api = {
       method: 'POST',
       body: JSON.stringify(data),
     }),
+  clearRoleRateLimits: (roleId: string) =>
+    requestJson(`/admin/roles/${encodeURIComponent(roleId)}/rate-limits`, {
+      method: 'DELETE',
+    }),
+  getUserRateLimits: (userId: string) =>
+    requestJson(`/admin/users/${encodeURIComponent(userId)}/rate-limits`),
   setUserRateLimits: (userId: string, data: Record<string, unknown>) =>
     requestJson(`/admin/users/${encodeURIComponent(userId)}/rate-limits`, {
       method: 'POST',

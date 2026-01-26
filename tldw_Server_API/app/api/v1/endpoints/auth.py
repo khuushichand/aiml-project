@@ -57,6 +57,7 @@ from tldw_Server_API.app.core.AuthNZ.rate_limiter import RateLimiter
 from tldw_Server_API.app.core.AuthNZ.input_validation import get_input_validator
 from tldw_Server_API.app.core.AuthNZ.token_blacklist import get_token_blacklist
 from tldw_Server_API.app.core.AuthNZ.orgs_teams import list_memberships_for_user
+from tldw_Server_API.app.core.AuthNZ.exceptions import DuplicateOrganizationError
 from tldw_Server_API.app.services.registration_service import RegistrationService
 from tldw_Server_API.app.core.AuthNZ.auth_governor import get_auth_governor
 from tldw_Server_API.app.core.AuthNZ.settings import Settings, get_settings, get_profile
@@ -199,6 +200,41 @@ def _generate_magic_password(length: int = 16) -> str:
     base.extend(secrets.choice(choices) for _ in range(remaining))
     secrets.SystemRandom().shuffle(base)
     return "".join(base)
+
+async def _ensure_user_org_membership(user_id: int, username: Optional[str] = None) -> None:
+    """Ensure a user has at least one org membership; create a personal org if not."""
+    try:
+        memberships = await list_memberships_for_user(int(user_id))
+    except Exception:
+        memberships = []
+    if memberships:
+        return
+
+    base_name = f"{username or 'Personal'} Workspace"
+    base_name = base_name.strip() or "Personal Workspace"
+
+    try:
+        from tldw_Server_API.app.core.AuthNZ.orgs_teams import create_organization
+        from tldw_Server_API.app.core.AuthNZ.repos.orgs_teams_repo import AuthnzOrgsTeamsRepo
+        from tldw_Server_API.app.core.AuthNZ.database import get_db_pool
+
+        org = None
+        for attempt in range(3):
+            name = base_name if attempt == 0 else f"{base_name}-{secrets.token_hex(2)}"
+            try:
+                org = await create_organization(name=name, owner_user_id=int(user_id))
+                break
+            except DuplicateOrganizationError:
+                continue
+
+        if not org:
+            return
+
+        pool = await get_db_pool()
+        repo = AuthnzOrgsTeamsRepo(db_pool=pool)
+        await repo.add_org_member(org_id=org["id"], user_id=int(user_id), role="owner")
+    except Exception as exc:
+        logger.warning("Org bootstrap failed for user {}: {}", user_id, exc)
 
 async def _ensure_mfa_cache_available(session_manager: SessionManager, settings: Settings) -> None:
     """Ensure MFA ephemeral storage is backed by Redis (mandatory for MFA flows)."""
@@ -824,6 +860,10 @@ async def login(
                     expires_in=ttl_seconds,
                     message="MFA required. Submit your TOTP or backup code.",
                 )
+
+            # Ensure org membership before issuing tokens (so claims include org_id)
+            if settings.AUTH_MODE == "multi_user":
+                await _ensure_user_org_membership(int(user["id"]), user.get("username"))
 
             # Create JWT tokens with session_id
             scope_claims = await _build_scope_claims(int(user["id"]))
@@ -1858,6 +1898,14 @@ async def request_magic_link(
     email = _normalize_magic_email(data.email)
     if not email:
         return MessageResponse(message="If the account exists, a sign-in link has been sent")
+    try:
+        validator = get_input_validator()
+        is_valid, _error_msg = validator.validate_email(email)
+        if not is_valid:
+            return MessageResponse(message="If the account exists, a sign-in link has been sent")
+    except Exception:
+        # Never fail the request on validation errors; keep response generic
+        pass
 
     # Rate limit by IP and email (best-effort)
     try:
@@ -2029,25 +2077,34 @@ async def verify_magic_link(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Invalid or inactive user",
         )
+    if user.get("is_active") is False:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid or inactive user",
+        )
 
-    # Ensure the user has at least one org membership
+    # If an existing account wasn't verified, magic link serves as verification
     try:
-        memberships = await list_memberships_for_user(int(user["id"]))
-    except Exception:
-        memberships = []
-    if not memberships:
-        try:
-            from tldw_Server_API.app.core.AuthNZ.orgs_teams import create_organization
-            from tldw_Server_API.app.core.AuthNZ.repos.orgs_teams_repo import AuthnzOrgsTeamsRepo
-            from tldw_Server_API.app.core.AuthNZ.database import get_db_pool
+        if user.get("is_verified") is False:
+            is_pg = await is_postgres_backend()
+            if is_pg:
+                await db.execute(
+                    "UPDATE users SET is_verified = true, updated_at = $1 WHERE id = $2",
+                    datetime.utcnow(),
+                    int(user["id"]),
+                )
+            else:
+                await db.execute(
+                    "UPDATE users SET is_verified = 1, updated_at = ? WHERE id = ?",
+                    (datetime.utcnow().isoformat(), int(user["id"])),
+                )
+                await db.commit()
+            user["is_verified"] = True
+    except Exception as exc:
+        logger.debug("Magic link verification: failed to mark user verified: {}", exc)
 
-            org_name = f"{user.get('username') or 'Personal'} Workspace"
-            org = await create_organization(name=org_name, owner_user_id=int(user["id"]))
-            pool = await get_db_pool()
-            repo = AuthnzOrgsTeamsRepo(db_pool=pool)
-            await repo.add_org_member(org_id=org["id"], user_id=int(user["id"]), role="owner")
-        except Exception as exc:
-            logger.warning("Magic link org bootstrap failed: {}", exc)
+    if settings.AUTH_MODE == "multi_user":
+        await _ensure_user_org_membership(int(user["id"]), user.get("username"))
 
     # Create a session and issue tokens (similar to login flow)
     user_agent = request.headers.get("User-Agent", "Unknown")
@@ -2440,6 +2497,9 @@ async def mfa_login(
                 detail="Invalid MFA token",
                 headers={"WWW-Authenticate": "Bearer"},
             )
+
+        if settings.AUTH_MODE == "multi_user":
+            await _ensure_user_org_membership(user_id, user.get("username"))
 
         scope_claims = await _build_scope_claims(user_id)
         add_claims = dict(scope_claims)

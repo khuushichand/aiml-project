@@ -18,6 +18,7 @@ import { ArrowLeft, Key, Save, Building2, Users, Shield, Monitor, RefreshCw, Tra
 import { AccessibleIconButton } from '@/components/ui/accessible-icon-button';
 import { api, ApiError } from '@/lib/api-client';
 import { formatDateTime } from '@/lib/format';
+import { parseOptionalInt } from '@/lib/number';
 import { canEditFromMemberships } from '@/lib/permissions';
 import { User, Permission } from '@/types';
 import Link from 'next/link';
@@ -73,6 +74,19 @@ type UserSession = {
   created_at: string;
   last_activity?: string | null;
   expires_at?: string | null;
+};
+
+const normalizeRateLimits = (value: unknown): UserRateLimits | null => {
+  if (!value || typeof value !== 'object') return null;
+  const candidate = value as UserRateLimits & { rate_limits?: UserRateLimits };
+  const source = candidate.rate_limits ?? candidate;
+  const toNumber = (input: unknown): number | null =>
+    typeof input === 'number' && Number.isFinite(input) ? input : null;
+  return {
+    requests_per_minute: toNumber(source.requests_per_minute),
+    requests_per_hour: toNumber(source.requests_per_hour),
+    requests_per_day: toNumber(source.requests_per_day),
+  };
 };
 
 const isForbiddenError = (err: unknown): boolean => {
@@ -132,21 +146,40 @@ export default function UserDetailPage() {
   const [newOverridePermissionId, setNewOverridePermissionId] = useState('');
   const [newOverrideGrant, setNewOverrideGrant] = useState(true);
 
+  const applyRateLimits = useCallback((limits?: UserRateLimits | null) => {
+    if (!limits) {
+      setRateLimits({});
+      setEditRpm('');
+      setEditRph('');
+      setEditRpd('');
+      return;
+    }
+    setRateLimits(limits);
+    setEditRpm(limits.requests_per_minute?.toString() || '');
+    setEditRph(limits.requests_per_hour?.toString() || '');
+    setEditRpd(limits.requests_per_day?.toString() || '');
+  }, []);
+
   const loadUser = useCallback(async () => {
     try {
       setLoading(true);
       setError('');
       setIsAuthorized(true);
       const data = await api.getUser(userId);
-      const roleValue = data.role && isValidRole(data.role) ? data.role : 'member';
-      setUser(data);
+      const userValue = data as User & { rate_limits?: UserRateLimits };
+      const roleValue = userValue.role && isValidRole(userValue.role) ? userValue.role : 'member';
+      setUser(userValue);
       setFormData({
-        username: data.username || '',
-        email: data.email || '',
+        username: userValue.username || '',
+        email: userValue.email || '',
         role: roleValue,
-        is_active: data.is_active ?? true,
-        storage_quota_mb: data.storage_quota_mb || 0,
+        is_active: userValue.is_active ?? true,
+        storage_quota_mb: userValue.storage_quota_mb || 0,
       });
+      const normalizedRateLimits = normalizeRateLimits(userValue.rate_limits);
+      if (normalizedRateLimits) {
+        applyRateLimits(normalizedRateLimits);
+      }
 
       try {
         const currentUser = await api.getCurrentUser();
@@ -225,10 +258,11 @@ export default function UserDetailPage() {
     if (!userId) return;
     try {
       setPermissionsLoading(true);
-      const [effectiveResult, overridesResult, allPermsResult] = await Promise.allSettled([
+      const [effectiveResult, overridesResult, allPermsResult, rateLimitsResult] = await Promise.allSettled([
         api.getUserEffectivePermissions(userId),
         api.getUserPermissionOverrides(userId),
         api.getPermissions(),
+        api.getUserRateLimits(userId),
       ]);
 
       if (effectiveResult.status === 'fulfilled') {
@@ -252,12 +286,19 @@ export default function UserDetailPage() {
       if (allPermsResult.status === 'fulfilled') {
         setAllPermissions(Array.isArray(allPermsResult.value) ? allPermsResult.value : []);
       }
+
+      if (rateLimitsResult.status === 'fulfilled') {
+        const normalizedRateLimits = normalizeRateLimits(rateLimitsResult.value);
+        if (normalizedRateLimits) {
+          applyRateLimits(normalizedRateLimits);
+        }
+      }
     } catch (err: unknown) {
       console.error('Failed to load permissions:', err);
     } finally {
       setPermissionsLoading(false);
     }
-  }, [userId]);
+  }, [applyRateLimits, userId]);
 
   useEffect(() => {
     loadUser();
@@ -361,13 +402,6 @@ export default function UserDetailPage() {
     }
   };
 
-  const parseOptionalInt = (value: string): number | undefined => {
-    const trimmed = value.trim();
-    if (!trimmed) return undefined;
-    const parsed = parseInt(trimmed, 10);
-    return Number.isFinite(parsed) && parsed >= 0 ? parsed : undefined;
-  };
-
   const handleSaveRateLimits = async () => {
     try {
       setRateLimitsSaving(true);
@@ -376,12 +410,12 @@ export default function UserDetailPage() {
       const rpm = parseOptionalInt(editRpm);
       const rph = parseOptionalInt(editRph);
       const rpd = parseOptionalInt(editRpd);
-      if (rpm !== undefined) data.requests_per_minute = rpm;
-      if (rph !== undefined) data.requests_per_hour = rph;
-      if (rpd !== undefined) data.requests_per_day = rpd;
+      if (rpm !== null) data.requests_per_minute = rpm;
+      if (rph !== null) data.requests_per_hour = rph;
+      if (rpd !== null) data.requests_per_day = rpd;
 
       await api.setUserRateLimits(userId, data);
-      setRateLimits(data);
+      applyRateLimits(data);
       toastSuccess('Rate limits updated', 'User rate limits have been saved.');
     } catch (err: unknown) {
       console.error('Failed to update rate limits:', err);

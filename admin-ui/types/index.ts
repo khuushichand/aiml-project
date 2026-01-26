@@ -58,6 +58,13 @@ export interface RegistrationSettings {
   self_registration_allowed?: boolean;
 }
 
+export interface WatchlistSettings {
+  watchlists_enabled?: boolean;
+  default_threshold?: number;
+  notification_email?: string;
+  alert_on_breach?: boolean;
+}
+
 export interface OrgMember {
   org_id: number;
   user_id: number;
@@ -171,6 +178,17 @@ export interface DashboardStats {
   providers: number;
   storageUsedMb: number;
 }
+
+export type SecurityHealthData = {
+  risk_score?: number;
+  recent_security_events?: number;
+  failed_logins_24h?: number;
+  suspicious_activity?: number;
+  mfa_adoption_rate?: number;
+  active_sessions?: number;
+  api_keys_active?: number;
+  last_security_scan?: string;
+};
 
 export interface AuthContextType {
   user: User | null;

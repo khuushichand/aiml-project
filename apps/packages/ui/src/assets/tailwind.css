@@ -374,71 +374,84 @@ body {
 
 @keyframes gradient-border {
   0% {
-    background-position: 0 0, 0% 50%;
+    background-position: 0% 50%;
   }
   50% {
-    background-position: 0 0, 100% 50%;
+    background-position: 100% 50%;
   }
   100% {
-    background-position: 0 0, 0% 50%;
+    background-position: 0% 50%;
   }
 }
 
 .animated-gradient-border {
+  position: relative;
   border: 3px solid transparent;
-  background-image:
-    linear-gradient(transparent, transparent),
-    linear-gradient(45deg, #f79533, #f37055, #ef4e7b, #a166ab);
-  background-origin: padding-box, border-box;
-  background-clip: padding-box, border-box;
-  background-size: 100% 100%, 300% 300%;
-  animation: gradient-border 3s linear infinite;
   border-radius: 10px;
 }
-/* Hide scrollbar by default */
-.custom-scrollbar {
-  scrollbar-width: none;
-  -ms-overflow-style: none;
-}
 
-.custom-scrollbar::-webkit-scrollbar {
-  display: none;
+.animated-gradient-border::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  padding: 3px;
+  background: linear-gradient(45deg, #f79533, #f37055, #ef4e7b, #a166ab);
+  background-size: 300% 300%;
+  animation: gradient-border 3s linear infinite;
+  -webkit-mask:
+    linear-gradient(#fff 0 0) content-box,
+    linear-gradient(#fff 0 0);
+  -webkit-mask-composite: xor;
+  mask-composite: exclude;
+  pointer-events: none;
 }
+@media (hover: hover) and (pointer: fine) {
+  /* Hide scrollbar by default */
+  .custom-scrollbar {
+    scrollbar-width: none;
+    -ms-overflow-style: none;
+  }
 
-/* Show scrollbar on hover */
-.custom-scrollbar:hover {
-  scrollbar-width: thin;
-  -ms-overflow-style: auto;
-}
+  .custom-scrollbar::-webkit-scrollbar {
+    display: none;
+  }
 
-.custom-scrollbar:hover::-webkit-scrollbar {
-  display: block;
-  width: 15px;
-}
+  /* Show scrollbar on hover */
+  .custom-scrollbar:hover {
+    scrollbar-width: thin;
+    -ms-overflow-style: auto;
+  }
 
-/* Custom scrollbar styles for light theme */
-.custom-scrollbar:hover::-webkit-scrollbar-track {
-  @apply bg-surface2;
-  border-radius: 6px;
-}
+  .custom-scrollbar:hover::-webkit-scrollbar {
+    display: block;
+    width: 15px;
+  }
 
-.custom-scrollbar:hover::-webkit-scrollbar-thumb {
-  @apply bg-border;
-  border-radius: 6px;
-  transition: background 0.2s ease;
-}
+  /* Custom scrollbar styles for light theme */
+  .custom-scrollbar:hover::-webkit-scrollbar-track {
+    @apply bg-surface2;
+    border-radius: 6px;
+  }
 
-.custom-scrollbar:hover::-webkit-scrollbar-thumb:hover {
-  @apply bg-border-strong;
-}
+  .custom-scrollbar:hover::-webkit-scrollbar-thumb {
+    @apply bg-border;
+    border-radius: 6px;
+    transition: background 0.2s ease;
+  }
 
-/* For Firefox */
-.custom-scrollbar {
-  scrollbar-color: rgb(var(--color-border)) rgb(var(--color-surface-2));
-}
+  .custom-scrollbar:hover::-webkit-scrollbar-thumb:hover {
+    @apply bg-border-strong;
+  }
 
-.dark .custom-scrollbar {
-  scrollbar-color: rgb(var(--color-border)) rgb(var(--color-surface-2));
+  /* For Firefox */
+  .custom-scrollbar {
+    scrollbar-color: rgb(var(--color-border)) rgb(var(--color-surface-2));
+  }
+
+  .dark .custom-scrollbar {
+    scrollbar-color: rgb(var(--color-border)) rgb(var(--color-surface-2));
+  }
 }
 
 @keyframes shimmer-text {

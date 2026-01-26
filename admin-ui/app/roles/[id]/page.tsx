@@ -13,6 +13,7 @@ import { Checkbox } from '@/components/ui/checkbox';
 import { useConfirm } from '@/components/ui/confirm-dialog';
 import { ArrowLeft, Shield, Lock, Save, Users, Trash2, Check, X, Clock, Wrench } from 'lucide-react';
 import { api } from '@/lib/api-client';
+import { parseOptionalInt } from '@/lib/number';
 import { Role, Permission, User } from '@/types';
 import { Label } from '@/components/ui/label';
 import Link from 'next/link';
@@ -266,13 +267,6 @@ export default function RoleDetailPage() {
     }
   };
 
-  const parseOptionalInt = (value: string): number | undefined => {
-    const trimmed = value.trim();
-    if (!trimmed) return undefined;
-    const parsed = parseInt(trimmed, 10);
-    return Number.isFinite(parsed) && parsed >= 0 ? parsed : undefined;
-  };
-
   const handleSaveRateLimits = async () => {
     try {
       setRateLimitsSaving(true);
@@ -281,9 +275,9 @@ export default function RoleDetailPage() {
       const rpm = parseOptionalInt(editRpm);
       const rph = parseOptionalInt(editRph);
       const rpd = parseOptionalInt(editRpd);
-      if (rpm !== undefined) data.requests_per_minute = rpm;
-      if (rph !== undefined) data.requests_per_hour = rph;
-      if (rpd !== undefined) data.requests_per_day = rpd;
+      if (rpm !== null) data.requests_per_minute = rpm;
+      if (rph !== null) data.requests_per_hour = rph;
+      if (rpd !== null) data.requests_per_day = rpd;
 
       await api.setRoleRateLimits(roleId, data);
       setRateLimits(data);
@@ -308,11 +302,7 @@ export default function RoleDetailPage() {
     try {
       setRateLimitsSaving(true);
       setError('');
-      await api.setRoleRateLimits(roleId, {
-        requests_per_minute: undefined,
-        requests_per_hour: undefined,
-        requests_per_day: undefined,
-      });
+      await api.clearRoleRateLimits(roleId);
       setRateLimits({});
       setEditRpm('');
       setEditRph('');
@@ -684,7 +674,7 @@ export default function RoleDetailPage() {
                       >
                         {rateLimitsSaving ? 'Saving...' : 'Save Rate Limits'}
                       </Button>
-                      {(rateLimits.requests_per_minute || rateLimits.requests_per_hour || rateLimits.requests_per_day) && (
+                      {(rateLimits.requests_per_minute != null || rateLimits.requests_per_hour != null || rateLimits.requests_per_day != null) && (
                         <Button
                           variant="outline"
                           onClick={handleClearRateLimits}
@@ -694,14 +684,14 @@ export default function RoleDetailPage() {
                         </Button>
                       )}
                     </div>
-                    {(rateLimits.requests_per_minute || rateLimits.requests_per_hour || rateLimits.requests_per_day) && (
+                    {(rateLimits.requests_per_minute != null || rateLimits.requests_per_hour != null || rateLimits.requests_per_day != null) && (
                       <div className="text-sm text-muted-foreground mt-2">
                         Current limits:{' '}
-                        {rateLimits.requests_per_minute && `${rateLimits.requests_per_minute}/min`}
-                        {rateLimits.requests_per_minute && rateLimits.requests_per_hour && ', '}
-                        {rateLimits.requests_per_hour && `${rateLimits.requests_per_hour}/hr`}
-                        {(rateLimits.requests_per_minute || rateLimits.requests_per_hour) && rateLimits.requests_per_day && ', '}
-                        {rateLimits.requests_per_day && `${rateLimits.requests_per_day}/day`}
+                        {rateLimits.requests_per_minute != null && `${rateLimits.requests_per_minute}/min`}
+                        {rateLimits.requests_per_minute != null && rateLimits.requests_per_hour != null && ', '}
+                        {rateLimits.requests_per_hour != null && `${rateLimits.requests_per_hour}/hr`}
+                        {(rateLimits.requests_per_minute != null || rateLimits.requests_per_hour != null) && rateLimits.requests_per_day != null && ', '}
+                        {rateLimits.requests_per_day != null && `${rateLimits.requests_per_day}/day`}
                       </div>
                     )}
                   </CardContent>

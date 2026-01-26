@@ -41,16 +41,32 @@ const ToggleBadgeGroup = React.forwardRef<HTMLDivElement, ToggleBadgeGroupProps>
     const containerRef = React.useRef<HTMLDivElement>(null);
 
     const handleKeyDown = (event: React.KeyboardEvent, index: number) => {
+      if (options.length === 0) {
+        return;
+      }
+
       switch (event.key) {
         case 'ArrowRight':
         case 'ArrowDown':
           event.preventDefault();
-          setFocusedIndex((index + 1) % options.length);
+          {
+            const nextIndex = (index + 1) % options.length;
+            setFocusedIndex(nextIndex);
+            if (!multiSelect) {
+              toggleOption(options[nextIndex]);
+            }
+          }
           break;
         case 'ArrowLeft':
         case 'ArrowUp':
           event.preventDefault();
-          setFocusedIndex((index - 1 + options.length) % options.length);
+          {
+            const nextIndex = (index - 1 + options.length) % options.length;
+            setFocusedIndex(nextIndex);
+            if (!multiSelect) {
+              toggleOption(options[nextIndex]);
+            }
+          }
           break;
         case 'Enter':
         case ' ':
@@ -102,7 +118,7 @@ const ToggleBadgeGroup = React.forwardRef<HTMLDivElement, ToggleBadgeGroupProps>
           }
           (containerRef as React.MutableRefObject<HTMLDivElement | null>).current = node;
         }}
-        role="group"
+        role={multiSelect ? 'group' : 'radiogroup'}
         aria-label={label}
         className={cn('flex flex-wrap gap-2', className)}
       >
@@ -112,7 +128,7 @@ const ToggleBadgeGroup = React.forwardRef<HTMLDivElement, ToggleBadgeGroupProps>
             <button
               key={option}
               type="button"
-              role="checkbox"
+              role={multiSelect ? 'checkbox' : 'radio'}
               aria-checked={isSelected}
               tabIndex={focusedIndex === index || (focusedIndex === -1 && index === 0) ? 0 : -1}
               onClick={() => toggleOption(option)}

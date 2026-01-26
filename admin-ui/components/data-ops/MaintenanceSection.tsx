@@ -5,7 +5,6 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/com
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
-import { Alert, AlertDescription } from '@/components/ui/alert';
 import { Badge } from '@/components/ui/badge';
 import { useConfirm } from '@/components/ui/confirm-dialog';
 import { useToast } from '@/components/ui/toast';
@@ -111,11 +110,11 @@ export function MaintenanceSection({ refreshSignal }: MaintenanceSectionProps) {
         auto_cleanup_enabled: editAutoCleanup,
         retention_days: retentionDays,
       });
-      setCleanupSettings({
-        ...cleanupSettings,
+      setCleanupSettings((prev) => ({
+        ...(prev ?? { auto_cleanup_enabled: editAutoCleanup, retention_days: retentionDays }),
         auto_cleanup_enabled: editAutoCleanup,
         retention_days: retentionDays,
-      });
+      }));
       success('Settings saved', 'Cleanup settings updated');
     } catch (err: unknown) {
       const message = err instanceof Error ? err.message : 'Failed to save cleanup settings';
@@ -137,11 +136,11 @@ export function MaintenanceSection({ refreshSignal }: MaintenanceSectionProps) {
         auto_generate_titles: editAutoTitles,
         max_title_length: maxLength,
       });
-      setNotesSettings({
-        ...notesSettings,
+      setNotesSettings((prev) => ({
+        ...(prev ?? { auto_generate_titles: editAutoTitles, max_title_length: maxLength }),
         auto_generate_titles: editAutoTitles,
         max_title_length: maxLength,
-      });
+      }));
       success('Settings saved', 'Notes title settings updated');
     } catch (err: unknown) {
       const message = err instanceof Error ? err.message : 'Failed to save notes settings';
@@ -261,10 +260,11 @@ export function MaintenanceSection({ refreshSignal }: MaintenanceSectionProps) {
               <>
                 <div className="flex items-center justify-between">
                   <div>
-                    <Label>Auto-generate Titles</Label>
+                    <Label htmlFor="auto-generate-titles">Auto-generate Titles</Label>
                     <p className="text-xs text-muted-foreground">Generate titles from content</p>
                   </div>
                   <input
+                    id="auto-generate-titles"
                     type="checkbox"
                     checked={editAutoTitles}
                     onChange={(e) => setEditAutoTitles(e.target.checked)}

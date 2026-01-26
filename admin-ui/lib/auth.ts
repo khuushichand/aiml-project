@@ -2,7 +2,7 @@
 
 import { buildApiUrl } from './api-config';
 
-// In-memory storage for single-user API key to avoid clear-text persistence
+// In-memory storage for single-user API key with sessionStorage fallback for same-session refreshes.
 let inMemoryApiKey: string | null = null;
 const API_KEY_STORAGE_KEY = 'x_api_key';
 const AUTH_CHANGE_EVENT = 'tldw-admin-auth-change';
@@ -204,7 +204,6 @@ export async function logout(): Promise<void> {
     // Always clear local storage
     localStorage.removeItem('user');
     localStorage.removeItem('access_token');
-    localStorage.removeItem('x_api_key');
     if (typeof sessionStorage !== 'undefined') {
       sessionStorage.removeItem('x_api_key');
     }

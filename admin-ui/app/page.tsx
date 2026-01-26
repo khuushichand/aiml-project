@@ -24,16 +24,8 @@ import {
   Building2, Clipboard, Settings, Trash2, UserPlus, ShieldAlert
 } from 'lucide-react';
 import { AccessibleIconButton } from '@/components/ui/accessible-icon-button';
-
-type SecurityHealthData = {
-  risk_score?: number;
-  recent_security_events?: number;
-  failed_logins_24h?: number;
-  suspicious_activity?: number;
-  mfa_adoption_rate?: number;
-};
 import { api } from '@/lib/api-client';
-import { AuditLog, LLMProvider, Organization, RegistrationCode, RegistrationSettings, User } from '@/types';
+import { AuditLog, LLMProvider, Organization, RegistrationCode, RegistrationSettings, type SecurityHealthData, User } from '@/types';
 import { buildDashboardUIStats, type DashboardUIStats } from '@/lib/dashboard';
 import Link from 'next/link';
 

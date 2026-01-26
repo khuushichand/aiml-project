@@ -174,6 +174,7 @@ export default function JobsPage() {
 
   const loadData = useCallback(async () => {
     setLoading(true);
+    setSlaPoliciesLoading(true);
     setError('');
     setRoutesUnavailable(false);
 
@@ -218,6 +219,7 @@ export default function JobsPage() {
       setSlaPolicies([]);
     }
 
+    setSlaPoliciesLoading(false);
     setLoading(false);
   }, [listParams, statsParams]);
 
@@ -313,9 +315,16 @@ export default function JobsPage() {
   };
 
   const formatBytes = (bytes: number) => {
-    if (bytes < 1024) return `${bytes} B`;
-    if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
-    return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+    if (!Number.isFinite(bytes) || bytes < 0) return '—';
+    const units = ['B', 'KB', 'MB', 'GB', 'TB'];
+    let size = bytes;
+    let unit = 0;
+    while (size >= 1024 && unit < units.length - 1) {
+      size /= 1024;
+      unit += 1;
+    }
+    const precision = unit === 0 ? 0 : 1;
+    return `${size.toFixed(precision)} ${units[unit]}`;
   };
 
   const handleCloseDetail = () => {

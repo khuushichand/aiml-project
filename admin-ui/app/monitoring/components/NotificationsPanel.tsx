@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import { Input } from '@/components/ui/input';
@@ -64,10 +64,11 @@ export default function NotificationsPanel({
   const [newChannelType, setNewChannelType] = useState<NotificationChannel['type']>('email');
   const [newChannelConfig, setNewChannelConfig] = useState('');
 
-  // Initialize edit settings when settings prop changes
-  if (settings && !editSettings) {
-    setEditSettings(settings);
-  }
+  useEffect(() => {
+    if (settings) {
+      setEditSettings(settings);
+    }
+  }, [settings]);
 
   const handleAddChannel = () => {
     if (!editSettings || !newChannelConfig.trim()) return;

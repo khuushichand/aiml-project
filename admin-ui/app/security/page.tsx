@@ -10,19 +10,9 @@ import { Alert, AlertDescription } from '@/components/ui/alert';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import { api } from '@/lib/api-client';
 import { formatDateTime } from '@/lib/format';
+import type { SecurityHealthData } from '@/types';
 import { ShieldAlert, ShieldCheck, RefreshCw, AlertTriangle, Key, Users, Lock } from 'lucide-react';
 import Link from 'next/link';
-
-type SecurityHealthData = {
-  risk_score?: number;
-  recent_security_events?: number;
-  failed_logins_24h?: number;
-  suspicious_activity?: number;
-  mfa_adoption_rate?: number;
-  active_sessions?: number;
-  api_keys_active?: number;
-  last_security_scan?: string;
-};
 
 type SecurityAlertStatus = {
   total_alerts?: number;

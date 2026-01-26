@@ -5,6 +5,7 @@
 import { FC, useState, useEffect, useRef, MouseEvent, useCallback } from "react"
 import { useTranslation } from "react-i18next"
 import { Dropdown, Modal, Input, message } from "antd"
+import type { MenuProps } from "antd"
 import {
   FolderOpen,
   ChevronDown,
@@ -17,6 +18,7 @@ import {
 import { useStorage } from "@plasmohq/storage/hook"
 import * as nativeClient from "@/services/native/native-client"
 import { useWorkspaceHistory, useAutoSelectWorkspace } from "@/hooks/useWorkspaceHistory"
+import { formatRelativeTime } from "@/utils/dateFormatters"
 import { isDuplicateWorkspacePath } from "./utils/workspace-paths"
 
 export interface Workspace {
@@ -43,8 +45,10 @@ const generateWorkspaceId = () => {
     const hex = Array.from(bytes, (b) => b.toString(16).padStart(2, "0")).join("")
     return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20)}`
   }
-  throw new Error("Secure UUID generation unavailable")
+  return `${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`
 }
+
+const MAX_RECENT_WORKSPACES = 3
 
 export const WorkspaceSelector: FC<WorkspaceSelectorProps> = ({
   onWorkspaceChange,
@@ -96,14 +100,15 @@ export const WorkspaceSelector: FC<WorkspaceSelectorProps> = ({
     }
   }, [])
 
+  const resolvedSelectedId = selectedId ?? null
+
   // Get currently selected workspace
-  const selectedWorkspace = workspaces?.find(w => w.id === selectedId) || null
+  const selectedWorkspace = workspaces?.find(w => w.id === resolvedSelectedId) || null
 
   const callbackRef = useRef(onWorkspaceChange)
-  // Sync ref on every render (intentionally no deps) to avoid stale closures in effects.
   useEffect(() => {
     callbackRef.current = onWorkspaceChange
-  })
+  }, [onWorkspaceChange])
 
   // Notify parent of workspace change
   useEffect(() => {
@@ -139,9 +144,21 @@ export const WorkspaceSelector: FC<WorkspaceSelectorProps> = ({
     }
   }, [recordUsage, setSelectedId, t])
 
+  const handleAutoSelect = useCallback(
+    (workspace: Workspace) => {
+      void handleSelect(workspace)
+    },
+    [handleSelect]
+  )
+
   // Auto-select last used workspace on mount
   const canAutoSelectWorkspace = isHostInstalled === true
-  useAutoSelectWorkspace(workspaces || [], selectedId, handleSelect, canAutoSelectWorkspace)
+  useAutoSelectWorkspace(
+    workspaces || [],
+    resolvedSelectedId,
+    handleAutoSelect,
+    canAutoSelectWorkspace
+  )
 
   // Handle adding new workspace
   const handleAddWorkspace = async () => {
@@ -195,20 +212,18 @@ export const WorkspaceSelector: FC<WorkspaceSelectorProps> = ({
   }
 
   // Handle removing workspace
-  const handleRemove = async (id: string, e: MouseEvent<HTMLButtonElement>) => {
+  const handleRemove = (id: string, e: MouseEvent<HTMLButtonElement>) => {
     e.stopPropagation()
     setWorkspaces(prev => (prev || []).filter(w => w.id !== id))
     if (selectedId === id) {
       setSelectedId(null)
     }
-    try {
-      await removeFromHistory(id)
-    } catch (error) {
+    void removeFromHistory(id).catch((error) => {
       console.warn(
         "[WorkspaceSelector] Failed to remove workspace from history:",
         error
       )
-    }
+    })
   }
 
   // If host not installed, show setup prompt
@@ -247,30 +262,39 @@ export const WorkspaceSelector: FC<WorkspaceSelectorProps> = ({
     )
   }
 
-  // Format relative time for recent workspaces
-  const formatRelativeTime = (isoString: string): string => {
-    const date = new Date(isoString)
-    if (Number.isNaN(date.getTime())) {
-      return t("unknown", "Unknown")
-    }
-    const now = new Date()
-    const diffMs = now.getTime() - date.getTime()
-    const diffMins = Math.floor(diffMs / (1000 * 60))
-    const diffHours = Math.floor(diffMs / (1000 * 60 * 60))
-    const diffDays = Math.floor(diffMs / (1000 * 60 * 60 * 24))
-
-    if (diffMins < 1) return t("justNow", "Just now")
-    if (diffMins < 60) return `${diffMins}m ${t("ago", "ago")}`
-    if (diffHours < 24) return `${diffHours}h ${t("ago", "ago")}`
-    if (diffDays < 7) return `${diffDays}d ${t("ago", "ago")}`
-    return date.toLocaleDateString()
-  }
-
   // Build menu items with recent workspaces section
-  const menuItems = []
+  const menuItems: MenuProps["items"] = []
 
   // Recent workspaces section (if any)
-  if (recentWorkspaces.length > 0) {
+  const recentItems = recentWorkspaces
+    .slice(0, MAX_RECENT_WORKSPACES)
+    .flatMap(recent => {
+      const ws = workspaces?.find(w => w.id === recent.workspaceId)
+      if (!ws) return []
+      return [
+        {
+          key: `recent-${ws.id}`,
+          label: (
+            <div className="flex items-center justify-between gap-3 py-1">
+              <div className="flex flex-col min-w-0">
+                <span className="font-medium truncate">{ws.name}</span>
+                <span className="text-xs text-text-subtle">
+                  {formatRelativeTime(recent.lastUsedAt, t, { compact: true })}
+                </span>
+              </div>
+              {ws.id === selectedId && (
+                <Check className="size-4 flex-shrink-0 text-success" />
+              )}
+            </div>
+          ),
+          onClick: () => {
+            void handleSelect(ws)
+          }
+        }
+      ]
+    })
+
+  if (recentItems.length > 0) {
     menuItems.push({
       key: "recent-header",
       type: "group" as const,
@@ -280,27 +304,7 @@ export const WorkspaceSelector: FC<WorkspaceSelectorProps> = ({
           {t("recent", "Recent")}
         </div>
       ),
-      children: recentWorkspaces.slice(0, 3).map(recent => {
-        const ws = workspaces?.find(w => w.id === recent.workspaceId)
-        if (!ws) return null
-        return {
-          key: `recent-${ws.id}`,
-          label: (
-            <div className="flex items-center justify-between gap-3 py-1">
-              <div className="flex flex-col min-w-0">
-                <span className="font-medium truncate">{ws.name}</span>
-                <span className="text-xs text-text-subtle">
-                  {formatRelativeTime(recent.lastUsedAt)}
-                </span>
-              </div>
-              {ws.id === selectedId && (
-                <Check className="size-4 flex-shrink-0 text-success" />
-              )}
-            </div>
-          ),
-          onClick: () => handleSelect(ws)
-        }
-      }).filter(Boolean)
+      children: recentItems
     })
 
     menuItems.push({ type: "divider" as const, key: "recent-divider" })
@@ -339,7 +343,9 @@ export const WorkspaceSelector: FC<WorkspaceSelectorProps> = ({
           </div>
         </div>
       ),
-      onClick: () => handleSelect(ws)
+      onClick: () => {
+        void handleSelect(ws)
+      }
     }))
   })
 
@@ -365,6 +371,7 @@ export const WorkspaceSelector: FC<WorkspaceSelectorProps> = ({
         placement="bottomLeft"
       >
         <button
+          type="button"
           className={`flex items-center gap-2 rounded-lg bg-surface2 px-3 py-2 transition-colors hover:bg-surface focus:outline-none focus-visible:ring-2 focus-visible:ring-focus focus-visible:ring-offset-2 ${className} ${isSelecting ? "opacity-70 cursor-wait" : ""}`}
           aria-label={selectedWorkspace?.name || t("selectWorkspace", "Select Workspace")}
           aria-haspopup="menu"
@@ -392,7 +399,9 @@ export const WorkspaceSelector: FC<WorkspaceSelectorProps> = ({
       <Modal
         title={t("addWorkspace", "Add Workspace")}
         open={showAddModal}
-        onOk={handleAddWorkspace}
+        onOk={() => {
+          void handleAddWorkspace()
+        }}
         onCancel={() => {
           setShowAddModal(false)
           setNewPath("")
@@ -411,7 +420,9 @@ export const WorkspaceSelector: FC<WorkspaceSelectorProps> = ({
               placeholder="/Users/you/projects/myapp"
               value={newPath}
               onChange={(e) => setNewPath(e.target.value)}
-              onPressEnter={handleAddWorkspace}
+              onPressEnter={() => {
+                void handleAddWorkspace()
+              }}
             />
             <p className="mt-1 text-xs text-text-subtle">
               {t("workspacePathHelp", "Enter the full path to your project directory")}
@@ -425,7 +436,9 @@ export const WorkspaceSelector: FC<WorkspaceSelectorProps> = ({
               placeholder="My Project"
               value={newName}
               onChange={(e) => setNewName(e.target.value)}
-              onPressEnter={handleAddWorkspace}
+              onPressEnter={() => {
+                void handleAddWorkspace()
+              }}
             />
           </div>
         </div>

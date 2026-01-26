@@ -10,6 +10,7 @@ import { Label } from '@/components/ui/label';
 import { Alert, AlertDescription } from '@/components/ui/alert';
 import { Bug, Key, Wallet, Search } from 'lucide-react';
 import { api } from '@/lib/api-client';
+import { formatDateTime } from '@/lib/format';
 
 type ApiKeyInfo = {
   user_id?: number;
@@ -82,19 +83,19 @@ export default function DebugPage() {
     }
   };
 
-  const formatDate = (dateStr?: string) => {
-    if (!dateStr) return '—';
-    try {
-      return new Date(dateStr).toLocaleString();
-    } catch {
-      return dateStr;
-    }
-  };
+  const formatDate = (dateStr?: string) => formatDateTime(dateStr, { fallback: '—' });
 
   const formatCurrency = (value?: number) => {
     if (value === undefined || value === null) return '—';
     return `$${value.toFixed(2)}`;
   };
+
+  const budgetUsageRatio =
+    budgetResult && budgetResult.total_budget !== undefined && budgetResult.used_budget !== undefined
+      ? budgetResult.total_budget > 0
+        ? budgetResult.used_budget / budgetResult.total_budget
+        : 0
+      : 0;
 
   return (
     <PermissionGuard variant="route" requireAuth role="admin">
@@ -250,20 +251,20 @@ export default function DebugPage() {
                         <div className="flex justify-between text-xs text-muted-foreground mb-1">
                           <span>Usage</span>
                           <span>
-                            {((budgetResult.used_budget / budgetResult.total_budget) * 100).toFixed(1)}%
+                            {(budgetUsageRatio * 100).toFixed(1)}%
                           </span>
                         </div>
                         <div className="h-2 bg-muted rounded-full overflow-hidden">
                           <div
                             className={`h-full transition-all ${
-                              (budgetResult.used_budget / budgetResult.total_budget) > 0.9
+                              budgetUsageRatio > 0.9
                                 ? 'bg-red-500'
-                                : (budgetResult.used_budget / budgetResult.total_budget) > 0.7
+                                : budgetUsageRatio > 0.7
                                   ? 'bg-yellow-500'
                                   : 'bg-green-500'
                             }`}
                             style={{
-                              width: `${Math.min(100, (budgetResult.used_budget / budgetResult.total_budget) * 100)}%`,
+                              width: `${Math.min(100, budgetUsageRatio * 100)}%`,
                             }}
                           />
                         </div>

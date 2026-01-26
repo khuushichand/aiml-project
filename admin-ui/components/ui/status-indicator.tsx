@@ -68,9 +68,6 @@ const StatusIndicator = React.forwardRef<HTMLSpanElement, StatusIndicatorProps>(
             {config.label}
           </span>
         )}
-        {!showText && (
-          <span className="sr-only">{config.label}</span>
-        )}
       </span>
     );
   }

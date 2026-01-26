@@ -57,6 +57,7 @@ export const CodeBlock: FC<Props> = ({ language, value, blockIndex }) => {
   const [isPreviewConstrained, setIsPreviewConstrained] = useState(true)
   const [previewToken, setPreviewToken] = useState(() => generatePreviewToken())
   const debounceTimeoutRef = useRef<NodeJS.Timeout | null>(null)
+  const copyTimeoutRef = useRef<NodeJS.Timeout | null>(null)
   const previewFrameRef = useRef<HTMLIFrameElement | null>(null)
   const normalizedLanguage = normalizeLanguage(language)
   const lines = value ? value.split(/\r?\n/) : []
@@ -132,13 +133,26 @@ export const CodeBlock: FC<Props> = ({ language, value, blockIndex }) => {
     try {
       await navigator.clipboard.writeText(value)
       setIsBtnPressed(true)
-      setTimeout(() => {
+      if (copyTimeoutRef.current) {
+        clearTimeout(copyTimeoutRef.current)
+      }
+      copyTimeoutRef.current = setTimeout(() => {
         setIsBtnPressed(false)
+        copyTimeoutRef.current = null
       }, 4000)
     } catch {
       // Clipboard write failed - optionally show error feedback
     }
   }
+
+  useEffect(() => {
+    return () => {
+      if (copyTimeoutRef.current) {
+        clearTimeout(copyTimeoutRef.current)
+        copyTimeoutRef.current = null
+      }
+    }
+  }, [])
 
   const isPreviewable = ["html", "svg", "xml"].includes(
     normalizedLanguage
@@ -537,7 +551,7 @@ export const CodeBlock: FC<Props> = ({ language, value, blockIndex }) => {
                   style={{ height: previewContainerHeight }}
                 >
                   <iframe
-                    title="Preview"
+                    title={t("preview", "Preview")}
                     ref={previewFrameRef}
                     src={previewUrl ?? "about:blank"}
                     className="w-full h-full border-0"

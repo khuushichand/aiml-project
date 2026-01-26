@@ -1,6 +1,6 @@
 'use client';
 
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { PermissionGuard } from '@/components/PermissionGuard';
 import { ResponsiveLayout } from '@/components/ResponsiveLayout';
 import { Badge } from '@/components/ui/badge';
@@ -148,6 +148,12 @@ export default function ByokDashboardPage() {
   const [newKeyValue, setNewKeyValue] = useState('');
   const [addingKey, setAddingKey] = useState(false);
   const [testingKey, setTestingKey] = useState<string | null>(null);
+  const sharedKeysRequestIdRef = useRef(0);
+
+  const resetAddKeyForm = useCallback(() => {
+    setShowAddKey(false);
+    setNewKeyValue('');
+  }, []);
 
   const loadMetrics = useCallback(async () => {
     setMetricsLoading(true);
@@ -222,14 +228,19 @@ export default function ByokDashboardPage() {
   }, [selectedOrg?.id]);
 
   const loadSharedKeys = useCallback(async () => {
+    const requestId = sharedKeysRequestIdRef.current + 1;
+    sharedKeysRequestIdRef.current = requestId;
     setSharedKeysLoading(true);
     setSharedKeysError(null);
+    setSharedKeys([]);
     try {
+      const orgId = selectedOrg?.id;
       // Filter by selected org if one is selected
-      const params = selectedOrg?.id
-        ? { scope_type: 'org', scope_id: selectedOrg.id }
+      const params = orgId
+        ? { scope_type: 'org', scope_id: orgId }
         : undefined;
       const data = await api.getSharedProviderKeys(params);
+      if (sharedKeysRequestIdRef.current !== requestId) return;
       const result = data as { keys?: SharedProviderKey[]; items?: SharedProviderKey[] };
       setSharedKeys(
         Array.isArray(result.keys) ? result.keys :
@@ -237,9 +248,11 @@ export default function ByokDashboardPage() {
         Array.isArray(result) ? result as SharedProviderKey[] : []
       );
     } catch (err) {
+      if (sharedKeysRequestIdRef.current !== requestId) return;
       const message = err instanceof Error ? err.message : 'Failed to load shared keys.';
       setSharedKeysError(message);
     } finally {
+      if (sharedKeysRequestIdRef.current !== requestId) return;
       setSharedKeysLoading(false);
     }
   }, [selectedOrg?.id]);
@@ -522,7 +535,7 @@ export default function ByokDashboardPage() {
                       icon={X}
                       label="Close form"
                       variant="ghost"
-                      onClick={() => setShowAddKey(false)}
+                      onClick={resetAddKeyForm}
                     />
                   </div>
                   <div className="grid gap-3 sm:grid-cols-2">
@@ -555,7 +568,7 @@ export default function ByokDashboardPage() {
                     <Button onClick={handleAddSharedKey} disabled={addingKey || !newKeyValue.trim()}>
                       {addingKey ? 'Adding...' : 'Add Key'}
                     </Button>
-                    <Button variant="outline" onClick={() => setShowAddKey(false)}>
+                    <Button variant="outline" onClick={resetAddKeyForm}>
                       Cancel
                     </Button>
                   </div>

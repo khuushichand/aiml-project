@@ -113,6 +113,8 @@ export function ServerChatList({
   const [bulkFolderPickerOpen, setBulkFolderPickerOpen] = React.useState(false)
   const [bulkTagPickerOpen, setBulkTagPickerOpen] = React.useState(false)
   const [bulkDeleteConfirmOpen, setBulkDeleteConfirmOpen] = React.useState(false)
+  const openSettingsTimeoutRef =
+    React.useRef<ReturnType<typeof setTimeout> | null>(null)
 
   const openExtensionUrl = React.useCallback(
     (path: `/options.html${string}` | `/sidepanel.html${string}`) => {
@@ -526,12 +528,25 @@ export function ServerChatList({
         selectServerChat(chat)
       }
       if (typeof window === "undefined") return
-      window.setTimeout(() => {
+      if (openSettingsTimeoutRef.current) {
+        window.clearTimeout(openSettingsTimeoutRef.current)
+      }
+      openSettingsTimeoutRef.current = window.setTimeout(() => {
         window.dispatchEvent(new CustomEvent("tldw:open-model-settings"))
+        openSettingsTimeoutRef.current = null
       }, 0)
     },
     [selectServerChat, serverChatId]
   )
+
+  React.useEffect(() => {
+    return () => {
+      if (openSettingsTimeoutRef.current) {
+        window.clearTimeout(openSettingsTimeoutRef.current)
+        openSettingsTimeoutRef.current = null
+      }
+    }
+  }, [])
 
   const handleRenameChat = React.useCallback(
     (chat: ServerChatHistoryItem) => {
@@ -715,7 +730,9 @@ export function ServerChatList({
       )}
       {editingTopicChat && (
         <Modal
-          title={t("playground:composer.topicPlaceholder", "Topic label (optional)")}
+          title={t("playground:composer.topicPlaceholder", {
+            defaultValue: "Topic label (optional)"
+          })}
           open
           destroyOnClose
           onCancel={() => {
@@ -731,10 +748,9 @@ export function ServerChatList({
             value={topicValue}
             onChange={(e) => setTopicValue(e.target.value)}
             onPressEnter={handleTopicSubmit}
-            placeholder={t(
-              "playground:composer.topicPlaceholder",
-              "Topic label (optional)"
-            )}
+            placeholder={t("playground:composer.topicPlaceholder", {
+              defaultValue: "Topic label (optional)"
+            })}
             disabled={topicLoading}
           />
         </Modal>

@@ -1,4 +1,4 @@
-import React, { useMemo, useState } from "react"
+import React, { useMemo, useRef, useState } from "react"
 import { useTranslation } from "react-i18next"
 import {
   useInfiniteQuery,
@@ -128,6 +128,8 @@ export function LocalChatList({
   const [renamingChat, setRenamingChat] = useState<string | null>(null)
   const [renameValue, setRenameValue] = useState("")
   const [renameError, setRenameError] = useState<string | null>(null)
+  const [loadingChatId, setLoadingChatId] = useState<string | null>(null)
+  const loadRequestRef = useRef(0)
 
   // Local chat history query
   const {
@@ -566,6 +568,7 @@ export function LocalChatList({
             {group.items.map((chat: HistoryInfo) => {
               const metadata = historyMetadata?.get(chat.id)
               const lastMessage = metadata?.lastMessage
+              const isLoadingChat = loadingChatId === chat.id
 
               return (
                 <div
@@ -585,19 +588,37 @@ export function LocalChatList({
                   )}
                   <button
                     className="flex-1 overflow-hidden text-start w-full min-w-0 focus:outline-none focus-visible:ring-2 focus-visible:ring-focus focus-visible:ring-offset-1 rounded"
-                    onClick={() => {
-                      loadLocalConversation(chat.id).catch((error) => {
+                    disabled={isLoadingChat}
+                    aria-busy={isLoadingChat}
+                    onClick={async () => {
+                      const requestId = loadRequestRef.current + 1
+                      loadRequestRef.current = requestId
+                      setLoadingChatId(chat.id)
+                      try {
+                        await loadLocalConversation(chat.id)
+                        if (loadRequestRef.current === requestId) {
+                          onSelectChat?.(chat.id)
+                        }
+                      } catch (error) {
                         // eslint-disable-next-line no-console
                         console.error("Failed to load conversation:", error)
-                        message.error(t("common:chatSidebar.loadError", "Failed to load chat"))
-                      })
-                      onSelectChat?.(chat.id)
+                        message.error(
+                          t("common:chatSidebar.loadError", "Failed to load chat")
+                        )
+                      } finally {
+                        if (loadRequestRef.current === requestId) {
+                          setLoadingChatId(null)
+                        }
+                      }
                     }}
                   >
-                    <div className="flex flex-col gap-1">
-                      <span className="truncate font-medium" title={chat.title}>
-                        {chat.title}
-                      </span>
+                    <div className="flex flex-col gap-1 min-w-0">
+                      <div className="flex items-center gap-2 min-w-0">
+                        <span className="truncate font-medium" title={chat.title}>
+                          {chat.title}
+                        </span>
+                        {isLoadingChat && <Spin size="small" />}
+                      </div>
                       {metadata && (
                         <div className="flex items-center gap-2 text-xs text-text-subtle">
                           <span className="flex items-center gap-1">
