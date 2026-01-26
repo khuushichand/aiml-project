@@ -746,8 +746,8 @@ export const StudioPane: React.FC<StudioPaneProps> = ({ onHide }) => {
         )}
       </div>
 
-      {/* Quick Notes Section - Collapsible */}
-      <div className="flex-1">
+      {/* Quick Notes Section - Collapsible, fills remaining height */}
+      <div className="flex min-h-0 flex-1 flex-col">
         {notesExpanded ? (
           <QuickNotesSection onCollapse={() => setNotesExpanded(false)} />
         ) : (

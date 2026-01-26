@@ -1747,7 +1747,7 @@ const SidepanelChat = () => {
           aria-hidden="true"
         />
       )}
-      <main className="relative h-dvh flex-1 bg-bg" data-testid="chat-main">
+      <main className="relative flex h-dvh flex-1 flex-col bg-bg" data-testid="chat-main">
         <div className="relative z-20 w-full">
           <SidepanelHeaderSimple
             sidebarOpen={sidebarOpen}
@@ -1760,7 +1760,7 @@ const SidepanelChat = () => {
         <div
           ref={drop}
           data-testid="chat-dropzone"
-          className={`relative flex h-full flex-col items-center bg-bg ${
+          className={`relative flex min-h-0 flex-1 flex-col items-center bg-bg ${
             dropState === "dragging" ? "bg-surface2" : ""
           }`}
           style={

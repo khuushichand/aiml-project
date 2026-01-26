@@ -576,7 +576,8 @@ const SortableList = ({
     id: `list-${list.id}`,
     index,
     collisionDetector: closestCorners,
-    group: "lists"
+    group: "lists",
+    plugins: []
   })
 
   const style = {
@@ -694,7 +695,9 @@ const SortableCard = ({ card, index, group, onClick }: SortableCardProps) => {
     id: `card-${card.id}`,
     index,
     collisionDetector: closestCorners,
-    group
+    group,
+    type: "card",
+    plugins: []
   })
 
   const style = {

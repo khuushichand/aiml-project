@@ -5,6 +5,7 @@ import "@web/lib/i18n-web"
 import type { AppProps } from "next/app"
 import dynamic from "next/dynamic"
 import { useRouter } from "next/router"
+import React from "react"
 import { AppProviders } from "@web/components/AppProviders"
 
 const OptionLayout = dynamic(
@@ -15,10 +16,16 @@ const OptionLayout = dynamic(
 export default function App({ Component, pageProps }: AppProps) {
   const router = useRouter()
   const pathname = router.pathname || ""
-  const isChatRoute = pathname === "/chat"
-  const isLoginRoute = pathname === "/login"
+  const routePath =
+    pathname.length > 1 && pathname.endsWith("/")
+      ? pathname.slice(0, -1)
+      : pathname
+
+  const isChatRoute =
+    routePath === "/chat" || routePath.startsWith("/chat/")
+  const isLoginRoute = routePath === "/login"
   const isSettingsRoute =
-    pathname === "/settings" || pathname.startsWith("/settings/")
+    routePath === "/settings" || routePath.startsWith("/settings/")
 
   return (
     <AppProviders>

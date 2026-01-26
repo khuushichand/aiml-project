@@ -116,12 +116,14 @@ Version 0.1.13 (beta). Expect bugs and rough edges; please report issues.
 
 ## What's New (compared to Gradio)
 
-- FastAPI-first backend with OpenAI-compatible Chat and Audio APIs (including streaming STT and TTS)
-- Unified RAG and Evaluations modules (hybrid BM25 + vector with re-ranking; unified metrics)
-- MCP Unified module with JWT/RBAC, tool execution APIs, and WebSockets
-- New WebUI (current Next.js UI is WIP and may be unstable or rough)
+- FastAPI-first backend with OpenAI-compatible Chat, Audio (STT/TTS + voice catalog), Embeddings, and Evals APIs
+- Unified RAG + Evaluations modules (hybrid BM25 + vector with re-ranking; unified metrics)
+- Expanded audio stack: multi-provider TTS/STT, streaming, and audio jobs queue
+- MCP Unified module with JWT/RBAC, tool execution APIs, WebSockets, and metrics
+- New WebUI and Admin UI (Next.js; WIP), with legacy WebUI deprecated
+- Research & ingestion upgrades: OCR, web search + academic search, connectors, outputs/artifacts, watchlists/workflows
 - Strict OpenAI compatibility mode for local/self-hosted providers
-- PostgreSQL content mode + backup/restore helpers; Prometheus metrics and monitoring improvements
+- PostgreSQL content mode + backup/restore helpers; Prometheus/Grafana monitoring + admin usage reporting
 
 See: `Docs/Published/RELEASE_NOTES.md` for detailed release notes.
 
@@ -135,15 +137,20 @@ See: `Docs/Published/RELEASE_NOTES.md` for detailed release notes.
 
 ## Highlights
 
-- Media ingestion & processing: video, audio, PDFs, EPUB, DOCX, HTML, Markdown, XML, MediaWiki dumps; metadata extraction; configurable chunking.
+- Media ingestion & processing: video, audio, PDFs, EPUB, DOCX, HTML, Markdown, XML, MediaWiki dumps; OCR for PDFs/images; metadata extraction; configurable chunking.
 - Custom-built Chunking library, tldw_Chunker, supporting token, word, sentence, paragraph, semantic, hierarchical and template chunking approaches.
-- Audio & speech: real-time and file STT via faster_whisper, NVIDIA NeMo (Canary/Parakeet), Qwen2Audio; TTS: OpenAI-compatible TTS supporting ElevenLabs, OpenAI and locally: kokoro, Higgs, Dia, VibeVoice.
+- Audio & speech: real-time and file STT via faster_whisper, NVIDIA NeMo (Canary/Parakeet), Qwen2Audio; diarization/VAD; TTS backends — commercial: OpenAI, ElevenLabs; local: Kokoro, PocketTTS, LuxTTS, Higgs, Chatterbox, Dia, VibeVoice, VibeVoice Realtime, NeuTTS, IndexTTS2, Supertonic, Supertonic2, Qwen3-TTS, EchoTTS; voice catalog + audio jobs queue.
 - Audiobooks: parse + chapter detection, per-chapter voice settings, optional TTS provider overrides (alignment/subtitles Kokoro-only), and M4B packaging (API-only).
-- Search & retrieval (RAG): hybrid BM25 + vector (ChromaDB/pgvector), re-ranking, contextual retrieval, OpenAI-compatible embeddings. 50+ optional parameters available for tuning.
-- Chat & providers: `/api/v1/chat/completions` (OpenAI-compatible), 16+ providers (commercial + self-hosted), character chat, budgets/allowlists.
-- Knowledge management: notes, prompt library, character cards, soft-delete with recovery, Chatbooks import/export. (Support for import/edit/export of .apkg files - anki)
-- Prompt Studio & evaluations: projects, prompt testing/optimization, unified evaluation APIs (G-Eval, RAG, batch metrics). Full evaluations and prompt management.
+- Search & retrieval (RAG): hybrid BM25 + vector (ChromaDB/pgvector), re-ranking, contextual retrieval, OpenAI-compatible embeddings, vector stores API, and media embeddings ingestion. 50+ optional parameters available for tuning.
+- Chat & providers: `/api/v1/chat/completions` (OpenAI-compatible), 16+ providers (commercial + self-hosted), character chat, budgets/allowlists, moderation endpoint.
+- Knowledge management: notes, prompt library, character cards, soft-delete with recovery, Chatbooks import/export, flashcards (.apkg), reading items/highlights.
+- Prompt Studio & evaluations: projects, prompt testing/optimization, unified evaluation APIs (G-Eval, RAG, OCR, embeddings A/B tests, batch metrics). Full evaluations and prompt management.
+- Research & web scraping: multi-provider web search, academic paper search (arXiv/PubMed/etc.), scraping jobs with cookies/progress, aggregation/final answers.
+- Connectors: Google Drive + Notion OAuth import; connector policies/quotas.
+- Outputs & artifacts: templated outputs (Markdown/HTML/MP3 via TTS), persisted artifacts with retention controls.
+- Automation: watchlists (sources/groups/tags, OPML import/export, scheduled runs) and workflows engine/scheduler (WIP).
 - MCP Server: production MCP with JWT/RBAC, tool execution, WebSockets, metrics, and health endpoints. Use existing tools or add your own using a handy guide. Setup tool categories and collections, allowing for easier context management.
+- Admin/Ops: orgs/teams/roles, API key management, audit logging, usage/LLM cost reporting, Prometheus metrics + Grafana dashboards, PostgreSQL content mode + backup/restore helpers.
 
 
 ## Feature Status

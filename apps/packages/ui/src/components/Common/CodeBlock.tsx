@@ -146,8 +146,10 @@ export const CodeBlock: FC<Props> = ({ language, value, blockIndex }) => {
 
   const buildPreviewDoc = useCallback(() => {
     const rawCode = previewValue || ""
+    const sanitizeLanguages = ["html", "xml"]
+    const shouldSanitize = sanitizeLanguages.includes(normalizedLanguage)
     const code =
-      normalizedLanguage === "html"
+      shouldSanitize
         ? DOMPurify.sanitize(rawCode, { WHOLE_DOCUMENT: false })
         : rawCode
     const tokenLiteral = JSON.stringify(previewToken)

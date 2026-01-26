@@ -3,6 +3,7 @@
 import { createContext, Suspense, useCallback, useContext, useEffect, useState, ReactNode } from 'react';
 import { usePathname, useRouter, useSearchParams } from 'next/navigation';
 import { api, ApiError } from '@/lib/api-client';
+import { hasStoredAuth, subscribeAuthChange } from '@/lib/auth';
 import { User } from '@/types';
 import { getRoleRank, hasRoleAccess, isAdminRole, isMemberRole, isSuperAdminRole } from '@/lib/roles';
 import { Alert, AlertDescription } from '@/components/ui/alert';
@@ -85,6 +86,15 @@ export function PermissionProvider({ children }: PermissionProviderProps) {
   const [loading, setLoading] = useState(true);
   const [authError, setAuthError] = useState(false);
 
+  const clearAuthState = useCallback((didAuthFail: boolean) => {
+    setUser(null);
+    setPermissions([]);
+    setPermissionHints([]);
+    setRoles([]);
+    setAuthError(didAuthFail);
+    setLoading(false);
+  }, []);
+
   const loadUserPermissions = useCallback(async () => {
     try {
       setLoading(true);
@@ -141,9 +151,23 @@ export function PermissionProvider({ children }: PermissionProviderProps) {
     }
   }, []);
 
+  const refreshPermissions = useCallback(async () => {
+    if (!hasStoredAuth()) {
+      clearAuthState(true);
+      return;
+    }
+    await loadUserPermissions();
+  }, [clearAuthState, loadUserPermissions]);
+
   useEffect(() => {
-    loadUserPermissions();
-  }, [loadUserPermissions]);
+    void refreshPermissions();
+  }, [refreshPermissions]);
+
+  useEffect(() => {
+    return subscribeAuthChange(() => {
+      void refreshPermissions();
+    });
+  }, [refreshPermissions]);
 
   const hasPermission = (permission: string | string[]): boolean => {
     if (permissions.includes('*')) return true;

@@ -103,15 +103,15 @@
   --moderation-hero-grid-opacity: 0.25;
 }
 
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
 body {
   background: rgb(var(--color-bg));
   color: rgb(var(--color-text));
   font-family: "Arimo", "Inter", system-ui, -apple-system, sans-serif;
 }
-
-@tailwind base;
-@tailwind components;
-@tailwind utilities;
 
 /* Simple fade-in animation for filter chips */
 @keyframes chip-in {
@@ -312,19 +312,19 @@ body {
 }
 
 .focus-ring:focus-visible {
-  outline: 2px solid #2563eb;
+  outline: 2px solid rgb(var(--color-focus));
   outline-offset: 2px;
   border-radius: 8px;
 }
 
 .focus-ring.ant-switch:focus-visible {
-  box-shadow: 0 0 0 3px rgba(37, 99, 235, 0.35);
+  box-shadow: 0 0 0 3px rgb(var(--color-focus) / 0.35);
 }
 
 .focus-ring.ant-select-focused .ant-select-selector,
 .focus-ring .ant-select-selector:focus-visible {
-  box-shadow: 0 0 0 3px rgba(37, 99, 235, 0.35) !important;
-  border-color: #2563eb !important;
+  box-shadow: 0 0 0 3px rgb(var(--color-focus) / 0.35) !important;
+  border-color: rgb(var(--color-focus)) !important;
   border-radius: 8px !important;
 }
 
@@ -374,35 +374,25 @@ body {
 
 @keyframes gradient-border {
   0% {
-    border-image-source: linear-gradient(
-      45deg,
-      #f79533,
-      #f37055,
-      #ef4e7b,
-      #a166ab
-    );
+    background-position: 0 0, 0% 50%;
   }
   50% {
-    border-image-source: linear-gradient(45deg, #ef4e7b, #a166ab);
-  }
-  74% {
-    border-image-source: linear-gradient(60deg, #5073b8, #1098ad);
+    background-position: 0 0, 100% 50%;
   }
   100% {
-    border-image-source: linear-gradient(
-      45deg,
-      #f79533,
-      #f37055,
-      #ef4e7b,
-      #a166ab
-    );
+    background-position: 0 0, 0% 50%;
   }
 }
 
 .animated-gradient-border {
-  border: 3px solid;
-  border-image-slice: 1;
-  animation: gradient-border 3s infinite;
+  border: 3px solid transparent;
+  background-image:
+    linear-gradient(transparent, transparent),
+    linear-gradient(45deg, #f79533, #f37055, #ef4e7b, #a166ab);
+  background-origin: padding-box, border-box;
+  background-clip: padding-box, border-box;
+  background-size: 100% 100%, 300% 300%;
+  animation: gradient-border 3s linear infinite;
   border-radius: 10px;
 }
 /* Hide scrollbar by default */
@@ -448,7 +438,7 @@ body {
 }
 
 .dark .custom-scrollbar {
-  scrollbar-color: #404040 #262626;
+  scrollbar-color: rgb(var(--color-border)) rgb(var(--color-surface-2));
 }
 
 @keyframes shimmer-text {

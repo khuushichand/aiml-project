@@ -355,6 +355,7 @@ const OptionLayoutInner: React.FC<OptionLayoutProps> = ({
 type LayoutShellOverrides = {
   hideHeader?: boolean
   hideSidebar?: boolean
+  sourcePath?: string
 }
 
 type LayoutShellContextValue = {
@@ -364,6 +365,7 @@ type LayoutShellContextValue = {
 
 type LayoutShellGlobal = {
   mounted: boolean
+  ownerId?: string
   setOverrides?: (overrides: LayoutShellOverrides | null) => void
 }
 
@@ -395,12 +397,15 @@ function NestedLayoutContent({
   shell: LayoutShellContextValue
   globalShell: LayoutShellGlobal | null
 }) {
+  const location = useLocation()
   const requestedOverrides = React.useMemo(() => {
     const overrides: LayoutShellOverrides = {}
     if (props.hideHeader) overrides.hideHeader = true
     if (props.hideSidebar) overrides.hideSidebar = true
-    return Object.keys(overrides).length > 0 ? overrides : null
-  }, [props.hideHeader, props.hideSidebar])
+    if (Object.keys(overrides).length === 0) return null
+    overrides.sourcePath = location.pathname
+    return overrides
+  }, [location.pathname, props.hideHeader, props.hideSidebar])
 
   React.useEffect(() => {
     const setOverrides = shell.setOverrides || globalShell?.setOverrides
@@ -416,31 +421,58 @@ function NestedLayoutContent({
  * Component for when OptionLayout is the root shell.
  * Extracted to satisfy React's Rules of Hooks (hooks must not be conditional).
  */
-function RootLayoutShell({ props, globalShell }: { props: OptionLayoutProps; globalShell: LayoutShellGlobal | null }) {
+function RootLayoutShell({
+  props,
+  globalShell,
+  ownerId
+}: {
+  props: OptionLayoutProps
+  globalShell: LayoutShellGlobal | null
+  ownerId: string
+}) {
   const [overrides, setOverrides] = React.useState<LayoutShellOverrides | null>(
     null
   )
+  const location = useLocation()
   const allowNestedHideHeader = props.allowNestedHideHeader !== false
   const allowNestedHideSidebar = props.allowNestedHideSidebar !== false
+  const overridesMatch =
+    !overrides?.sourcePath || overrides.sourcePath === location.pathname
   const effectiveHideHeader =
-    (allowNestedHideHeader && overrides?.hideHeader) || props.hideHeader || false
+    (allowNestedHideHeader && overridesMatch && overrides?.hideHeader) ||
+    props.hideHeader ||
+    false
   const effectiveHideSidebar =
-    (allowNestedHideSidebar && overrides?.hideSidebar) || props.hideSidebar || false
+    (allowNestedHideSidebar && overridesMatch && overrides?.hideSidebar) ||
+    props.hideSidebar ||
+    false
 
   if (globalShell) {
     globalShell.mounted = true
+    globalShell.ownerId = ownerId
     globalShell.setOverrides = setOverrides
   }
 
   React.useEffect(() => {
     if (!globalShell) return
     return () => {
-      if (globalShell.setOverrides === setOverrides) {
+      if (
+        globalShell.setOverrides === setOverrides &&
+        globalShell.ownerId === ownerId
+      ) {
         globalShell.setOverrides = undefined
         globalShell.mounted = false
+        globalShell.ownerId = undefined
       }
     }
-  }, [globalShell, setOverrides])
+  }, [globalShell, ownerId, setOverrides])
+
+  React.useEffect(() => {
+    if (!overrides?.sourcePath) return
+    if (overrides.sourcePath !== location.pathname) {
+      setOverrides(null)
+    }
+  }, [location.pathname, overrides?.sourcePath])
 
   return (
     <DemoModeProvider>
@@ -458,12 +490,22 @@ function RootLayoutShell({ props, globalShell }: { props: OptionLayoutProps; glo
 export default function OptionLayout(props: OptionLayoutProps) {
   const shell = useContext(LayoutShellContext)
   const globalShell = getGlobalShell()
+  const ownerId = React.useId()
+  const externalShell =
+    Boolean(globalShell?.mounted) &&
+    (globalShell?.ownerId == null || globalShell.ownerId !== ownerId)
 
   // Check if we're nested inside an existing shell
-  if (shell.inShell || globalShell?.mounted) {
+  if (shell.inShell || externalShell) {
     return <NestedLayoutContent props={props} shell={shell} globalShell={globalShell} />
   }
 
   // We're the root shell
-  return <RootLayoutShell props={props} globalShell={globalShell} />
+  return (
+    <RootLayoutShell
+      props={props}
+      globalShell={globalShell}
+      ownerId={ownerId}
+    />
+  )
 }

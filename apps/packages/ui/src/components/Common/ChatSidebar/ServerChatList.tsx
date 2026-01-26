@@ -336,7 +336,6 @@ export function ServerChatList({
     [
       addSource,
       openExtensionUrl,
-      queueDataTablesPrefill,
       resetWizard,
       setWizardStep,
       t
@@ -562,14 +561,17 @@ export function ServerChatList({
     [selectionMode, selectServerChat, toggleChatSelected]
   )
 
-  const selectionPropsForChat = (chatId: string) =>
-    selectionMode
-      ? {
-          selectionMode: true as const,
-          isSelected: selectedChatIdSet.has(chatId),
-          onToggleSelected: toggleChatSelected
-        }
-      : { selectionMode: false as const }
+  const selectionPropsForChat = React.useCallback(
+    (chatId: string) =>
+      selectionMode
+        ? {
+            selectionMode: true as const,
+            isSelected: selectedChatIdSet.has(chatId),
+            onToggleSelected: toggleChatSelected
+          }
+        : { selectionMode: false as const },
+    [selectionMode, selectedChatIdSet, toggleChatSelected]
+  )
 
   const openBulkDeleteConfirm = React.useCallback(() => {
     setBulkDeleteConfirmOpen(true)
@@ -681,7 +683,7 @@ export function ServerChatList({
         <Modal
           title={t("common:renameChat", { defaultValue: "Rename chat" })}
           open
-          destroyOnHidden
+          destroyOnClose
           onCancel={() => {
             setRenamingChat(null)
             setRenameValue("")
@@ -715,7 +717,7 @@ export function ServerChatList({
         <Modal
           title={t("playground:composer.topicPlaceholder", "Topic label (optional)")}
           open
-          destroyOnHidden
+          destroyOnClose
           onCancel={() => {
             setEditingTopicChat(null)
             setTopicValue("")
@@ -876,7 +878,7 @@ export function ServerChatList({
           "sidepanel:multiSelect.deleteConfirmTitle",
           "Move chats to trash?"
         )}
-        destroyOnHidden
+        destroyOnClose
       >
         <p>
           {t(

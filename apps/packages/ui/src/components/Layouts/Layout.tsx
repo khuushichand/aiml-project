@@ -1,4 +1,4 @@
-import React, { lazy, Suspense, useState } from "react"
+import React, { lazy, Suspense, useContext, useState } from "react"
 
 import { Drawer, Tooltip } from "antd"
 import { EraserIcon, XIcon } from "lucide-react"
@@ -59,6 +59,18 @@ type OptionLayoutProps = {
 const SHORTCUT_LOADING_MIN_MS = 0
 const SHORTCUT_LOADING_MAX_MS = 2500
 
+const OptionLayoutEffects = () => {
+  useStorageMigrations()
+  const location = useLocation()
+
+  React.useEffect(() => {
+    const path = `${location.pathname}${location.search}${location.hash}`
+    setSettingsReturnTo(path)
+  }, [location.pathname, location.search, location.hash])
+
+  return null
+}
+
 const OptionLayoutInner: React.FC<OptionLayoutProps> = ({
   children,
   hideHeader = false
@@ -74,7 +86,6 @@ const OptionLayoutInner: React.FC<OptionLayoutProps> = ({
   const { t } = useTranslation(["option", "common", "settings"])
   const [openModelSettings, setOpenModelSettings] = useState(false)
   const { isLoading: migrationLoading } = useMigration()
-  useStorageMigrations()
   const { demoEnabled } = useDemoMode()
   const [showChatSidebar] = useChatSidebar()
   const location = useLocation()
@@ -162,13 +173,6 @@ const OptionLayoutInner: React.FC<OptionLayoutProps> = ({
     return () => window.clearTimeout(timeoutId)
   }, [shortcutLoading, stopShortcutLoading])
 
-  React.useEffect(() => {
-    const path = `${location.pathname}${location.search}${location.hash}`
-    setSettingsReturnTo(path)
-  }, [location.pathname, location.search, location.hash])
-
-
-
   if (migrationLoading) {
     return (
       <div className="flex h-screen w-full items-center justify-center bg-bg ">
@@ -199,7 +203,9 @@ const OptionLayoutInner: React.FC<OptionLayoutProps> = ({
   )
 
   return (
-    <div className="flex min-h-screen w-full">
+    <>
+      <OptionLayoutEffects />
+      <div className="flex min-h-screen w-full">
       {/* Persistent ChatSidebar when feature flag enabled */}
       {showChatSidebar && !hideHeader && (
         <ChatSidebar
@@ -353,14 +359,149 @@ const OptionLayoutInner: React.FC<OptionLayoutProps> = ({
         {/* Ensure event-driven modals are available even when the header is hidden */}
         {hideHeader && <EventOnlyHosts commandPaletteProps={commandPaletteProps} />}
       </main>
-    </div>
+      </div>
+    </>
+  )
+}
+
+type LayoutShellOverrides = {
+  hideHeader?: boolean
+  hideSidebar?: boolean
+  sourcePath?: string
+}
+
+type LayoutShellContextValue = {
+  inShell: boolean
+  setOverrides?: (overrides: LayoutShellOverrides | null) => void
+}
+
+type LayoutShellGlobal = {
+  mounted: boolean
+  ownerId?: string
+  setOverrides?: (overrides: LayoutShellOverrides | null) => void
+}
+
+const LayoutShellContext = React.createContext<LayoutShellContextValue>({
+  inShell: false
+})
+
+const getGlobalShell = (): LayoutShellGlobal | null => {
+  if (typeof globalThis === "undefined") return null
+  const scope = globalThis as typeof globalThis & {
+    __tldwOptionShell?: LayoutShellGlobal
+  }
+  if (!scope.__tldwOptionShell) {
+    scope.__tldwOptionShell = { mounted: false }
+  }
+  return scope.__tldwOptionShell
+}
+
+function NestedLayoutContent({
+  props,
+  shell,
+  globalShell
+}: {
+  props: OptionLayoutProps
+  shell: LayoutShellContextValue
+  globalShell: LayoutShellGlobal | null
+}) {
+  const location = useLocation()
+  const requestedOverrides = React.useMemo(() => {
+    const overrides: LayoutShellOverrides = {}
+    if (props.hideHeader) overrides.hideHeader = true
+    if (Object.keys(overrides).length === 0) return null
+    overrides.sourcePath = location.pathname
+    return overrides
+  }, [location.pathname, props.hideHeader])
+
+  React.useEffect(() => {
+    const setOverrides = shell.setOverrides || globalShell?.setOverrides
+    if (!setOverrides || !requestedOverrides) return
+    setOverrides(requestedOverrides)
+    return () => setOverrides?.(null)
+  }, [globalShell?.setOverrides, requestedOverrides, shell.setOverrides])
+
+  return (
+    <DemoModeProvider>
+      <OptionLayoutEffects />
+      {props.children}
+    </DemoModeProvider>
+  )
+}
+
+function RootLayoutShell({
+  props,
+  globalShell,
+  ownerId
+}: {
+  props: OptionLayoutProps
+  globalShell: LayoutShellGlobal | null
+  ownerId: string
+}) {
+  const [overrides, setOverrides] = React.useState<LayoutShellOverrides | null>(
+    null
+  )
+  const location = useLocation()
+  const overridesMatch =
+    !overrides?.sourcePath || overrides.sourcePath === location.pathname
+  const effectiveHideHeader =
+    (overridesMatch && overrides?.hideHeader) || props.hideHeader || false
+
+  if (globalShell) {
+    globalShell.mounted = true
+    globalShell.ownerId = ownerId
+    globalShell.setOverrides = setOverrides
+  }
+
+  React.useEffect(() => {
+    if (!globalShell) return
+    return () => {
+      if (
+        globalShell.setOverrides === setOverrides &&
+        globalShell.ownerId === ownerId
+      ) {
+        globalShell.setOverrides = undefined
+        globalShell.mounted = false
+        globalShell.ownerId = undefined
+      }
+    }
+  }, [globalShell, ownerId, setOverrides])
+
+  React.useEffect(() => {
+    if (!overrides?.sourcePath) return
+    if (overrides.sourcePath !== location.pathname) {
+      setOverrides(null)
+    }
+  }, [location.pathname, overrides?.sourcePath])
+
+  return (
+    <DemoModeProvider>
+      <LayoutShellContext.Provider value={{ inShell: true, setOverrides }}>
+        <OptionLayoutInner {...props} hideHeader={effectiveHideHeader} />
+      </LayoutShellContext.Provider>
+    </DemoModeProvider>
   )
 }
 
 export default function OptionLayout(props: OptionLayoutProps) {
+  const shell = useContext(LayoutShellContext)
+  const globalShell = getGlobalShell()
+  const isNextApp =
+    typeof window !== "undefined" && "__NEXT_DATA__" in window
+  const ownerId = React.useId()
+  const externalShell =
+    Boolean(globalShell?.mounted) &&
+    (globalShell?.ownerId == null || globalShell.ownerId !== ownerId)
+
+  if (shell.inShell || externalShell || isNextApp) {
+    return <NestedLayoutContent props={props} shell={shell} globalShell={globalShell} />
+  }
+
   return (
-    <DemoModeProvider>
-      <OptionLayoutInner {...props} />
-    </DemoModeProvider>
+    <RootLayoutShell
+      props={props}
+      globalShell={globalShell}
+      ownerId={ownerId}
+    />
   )
 }

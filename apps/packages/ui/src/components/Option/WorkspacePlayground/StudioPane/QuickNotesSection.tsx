@@ -277,11 +277,11 @@ export const QuickNotesSection: React.FC<QuickNotesSectionProps> = ({ onCollapse
   }
 
   return (
-    <div className="border-t border-border p-4">
+    <div className="flex h-full flex-col border-t border-border p-4">
       {contextHolder}
 
       {/* Header */}
-      <div className="mb-3 flex items-center justify-between">
+      <div className="mb-3 flex shrink-0 items-center justify-between">
         <h3 className="text-xs font-semibold uppercase text-text-muted">
           {t("playground:studio.quickNotes", "Quick Notes")}
           {currentNote.id && (
@@ -324,7 +324,7 @@ export const QuickNotesSection: React.FC<QuickNotesSectionProps> = ({ onCollapse
         onChange={(e) => updateNoteTitle(e.target.value)}
         placeholder={t("playground:studio.noteTitlePlaceholder", "Note title...")}
         size="small"
-        className="mb-2"
+        className="mb-2 shrink-0"
       />
 
       {/* Keywords input */}
@@ -333,7 +333,7 @@ export const QuickNotesSection: React.FC<QuickNotesSectionProps> = ({ onCollapse
         onChange={handleKeywordsChange}
         placeholder={t("playground:studio.noteKeywordsPlaceholder", "Keywords (comma-separated)...")}
         size="small"
-        className="mb-2"
+        className="mb-2 shrink-0"
         prefix={
           <span className="text-xs text-text-muted">
             {t("playground:studio.tags", "Tags")}:
@@ -341,9 +341,9 @@ export const QuickNotesSection: React.FC<QuickNotesSectionProps> = ({ onCollapse
         }
       />
 
-      {/* Display keywords as tags */}
+      {/* Display keywords as tags - horizontally scrollable */}
       {currentNote.keywords.length > 0 && (
-        <div className="mb-2 flex flex-wrap gap-1">
+        <div className="custom-scrollbar mb-2 flex shrink-0 gap-1 overflow-x-auto pb-1">
           {currentNote.keywords.map((kw, idx) => (
             <Tag
               key={idx}
@@ -353,7 +353,7 @@ export const QuickNotesSection: React.FC<QuickNotesSectionProps> = ({ onCollapse
                 updateNoteKeywords(newKeywords)
                 setKeywordsInput(newKeywords.join(", "))
               }}
-              className="text-xs"
+              className="shrink-0 text-xs"
             >
               {kw}
             </Tag>
@@ -361,21 +361,23 @@ export const QuickNotesSection: React.FC<QuickNotesSectionProps> = ({ onCollapse
         </div>
       )}
 
-      {/* Content textarea */}
-      <TextArea
-        value={currentNote.content}
-        onChange={(e) => updateNoteContent(e.target.value)}
-        placeholder={t(
-          "playground:studio.notesPlaceholder",
-          "Jot down notes, ideas, or observations..."
-        )}
-        autoSize={{ minRows: 3, maxRows: 8 }}
-        className="text-sm"
-      />
+      {/* Content textarea - fills remaining space */}
+      <div className="min-h-0 flex-1">
+        <TextArea
+          value={currentNote.content}
+          onChange={(e) => updateNoteContent(e.target.value)}
+          placeholder={t(
+            "playground:studio.notesPlaceholder",
+            "Jot down notes, ideas, or observations..."
+          )}
+          className="h-full !resize-none text-sm [&_.ant-input]:!h-full"
+          style={{ height: "100%", minHeight: "80px" }}
+        />
+      </div>
 
       {/* Save button */}
       {(currentNote.content.trim() || currentNote.title.trim() || currentNote.isDirty) && (
-        <div className="mt-2 flex items-center justify-between">
+        <div className="mt-2 flex shrink-0 items-center justify-between">
           <div className="flex items-center gap-2">
             {currentNote.isDirty && (
               <span className="flex items-center gap-1 text-xs text-warning">

@@ -4,7 +4,7 @@
 
 import { FC, useState, useEffect, useRef, MouseEvent, useCallback } from "react"
 import { useTranslation } from "react-i18next"
-import { Dropdown, Modal, Input, message, Divider } from "antd"
+import { Dropdown, Modal, Input, message } from "antd"
 import {
   FolderOpen,
   ChevronDown,
@@ -64,6 +64,7 @@ export const WorkspaceSelector: FC<WorkspaceSelectorProps> = ({
   const {
     recentWorkspaces,
     recordUsage,
+    removeWorkspace: removeFromHistory,
   } = useWorkspaceHistory(workspaces || [])
 
   // Check if native host is installed
@@ -194,11 +195,19 @@ export const WorkspaceSelector: FC<WorkspaceSelectorProps> = ({
   }
 
   // Handle removing workspace
-  const handleRemove = (id: string, e: MouseEvent<HTMLButtonElement>) => {
+  const handleRemove = async (id: string, e: MouseEvent<HTMLButtonElement>) => {
     e.stopPropagation()
     setWorkspaces(prev => (prev || []).filter(w => w.id !== id))
     if (selectedId === id) {
       setSelectedId(null)
+    }
+    try {
+      await removeFromHistory(id)
+    } catch (error) {
+      console.warn(
+        "[WorkspaceSelector] Failed to remove workspace from history:",
+        error
+      )
     }
   }
 
@@ -241,6 +250,9 @@ export const WorkspaceSelector: FC<WorkspaceSelectorProps> = ({
   // Format relative time for recent workspaces
   const formatRelativeTime = (isoString: string): string => {
     const date = new Date(isoString)
+    if (Number.isNaN(date.getTime())) {
+      return t("unknown", "Unknown")
+    }
     const now = new Date()
     const diffMs = now.getTime() - date.getTime()
     const diffMins = Math.floor(diffMs / (1000 * 60))
@@ -355,7 +367,7 @@ export const WorkspaceSelector: FC<WorkspaceSelectorProps> = ({
         <button
           className={`flex items-center gap-2 rounded-lg bg-surface2 px-3 py-2 transition-colors hover:bg-surface focus:outline-none focus-visible:ring-2 focus-visible:ring-focus focus-visible:ring-offset-2 ${className} ${isSelecting ? "opacity-70 cursor-wait" : ""}`}
           aria-label={selectedWorkspace?.name || t("selectWorkspace", "Select Workspace")}
-          aria-haspopup="listbox"
+          aria-haspopup="menu"
           aria-busy={isSelecting}
           disabled={isSelecting}
         >
