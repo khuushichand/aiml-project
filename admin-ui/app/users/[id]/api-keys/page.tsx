@@ -205,14 +205,6 @@ export default function UserApiKeysPage() {
     }
   };
 
-  const toggleScope = (scope: string) => {
-    setSelectedScopes((prev) =>
-      prev.includes(scope)
-        ? prev.filter((s) => s !== scope)
-        : [...prev, scope]
-    );
-  };
-
   const handleCreateVirtualKey = async () => {
     if (!virtualKeyName.trim()) {
       setError('Key name is required');
