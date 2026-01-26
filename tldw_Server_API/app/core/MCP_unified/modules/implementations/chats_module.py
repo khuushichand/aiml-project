@@ -166,9 +166,20 @@ class ChatsModule(BaseModule):
             retrieval = arguments.get("retrieval") or {}
             if not isinstance(retrieval, dict):
                 raise ValueError("retrieval must be an object")
+            mode = retrieval.get("mode", "snippet")
+            if mode not in {"snippet", "full", "chunk_with_siblings"}:
+                raise ValueError("retrieval.mode must be snippet|full|chunk_with_siblings")
             snip = int(retrieval.get("snippet_length", 300))
             if snip < 50 or snip > 2000:
                 raise ValueError("retrieval.snippet_length must be 50..2000")
+            if retrieval.get("chars_per_token") is not None:
+                cpt = int(retrieval.get("chars_per_token"))
+                if cpt <= 0:
+                    raise ValueError("chars_per_token must be a positive integer")
+            if retrieval.get("max_tokens") is not None:
+                mt = int(retrieval.get("max_tokens"))
+                if mt <= 0:
+                    raise ValueError("max_tokens must be a positive integer")
             loc = retrieval.get("loc")
             if loc is not None:
                 if not isinstance(loc, dict):
@@ -183,6 +194,12 @@ class ChatsModule(BaseModule):
         snippet_len = int(retrieval.get("snippet_length", 300))
         max_tokens = retrieval.get("max_tokens")
         cpt = int(retrieval.get("chars_per_token", 4))
+        if cpt <= 0:
+            raise ValueError("chars_per_token must be a positive integer")
+        if max_tokens is not None:
+            mt = int(max_tokens)
+            if mt <= 0:
+                raise ValueError("max_tokens must be a positive integer")
         loc = retrieval.get("loc") or {}
 
         return await asyncio.to_thread(

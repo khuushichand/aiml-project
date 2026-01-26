@@ -119,6 +119,24 @@ class TestPropositionStrategy:
         assert any("(" in chunk for chunk in chunks)
         assert any(")" in chunk for chunk in chunks)
 
+    @pytest.mark.unit
+    def test_chunk_with_metadata_offsets_align_source(self):
+        strategy = PropositionChunkingStrategy()
+        text = "Alice wrote code—then Bob reviewed it;  after that,   Carol approved it."
+        results = strategy.chunk_with_metadata(
+            text,
+            max_size=2,
+            overlap=1,
+            aggressiveness=2,
+            min_proposition_length=1,
+        )
+        assert results
+        for res in results:
+            start = res.metadata.start_char
+            end = res.metadata.end_char
+            assert 0 <= start <= end <= len(text)
+            assert text[start:end] == res.text
+
 
 class TestChunkerIntegration:
     def test_chunker_with_propositions_method(self):

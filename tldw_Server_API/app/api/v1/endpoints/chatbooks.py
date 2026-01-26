@@ -35,6 +35,7 @@ from ....core.Chatbooks.chatbook_validators import ChatbookValidator
 from ..API_Deps.ChaCha_Notes_DB_Deps import get_chacha_db_for_user as get_chacha_db
 from ..schemas.chatbook_schemas import (
     CancelJobResponse,
+    RemoveJobResponse,
     ChatbookManifestResponse,
     ChatbookVersion as SchemaChatbookVersion,
     CleanupExpiredExportsResponse,
@@ -1309,4 +1310,102 @@ async def cancel_import_job(
         raise HTTPException(
             status_code=500,
             detail="An error occurred while cancelling the import job",
+        ) from None
+
+
+@router.delete("/export/jobs/{job_id}/remove", response_model=RemoveJobResponse)
+async def remove_export_job(
+    job_id: str,
+    request: Request,
+    service: ChatbookService = Depends(get_chatbook_service),
+    user: User = Depends(get_request_user),
+    audit_service=Depends(get_audit_service_for_user),
+):
+    """
+    Remove a completed or cancelled export job.
+
+    Args:
+        job_id: The export job ID to remove
+    """
+    try:
+        ok = service.delete_export_job(job_id)
+        if not ok:
+            raise HTTPException(status_code=400, detail="Only cancelled or completed jobs can be removed")
+        try:
+            context = AuditContext(
+                user_id=str(user.id),
+                endpoint="/chatbooks/export/jobs/{job_id}/remove",
+                method="DELETE",
+                ip_address=request.client.host if request and hasattr(request, 'client') else None,
+            )
+            await audit_service.log_event(
+                event_type=AuditEventType.DATA_DELETE,
+                context=context,
+                resource_type="chatbook_export_job",
+                resource_id=job_id,
+                action="chatbook_export_job_removed",
+            )
+        except Exception as audit_err:
+            logger.warning(f"Failed to log audit event for export job removal: {audit_err}")
+        return RemoveJobResponse(
+            success=True,
+            message=f"Export job {job_id} removed",
+            job_id=job_id,
+        )
+    except HTTPException:
+        raise
+    except Exception:
+        logger.exception(f"Error removing export job {job_id} for user {user.id}")
+        raise HTTPException(
+            status_code=500,
+            detail="An error occurred while removing the export job",
+        ) from None
+
+
+@router.delete("/import/jobs/{job_id}/remove", response_model=RemoveJobResponse)
+async def remove_import_job(
+    job_id: str,
+    request: Request,
+    service: ChatbookService = Depends(get_chatbook_service),
+    user: User = Depends(get_request_user),
+    audit_service=Depends(get_audit_service_for_user),
+):
+    """
+    Remove a completed or cancelled import job.
+
+    Args:
+        job_id: The import job ID to remove
+    """
+    try:
+        ok = service.delete_import_job(job_id)
+        if not ok:
+            raise HTTPException(status_code=400, detail="Only cancelled or completed jobs can be removed")
+        try:
+            context = AuditContext(
+                user_id=str(user.id),
+                endpoint="/chatbooks/import/jobs/{job_id}/remove",
+                method="DELETE",
+                ip_address=request.client.host if request and hasattr(request, 'client') else None,
+            )
+            await audit_service.log_event(
+                event_type=AuditEventType.DATA_DELETE,
+                context=context,
+                resource_type="chatbook_import_job",
+                resource_id=job_id,
+                action="chatbook_import_job_removed",
+            )
+        except Exception as audit_err:
+            logger.warning(f"Failed to log audit event for import job removal: {audit_err}")
+        return RemoveJobResponse(
+            success=True,
+            message=f"Import job {job_id} removed",
+            job_id=job_id,
+        )
+    except HTTPException:
+        raise
+    except Exception:
+        logger.exception(f"Error removing import job {job_id} for user {user.id}")
+        raise HTTPException(
+            status_code=500,
+            detail="An error occurred while removing the import job",
         ) from None

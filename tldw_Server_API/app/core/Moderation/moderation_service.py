@@ -65,11 +65,12 @@ class ModerationPolicy:
             if self.block_patterns:
                 for p in self.block_patterns:
                     if isinstance(p, PatternRule):
+                        cats = p.categories if p.categories else {ModerationService._UNCATEGORIZED_CATEGORY}
                         rules.append({
                             "pattern": p.regex.pattern,
                             "action": p.action or "",
                             "replacement": p.replacement or "",
-                            "categories": ",".join(sorted(p.categories)) if p.categories else "",
+                            "categories": ",".join(sorted(cats)) if cats else "",
                         })
                     else:
                         rules.append({"pattern": getattr(p, 'pattern', ''), "action": "", "replacement": "", "categories": ""})
@@ -100,6 +101,8 @@ class PatternRule:
 
 class ModerationService:
     """Loads moderation configuration and evaluates content against policies."""
+    _UNCATEGORIZED_CATEGORY = "uncategorized"
+    _ALLOWED_REGEX_FLAGS = {"i", "m", "s", "x"}
 
     def __init__(self) -> None:
         self._config = load_and_log_configs() or {}
@@ -328,6 +331,24 @@ class ModerationService:
                 return lhs, rhs
         return text, None
 
+    @classmethod
+    def _parse_regex_expr(cls, expr: str) -> Optional[Tuple[str, str]]:
+        """Return (pattern, flags) if expr is /pattern/flags with allowed flags; otherwise None."""
+        if not expr or not expr.startswith("/"):
+            return None
+        last_slash = expr.rfind("/")
+        if last_slash <= 0:
+            return None
+        flags_str = expr[last_slash + 1:]
+        if flags_str:
+            fs = flags_str.lower()
+            if any(ch not in cls._ALLOWED_REGEX_FLAGS for ch in fs):
+                return None
+        raw = expr[1:last_slash]
+        if raw == "":
+            return None
+        return raw, flags_str
+
     def _load_block_patterns(self, path: Optional[str]) -> List[PatternRule]:
         patterns: List[PatternRule] = []
         if not path:
@@ -345,28 +366,24 @@ class ModerationService:
                         expr, action, repl, cats = self._parse_rule_line(s)
                         if expr is None:
                             continue
-                        # Treat lines starting with '/' as regex with optional trailing flags (e.g., /.../i)
-                        if len(expr) >= 2 and expr.startswith("/"):
-                            last_slash = expr.rfind("/")
-                            if last_slash > 0:
-                                raw = expr[1:last_slash]
-                                flags_str = expr[last_slash + 1:]
-                                if self._is_regex_dangerous(raw):
-                                    logger.warning(f"Skipped dangerous regex in blocklist: {raw}")
-                                    continue
-                                flags = re.IGNORECASE  # default remains case-insensitive
-                                fs = (flags_str or "").lower()
-                                if 'i' in fs:
-                                    flags |= re.IGNORECASE
-                                if 'm' in fs:
-                                    flags |= re.MULTILINE
-                                if 's' in fs:
-                                    flags |= re.DOTALL
-                                if 'x' in fs:
-                                    flags |= re.VERBOSE
-                                pat = re.compile(raw, flags=flags)
-                            else:
-                                pat = re.compile(re.escape(expr), flags=re.IGNORECASE)
+                        # Treat lines starting and ending with '/' (optional flags) as regex
+                        regex_parts = self._parse_regex_expr(expr)
+                        if regex_parts:
+                            raw, flags_str = regex_parts
+                            if self._is_regex_dangerous(raw):
+                                logger.warning(f"Skipped dangerous regex in blocklist: {raw}")
+                                continue
+                            flags = re.IGNORECASE  # default remains case-insensitive
+                            fs = (flags_str or "").lower()
+                            if 'i' in fs:
+                                flags |= re.IGNORECASE
+                            if 'm' in fs:
+                                flags |= re.MULTILINE
+                            if 's' in fs:
+                                flags |= re.DOTALL
+                            if 'x' in fs:
+                                flags |= re.VERBOSE
+                            pat = re.compile(raw, flags=flags)
                         else:
                             # Literal pattern: allow escaped '#'
                             literal = expr.replace("\\#", "#")
@@ -499,11 +516,22 @@ class ModerationService:
             }
         }
 
-    def update_settings(self, pii_enabled: Optional[bool] = None, categories_enabled: Optional[List[str]] = None, persist: bool = False) -> Dict[str, object]:
+    def update_settings(
+        self,
+        pii_enabled: Optional[bool] = None,
+        categories_enabled: Optional[List[str]] = None,
+        persist: bool = False,
+        clear_pii: bool = False,
+        clear_categories: bool = False,
+    ) -> Dict[str, object]:
         with self._lock:
-            if pii_enabled is not None:
+            if clear_pii:
+                self._runtime_override.pop("pii_enabled", None)
+            elif pii_enabled is not None:
                 self._runtime_override["pii_enabled"] = bool(pii_enabled)
-            if categories_enabled is not None:
+            if clear_categories:
+                self._runtime_override.pop("categories_enabled", None)
+            elif categories_enabled is not None:
                 cats = [str(c).strip().lower() for c in categories_enabled if str(c).strip()]
                 self._runtime_override["categories_enabled"] = set(cats)
             if persist:
@@ -602,6 +630,12 @@ class ModerationService:
             return None
         return None
 
+    @classmethod
+    def _effective_rule_categories(cls, rule: PatternRule) -> Set[str]:
+        cats = rule.categories or set()
+        normalized = {str(c).strip().lower() for c in cats if str(c).strip()}
+        return normalized if normalized else {cls._UNCATEGORIZED_CATEGORY}
+
     def effective_policy_snapshot(self, user_id: Optional[str]) -> Dict[str, object]:
         """Return a serializable dict of the effective policy for inspection."""
         return self.get_effective_policy(user_id).to_dict()
@@ -649,7 +683,7 @@ class ModerationService:
         for rule in policy.block_patterns:
             # Category gating mirrors evaluate_action() behavior
             if isinstance(rule, PatternRule) and policy.categories_enabled:
-                rcats = rule.categories or set()
+                rcats = self._effective_rule_categories(rule)
                 if not (rcats & policy.categories_enabled):
                     continue
             pat = rule.regex if isinstance(rule, PatternRule) else rule
@@ -732,7 +766,7 @@ class ModerationService:
         for rule in policy.block_patterns:
             # Respect category gating similar to evaluate_action/check_text
             if isinstance(rule, PatternRule) and policy.categories_enabled:
-                rcats = rule.categories or set()
+                rcats = self._effective_rule_categories(rule)
                 if not (rcats & policy.categories_enabled):
                     continue
             pat = rule.regex if isinstance(rule, PatternRule) else rule
@@ -786,7 +820,7 @@ class ModerationService:
             pat = rule.regex if isinstance(rule, PatternRule) else rule
             # Category gating
             if isinstance(rule, PatternRule) and policy.categories_enabled:
-                rcats = rule.categories or set()
+                rcats = self._effective_rule_categories(rule)
                 if not (rcats & policy.categories_enabled):
                     continue
             match_span = self._find_match_span(pat, text)
@@ -809,12 +843,11 @@ class ModerationService:
                 best_match_pos = match_pos
                 best_match_span = match_span
                 best_pattern = pat.pattern
-                if isinstance(rule, PatternRule) and rule.categories:
+                if isinstance(rule, PatternRule):
                     try:
+                        cats = self._effective_rule_categories(rule)
                         if policy.categories_enabled:
-                            cats = set(rule.categories) & set(policy.categories_enabled)
-                        else:
-                            cats = set(rule.categories)
+                            cats = cats & set(policy.categories_enabled)
                         if cats:
                             if "pii" in cats and len(cats) > 1:
                                 cats = {c for c in cats if c != "pii"}
@@ -991,7 +1024,7 @@ class ModerationService:
         try:
             with self._lock:
                 with open(path, "r", encoding="utf-8") as f:
-                    return [ln.rstrip("\n") for ln in f.readlines()]
+                    return [ln.rstrip("\r\n") for ln in f.readlines()]
         except Exception as e:
             logger.error(f"Failed to read blocklist: {e}")
             return []
@@ -1053,7 +1086,7 @@ class ModerationService:
     # --------------- Managed blocklist with versioning ---------------
     @staticmethod
     def _normalize_lines(lines: List[str]) -> List[str]:
-        return [str(ln).rstrip("\n") for ln in (lines or [])]
+        return [str(ln).rstrip("\r\n") for ln in (lines or [])]
 
     @staticmethod
     def _compute_version(lines: List[str]) -> str:
@@ -1130,16 +1163,18 @@ class ModerationService:
                     results.append(item)
                     invalid_count += 1
                     continue
+                if not cats:
+                    cats = {self._UNCATEGORIZED_CATEGORY}
                 # Recognize /regex/flags form as regex
-                is_regex = len(expr) >= 2 and expr.startswith("/") and (expr.rfind("/") > 0)
+                regex_parts = self._parse_regex_expr(expr)
+                is_regex = regex_parts is not None
                 item.update({
                     "action": action,
                     "replacement": repl,
                     "categories": sorted(list(cats)) if cats else [],
                 })
                 if is_regex:
-                    last_slash = expr.rfind("/")
-                    raw_pat = expr[1:last_slash]
+                    raw_pat, flags_part = regex_parts
                     if self._is_regex_dangerous(raw_pat):
                         item.update({"ok": False, "pattern_type": "regex", "error": "dangerous regex (nested quantifiers/too complex)"})
                         results.append(item)
@@ -1147,7 +1182,7 @@ class ModerationService:
                         continue
                     try:
                         flags = re.IGNORECASE
-                        flags_str = expr[last_slash + 1:].lower()
+                        flags_str = (flags_part or "").lower()
                         if 'i' in flags_str:
                             flags |= re.IGNORECASE
                         if 'm' in flags_str:

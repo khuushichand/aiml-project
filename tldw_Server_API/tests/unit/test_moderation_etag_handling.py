@@ -49,11 +49,13 @@ def _build_app(stub) -> FastAPI:
 
 
 class _StubModerationService:
-    def __init__(self, version: str = "abc123"):
+    def __init__(self, version: str = "abc123", invalid_lines: Optional[set[str]] = None):
         self.version = version
+        self.invalid_lines = invalid_lines or set()
         self.append_called = False
         self.delete_called = False
         self.last_expected: Optional[str] = None
+        self.lines: list[str] = []
 
     def get_blocklist_state(self) -> dict:
         return {"version": self.version, "items": []}
@@ -71,6 +73,20 @@ class _StubModerationService:
         if expected_version and expected_version != self.version:
             return False, {"version": self.version, "conflict": True}
         return True, {"version": self.version, "items": []}
+
+    def lint_blocklist_lines(self, lines: list[str]) -> dict:
+        items = []
+        invalid_count = 0
+        for idx, line in enumerate(lines or []):
+            ok = line not in self.invalid_lines
+            items.append({"index": idx, "line": line, "ok": ok})
+            if not ok:
+                invalid_count += 1
+        return {"items": items, "valid_count": len(lines) - invalid_count, "invalid_count": invalid_count}
+
+    def set_blocklist_lines(self, lines: list[str]) -> bool:
+        self.lines = list(lines or [])
+        return True
 
 
 @pytest.mark.unit
@@ -125,6 +141,32 @@ def test_blocklist_append_rejects_mismatched_if_match():
         )
     assert resp.status_code == 412
     assert stub.append_called is False
+
+
+@pytest.mark.unit
+def test_blocklist_append_rejects_invalid_line():
+    stub = _StubModerationService(version="v6", invalid_lines={"bad"})
+    app = _build_app(stub)
+    with TestClient(app) as client:
+        resp = client.post(
+            "/api/v1/moderation/blocklist/append",
+            json={"line": "bad"},
+            headers={"If-Match": "\"v6\""},
+        )
+    assert resp.status_code == 400
+    assert stub.append_called is False
+
+
+@pytest.mark.unit
+def test_blocklist_update_rejects_invalid_lines():
+    stub = _StubModerationService(version="v7", invalid_lines={"bad"})
+    app = _build_app(stub)
+    with TestClient(app) as client:
+        resp = client.put(
+            "/api/v1/moderation/blocklist",
+            json={"lines": ["good", "bad"]},
+        )
+    assert resp.status_code == 400
 
 
 @pytest.mark.unit

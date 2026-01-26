@@ -126,10 +126,25 @@ async def get_blocklist() -> list[str]:
 async def update_blocklist(data: ModerationBlocklistUpdate) -> dict[str, Any]:
     """Replace the entire blocklist with the provided lines."""
     svc = get_moderation_service()
-    ok = svc.set_blocklist_lines(data.lines or [])
+    lines = data.lines or []
+    try:
+        lint = svc.lint_blocklist_lines(lines)
+    except Exception as exc:
+        logger.exception("Failed to lint blocklist lines")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Failed to lint blocklist lines",
+        ) from exc
+    if int(lint.get("invalid_count", 0)) > 0:
+        invalid_items = [it for it in (lint.get("items") or []) if not it.get("ok")]
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail={"error": "Invalid blocklist lines", "invalid_items": invalid_items},
+        )
+    ok = svc.set_blocklist_lines(lines)
     if not ok:
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Failed to persist blocklist")
-    return {"status": "ok", "count": len(data.lines or [])}
+    return {"status": "ok", "count": len(lines)}
 
 
 @router.get(
@@ -203,7 +218,16 @@ async def update_moderation_settings(body: ModerationSettingsUpdate) -> Moderati
     """Update runtime moderation settings without persisting by default."""
     svc = get_moderation_service()
     try:
-        data = svc.update_settings(pii_enabled=body.pii_enabled, categories_enabled=body.categories_enabled, persist=bool(body.persist))
+        fields_set = getattr(body, "model_fields_set", set())
+        clear_pii = ("pii_enabled" in fields_set and body.pii_enabled is None)
+        clear_categories = ("categories_enabled" in fields_set and body.categories_enabled is None)
+        data = svc.update_settings(
+            pii_enabled=body.pii_enabled,
+            categories_enabled=body.categories_enabled,
+            persist=bool(body.persist),
+            clear_pii=clear_pii,
+            clear_categories=clear_categories,
+        )
     except Exception as exc:
         logger.exception("Failed to update moderation settings")
         raise HTTPException(
@@ -247,6 +271,20 @@ async def append_blocklist_line(
     if not tokens:
         raise HTTPException(status_code=428, detail="If-Match header is required")
     svc = get_moderation_service()
+    try:
+        lint = svc.lint_blocklist_lines([payload.line])
+    except Exception as exc:
+        logger.exception("Failed to lint blocklist line")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Failed to lint blocklist line",
+        ) from exc
+    if int(lint.get("invalid_count", 0)) > 0:
+        invalid_items = [it for it in (lint.get("items") or []) if not it.get("ok")]
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail={"error": "Invalid blocklist line", "invalid_items": invalid_items},
+        )
     expected_version = ""
     if "*" not in tokens:
         current_state = svc.get_blocklist_state()

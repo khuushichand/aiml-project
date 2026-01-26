@@ -33,6 +33,7 @@ from typing import Dict as _Dict
 from uuid import uuid4
 from loguru import logger
 from contextlib import asynccontextmanager
+from tldw_Server_API.app.core.config import settings as core_settings
 
 # Unified audit logging is handled at the API layer. The service no longer
 # imports or depends on legacy audit loggers.
@@ -151,6 +152,14 @@ class ChatbookService:
         """Optional cap on exported messages per conversation (0 means unlimited)."""
         max_messages = cls._get_env_int("CHATBOOKS_CONVERSATION_EXPORT_MAX_MESSAGES", 0)
         return max_messages if max_messages > 0 else None
+
+    @staticmethod
+    def _get_max_message_image_bytes() -> int:
+        """Return the maximum size for message images in bytes."""
+        try:
+            return int(core_settings.get("MAX_MESSAGE_IMAGE_BYTES", 5 * 1024 * 1024))
+        except Exception:
+            return 5 * 1024 * 1024
 
     @classmethod
     def _get_export_retention_seconds(cls) -> int:
@@ -2927,6 +2936,44 @@ class ChatbookService:
                         "citations": []
                     }
 
+                    # Persist primary image (messages.image_data) as an attachment if present
+                    primary_bytes = msg.get("image_data")
+                    if isinstance(primary_bytes, memoryview):
+                        primary_bytes = primary_bytes.tobytes()
+                    primary_mime = msg.get("image_mime_type") or "application/octet-stream"
+                    if primary_bytes:
+                        if attachment_limit is not None and len(primary_bytes) > attachment_limit:
+                            message_payload["attachments"].append({
+                                "type": "image",
+                                "mime_type": primary_mime,
+                                "file_path": None,
+                                "bundled": False,
+                                "size_bytes": len(primary_bytes),
+                                "primary": True
+                            })
+                        else:
+                            if attachments_dir is None:
+                                attachments_dir = conv_dir / f"conversation_{conv_id}_assets"
+                                attachments_dir.mkdir(parents=True, exist_ok=True)
+                            ext = self._extension_from_mime(primary_mime)
+                            attachment_name = f"{msg['id']}_image_primary{ext}"
+                            attachment_path = attachments_dir / attachment_name
+                            try:
+                                with open(attachment_path, "wb") as af:
+                                    af.write(bytes(primary_bytes))
+                            except Exception as exc:
+                                logger.debug(f"Failed to persist primary image attachment for message {msg['id']}: {exc}")
+                                self._note_todo("Failed to export some conversation image attachments; inspect logs.")
+                            else:
+                                rel_path = f"content/conversations/{attachments_dir.name}/{attachment_name}"
+                                message_payload["attachments"].append({
+                                    "type": "image",
+                                    "mime_type": primary_mime,
+                                    "file_path": rel_path,
+                                    "bundled": True,
+                                    "primary": True
+                                })
+
                     # Persist inline images as attachments
                     for idx, image in enumerate(msg.get("images") or []):
                         image_bytes = image.get("image_data")
@@ -2934,10 +2981,13 @@ class ChatbookService:
                             image_bytes = image_bytes.tobytes()
                         if not image_bytes:
                             continue
+                        image_mime = image.get("image_mime_type") or "application/octet-stream"
+                        if primary_bytes and image_bytes == primary_bytes and image_mime == primary_mime:
+                            continue
                         if attachment_limit is not None and len(image_bytes) > attachment_limit:
                             message_payload["attachments"].append({
                                 "type": "image",
-                                "mime_type": image.get("image_mime_type"),
+                                "mime_type": image_mime,
                                 "file_path": None,
                                 "bundled": False,
                                 "size_bytes": len(image_bytes)
@@ -2946,7 +2996,7 @@ class ChatbookService:
                         if attachments_dir is None:
                             attachments_dir = conv_dir / f"conversation_{conv_id}_assets"
                             attachments_dir.mkdir(parents=True, exist_ok=True)
-                        ext = self._extension_from_mime(image.get("image_mime_type"))
+                        ext = self._extension_from_mime(image_mime)
                         attachment_name = f"{msg['id']}_image_{idx}{ext}"
                         attachment_path = attachments_dir / attachment_name
                         try:
@@ -2959,7 +3009,7 @@ class ChatbookService:
                         rel_path = f"content/conversations/{attachments_dir.name}/{attachment_name}"
                         message_payload["attachments"].append({
                             "type": "image",
-                            "mime_type": image.get("image_mime_type"),
+                            "mime_type": image_mime,
                             "file_path": rel_path,
                             "bundled": True
                         })
@@ -3119,9 +3169,7 @@ class ChatbookService:
         for wb_id in world_book_ids:
             try:
                 # Get world book with entries
-                wb_data = wb_service.get_world_book(int(wb_id))
-                if not wb_data:
-                    continue
+                wb_data = wb_service.export_world_book(int(wb_id))
 
                 # Convert datetime objects to strings for JSON serialization
                 wb_data_serializable = self._convert_datetimes(wb_data)
@@ -3164,9 +3212,13 @@ class ChatbookService:
         for dict_id in dictionary_ids:
             try:
                 # Get dictionary with entries
-                dict_data = dict_service.get_dictionary(int(dict_id))
-                if not dict_data:
-                    continue
+                dict_data = dict_service.export_to_json(int(dict_id))
+                dict_meta = dict_service.get_dictionary(int(dict_id))
+                if dict_meta:
+                    dict_data.setdefault("name", dict_meta.get("name"))
+                    dict_data.setdefault("description", dict_meta.get("description"))
+                    dict_data["id"] = dict_meta.get("id", dict_id)
+                    dict_data["is_active"] = dict_meta.get("is_active", True)
 
                 # Convert datetime objects to strings for JSON serialization
                 dict_data_serializable = self._convert_datetimes(dict_data)
@@ -3246,6 +3298,7 @@ class ChatbookService:
     ):
         """Import conversations from chatbook."""
         conv_dir = extract_dir / "content" / "conversations"
+        max_img_bytes = self._get_max_message_image_bytes()
 
         for conv_id in conversation_ids:
             status.processed_items += 1
@@ -3284,68 +3337,96 @@ class ChatbookService:
                     status.warnings.append(f"Conversation {conv_id} skipped due to missing character_id.")
                     continue
 
-                # Create conversation
-                conv_dict = {
-                    'title': conv_name,
-                    'created_at': conv_data.get('created_at'),
-                    'character_id': resolved_char_id
-                }
-                new_conv_id = self.db.add_conversation(conv_dict)
+                # Create conversation + messages atomically
+                with self.db.transaction():
+                    conv_dict = {
+                        'title': conv_name,
+                        'created_at': conv_data.get('created_at'),
+                        'character_id': resolved_char_id
+                    }
+                    new_conv_id = self.db.add_conversation(conv_dict)
 
-                if new_conv_id:
-                    # Import messages
-                    base_path = extract_dir.resolve()
-                    for msg in conv_data.get('messages', []):
-                        msg_dict = {
-                            'conversation_id': new_conv_id,
-                            'sender': msg['role'],
-                            'content': msg['content'],
-                            'timestamp': msg.get('timestamp')
-                        }
+                    if new_conv_id:
+                        # Import messages
+                        base_path = extract_dir.resolve()
+                        for msg in conv_data.get('messages', []):
+                            msg_dict = {
+                                'conversation_id': new_conv_id,
+                                'sender': msg['role'],
+                                'content': msg['content'],
+                                'timestamp': msg.get('timestamp')
+                            }
 
-                        attachments = msg.get('attachments') or []
-                        images_payload: List[Dict[str, Any]] = []
-                        for attachment in attachments:
-                            if not isinstance(attachment, dict):
-                                continue
-                            if str(attachment.get("type", "")).lower() != "image":
-                                continue
-                            rel_path = attachment.get("file_path")
-                            if not rel_path:
-                                continue
-                            try:
-                                attachment_rel = Path(rel_path)
-                            except Exception:
-                                continue
-                            candidate_path = (base_path / attachment_rel).resolve()
-                            try:
-                                candidate_path.relative_to(base_path)
-                            except Exception:
-                                status.warnings.append(f"Skipped attachment outside extract dir: {rel_path}")
-                                continue
-                            try:
-                                image_bytes = candidate_path.read_bytes()
-                            except Exception as read_exc:
-                                status.warnings.append(f"Failed to read attachment {rel_path}: {read_exc}")
-                                continue
-                            mime_type = attachment.get("mime_type") or "application/octet-stream"
-                            images_payload.append({
-                                "image_data": image_bytes,
-                                "image_mime_type": mime_type
-                            })
-                        if images_payload:
-                            msg_dict['images'] = images_payload
+                            attachments = msg.get('attachments') or []
+                            images_payload: List[Dict[str, Any]] = []
+                            primary_payload: Optional[Tuple[bytes, str]] = None
+                            for attachment in attachments:
+                                if not isinstance(attachment, dict):
+                                    continue
+                                if str(attachment.get("type", "")).lower() != "image":
+                                    continue
+                                rel_path = attachment.get("file_path")
+                                if not rel_path:
+                                    continue
+                                try:
+                                    attachment_rel = Path(rel_path)
+                                except Exception:
+                                    continue
+                                candidate_path = (base_path / attachment_rel).resolve()
+                                try:
+                                    candidate_path.relative_to(base_path)
+                                except Exception:
+                                    status.warnings.append(f"Skipped attachment outside extract dir: {rel_path}")
+                                    continue
+                                try:
+                                    size_bytes = candidate_path.stat().st_size
+                                except Exception:
+                                    size_bytes = None
+                                if size_bytes is not None and size_bytes > max_img_bytes:
+                                    status.warnings.append(
+                                        f"Skipped attachment {rel_path}: exceeds MAX_MESSAGE_IMAGE_BYTES ({max_img_bytes} bytes)"
+                                    )
+                                    continue
+                                try:
+                                    image_bytes = candidate_path.read_bytes()
+                                except Exception as read_exc:
+                                    status.warnings.append(f"Failed to read attachment {rel_path}: {read_exc}")
+                                    continue
+                                if len(image_bytes) > max_img_bytes:
+                                    status.warnings.append(
+                                        f"Skipped attachment {rel_path}: exceeds MAX_MESSAGE_IMAGE_BYTES ({max_img_bytes} bytes)"
+                                    )
+                                    continue
+                                mime_type = attachment.get("mime_type") or "application/octet-stream"
+                                if attachment.get("primary") or attachment.get("is_primary"):
+                                    if primary_payload is None:
+                                        primary_payload = (image_bytes, mime_type)
+                                    else:
+                                        images_payload.append({
+                                            "image_data": image_bytes,
+                                            "image_mime_type": mime_type
+                                        })
+                                else:
+                                    images_payload.append({
+                                        "image_data": image_bytes,
+                                        "image_mime_type": mime_type
+                                    })
+                            if primary_payload:
+                                msg_dict['image_data'] = primary_payload[0]
+                                msg_dict['image_mime_type'] = primary_payload[1]
+                            if images_payload:
+                                msg_dict['images'] = images_payload
 
-                        self.db.add_message(msg_dict)
+                            self.db.add_message(msg_dict)
 
-                    status.successful_items += 1
-                else:
-                    # If add failed, it might be a duplicate not caught by search
-                    # Count as skipped if we're in skip mode
-                    if conflict_resolution == ConflictResolution.SKIP:
-                        status.skipped_items += 1
+                        status.successful_items += 1
                     else:
-                        status.failed_items += 1
+                        # If add failed, it might be a duplicate not caught by search
+                        # Count as skipped if we're in skip mode
+                        if conflict_resolution == ConflictResolution.SKIP:
+                            status.skipped_items += 1
+                        else:
+                            status.failed_items += 1
 
             except Exception as e:
                 status.failed_items += 1
@@ -3362,6 +3443,29 @@ class ChatbookService:
     ):
         """Import notes from chatbook."""
         notes_dir = extract_dir / "content" / "notes"
+        def _parse_yaml_scalar(text: str) -> str:
+            if not text:
+                return ""
+            if len(text) >= 2 and text[0] == text[-1] and text[0] in ("'", '"'):
+                inner = text[1:-1]
+                if text[0] == '"':
+                    inner = (
+                        inner.replace("\\\\", "\\")
+                        .replace("\\\"", "\"")
+                        .replace("\\n", "\n")
+                        .replace("\\r", "\r")
+                        .replace("\\t", "\t")
+                    )
+                else:
+                    inner = inner.replace("''", "'")
+                return inner
+            return text
+        def _extract_title_frontmatter(frontmatter: str, fallback: str) -> str:
+            for line in frontmatter.splitlines():
+                if line.startswith('title:'):
+                    raw = line.replace('title:', '', 1).strip()
+                    return _parse_yaml_scalar(raw) or fallback
+            return fallback
 
         for note_id in note_ids:
             status.processed_items += 1
@@ -3387,9 +3491,15 @@ class ChatbookService:
                     if len(parts) >= 3:
                         # Parse frontmatter for title
                         frontmatter = parts[1].strip()
-                        for line in frontmatter.split('\n'):
-                            if line.startswith('title:'):
-                                note_title = line.replace('title:', '').strip()
+                        try:
+                            import yaml  # type: ignore
+                            parsed = yaml.safe_load(frontmatter) if frontmatter else {}
+                            if isinstance(parsed, dict) and parsed.get('title') is not None:
+                                note_title = str(parsed.get('title'))
+                            else:
+                                note_title = _extract_title_frontmatter(frontmatter, note_title)
+                        except Exception:
+                            note_title = _extract_title_frontmatter(frontmatter, note_title)
                         note_content = parts[2].strip()
 
                 if prefix_imported:
@@ -3659,13 +3769,26 @@ class ChatbookService:
                                 pf = max(0.0, min(1.0, pf / 100.0))
                         except Exception:
                             pf = 1.0
+                        max_rep_raw = entry.get("max_replacements", 1)
+                        try:
+                            max_rep_val = int(max_rep_raw)
+                        except Exception:
+                            max_rep_val = 1
+                        group = entry.get("group") or entry.get("group_name")
+                        timed_effects = entry.get("timed_effects")
+                        if not isinstance(timed_effects, dict):
+                            timed_effects = None
                         dict_service.add_entry(
                             new_dict_id,
-                            str(pat),
-                            str(repl),
-                            is_regex,
-                            pf,
-                            int(entry.get('max_replacements', 1) or 1)
+                            key=str(pat),
+                            content=str(repl),
+                            probability=pf,
+                            group=group,
+                            timed_effects=timed_effects,
+                            max_replacements=max_rep_val,
+                            type="regex" if is_regex else "literal",
+                            enabled=bool(entry.get("enabled", True)),
+                            case_sensitive=bool(entry.get("case_sensitive", True)),
                         )
                     status.successful_items += 1
                 else:
@@ -4147,6 +4270,61 @@ class ChatbookService:
                 pass
         return True
 
+    def delete_export_job(self, job_id: str, delete_file: bool = True) -> bool:
+        """Remove a completed/cancelled export job record and optionally its file."""
+        job = self._get_export_job(job_id)
+        if not job:
+            raise JobError(f"Export job {job_id} not found", job_id=job_id)
+
+        allowed_statuses = {ExportStatus.COMPLETED, ExportStatus.CANCELLED, ExportStatus.EXPIRED}
+        if job.status not in allowed_statuses:
+            return False
+
+        if delete_file and job.output_path:
+            try:
+                file_path = Path(job.output_path).resolve()
+                expected_base = Path(self.export_dir).resolve()
+                if os.path.commonpath([str(file_path), str(expected_base)]) != str(expected_base):
+                    logger.warning(f"Refusing to delete export outside export dir: {file_path}")
+                elif file_path.exists() and file_path.is_file():
+                    file_path.unlink()
+            except Exception as exc:
+                logger.warning(f"Failed to delete export file for job {job_id}: {exc}")
+
+        try:
+            self.db.execute_query(
+                "DELETE FROM export_jobs WHERE job_id = ? AND user_id = ?",
+                (job_id, self.user_id),
+                commit=True,
+            )
+        except Exception as exc:
+            logger.error(f"Failed to delete export job {job_id}: {exc}")
+            raise
+
+        return True
+
+    def delete_import_job(self, job_id: str) -> bool:
+        """Remove a completed/cancelled import job record."""
+        job = self._get_import_job(job_id)
+        if not job:
+            raise JobError(f"Import job {job_id} not found", job_id=job_id)
+
+        allowed_statuses = {ImportStatus.COMPLETED, ImportStatus.CANCELLED}
+        if job.status not in allowed_statuses:
+            return False
+
+        try:
+            self.db.execute_query(
+                "DELETE FROM import_jobs WHERE job_id = ? AND user_id = ?",
+                (job_id, self.user_id),
+                commit=True,
+            )
+        except Exception as exc:
+            logger.error(f"Failed to delete import job {job_id}: {exc}")
+            raise
+
+        return True
+
     def create_import_job(self, file_path: str, conflict_strategy: str = "skip") -> Dict[str, Any]:
         """
         Create an import job (synchronous wrapper for tests).
@@ -4260,7 +4438,7 @@ class ChatbookService:
                         # Try to get dictionaries
                         try:
                             cursor = self.db.execute_query(
-                                "SELECT id FROM dictionaries WHERE deleted = 0",
+                                "SELECT id FROM chat_dictionaries WHERE deleted = 0",
                                 ()
                             )
                             items = self._fetch_results(cursor)

@@ -163,7 +163,11 @@ class JSONChunkingStrategy(BaseChunkingStrategy):
                             max_size: int,
                             overlap: int = 0,
                             **options) -> List[ChunkResult]:
-        """Chunk JSON and return metadata with source offsets aligned to the original text."""
+        """Chunk JSON and return metadata with source offsets aligned to the original text.
+
+        Note: `output_format` affects metadata only. Chunk text is always sourced
+        from the original JSON string slice for reliable offsets.
+        """
         if not self.validate_parameters(text, max_size, overlap):
             return []
 

@@ -286,7 +286,8 @@ def _resolve_base64_image_limit_enforcement() -> bool:
         return _to_bool(env_val)
     cfg_val = _chat_config.get("enforce_base64_image_limit") if _chat_config else None
     if cfg_val is None:
-        return False
+        # Default to enforcing base64 image limits unless explicitly disabled.
+        return True
     return _to_bool(cfg_val)
 
 # Optional flag: allow auto-switch from 'local-llm' to 'openai' when an
@@ -329,6 +330,8 @@ _recent_calls_by_user: dict[str, deque] = defaultdict(lambda: deque(maxlen=16))
 _active_request_counts: dict[str, int] = defaultdict(int)
 _active_request_locks: "WeakKeyDictionary[asyncio.AbstractEventLoop, asyncio.Lock]" = WeakKeyDictionary()
 _active_request_guard = threading.Lock()
+_system_message_locks: "WeakKeyDictionary[asyncio.AbstractEventLoop, dict[str, asyncio.Lock]]" = WeakKeyDictionary()
+_system_message_guard = threading.Lock()
 
 
 def _get_active_request_lock() -> asyncio.Lock:
@@ -342,6 +345,21 @@ def _get_active_request_lock() -> asyncio.Lock:
         if lock is None:
             lock = asyncio.Lock()
             _active_request_locks[loop] = lock
+    return lock
+
+
+def _get_system_message_lock(conversation_id: str) -> asyncio.Lock:
+    """Return an asyncio.Lock scoped to the current loop + conversation_id."""
+    loop = asyncio.get_running_loop()
+    with _system_message_guard:
+        per_loop = _system_message_locks.get(loop)
+        if per_loop is None:
+            per_loop = {}
+            _system_message_locks[loop] = per_loop
+        lock = per_loop.get(conversation_id)
+        if lock is None:
+            lock = asyncio.Lock()
+            per_loop[conversation_id] = lock
     return lock
 
 
@@ -1101,46 +1119,47 @@ async def _persist_system_message_if_needed(
 ) -> Optional[str]:
     if not system_message or not system_message.strip():
         return None
-    try:
-        # Best-effort guard; concurrent requests may still race and insert duplicates.
-        has_system = await loop.run_in_executor(
-            None,
-            db.has_system_message_for_conversation,
-            conversation_id,
-        )
-    except (CharactersRAGDBError, RuntimeError) as exc:
-        logger.debug(
-            "System message presence check failed for conv=%s: %s",
-            conversation_id,
-            exc,
-        )
-        has_system = False
-    if has_system:
-        return None
-    try:
-        conv_created_at = None
+    async with _get_system_message_lock(conversation_id):
         try:
-            conv = await loop.run_in_executor(None, db.get_conversation_by_id, conversation_id)
-            if conv:
-                conv_created_at = conv.get("created_at")
-        except (CharactersRAGDBError, RuntimeError):
+            # Best-effort guard; serialize within a process to avoid duplicates.
+            has_system = await loop.run_in_executor(
+                None,
+                db.has_system_message_for_conversation,
+                conversation_id,
+            )
+        except (CharactersRAGDBError, RuntimeError) as exc:
+            logger.debug(
+                "System message presence check failed for conv=%s: %s",
+                conversation_id,
+                exc,
+            )
+            has_system = False
+        if has_system:
+            return None
+        try:
             conv_created_at = None
-        system_payload: Dict[str, Any] = {"role": "system", "content": system_message.strip()}
-        if conv_created_at:
-            system_payload["timestamp"] = conv_created_at
-        return await save_message_fn(
-            db,
-            conversation_id,
-            system_payload,
-            use_transaction=True,
-        )
-    except (CharactersRAGDBError, InputError, ConflictError, RuntimeError) as exc:
-        logger.warning(
-            "Failed to persist system message for conv=%s: %s",
-            conversation_id,
-            exc,
-        )
-        return None
+            try:
+                conv = await loop.run_in_executor(None, db.get_conversation_by_id, conversation_id)
+                if conv:
+                    conv_created_at = conv.get("created_at")
+            except (CharactersRAGDBError, RuntimeError):
+                conv_created_at = None
+            system_payload: Dict[str, Any] = {"role": "system", "content": system_message.strip()}
+            if conv_created_at:
+                system_payload["timestamp"] = conv_created_at
+            return await save_message_fn(
+                db,
+                conversation_id,
+                system_payload,
+                use_transaction=True,
+            )
+        except (CharactersRAGDBError, InputError, ConflictError, RuntimeError) as exc:
+            logger.warning(
+                "Failed to persist system message for conv=%s: %s",
+                conversation_id,
+                exc,
+            )
+            return None
 
 
 @router.post(
@@ -2194,9 +2213,10 @@ async def create_chat_completion(
                     queue = queue_candidate
             if queue is not None and not queue_is_active(queue):
                 queue = None
-            # Admission-only gating: even when background queue execution is disabled,
-            # perform an admission check to apply backpressure/fairness.
-            if queue is not None:
+            # Admission-only gating: only apply when queued execution is disabled to
+            # avoid double-charging rate limits (execution path will enqueue itself).
+            admission_queue = queue if (queue is not None and not QUEUED_EXECUTION) else None
+            if admission_queue is not None:
                 try:
                     # Estimate tokens for queue gating (sanitize base64 payloads)
                     est_tokens_for_queue = _estimate_tokens_for_queue(request_json)
@@ -2210,7 +2230,7 @@ async def create_chat_completion(
                         getattr(priority, "name", str(priority)),
                         est_tokens_for_queue,
                     )
-                    q_future = await queue.enqueue(
+                    q_future = await admission_queue.enqueue(
                         request_id=request_id,
                         request_data={"endpoint": "/api/v1/chat/completions"},
                         client_id=str(user_id),
@@ -3099,15 +3119,15 @@ async def list_chat_conversations(
 
         total = len(rows)
         page_rows = rows[offset: offset + limit]
+        conv_ids = [row.get("id") for row in page_rows if row.get("id")]
+        keyword_map = db.get_keywords_for_conversations(conv_ids) if conv_ids else {}
+        message_counts = db.count_messages_for_conversations(conv_ids) if conv_ids else {}
         items: List[ConversationListItem] = []
         for row in page_rows:
             conv_id = row.get("id") or ""
-            keyword_rows = db.get_keywords_for_conversation(conv_id)
+            keyword_rows = keyword_map.get(conv_id, [])
             keywords_list = [k.get("keyword") for k in keyword_rows if k.get("keyword")]
-            try:
-                message_count = db.count_messages_for_conversation(conv_id)
-            except Exception:
-                message_count = 0
+            message_count = message_counts.get(conv_id, 0)
 
             bm25_norm = row.get("_bm25_norm") if order_by in {"bm25", "hybrid"} else None
             items.append(
@@ -3296,25 +3316,19 @@ async def get_conversation_tree(
             card = db.get_character_card_by_id(int(conversation.get("character_id")))
             character_name = card.get("name") if card else None
 
-        total_messages = db.count_messages_for_conversation(conversation_id)
-        messages: List[Dict[str, Any]] = []
-        batch_size = 1000
-        current_offset = 0
-        while current_offset < total_messages:
-            batch = db.get_messages_for_conversation(
-                conversation_id,
-                limit=batch_size,
-                offset=current_offset,
-                order_by_timestamp="ASC",
-            )
-            if not batch:
-                break
-            messages.extend(batch)
-            current_offset += len(batch)
+        total_root_threads = db.count_root_messages_for_conversation(conversation_id)
+        root_rows = db.get_root_messages_for_conversation(
+            conversation_id,
+            limit=limit,
+            offset=offset,
+            order_by_timestamp="ASC",
+        )
 
         nodes: Dict[str, ConversationTreeNode] = {}
         roots: List[ConversationTreeNode] = []
-        for msg in messages:
+        node_depths: Dict[str, int] = {}
+
+        for msg in root_rows:
             msg_id = msg.get("id")
             if not msg_id:
                 continue
@@ -3328,19 +3342,63 @@ async def get_conversation_tree(
                 truncated=False,
             )
             nodes[msg_id] = node
+            roots.append(node)
+            node_depths[msg_id] = 1
 
-        for msg in messages:
-            msg_id = msg.get("id")
-            if not msg_id or msg_id not in nodes:
-                continue
-            parent_id = msg.get("parent_message_id")
-            if parent_id and parent_id in nodes:
-                nodes[parent_id].children.append(nodes[msg_id])
-            else:
-                roots.append(nodes[msg_id])
+        # BFS over child messages up to max_depth
+        current_parent_ids = [msg.get("id") for msg in root_rows if msg.get("id")]
+        current_depth = 1
+        while current_parent_ids and current_depth < max_depth:
+            children = db.get_messages_for_conversation_by_parent_ids(
+                conversation_id,
+                current_parent_ids,
+                order_by_timestamp="ASC",
+            )
+            if not children:
+                break
+            next_parent_ids: List[str] = []
+            next_depth = current_depth + 1
+            for child in children:
+                child_id = child.get("id")
+                if not child_id or child_id in nodes:
+                    continue
+                created_at = _coerce_datetime(child.get("timestamp")) or datetime.now(timezone.utc)
+                node = ConversationTreeNode(
+                    id=child_id,
+                    role=map_sender_to_role(child.get("sender"), character_name),
+                    content=child.get("content") or "",
+                    created_at=created_at,
+                    children=[],
+                    truncated=False,
+                )
+                nodes[child_id] = node
+                node_depths[child_id] = next_depth
+                parent_id = child.get("parent_message_id")
+                if parent_id and parent_id in nodes:
+                    nodes[parent_id].children.append(node)
+                next_parent_ids.append(child_id)
+            current_parent_ids = next_parent_ids
+            current_depth = next_depth
 
-        total_root_threads = len(roots)
-        root_page = roots[offset: offset + limit]
+        # Mark nodes at max_depth as truncated if they have undisplayed children.
+        parents_at_max_depth = [mid for mid, depth in node_depths.items() if depth == max_depth]
+        if parents_at_max_depth:
+            extra_children = db.get_messages_for_conversation_by_parent_ids(
+                conversation_id,
+                parents_at_max_depth,
+                order_by_timestamp="ASC",
+            )
+            parents_with_more = {
+                child.get("parent_message_id")
+                for child in extra_children
+                if child.get("parent_message_id")
+            }
+            for parent_id in parents_with_more:
+                node = nodes.get(parent_id)
+                if node is not None:
+                    node.truncated = True
+
+        root_page = roots
 
         message_cap = min(max(TREE_MESSAGE_CAP_DEFAULT, 1), TREE_MESSAGE_CAP_MAX)
         count = 0
@@ -3353,6 +3411,8 @@ async def get_conversation_tree(
             if depth >= max_depth:
                 if node.children:
                     node.truncated = True
+                    node.children = []
+                elif node.truncated:
                     node.children = []
                 return node
             pruned_children: List[ConversationTreeNode] = []

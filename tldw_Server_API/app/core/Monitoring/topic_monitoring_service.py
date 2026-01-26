@@ -739,9 +739,11 @@ class TopicMonitoringService:
                 if not match_span:
                     continue
                 if streaming_mode:
+                    # Dedupe per watchlist to avoid suppressing alerts across distinct watchlists
+                    rule_key = f"{wid}:{cr.rule_id}"
                     skip, dedupe_meta = self._dedupe_should_skip(
                         stream_id=str(source_id),
-                        rule_id=str(cr.rule_id),
+                        rule_id=rule_key,
                         text=text,
                     )
                     if skip:

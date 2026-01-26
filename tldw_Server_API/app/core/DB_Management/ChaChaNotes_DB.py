@@ -5660,6 +5660,51 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
             logger.error(f"Database error counting messages for conversation {conversation_id}: {e}")
             raise
 
+    def count_messages_for_conversations(
+        self,
+        conversation_ids: List[str],
+        include_deleted: bool = False,
+    ) -> Dict[str, int]:
+        """
+        Count messages for multiple conversations in a single query.
+
+        Args:
+            conversation_ids: List of conversation UUIDs.
+            include_deleted: If True, include soft-deleted messages.
+
+        Returns:
+            Mapping of conversation_id -> message count.
+        """
+        if not conversation_ids:
+            return {}
+        placeholders = ",".join(["?"] * len(conversation_ids))
+        base_query = (
+            f"SELECT m.conversation_id, COUNT(1) as cnt "
+            f"FROM messages m "
+            f"JOIN conversations c ON m.conversation_id = c.id "
+            f"WHERE m.conversation_id IN ({placeholders}) AND c.deleted = 0"
+        )
+        if not include_deleted:
+            base_query += " AND m.deleted = 0"
+        base_query += " GROUP BY m.conversation_id"
+        try:
+            cursor = self.execute_query(base_query, tuple(conversation_ids))
+            rows = cursor.fetchall()
+            result: Dict[str, int] = {cid: 0 for cid in conversation_ids}
+            for row in rows:
+                if isinstance(row, dict):
+                    conv_id = row.get("conversation_id")
+                    cnt = row.get("cnt") or row.get("COUNT(1)") or 0
+                else:
+                    conv_id = row[0]
+                    cnt = row[1]
+                if conv_id is not None:
+                    result[str(conv_id)] = int(cnt or 0)
+            return result
+        except CharactersRAGDBError as e:
+            logger.error("Database error counting messages for conversations: %s", e)
+            raise
+
     def get_latest_message_for_conversation(self, conversation_id: str) -> Optional[Dict[str, Any]]:
         """Fetch the most recent non-deleted message for a conversation."""
         query = (
@@ -6704,6 +6749,109 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
             return results
         except CharactersRAGDBError as e:
             logger.error(f"Database error fetching messages for conversation ID {conversation_id}: {e}")
+            raise
+
+    def count_root_messages_for_conversation(self, conversation_id: str) -> int:
+        """Count root (parentless) messages for a conversation."""
+        query = (
+            "SELECT COUNT(1) FROM messages m "
+            "JOIN conversations c ON m.conversation_id = c.id "
+            "WHERE m.conversation_id = ? AND m.parent_message_id IS NULL "
+            "AND m.deleted = 0 AND c.deleted = 0"
+        )
+        try:
+            cursor = self.execute_query(query, (conversation_id,))
+            row = cursor.fetchone()
+            if row is None:
+                return 0
+            try:
+                return int(row[0])
+            except Exception:
+                return int(row.get("COUNT(1)") or row.get("count") or 0)
+        except CharactersRAGDBError as e:
+            logger.error("Database error counting root messages for conversation %s: %s", conversation_id, e)
+            raise
+
+    def get_root_messages_for_conversation(
+        self,
+        conversation_id: str,
+        *,
+        limit: int,
+        offset: int,
+        order_by_timestamp: str = "ASC",
+    ) -> List[Dict[str, Any]]:
+        """Fetch root (parentless) messages with minimal columns for tree building."""
+        if order_by_timestamp.upper() not in ["ASC", "DESC"]:
+            raise InputError("order_by_timestamp must be 'ASC' or 'DESC'.")
+        query = f"""
+            SELECT m.id, m.parent_message_id, m.sender, m.content, m.timestamp
+            FROM messages m
+            JOIN conversations c ON m.conversation_id = c.id
+            WHERE m.conversation_id = ?
+              AND m.parent_message_id IS NULL
+              AND m.deleted = 0
+              AND c.deleted = 0
+            ORDER BY m.timestamp {order_by_timestamp}
+            LIMIT ? OFFSET ?
+        """
+        try:
+            cursor = self.execute_query(query, (conversation_id, limit, offset))
+            rows = cursor.fetchall()
+            columns = [col[0] for col in cursor.description] if cursor.description else []
+            results: List[Dict[str, Any]] = []
+            for row in rows:
+                if isinstance(row, dict):
+                    record = dict(row)
+                else:
+                    record = {columns[idx]: row[idx] for idx in range(len(columns))}
+                results.append(record)
+            return results
+        except CharactersRAGDBError as e:
+            logger.error("Database error fetching root messages for conversation %s: %s", conversation_id, e)
+            raise
+
+    def get_messages_for_conversation_by_parent_ids(
+        self,
+        conversation_id: str,
+        parent_ids: List[str],
+        *,
+        order_by_timestamp: str = "ASC",
+    ) -> List[Dict[str, Any]]:
+        """Fetch child messages for the given parent IDs with minimal columns."""
+        if not parent_ids:
+            return []
+        if order_by_timestamp.upper() not in ["ASC", "DESC"]:
+            raise InputError("order_by_timestamp must be 'ASC' or 'DESC'.")
+        placeholders = ",".join(["?"] * len(parent_ids))
+        query = f"""
+            SELECT m.id, m.parent_message_id, m.sender, m.content, m.timestamp
+            FROM messages m
+            JOIN conversations c ON m.conversation_id = c.id
+            WHERE m.conversation_id = ?
+              AND m.parent_message_id IN ({placeholders})
+              AND m.deleted = 0
+              AND c.deleted = 0
+            ORDER BY m.timestamp {order_by_timestamp}
+        """
+        params = [conversation_id, *parent_ids]
+        try:
+            cursor = self.execute_query(query, tuple(params))
+            rows = cursor.fetchall()
+            columns = [col[0] for col in cursor.description] if cursor.description else []
+            results: List[Dict[str, Any]] = []
+            for row in rows:
+                if isinstance(row, dict):
+                    record = dict(row)
+                else:
+                    record = {columns[idx]: row[idx] for idx in range(len(columns))}
+                results.append(record)
+            return results
+        except CharactersRAGDBError as e:
+            logger.error(
+                "Database error fetching child messages for conversation %s: %s",
+                conversation_id,
+                e,
+            )
             raise
 
     def has_system_message_for_conversation(
@@ -8351,6 +8499,36 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
                 """
         cursor = self.execute_query(query, (conversation_id,))
         return [dict(row) for row in cursor.fetchall()]
+
+    def get_keywords_for_conversations(self, conversation_ids: List[str]) -> Dict[str, List[Dict[str, Any]]]:
+        """Fetch keywords for multiple conversations in a single query."""
+        if not conversation_ids:
+            return {}
+        keyword_table = self._map_table_for_backend("keywords")
+        placeholders = ",".join(["?"] * len(conversation_ids))
+        order_expr = self._case_insensitive_order_expression("k.keyword")
+        query = f"""
+                SELECT ck.conversation_id as conversation_id, k.* \
+                FROM {keyword_table} k \
+                         JOIN conversation_keywords ck ON k.id = ck.keyword_id
+                WHERE ck.conversation_id IN ({placeholders}) \
+                  AND k.deleted = 0 \
+                ORDER BY ck.conversation_id, {order_expr}
+                """
+        cursor = self.execute_query(query, tuple(conversation_ids))
+        rows = cursor.fetchall()
+        columns = [col[0] for col in cursor.description] if cursor.description else []
+        result: Dict[str, List[Dict[str, Any]]] = {cid: [] for cid in conversation_ids}
+        for row in rows:
+            if isinstance(row, dict):
+                record = dict(row)
+            else:
+                record = {columns[idx]: row[idx] for idx in range(len(columns))}
+            conv_id = record.pop("conversation_id", None)
+            if conv_id is None:
+                continue
+            result.setdefault(str(conv_id), []).append(record)
+        return result
 
     def get_conversations_for_keyword(self, keyword_id: int, limit: int = 50, offset: int = 0) -> List[Dict[str, Any]]:
         query = """

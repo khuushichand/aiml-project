@@ -115,7 +115,7 @@ class AsyncChunker:
             List of text chunks
         """
         async with self._semaphore:
-            loop = asyncio.get_event_loop()
+            loop = asyncio.get_running_loop()
 
             def _run_chunking():
                 chunker = self._get_chunker(llm_call_func=llm_call_func, llm_config=llm_config)
@@ -371,7 +371,7 @@ class AsyncChunker:
             List of ChunkResult objects
         """
         async with self._semaphore:
-            loop = asyncio.get_event_loop()
+            loop = asyncio.get_running_loop()
 
             def _run_chunking():
                 chunker = self._get_chunker(llm_call_func=llm_call_func, llm_config=llm_config)
@@ -442,7 +442,7 @@ class AsyncChunker:
 
         # Process in executor (ensure keyword options are passed correctly)
         import functools
-        loop = asyncio.get_event_loop()
+        loop = asyncio.get_running_loop()
         func = functools.partial(self._template_manager.process, text, template_name, **options)
         chunks = await loop.run_in_executor(self._executor, func)
         return chunks
@@ -621,9 +621,9 @@ class AsyncBatchProcessor:
         Returns:
             Result dictionary or None if timeout
         """
-        start_time = asyncio.get_event_loop().time()
+        start_time = asyncio.get_running_loop().time()
 
-        while asyncio.get_event_loop().time() - start_time < timeout:
+        while asyncio.get_running_loop().time() - start_time < timeout:
             result = self.get_result(request_id)
             if result is not None:
                 return result

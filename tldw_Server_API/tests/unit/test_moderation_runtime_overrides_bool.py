@@ -23,3 +23,14 @@ def test_runtime_overrides_parse_false_string():
             os.unlink(tmp_path)
         except Exception:
             pass
+
+
+@pytest.mark.unit
+def test_update_settings_can_clear_runtime_overrides():
+    svc = ModerationService()
+    # Set an override, then clear it explicitly
+    svc.update_settings(pii_enabled=True)
+    assert svc.get_settings()["pii_enabled"] is True
+    svc.update_settings(pii_enabled=None, clear_pii=True)
+    assert "pii_enabled" not in svc._runtime_override
+    assert svc.get_settings()["pii_enabled"] is None

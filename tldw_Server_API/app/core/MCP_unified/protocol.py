@@ -293,6 +293,16 @@ class MCPProtocol:
         if not scopes:
             return True
         identifier_norm = identifier.lower() if isinstance(identifier, str) else None
+        if identifier_norm is None:
+            # Allow listing/browsing when any scoped permission exists for this resource kind.
+            for scope in scopes:
+                try:
+                    parts = scope.strip().lower().split(":")
+                except Exception:
+                    continue
+                if len(parts) >= 2 and parts[0] == "mcp":
+                    if parts[1] == "*" or parts[1] == resource_kind:
+                        return True
         for scope in scopes:
             if self._scope_matches(scope, resource_kind, identifier_norm):
                 return True
@@ -930,6 +940,10 @@ class MCPProtocol:
                     tool_copy = tool.copy()
                     tool_copy["module"] = module_id
                     name = tool_copy.get("name")
+                    # Scoped tool permissions: when scopes are present, list only matching tools
+                    if self._mcp_scopes(context) and isinstance(name, str):
+                        if not self._scope_allows(context, Resource.TOOL.value, name):
+                            continue
                     # Catalog filter: include only when in selected catalog
                     if catalog_filter is not None and isinstance(name, str):
                         if name not in catalog_filter:

@@ -182,6 +182,17 @@ class TestExportWorkflow:
         assert result["content_summary"]["notes"] == 2
         assert Path(result["file_path"]).exists()
 
+        with zipfile.ZipFile(result["file_path"], "r") as zf:
+            wb_path = f"content/world_books/world_book_{sample_test_data['world_book_id']}.json"
+            wb_payload = json.loads(zf.read(wb_path))
+            assert "entries" in wb_payload
+            assert len(wb_payload["entries"]) >= 2
+
+            dict_path = f"content/dictionaries/dictionary_{sample_test_data['dictionary_id']}.json"
+            dict_payload = json.loads(zf.read(dict_path))
+            assert "entries" in dict_payload
+            assert len(dict_payload["entries"]) >= 2
+
     @pytest.mark.asyncio
     async def test_export_with_relationships(self, chatbook_service, test_db):
         """Test exporting content with relationships preserved."""

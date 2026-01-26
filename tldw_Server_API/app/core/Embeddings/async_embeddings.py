@@ -5,6 +5,8 @@ import asyncio
 import hashlib
 import time
 import atexit
+import threading
+import weakref
 from typing import List, Dict, Any, Optional, Tuple
 from concurrent.futures import ThreadPoolExecutor
 import numpy as np
@@ -356,6 +358,7 @@ class AsyncLocalProvider(AsyncEmbeddingProvider):
                 pass
 
     async def _evict_if_needed(self, keep: Optional[str] = None) -> None:
+        to_drop: list[str] = []
         async with self._models_guard:
             now = time.time()
             if self.model_ttl_seconds > 0:
@@ -366,21 +369,20 @@ class AsyncLocalProvider(AsyncEmbeddingProvider):
                 for name in expired:
                     if self.model_in_use.get(name, 0) > 0:
                         continue
-                    self.models.pop(name, None)
-                    self.model_last_used.pop(name, None)
-                    self.model_in_use.pop(name, None)
+                    to_drop.append(name)
 
-            while len(self.models) >= self.max_models_in_memory:
+            while len(self.models) - len(to_drop) >= self.max_models_in_memory:
                 candidates = [
                     (name, last_used) for name, last_used in self.model_last_used.items()
-                    if name != keep and self.model_in_use.get(name, 0) <= 0
+                    if name != keep and self.model_in_use.get(name, 0) <= 0 and name not in to_drop
                 ]
                 if not candidates:
                     break
                 lru_name = min(candidates, key=lambda item: item[1])[0]
-                self.models.pop(lru_name, None)
-                self.model_last_used.pop(lru_name, None)
-                self.model_in_use.pop(lru_name, None)
+                to_drop.append(lru_name)
+
+        for name in to_drop:
+            await self._drop_model(name)
 
     async def _load_model(self, model_name: str):
         """Load model if not already loaded"""
@@ -770,59 +772,87 @@ class AsyncEmbeddingService:
         logger.info("Async embedding service shutdown complete")
 
 
-# Global async service instance
-_async_service: Optional[AsyncEmbeddingService] = None
+# Global async service instances scoped by event loop
+_async_services: "weakref.WeakKeyDictionary[asyncio.AbstractEventLoop, AsyncEmbeddingService]" = (
+    weakref.WeakKeyDictionary()
+)
+_async_service_fallback: Optional[AsyncEmbeddingService] = None
+_health_check_tasks: "weakref.WeakKeyDictionary[asyncio.AbstractEventLoop, asyncio.Task]" = (
+    weakref.WeakKeyDictionary()
+)
 _shutdown_registered = False
-_health_check_task: Optional[asyncio.Task] = None
+_service_lock = threading.Lock()
 
 
-async def _cancel_health_check_task():
-    """Cancel and await the periodic health task if it exists."""
-    global _health_check_task
-    task = _health_check_task
-    if task is None:
-        return
-    try:
-        task_loop = task.get_loop()
+async def _cancel_health_check_task(loop: Optional[asyncio.AbstractEventLoop] = None):
+    """Cancel and await the periodic health task(s) if they exist."""
+    tasks: list[tuple[asyncio.AbstractEventLoop, asyncio.Task]] = []
+    if loop is not None:
+        task = _health_check_tasks.get(loop)
+        if task is not None:
+            tasks.append((loop, task))
+    else:
+        tasks = list(_health_check_tasks.items())
+
+    for task_loop, task in tasks:
         try:
-            current_loop = asyncio.get_running_loop()
-        except RuntimeError:
-            current_loop = None
+            try:
+                current_loop = asyncio.get_running_loop()
+            except RuntimeError:
+                current_loop = None
 
-        if current_loop and task_loop is current_loop:
-            task.cancel()
-            try:
-                await task
-            except asyncio.CancelledError:
-                pass
-        else:
-            # Different loop or no running loop; request cancellation and return
-            try:
-                if task_loop.is_running():
-                    task_loop.call_soon_threadsafe(task.cancel)
-                else:
-                    # Loop already stopped; best-effort cancel
-                    task.cancel()
-            except Exception:
+            if current_loop and task_loop is current_loop:
+                task.cancel()
                 try:
-                    task.cancel()
-                except Exception:
+                    await task
+                except asyncio.CancelledError:
                     pass
-    finally:
-        _health_check_task = None
+            else:
+                # Different loop or no running loop; request cancellation and return
+                try:
+                    if task_loop.is_running():
+                        task_loop.call_soon_threadsafe(task.cancel)
+                    else:
+                        task.cancel()
+                except Exception:
+                    try:
+                        task.cancel()
+                    except Exception:
+                        pass
+        finally:
+            try:
+                _health_check_tasks.pop(task_loop, None)
+            except Exception:
+                pass
 
 
 async def _shutdown_service(service: AsyncEmbeddingService):
     """Shutdown helper that cancels background tasks then stops the service."""
-    await _cancel_health_check_task()
+    loop = getattr(service, "_loop", None)
+    await _cancel_health_check_task(loop=loop)
     await service.shutdown()
 
 
 def get_async_embedding_service() -> AsyncEmbeddingService:
     """Get or create the global async embedding service."""
-    global _async_service, _shutdown_registered
-    if _async_service is None:
-        _async_service = AsyncEmbeddingService()
+    global _async_service_fallback, _shutdown_registered
+    try:
+        loop = asyncio.get_running_loop()
+    except RuntimeError:
+        loop = None
+
+    with _service_lock:
+        if loop is not None:
+            service = _async_services.get(loop)
+            if service is None:
+                service = AsyncEmbeddingService()
+                service._loop = loop
+                _async_services[loop] = service
+        else:
+            if _async_service_fallback is None:
+                _async_service_fallback = AsyncEmbeddingService()
+            service = _async_service_fallback
+
         if not _shutdown_registered:
             try:
                 atexit.register(_shutdown_async_embedding_service_sync)
@@ -830,39 +860,47 @@ def get_async_embedding_service() -> AsyncEmbeddingService:
                 logger.warning(f"Failed to register async embedding service shutdown hook: {exc}")
             else:
                 _shutdown_registered = True
-    return _async_service
+
+    return service
 
 
 def _shutdown_async_embedding_service_sync():
-    """Best-effort shutdown for the global async service at interpreter exit."""
-    global _async_service
-    service = _async_service
-    if service is None:
-        return
+    """Best-effort shutdown for all async embedding services at interpreter exit."""
+    global _async_service_fallback
 
-    try:
-        loop = getattr(service, "_loop", None)
-        if loop and not loop.is_closed():
-            if loop.is_running():
-                fut = asyncio.run_coroutine_threadsafe(_shutdown_service(service), loop)
-                try:
-                    fut.result(timeout=15)
-                except Exception as exc:
-                    try:
-                        logger.warning(f"Async embedding service shutdown timed out: {exc}")
-                    except Exception:
-                        pass
-            else:
-                loop.run_until_complete(_shutdown_service(service))
-        else:
-            asyncio.run(_shutdown_service(service))
-    except Exception as exc:
+    with _service_lock:
+        services = list(_async_services.items())
+        fallback = _async_service_fallback
+        _async_services.clear()
+        _async_service_fallback = None
+
+    def _shutdown_with_loop(service: AsyncEmbeddingService, loop: Optional[asyncio.AbstractEventLoop]) -> None:
         try:
-            logger.warning(f"Failed during async embedding service shutdown: {exc}")
-        except Exception:
-            pass
-    finally:
-        _async_service = None
+            if loop and not loop.is_closed():
+                if loop.is_running():
+                    fut = asyncio.run_coroutine_threadsafe(_shutdown_service(service), loop)
+                    try:
+                        fut.result(timeout=15)
+                    except Exception as exc:
+                        try:
+                            logger.warning(f"Async embedding service shutdown timed out: {exc}")
+                        except Exception:
+                            pass
+                else:
+                    loop.run_until_complete(_shutdown_service(service))
+            else:
+                asyncio.run(_shutdown_service(service))
+        except Exception as exc:
+            try:
+                logger.warning(f"Failed during async embedding service shutdown: {exc}")
+            except Exception:
+                pass
+
+    for loop, service in services:
+        _shutdown_with_loop(service, loop)
+
+    if fallback is not None:
+        _shutdown_with_loop(fallback, getattr(fallback, "_loop", None))
 
 
 # Convenience functions
@@ -919,15 +957,8 @@ async def startup_event():
     await service.warmup_providers()
 
     # Start periodic tasks
-    global _health_check_task
-    try:
-        loop = asyncio.get_running_loop()
-    except RuntimeError:
-        loop = None
-    if loop:
-        _health_check_task = loop.create_task(periodic_health_check())
-    else:
-        _health_check_task = asyncio.create_task(periodic_health_check())
+    loop = asyncio.get_running_loop()
+    _health_check_tasks[loop] = loop.create_task(periodic_health_check())
 
 
 async def shutdown_event():

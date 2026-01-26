@@ -442,9 +442,10 @@ async def get_auth_principal(request: Request) -> AuthPrincipal:
                 primary_key = getattr(settings, "SINGLE_USER_API_KEY", None)
                 if primary_key:
                     allowed_keys.add(primary_key)
-                test_key = os.getenv("SINGLE_USER_TEST_API_KEY")
-                if test_key:
-                    allowed_keys.add(test_key)
+                if test_context:
+                    test_key = os.getenv("SINGLE_USER_TEST_API_KEY")
+                    if test_key:
+                        allowed_keys.add(test_key)
                 if api_key in allowed_keys:
                     client_ip = resolve_client_ip(request, settings)
                     if not is_single_user_ip_allowed(client_ip, settings):
@@ -460,6 +461,7 @@ async def get_auth_principal(request: Request) -> AuthPrincipal:
                         request=request,
                         token_type="api_key",
                         jti=None,
+                        subject="single_user",
                         api_key_id=None,
                     )
                     ctx = _build_context(principal, request)

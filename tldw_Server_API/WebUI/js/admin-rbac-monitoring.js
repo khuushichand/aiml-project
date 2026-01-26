@@ -236,15 +236,18 @@ async function monLoadNotifSettings() {
     document.getElementById('monNotif_smtp_user').value = s.smtp_user || '';
     document.getElementById('monNotif_email_from').value = s.email_from || '';
     document.getElementById('monitoringNotif_result').textContent = JSON.stringify(s, null, 2);
-  } catch (e) { document.getElementById('monitoringNotif_result').textContent = JSON.stringify(e.response || e, null, 2); Toast.error('Failed to load settings'); }
+  } catch (e) {
+    document.getElementById('monitoringNotif_result').textContent = JSON.stringify(e.response || e, null, 2);
+    if (typeof Toast !== 'undefined' && Toast) Toast.error('Failed to load settings');
+  }
 }
 
 async function monSaveNotifSettings() {
   try {
+    const fileVal = (document.getElementById('monNotif_file')?.value || '').trim();
     const body = {
       enabled: (document.getElementById('monNotif_enabled')?.value === 'true'),
       min_severity: document.getElementById('monNotif_min_sev')?.value || 'critical',
-      file: document.getElementById('monNotif_file')?.value || '',
       webhook_url: document.getElementById('monNotif_webhook')?.value || '',
       email_to: document.getElementById('monNotif_email_to')?.value || '',
       email_from: document.getElementById('monNotif_email_from')?.value || '',
@@ -254,6 +257,7 @@ async function monSaveNotifSettings() {
       smtp_user: document.getElementById('monNotif_smtp_user')?.value || '',
       smtp_password: document.getElementById('monNotif_smtp_pass')?.value || '',
     };
+    if (fileVal) body.file = fileVal;
     const res = await window.apiClient.put('/api/v1/monitoring/notifications/settings', body);
     document.getElementById('monitoringNotif_result').textContent = JSON.stringify(res, null, 2);
     if (typeof Toast !== 'undefined' && Toast) Toast.success('Saved');

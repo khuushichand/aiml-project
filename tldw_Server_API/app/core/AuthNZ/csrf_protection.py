@@ -243,6 +243,16 @@ class CSRFProtectionMiddleware(BaseHTTPMiddleware):
                 try:
                     from tldw_Server_API.app.core.AuthNZ.jwt_service import get_jwt_service
                     payload = get_jwt_service().decode_access_token(token)
+                    try:
+                        from tldw_Server_API.app.core.AuthNZ.session_manager import get_session_manager
+
+                        session_manager = await get_session_manager()
+                        if await session_manager.is_token_blacklisted(token, payload.get("jti")):
+                            logger.debug("CSRF binding: bearer token revoked; skipping user binding")
+                            return None
+                    except Exception as bl_exc:
+                        logger.debug(f"CSRF binding: token blacklist check failed: {bl_exc}")
+                        return None
                     user_id = payload.get("user_id") or payload.get("sub")
                     if isinstance(user_id, str):
                         user_id = int(user_id)

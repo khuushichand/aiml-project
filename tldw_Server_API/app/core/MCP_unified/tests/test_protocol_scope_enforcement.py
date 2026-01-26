@@ -59,3 +59,25 @@ async def test_scoped_permissions_restrict_when_present():
         metadata={"permissions": ["mcp:tool:media.search"]},
     )
     assert await proto._check_authorization(req, ctx_match) is True
+
+
+@pytest.mark.unit
+@pytest.mark.asyncio
+async def test_tools_list_allowed_with_tool_scope():
+    class _RBACAllow:
+        async def check_permission(self, *_args, **_kwargs):
+            return True
+
+    proto = MCPProtocol()
+    proto.rbac_policy = _RBACAllow()
+    req = MCPRequest(method="tools/list", params={}, id="list-1")
+
+    ctx = RequestContext(
+        request_id="list-ctx",
+        user_id="1",
+        client_id="unit",
+        metadata={"permissions": ["mcp:tool:media.search"]},
+    )
+
+    allowed = await proto._check_authorization(req, ctx)
+    assert allowed is True

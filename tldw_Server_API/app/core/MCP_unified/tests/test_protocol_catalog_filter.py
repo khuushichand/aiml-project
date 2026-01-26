@@ -112,6 +112,52 @@ async def test_protocol_tools_list_module_filter(monkeypatch):
 
 @pytest.mark.unit
 @pytest.mark.asyncio
+async def test_protocol_tools_list_scope_filters_tools(monkeypatch):
+    os.environ["TEST_MODE"] = "true"
+
+    from tldw_Server_API.app.core.MCP_unified.protocol import MCPProtocol, RequestContext
+
+    class _ModuleStub:
+        name = "Media"
+
+        async def get_tools(self):
+            return [
+                {"name": "media.search", "inputSchema": {"type": "object"}},
+                {"name": "media.get", "inputSchema": {"type": "object"}},
+            ]
+
+    class _RegistryStub:
+        async def get_all_modules(self):
+            return {"media": _ModuleStub()}
+
+    proto = MCPProtocol()
+    proto.module_registry = _RegistryStub()
+
+    async def _allow_mod(ctx, mid):
+        return True
+
+    async def _allow_tool(ctx, name, **_kwargs):
+        return True
+
+    proto._has_module_permission = _allow_mod  # type: ignore
+    proto._has_tool_permission = _allow_tool  # type: ignore
+
+    ctx = RequestContext(
+        request_id="scoped",
+        user_id="1",
+        client_id="unit",
+        session_id=None,
+        metadata={"permissions": ["mcp:tool:media.search"]},
+    )
+
+    result = await proto._handle_tools_list({}, ctx)
+    tools = result.get("tools", [])
+    names = {t.get("name") for t in tools}
+    assert names == {"media.search"}
+
+
+@pytest.mark.unit
+@pytest.mark.asyncio
 async def test_protocol_catalog_resolution_precedence(monkeypatch):
     os.environ["TEST_MODE"] = "true"
 

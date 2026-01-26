@@ -22,12 +22,12 @@ Notes:
   available, we can upgrade later to leverage it behind a feature flag.
 """
 
-from typing import List, Any, Dict, Optional
+from typing import List, Any, Dict, Optional, Tuple
 import re
 from loguru import logger
 from tldw_Server_API.app.core.Utils.prompt_loader import load_prompt
 
-from ..base import BaseChunkingStrategy
+from ..base import BaseChunkingStrategy, ChunkResult, ChunkMetadata
 
 
 class PropositionChunkingStrategy(BaseChunkingStrategy):
@@ -102,6 +102,89 @@ class PropositionChunkingStrategy(BaseChunkingStrategy):
 
         logger.debug(f"Created {len(chunks)} chunks from {len(propositions)} propositions")
         return chunks
+
+    def chunk_with_metadata(self, text: str, max_size: int, overlap: int = 0, **options) -> List[ChunkResult]:
+        """Chunk text and return metadata with reliable source offsets.
+
+        For proposition chunking, offsets are derived from source spans using a
+        normalization-aware mapping (whitespace collapsing and dash handling)
+        to keep offsets stable even when chunk text is normalized.
+        """
+        if not self.validate_parameters(text, max_size, overlap):
+            return []
+
+        if overlap >= max_size:
+            logger.warning(f"Overlap ({overlap}) >= max_size ({max_size}), setting to max_size - 1")
+            overlap = max_size - 1
+
+        # Extract options (mirror chunk())
+        engine = str(options.get("engine", options.get("proposition_engine", "heuristic"))).lower()
+        aggressiveness = int(options.get("aggressiveness", options.get("proposition_aggressiveness", 1)))
+        min_prop_len = int(options.get("min_proposition_length", 15))
+
+        # Build proposition spans from source text (heuristic path for reliable offsets)
+        spans = self._proposition_spans_with_offsets(
+            text=text,
+            aggressiveness=aggressiveness,
+            min_prop_len=min_prop_len,
+        )
+
+        if not spans:
+            # Fallback: return original text as a single chunk when no propositions extracted
+            if not text.strip():
+                return []
+            md = ChunkMetadata(
+                index=0,
+                start_char=0,
+                end_char=len(text),
+                word_count=len(text.split()),
+                language=self.language,
+                overlap_with_previous=0,
+                overlap_with_next=0,
+                method='propositions',
+                options={
+                    'engine': engine,
+                    'aggressiveness': aggressiveness,
+                    'min_proposition_length': min_prop_len,
+                },
+            )
+            return [ChunkResult(text=text, metadata=md)]
+
+        results: List[ChunkResult] = []
+        step = max(1, max_size - overlap)
+        total_props = len(spans)
+
+        for i in range(0, total_props, step):
+            window = spans[i:i + max_size]
+            if not window:
+                continue
+            start_char = min(s for s, _e in window)
+            end_char = max(e for _s, e in window)
+            if end_char < start_char:
+                end_char = start_char
+            try:
+                end_char = self._expand_end_to_grapheme_boundary(text, end_char, options=options)
+            except Exception:
+                pass
+            chunk_text = text[start_char:end_char]
+            md = ChunkMetadata(
+                index=len(results),
+                start_char=start_char,
+                end_char=end_char,
+                word_count=len(chunk_text.split()) if chunk_text else 0,
+                language=self.language,
+                overlap_with_previous=overlap if i > 0 else 0,
+                overlap_with_next=overlap if (i + step) < total_props else 0,
+                method='propositions',
+                options={
+                    'engine': engine,
+                    'aggressiveness': aggressiveness,
+                    'min_proposition_length': min_prop_len,
+                },
+            )
+            results.append(ChunkResult(text=chunk_text, metadata=md))
+
+        return results
 
     # --- helpers ---
     def _propositions_via_heuristics(self, text: str, aggressiveness: int, min_prop_len: int) -> List[str]:
@@ -497,3 +580,138 @@ class PropositionChunkingStrategy(BaseChunkingStrategy):
         out = " ".join(p.strip() for p in props if p and p.strip())
         out = re.sub(r"\s+([,.;:!?])", r"\1", out)
         return out.strip()
+
+    # ------------------ span helpers for metadata ------------------
+    def _split_sentences_with_spans(self, text: str) -> List[Tuple[str, int, int]]:
+        """Split text into sentences with source spans using a lightweight regex."""
+        if not text:
+            return []
+        spans: List[Tuple[str, int, int]] = []
+        # Split on sentence terminators followed by whitespace
+        pattern = re.compile(r"(?<=[.!?])\s+")
+        start = 0
+        for m in pattern.finditer(text):
+            end = m.start()
+            segment = text[start:end]
+            if segment and segment.strip():
+                ltrim = len(segment) - len(segment.lstrip())
+                rtrim = len(segment) - len(segment.rstrip())
+                s_start = start + ltrim
+                s_end = end - rtrim if rtrim else end
+                if s_end > s_start:
+                    spans.append((text[s_start:s_end], s_start, s_end))
+            start = m.end()
+        if start < len(text):
+            segment = text[start:]
+            if segment and segment.strip():
+                ltrim = len(segment) - len(segment.lstrip())
+                rtrim = len(segment) - len(segment.rstrip())
+                s_start = start + ltrim
+                s_end = len(text) - rtrim if rtrim else len(text)
+                if s_end > s_start:
+                    spans.append((text[s_start:s_end], s_start, s_end))
+        return spans
+
+    def _normalize_for_mapping(self, text: str) -> Tuple[str, List[int]]:
+        """Normalize text to proposition-splitting form while tracking index mapping.
+
+        - Collapses whitespace runs to a single space.
+        - Replaces em/en dashes with " - " (matching _split_on_punct behavior).
+        Returns (normalized_text, mapping), where mapping maps normalized
+        character indices back to original indices.
+        """
+        norm_chars: List[str] = []
+        mapping: List[int] = []
+        i = 0
+        n = len(text)
+        while i < n:
+            ch = text[i]
+            if ch in ("—", "\u2013"):
+                for rep in (" ", "-", " "):
+                    norm_chars.append(rep)
+                    mapping.append(i)
+                i += 1
+                continue
+            if ch.isspace():
+                j = i
+                while j < n and text[j].isspace():
+                    j += 1
+                if not norm_chars or norm_chars[-1] != " ":
+                    norm_chars.append(" ")
+                    mapping.append(i)
+                i = j
+                continue
+            norm_chars.append(ch)
+            mapping.append(i)
+            i += 1
+
+        # Trim leading/trailing spaces to mirror proposition normalization
+        while norm_chars and norm_chars[0] == " ":
+            norm_chars.pop(0)
+            mapping.pop(0)
+        while norm_chars and norm_chars[-1] == " ":
+            norm_chars.pop()
+            mapping.pop()
+        return "".join(norm_chars), mapping
+
+    def _proposition_spans_with_offsets(
+        self,
+        text: str,
+        aggressiveness: int,
+        min_prop_len: int,
+    ) -> List[Tuple[int, int]]:
+        """Return proposition spans as (start, end) offsets in the original text."""
+        spans: List[Tuple[int, int]] = []
+        sentences = self._split_sentences_with_spans(text)
+        if not sentences:
+            return spans
+
+        for sentence_text, sent_start, _sent_end in sentences:
+            norm_sent, mapping = self._normalize_for_mapping(sentence_text)
+            if not norm_sent or not mapping:
+                continue
+            props = self._split_sentence_into_propositions(norm_sent, aggressiveness)
+            if not props:
+                continue
+
+            # Map proposition strings back to source indices using normalized mapping
+            norm_cursor = 0
+            local_spans: List[Tuple[int, int, int]] = []  # (start, end, prop_len)
+            for prop in props:
+                prop_clean = prop.strip()
+                if not prop_clean:
+                    continue
+                idx = norm_sent.find(prop_clean, norm_cursor)
+                if idx == -1:
+                    idx = norm_cursor
+                end_idx = min(len(norm_sent), idx + len(prop_clean))
+                if not mapping:
+                    continue
+                start_map_idx = min(max(0, idx), len(mapping) - 1)
+                end_map_idx = min(max(0, end_idx - 1), len(mapping) - 1)
+                orig_start = sent_start + mapping[start_map_idx]
+                orig_end = sent_start + mapping[end_map_idx] + 1
+                if orig_end < orig_start:
+                    orig_end = orig_start
+                if orig_end > orig_start:
+                    local_spans.append((orig_start, orig_end, len(prop_clean)))
+                norm_cursor = end_idx
+
+            if not local_spans:
+                continue
+
+            # Merge short propositions per sentence (same semantics as chunk())
+            merged: List[Tuple[int, int, int]] = []
+            for s, e, plen in local_spans:
+                if not merged:
+                    merged.append((s, e, plen))
+                    continue
+                if plen < min_prop_len:
+                    prev_s, prev_e, prev_len = merged[-1]
+                    merged[-1] = (prev_s, max(prev_e, e), prev_len + plen)
+                else:
+                    merged.append((s, e, plen))
+
+            spans.extend((s, e) for s, e, _plen in merged)
+
+        return spans
