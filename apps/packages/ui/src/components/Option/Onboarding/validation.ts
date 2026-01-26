@@ -96,6 +96,27 @@ export const validateMultiUserAuth = async (
   }
 }
 
+export const validateMagicLinkAuth = async (
+  token: string,
+  t: TFunction
+): Promise<ValidationResult> => {
+  try {
+    await tldwAuth.verifyMagicLink(token)
+    return { success: true }
+  } catch (error: unknown) {
+    const friendly = mapMultiUserLoginErrorMessage(t, error, "onboarding")
+    const { status, message } = extractStatusAndMessage(error)
+    const errorKind =
+      categorizeConnectionError(status, message) ?? "auth_invalid"
+
+    return {
+      success: false,
+      errorKind,
+      error: friendly
+    }
+  }
+}
+
 export const validateApiKey = async (
   serverUrl: string,
   apiKey: string,

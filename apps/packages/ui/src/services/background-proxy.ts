@@ -507,6 +507,9 @@ export async function* bgStream<
         throw new Error("Not authenticated. Please login under Settings > tldw.")
       }
     }
+    if (cfg?.orgId) {
+      resolvedHeaders["X-TLDW-Org-Id"] = String(cfg.orgId)
+    }
 
     resolvedHeaders["Accept"] = resolvedHeaders["Accept"] || "text/event-stream"
     resolvedHeaders["Cache-Control"] =

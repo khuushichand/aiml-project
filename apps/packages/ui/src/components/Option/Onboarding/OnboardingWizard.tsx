@@ -25,6 +25,7 @@ type Props = {
 
 type PathChoice = 'has-server' | 'no-server' | 'demo'
 type AuthMode = 'single-user' | 'multi-user'
+type LoginMethod = 'magic-link' | 'password'
 
 const isAuthMode = (value: SegmentedValue): value is AuthMode =>
   value === 'single-user' || value === 'multi-user'
@@ -51,6 +52,11 @@ const LegacyOnboardingWizard: React.FC<Props> = ({ onFinish }) => {
   const [apiKey, setApiKey] = React.useState(DEFAULT_TLDW_API_KEY)
   const [username, setUsername] = React.useState('')
   const [password, setPassword] = React.useState('')
+  const [loginMethod, setLoginMethod] = React.useState<LoginMethod>('magic-link')
+  const [magicEmail, setMagicEmail] = React.useState('')
+  const [magicToken, setMagicToken] = React.useState('')
+  const [magicSent, setMagicSent] = React.useState(false)
+  const [magicSending, setMagicSending] = React.useState(false)
   const [authError, setAuthError] = React.useState<string | null>(null)
   const [pathChoice, setPathChoice] = React.useState<PathChoice>('has-server')
 
@@ -370,28 +376,53 @@ const LegacyOnboardingWizard: React.FC<Props> = ({ onFinish }) => {
       )
       return
     }
-    if (authMode === 'multi-user' && (!username || !password)) {
-      setAuthError(
-        t(
-          'settings:onboarding.auth.missingCredentials',
-          'Enter both a username and password to continue.'
-        ) ?? 'Enter both a username and password to continue.'
-      )
-      return
+    if (authMode === 'multi-user') {
+      if (loginMethod === 'password' && (!username || !password)) {
+        setAuthError(
+          t(
+            'settings:onboarding.auth.missingCredentials',
+            'Enter both a username and password to continue.'
+          ) ?? 'Enter both a username and password to continue.'
+        )
+        return
+      }
+      if (loginMethod === 'magic-link' && (!magicEmail || !magicToken)) {
+        setAuthError(
+          t(
+            'settings:onboarding.auth.missingMagicLink',
+            'Enter your email and the magic link token to continue.'
+          ) ?? 'Enter your email and the magic link token to continue.'
+        )
+        return
+      }
     }
     setLoading(true)
     try {
-      if (authMode === 'multi-user' && username && password) {
-        try {
-          await tldwAuth.login({ username, password })
-        } catch (error: unknown) {
-          const friendly = mapMultiUserLoginErrorMessage(
-            t,
-            error,
-            'onboarding'
-          )
-          setAuthError(friendly)
-          return
+      if (authMode === 'multi-user') {
+        if (loginMethod === 'password' && username && password) {
+          try {
+            await tldwAuth.login({ username, password })
+          } catch (error: unknown) {
+            const friendly = mapMultiUserLoginErrorMessage(
+              t,
+              error,
+              'onboarding'
+            )
+            setAuthError(friendly)
+            return
+          }
+        } else if (loginMethod === 'magic-link' && magicEmail && magicToken) {
+          try {
+            await tldwAuth.verifyMagicLink(magicToken)
+          } catch (error: unknown) {
+            const friendly = mapMultiUserLoginErrorMessage(
+              t,
+              error,
+              'onboarding'
+            )
+            setAuthError(friendly)
+            return
+          }
         }
       } else if (authMode === 'single-user' && apiKey) {
         // Validate API key before saving
@@ -425,6 +456,29 @@ const LegacyOnboardingWizard: React.FC<Props> = ({ onFinish }) => {
       )
     } finally {
       setLoading(false)
+    }
+  }
+
+  const handleSendMagicLink = async () => {
+    setAuthError(null)
+    if (!magicEmail) {
+      setAuthError(
+        t('settings:onboarding.auth.missingEmail', 'Enter your email to receive a magic link.')
+      )
+      return
+    }
+    setMagicSending(true)
+    try {
+      await tldwAuth.requestMagicLink(magicEmail)
+      setMagicSent(true)
+      message.success(
+        t('settings:onboarding.auth.magicLinkSent', 'Magic link sent. Check your inbox.')
+      )
+    } catch (error: unknown) {
+      const friendly = mapMultiUserLoginErrorMessage(t, error, 'onboarding')
+      setAuthError(friendly)
+    } finally {
+      setMagicSending(false)
     }
   }
 
@@ -992,27 +1046,87 @@ const LegacyOnboardingWizard: React.FC<Props> = ({ onFinish }) => {
               </p>
             </div>
           ) : (
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+            <div className="space-y-3">
               <div>
-                <label className="block text-sm font-medium text-text">{t('settings:onboarding.username.label')}</label>
-                <Input
-                  placeholder={t('settings:onboarding.username.placeholder')}
-                  value={username}
-                  onChange={(e) => setUsername(e.target.value)}
-                  size="large"
-                  className="rounded-2xl"
+                <label className="block text-sm font-medium text-text">
+                  {t('settings:onboarding.loginMethod.label', 'Login method')}
+                </label>
+                <Segmented
+                  options={[
+                    { label: t('settings:onboarding.loginMethod.magic', 'Magic link'), value: 'magic-link' },
+                    { label: t('settings:onboarding.loginMethod.password', 'Password'), value: 'password' }
+                  ]}
+                  value={loginMethod}
+                  onChange={(value: SegmentedValue) => {
+                    if (value === 'magic-link' || value === 'password') {
+                      setLoginMethod(value)
+                    }
+                  }}
                 />
               </div>
-              <div>
-                <label className="block text-sm font-medium text-text">{t('settings:onboarding.password.label')}</label>
-              <Input.Password
-                placeholder={t('settings:onboarding.password.placeholder')}
-                value={password}
-                onChange={(e) => setPassword(e.target.value)}
-                size="large"
-                className="rounded-2xl"
-              />
-              </div>
+              {loginMethod === 'magic-link' ? (
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                  <div>
+                    <label className="block text-sm font-medium text-text">
+                      {t('settings:onboarding.magicLink.email.label', 'Email')}
+                    </label>
+                    <Input
+                      placeholder={t('settings:onboarding.magicLink.email.placeholder', 'you@company.com')}
+                      value={magicEmail}
+                      onChange={(e) => setMagicEmail(e.target.value)}
+                      size="large"
+                      className="rounded-2xl"
+                    />
+                    <div className="mt-2">
+                      <Button
+                        type="default"
+                        onClick={handleSendMagicLink}
+                        loading={magicSending}
+                        className="rounded-full"
+                      >
+                        {magicSent
+                          ? t('settings:onboarding.magicLink.resend', 'Resend magic link')
+                          : t('settings:onboarding.magicLink.send', 'Send magic link')}
+                      </Button>
+                    </div>
+                  </div>
+                  <div>
+                    <label className="block text-sm font-medium text-text">
+                      {t('settings:onboarding.magicLink.token.label', 'Magic link token')}
+                    </label>
+                    <Input
+                      placeholder={t('settings:onboarding.magicLink.token.placeholder', 'Paste the token from your email')}
+                      value={magicToken}
+                      onChange={(e) => setMagicToken(e.target.value)}
+                      size="large"
+                      className="rounded-2xl"
+                    />
+                  </div>
+                </div>
+              ) : (
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                  <div>
+                    <label className="block text-sm font-medium text-text">{t('settings:onboarding.username.label')}</label>
+                    <Input
+                      placeholder={t('settings:onboarding.username.placeholder')}
+                      value={username}
+                      onChange={(e) => setUsername(e.target.value)}
+                      size="large"
+                      className="rounded-2xl"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-sm font-medium text-text">{t('settings:onboarding.password.label')}</label>
+                    <Input.Password
+                      placeholder={t('settings:onboarding.password.placeholder')}
+                      value={password}
+                      onChange={(e) => setPassword(e.target.value)}
+                      size="large"
+                      className="rounded-2xl"
+                    />
+                  </div>
+                </div>
+              )}
             </div>
           )}
           {authError && (

@@ -13,6 +13,14 @@ export interface TokenResponse {
   expires_in?: number
 }
 
+type OrgListResponse = {
+  items?: Array<{ id: number }>
+}
+
+type OrgDetailResponse = {
+  id: number
+}
+
 export interface UserInfo {
   id: number
   username: string
@@ -25,6 +33,36 @@ export class TldwAuthService {
   private refreshTimer: NodeJS.Timeout | null = null
 
   constructor() {
+  }
+
+  private async ensureOrgId(): Promise<void> {
+    try {
+      const orgs = await bgRequest<OrgListResponse>({
+        path: "/api/v1/orgs",
+        method: "GET"
+      })
+      const existingId = orgs?.items?.[0]?.id
+      if (existingId) {
+        await tldwClient.updateConfig({ orgId: existingId })
+        return
+      }
+    } catch {
+      // ignore and try create below
+    }
+
+    try {
+      const created = await bgRequest<OrgDetailResponse>({
+        path: "/api/v1/orgs",
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: { name: "Personal Workspace" }
+      })
+      if (created?.id) {
+        await tldwClient.updateConfig({ orgId: created.id })
+      }
+    } catch {
+      // best-effort only
+    }
   }
 
   /**
@@ -56,7 +94,58 @@ export class TldwAuthService {
       refreshToken: tokens.refresh_token
     })
 
+    await this.ensureOrgId()
+
     // Set up auto-refresh if expires_in is provided
+    if (tokens.expires_in) {
+      this.setupTokenRefresh(tokens.expires_in)
+    }
+
+    return tokens
+  }
+
+  /**
+   * Request a magic link sign-in email
+   */
+  async requestMagicLink(email: string): Promise<void> {
+    const config = await tldwClient.getConfig()
+    if (!config) {
+      throw new Error('tldw server not configured')
+    }
+    await bgRequest<any>({
+      path: '/api/v1/auth/magic-link/request',
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: { email },
+      noAuth: true
+    })
+  }
+
+  /**
+   * Verify a magic link token and sign in
+   */
+  async verifyMagicLink(token: string): Promise<TokenResponse> {
+    const config = await tldwClient.getConfig()
+    if (!config) {
+      throw new Error('tldw server not configured')
+    }
+
+    const tokens = await bgRequest<TokenResponse>({
+      path: '/api/v1/auth/magic-link/verify',
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: { token },
+      noAuth: true
+    })
+
+    await tldwClient.updateConfig({
+      authMode: 'multi-user',
+      accessToken: tokens.access_token,
+      refreshToken: tokens.refresh_token
+    })
+
+    await this.ensureOrgId()
+
     if (tokens.expires_in) {
       this.setupTokenRefresh(tokens.expires_in)
     }

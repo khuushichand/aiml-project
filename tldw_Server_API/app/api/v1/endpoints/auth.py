@@ -7,6 +7,8 @@ import os
 import base64
 import json
 import secrets
+import string
+import re
 from datetime import datetime, timezone, timedelta
 from importlib import import_module
 #
@@ -30,6 +32,8 @@ from tldw_Server_API.app.api.v1.schemas.auth_schemas import (
     DeprecatedUserResponse,
     SessionResponse,
     MFAChallengeResponse,
+    MagicLinkRequest,
+    MagicLinkVerifyRequest,
 )
 from tldw_Server_API.app.api.v1.API_Deps.auth_deps import (
     get_db_transaction,
@@ -167,6 +171,34 @@ def _get_mfa_login_ttl_seconds() -> int:
     except (TypeError, ValueError):
         ttl = 600
     return max(ttl, 60)
+
+
+def _normalize_magic_email(email: str) -> str:
+    return str(email or "").strip().lower()
+
+
+def _derive_username_from_email(email: str) -> str:
+    local = email.split("@", 1)[0].strip().lower()
+    local = re.sub(r"[^a-z0-9_-]+", "-", local).strip("-")
+    if len(local) < 3:
+        local = f"user-{secrets.token_hex(2)}"
+    return local[:32]
+
+
+def _generate_magic_password(length: int = 16) -> str:
+    # Ensure a mix of upper, lower, digit, and special characters.
+    specials = "!@#$%^&*"
+    choices = string.ascii_letters + string.digits + specials
+    base = [
+        secrets.choice(string.ascii_lowercase),
+        secrets.choice(string.ascii_uppercase),
+        secrets.choice(string.digits),
+        secrets.choice(specials),
+    ]
+    remaining = max(length - len(base), 0)
+    base.extend(secrets.choice(choices) for _ in range(remaining))
+    secrets.SystemRandom().shuffle(base)
+    return "".join(base)
 
 async def _ensure_mfa_cache_available(session_manager: SessionManager, settings: Settings) -> None:
     """Ensure MFA ephemeral storage is backed by Redis (mandatory for MFA flows)."""
@@ -1796,6 +1828,292 @@ async def resend_verification(
     except Exception as e:
         logger.error(f"Resend verification error: {e}")
         return {"message": "If the account exists and needs verification, an email has been sent"}
+
+
+@router.post(
+    "/magic-link/request",
+    response_model=MessageResponse,
+    status_code=status.HTTP_200_OK,
+    dependencies=[Depends(check_auth_rate_limit)],
+)
+async def request_magic_link(
+    data: MagicLinkRequest,
+    request: Request,
+    db=Depends(get_db_transaction),
+    jwt_service: JWTService = Depends(get_jwt_service_dep),
+    rate_limiter=Depends(get_rate_limiter_dep),
+) -> MessageResponse:
+    """
+    Request a magic link sign-in email.
+
+    Always returns a generic success message to avoid user enumeration.
+    """
+    settings = get_settings()
+    if settings.AUTH_MODE != "multi_user":
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Magic link sign-in is only available in multi-user mode",
+        )
+
+    email = _normalize_magic_email(data.email)
+    if not email:
+        return MessageResponse(message="If the account exists, a sign-in link has been sent")
+
+    # Rate limit by IP and email (best-effort)
+    try:
+        client_ip = request.client.host if request.client else "unknown"
+        allowed, _ = await rate_limiter.check_rate_limit(
+            identifier=f"ip:{client_ip}",
+            endpoint="auth:magic_link",
+            limit=10,
+            window_minutes=1,
+        )
+        if not allowed:
+            return MessageResponse(message="If the account exists, a sign-in link has been sent")
+        allowed, _ = await rate_limiter.check_rate_limit(
+            identifier=f"email:{email}",
+            endpoint="auth:magic_link",
+            limit=3,
+            window_minutes=10,
+        )
+        if not allowed:
+            return MessageResponse(message="If the account exists, a sign-in link has been sent")
+    except Exception as exc:
+        logger.debug("magic link rate limit check failed: {}", exc)
+
+    user = await fetch_user_by_login_identifier(db, email)
+    user_id = int(user["id"]) if user and user.get("id") is not None else None
+
+    # If registration is disabled and user doesn't exist, do not send an email.
+    if not user and not settings.ENABLE_REGISTRATION:
+        return MessageResponse(message="If the account exists, a sign-in link has been sent")
+
+    try:
+        token = jwt_service.create_magic_link_token(
+            email=email,
+            user_id=user_id,
+            expires_in_minutes=settings.MAGIC_LINK_EXPIRE_MINUTES,
+        )
+
+        email_service = _get_email_service()
+        await email_service.send_magic_link_email(
+            to_email=email,
+            magic_token=token,
+            expires_in_minutes=settings.MAGIC_LINK_EXPIRE_MINUTES,
+            username=user.get("username") if user else None,
+        )
+    except Exception as exc:
+        logger.error("Failed to send magic link email: {}", exc)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Failed to send magic link email",
+        ) from exc
+
+    return MessageResponse(message="If the account exists, a sign-in link has been sent")
+
+
+@router.post(
+    "/magic-link/verify",
+    response_model=TokenResponse,
+    status_code=status.HTTP_200_OK,
+)
+async def verify_magic_link(
+    data: MagicLinkVerifyRequest,
+    request: Request,
+    db=Depends(get_db_transaction),
+    jwt_service: JWTService = Depends(get_jwt_service_dep),
+    session_manager: SessionManager = Depends(get_session_manager_dep),
+    registration_service: RegistrationService = Depends(get_registration_service_dep),
+) -> TokenResponse:
+    """Verify a magic link token and return access/refresh tokens."""
+    settings = get_settings()
+    if settings.AUTH_MODE != "multi_user":
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Magic link sign-in is only available in multi-user mode",
+        )
+
+    try:
+        payload = await jwt_service.verify_token_async(data.token, token_type="magic_link")
+    except TokenExpiredError:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Magic link token has expired",
+        )
+    except InvalidTokenError:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Invalid magic link token",
+        )
+    except Exception as exc:
+        logger.error("Magic link verification failed: {}", exc)
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Invalid magic link token",
+        )
+
+    email = _normalize_magic_email(payload.get("email") or "")
+    user_id: Optional[int] = None
+    raw_user_id = payload.get("user_id")
+    if isinstance(raw_user_id, int):
+        user_id = raw_user_id
+    elif isinstance(raw_user_id, str) and raw_user_id.isdigit():
+        user_id = int(raw_user_id)
+    else:
+        sub = payload.get("sub")
+        if isinstance(sub, int):
+            user_id = sub
+        elif isinstance(sub, str) and sub.isdigit():
+            user_id = int(sub)
+        elif not email and isinstance(sub, str) and "@" in sub:
+            email = _normalize_magic_email(sub)
+
+    user: Optional[Dict[str, Any]] = None
+    if user_id is not None:
+        user = await fetch_active_user_by_id(db, int(user_id))
+    if not user and email:
+        user = await fetch_user_by_login_identifier(db, email)
+
+    if not user:
+        if not settings.ENABLE_REGISTRATION:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Registration is disabled",
+            )
+
+        # Create a new user on first magic-link sign-in
+        username_base = _derive_username_from_email(email or "user")
+        password = _generate_magic_password()
+        user_info: Optional[Dict[str, Any]] = None
+        for attempt in range(5):
+            username = username_base if attempt == 0 else f"{username_base}-{secrets.token_hex(2)}"
+            try:
+                user_info = await registration_service.register_user(
+                    username=username,
+                    email=email,
+                    password=password,
+                    registration_code=None,
+                )
+                break
+            except DuplicateUserError as dupe:
+                if getattr(dupe, "field", None) == "email":
+                    user = await fetch_user_by_login_identifier(db, email)
+                    break
+            except Exception as exc:
+                logger.error("Magic link registration failed: {}", exc)
+                raise HTTPException(
+                    status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                    detail="Failed to register user",
+                ) from exc
+
+        if not user and user_info:
+            user_id = int(user_info["user_id"])
+            # Mark user verified (magic link serves as email verification)
+            is_pg = await is_postgres_backend()
+            if is_pg:
+                await db.execute(
+                    "UPDATE users SET is_verified = true, updated_at = $1 WHERE id = $2",
+                    datetime.utcnow(),
+                    user_id,
+                )
+            else:
+                await db.execute(
+                    "UPDATE users SET is_verified = 1, updated_at = ? WHERE id = ?",
+                    (datetime.utcnow().isoformat(), user_id),
+                )
+                await db.commit()
+            user = await fetch_active_user_by_id(db, user_id)
+
+    if not user:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid or inactive user",
+        )
+
+    # Ensure the user has at least one org membership
+    try:
+        memberships = await list_memberships_for_user(int(user["id"]))
+    except Exception:
+        memberships = []
+    if not memberships:
+        try:
+            from tldw_Server_API.app.core.AuthNZ.orgs_teams import create_organization
+            from tldw_Server_API.app.core.AuthNZ.repos.orgs_teams_repo import AuthnzOrgsTeamsRepo
+            from tldw_Server_API.app.core.AuthNZ.database import get_db_pool
+
+            org_name = f"{user.get('username') or 'Personal'} Workspace"
+            org = await create_organization(name=org_name, owner_user_id=int(user["id"]))
+            pool = await get_db_pool()
+            repo = AuthnzOrgsTeamsRepo(db_pool=pool)
+            await repo.add_org_member(org_id=org["id"], user_id=int(user["id"]), role="owner")
+        except Exception as exc:
+            logger.warning("Magic link org bootstrap failed: {}", exc)
+
+    # Create a session and issue tokens (similar to login flow)
+    user_agent = request.headers.get("User-Agent", "Unknown")
+    temp_access = f"temp_access_{secrets.token_urlsafe(16)}"
+    temp_refresh = f"temp_refresh_{secrets.token_urlsafe(16)}"
+    temp_session_info = await session_manager.create_session(
+        user_id=user["id"],
+        access_token=temp_access,
+        refresh_token=temp_refresh,
+        ip_address=request.client.host if request.client else "unknown",
+        user_agent=user_agent,
+    )
+    session_id = temp_session_info["session_id"]
+
+    scope_claims = await _build_scope_claims(int(user["id"]))
+    add_claims = dict(scope_claims)
+    add_claims["session_id"] = session_id
+    access_token = jwt_service.create_access_token(
+        user_id=user["id"],
+        username=user["username"],
+        role=user["role"],
+        additional_claims=add_claims,
+    )
+    refresh_token = jwt_service.create_refresh_token(
+        user_id=user["id"],
+        username=user["username"],
+        additional_claims=add_claims,
+    )
+    await session_manager.update_session_tokens(
+        session_id=session_id,
+        access_token=access_token,
+        refresh_token=refresh_token,
+    )
+
+    await update_user_last_login(db, int(user["id"]), datetime.utcnow())
+
+    # Blacklist the magic link token after use (one-time)
+    try:
+        jti = payload.get("jti")
+        raw_exp = payload.get("exp")
+        exp_dt = None
+        if isinstance(raw_exp, (int, float)):
+            exp_dt = datetime.fromtimestamp(raw_exp, tz=timezone.utc)
+        elif isinstance(raw_exp, datetime):
+            exp_dt = raw_exp
+        if jti and exp_dt:
+            from tldw_Server_API.app.core.AuthNZ.token_blacklist import get_token_blacklist
+            bl = get_token_blacklist()
+            await bl.revoke_token(
+                jti=jti,
+                expires_at=exp_dt,
+                user_id=int(user["id"]),
+                token_type="magic_link",
+                reason="magic_link_used",
+                revoked_by=int(user["id"]),
+                ip_address=request.client.host if request.client else None,
+            )
+    except Exception as exc:
+        logger.debug("Magic link token blacklist failed: {}", exc)
+
+    return TokenResponse(
+        access_token=access_token,
+        refresh_token=refresh_token,
+        token_type="bearer",
+        expires_in=settings.ACCESS_TOKEN_EXPIRE_MINUTES * 60,
+    )
 
 
 # MFA Endpoints

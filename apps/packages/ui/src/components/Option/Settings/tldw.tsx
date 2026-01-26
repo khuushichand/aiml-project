@@ -8,6 +8,7 @@ import {
   Modal,
   Spin,
   Button,
+  Select,
   Collapse,
   Tag
 } from "antd"
@@ -27,6 +28,7 @@ import { mapMultiUserLoginErrorMessage } from "@/services/auth-errors"
 import { ServerOverviewHint } from "@/components/Common/ServerOverviewHint"
 
 type TimeoutPresetKey = 'balanced' | 'extended'
+type LoginMethod = 'magic-link' | 'password'
 
 type TimeoutValues = {
   request: number
@@ -36,6 +38,42 @@ type TimeoutValues = {
   ragRequest: number
   media: number
   upload: number
+}
+
+type BillingPlan = {
+  name: string
+  display_name: string
+  description?: string
+  price_usd_monthly?: number
+  price_usd_yearly?: number
+  limits?: Record<string, any>
+}
+
+type BillingSubscription = {
+  plan_name: string
+  plan_display_name: string
+  status: string
+  billing_cycle?: string | null
+  current_period_end?: string | null
+  trial_end?: string | null
+  cancel_at_period_end?: boolean
+  limits?: Record<string, any>
+}
+
+type BillingUsage = {
+  plan_name?: string
+  limits?: Record<string, any>
+  usage?: Record<string, number>
+  limit_checks?: Record<string, {
+    limit?: number | null
+    current?: number
+    exceeded?: boolean
+    warning?: boolean
+    unlimited?: boolean
+    percent_used?: number
+  }>
+  has_warnings?: boolean
+  has_exceeded?: boolean
 }
 
 const TIMEOUT_PRESETS: Record<TimeoutPresetKey, TimeoutValues> = {
@@ -59,6 +97,11 @@ const TIMEOUT_PRESETS: Record<TimeoutPresetKey, TimeoutValues> = {
   }
 }
 
+const BILLING_BASE_URL = "https://vademhq.com"
+const BILLING_SUCCESS_URL = `${BILLING_BASE_URL}/billing/success`
+const BILLING_CANCEL_URL = `${BILLING_BASE_URL}/billing/cancel`
+const BILLING_RETURN_URL = `${BILLING_BASE_URL}/billing`
+
 type CoreStatus = 'unknown' | 'checking' | 'connected' | 'failed'
 type RagStatus = 'healthy' | 'unhealthy' | 'unknown' | 'checking'
 
@@ -77,6 +120,11 @@ export const TldwSettings = () => {
   const [ragStatus, setRagStatus] = useState<RagStatus>("unknown")
   const [authMode, setAuthMode] = useState<'single-user' | 'multi-user'>('single-user')
   const [isLoggedIn, setIsLoggedIn] = useState(false)
+  const [loginMethod, setLoginMethod] = useState<LoginMethod>('magic-link')
+  const [magicEmail, setMagicEmail] = useState("")
+  const [magicToken, setMagicToken] = useState("")
+  const [magicSent, setMagicSent] = useState(false)
+  const [magicSending, setMagicSending] = useState(false)
   const [serverUrl, setServerUrl] = useState("")
   const [requestTimeoutSec, setRequestTimeoutSec] = useState<number>(10)
   const [streamIdleTimeoutSec, setStreamIdleTimeoutSec] = useState<number>(15)
@@ -87,6 +135,13 @@ export const TldwSettings = () => {
   const [uploadRequestTimeoutSec, setUploadRequestTimeoutSec] = useState<number>(60)
   const [timeoutPreset, setTimeoutPreset] = useState<TimeoutPresetKey | 'custom'>('balanced')
   const [showDefaultKeyWarning, setShowDefaultKeyWarning] = useState(false)
+  const [billingLoading, setBillingLoading] = useState(false)
+  const [billingError, setBillingError] = useState<string | null>(null)
+  const [billingPlans, setBillingPlans] = useState<BillingPlan[]>([])
+  const [billingStatus, setBillingStatus] = useState<BillingSubscription | null>(null)
+  const [billingUsage, setBillingUsage] = useState<BillingUsage | null>(null)
+  const [selectedPlan, setSelectedPlan] = useState<string | null>(null)
+  const [billingCycle, setBillingCycle] = useState<'monthly' | 'yearly'>('monthly')
 
   const determinePreset = (values: TimeoutValues): TimeoutPresetKey | 'custom' => {
     for (const [key, presetValues] of Object.entries(TIMEOUT_PRESETS) as [TimeoutPresetKey, typeof TIMEOUT_PRESETS[TimeoutPresetKey]][]) {
@@ -167,6 +222,97 @@ export const TldwSettings = () => {
         return t("settings:tldw.connection.ragUnhealthy", "RAG: needs attention")
       default:
         return t("settings:tldw.connection.ragUnknown", "RAG: waiting")
+    }
+  }
+
+  const formatNumber = (value?: number | null) => {
+    if (value === null || value === undefined) {
+      return t('settings:tldw.billing.unknown', '—')
+    }
+    if (Number.isFinite(value)) {
+      return value.toLocaleString(undefined, { maximumFractionDigits: 2 })
+    }
+    return String(value)
+  }
+
+  const formatLimitValue = (value?: number | null, unlimited?: boolean) => {
+    if (unlimited) {
+      return t('settings:tldw.billing.unlimited', 'Unlimited')
+    }
+    if (value === null || value === undefined) {
+      return t('settings:tldw.billing.unknown', '—')
+    }
+    if (value === -1) {
+      return t('settings:tldw.billing.unlimited', 'Unlimited')
+    }
+    return formatNumber(value)
+  }
+
+  const formatUsageLabel = (key: string) => {
+    const map: Record<string, string> = {
+      api_calls_day: t('settings:tldw.billing.usage.apiCallsDay', 'API calls / day'),
+      llm_tokens_month: t('settings:tldw.billing.usage.llmTokensMonth', 'LLM tokens / month'),
+      storage_mb: t('settings:tldw.billing.usage.storageMb', 'Storage (MB)'),
+      team_members: t('settings:tldw.billing.usage.teamMembers', 'Team members'),
+      transcription_minutes_month: t('settings:tldw.billing.usage.transcriptionMinutes', 'Transcription minutes / month'),
+      rag_queries_day: t('settings:tldw.billing.usage.ragQueriesDay', 'RAG queries / day'),
+      concurrent_jobs: t('settings:tldw.billing.usage.concurrentJobs', 'Concurrent jobs')
+    }
+    return map[key] || key.replace(/_/g, ' ')
+  }
+
+  const formatPlanPrice = (plan: BillingPlan, cycle: 'monthly' | 'yearly') => {
+    const price =
+      cycle === 'yearly'
+        ? plan.price_usd_yearly
+        : plan.price_usd_monthly
+    if (typeof price === 'number' && !Number.isNaN(price)) {
+      const suffix = cycle === 'yearly' ? 'yr' : 'mo'
+      return `$${price.toLocaleString()}/${suffix}`
+    }
+    return t('settings:tldw.billing.customPrice', 'Custom')
+  }
+
+  const formatDate = (value?: string | null) => {
+    if (!value) return t('settings:tldw.billing.unknown', '—')
+    const parsed = new Date(value)
+    if (Number.isNaN(parsed.getTime())) {
+      return value
+    }
+    return parsed.toLocaleDateString()
+  }
+
+  const billingStatusColor = (status?: string | null) => {
+    switch (status) {
+      case "active":
+        return "green"
+      case "trialing":
+        return "blue"
+      case "past_due":
+        return "orange"
+      case "canceling":
+        return "gold"
+      case "canceled":
+        return "red"
+      default:
+        return "default"
+    }
+  }
+
+  const billingStatusLabel = (status?: string | null) => {
+    switch (status) {
+      case "active":
+        return t('settings:tldw.billing.status.active', 'Active')
+      case "trialing":
+        return t('settings:tldw.billing.status.trialing', 'Trialing')
+      case "past_due":
+        return t('settings:tldw.billing.status.pastDue', 'Past due')
+      case "canceling":
+        return t('settings:tldw.billing.status.canceling', 'Canceling')
+      case "canceled":
+        return t('settings:tldw.billing.status.canceled', 'Canceled')
+      default:
+        return t('settings:tldw.billing.status.unknown', 'Unknown')
     }
   }
 
@@ -294,6 +440,65 @@ export const TldwSettings = () => {
       setLoading(false)
     }
   }
+
+  const loadBilling = async () => {
+    if (authMode !== 'multi-user' || !isLoggedIn) return
+    setBillingLoading(true)
+    setBillingError(null)
+    try {
+      const [plansResp, subResp, usageResp] = await Promise.all([
+        apiSend<{ plans?: BillingPlan[] }>({
+          path: "/api/v1/billing/plans" as PathOrUrl,
+          method: "GET"
+        }),
+        apiSend<BillingSubscription>({
+          path: "/api/v1/billing/subscription" as PathOrUrl,
+          method: "GET"
+        }),
+        apiSend<BillingUsage>({
+          path: "/api/v1/billing/usage" as PathOrUrl,
+          method: "GET"
+        })
+      ])
+      const plans = plansResp?.data?.plans || []
+      const subscription = subResp?.data || null
+      const usage = usageResp?.data || null
+
+      setBillingPlans(plans)
+      setBillingStatus(subscription)
+      setBillingUsage(usage)
+
+      if (!plansResp?.ok || !subResp?.ok || !usageResp?.ok) {
+        const errorMsg =
+          plansResp?.error ||
+          subResp?.error ||
+          usageResp?.error ||
+          'Failed to load billing details'
+        setBillingError(errorMsg)
+      }
+
+      if (!selectedPlan) {
+        if (subscription?.plan_name) {
+          setSelectedPlan(subscription.plan_name)
+        } else if (plans.length > 0) {
+          setSelectedPlan(plans[0].name)
+        }
+      }
+      if (subscription?.billing_cycle) {
+        setBillingCycle(subscription.billing_cycle === 'yearly' ? 'yearly' : 'monthly')
+      }
+    } catch (err: any) {
+      setBillingError(err?.message || 'Failed to load billing details')
+    } finally {
+      setBillingLoading(false)
+    }
+  }
+
+  useEffect(() => {
+    if (authMode === 'multi-user' && isLoggedIn) {
+      void loadBilling()
+    }
+  }, [authMode, isLoggedIn])
 
   const testConnection = async () => {
     setTestingConnection(true)
@@ -490,6 +695,52 @@ export const TldwSettings = () => {
     }
   }
 
+  const handleSendMagicLink = async () => {
+    if (!magicEmail.trim()) {
+      message.warning(
+        t('settings:tldw.magicLink.missingEmail', 'Enter your email to receive a magic link.')
+      )
+      return
+    }
+    setMagicSending(true)
+    try {
+      await tldwAuth.requestMagicLink(magicEmail.trim())
+      setMagicSent(true)
+      message.success(
+        t('settings:tldw.magicLink.sent', 'Magic link sent. Check your inbox.')
+      )
+    } catch (error: any) {
+      const friendly = mapMultiUserLoginErrorMessage(t, error, 'settings')
+      message.error(friendly)
+      console.error('Magic link request failed:', error)
+    } finally {
+      setMagicSending(false)
+    }
+  }
+
+  const handleVerifyMagicLink = async () => {
+    if (!magicToken.trim()) {
+      message.warning(
+        t('settings:tldw.magicLink.missingToken', 'Paste the magic link token to continue.')
+      )
+      return
+    }
+    setLoading(true)
+    try {
+      await tldwAuth.verifyMagicLink(magicToken.trim())
+      setIsLoggedIn(true)
+      message.success(t('settings:tldw.login.success', 'Login successful!'))
+      setMagicToken('')
+      await testConnection()
+    } catch (error: any) {
+      const friendly = mapMultiUserLoginErrorMessage(t, error, 'settings')
+      message.error(friendly)
+      console.error('Magic link login failed:', error)
+    } finally {
+      setLoading(false)
+    }
+  }
+
   const handleLogout = async () => {
     try {
       setLoading(true)
@@ -504,9 +755,98 @@ export const TldwSettings = () => {
     }
   }
 
+  const handleCheckout = async () => {
+    if (!selectedPlan) {
+      message.warning(t('settings:tldw.billing.missingPlan', 'Select a plan to continue.'))
+      return
+    }
+    setBillingLoading(true)
+    try {
+      const resp = await apiSend<{ url?: string }>({
+        path: "/api/v1/billing/checkout" as PathOrUrl,
+        method: "POST",
+        body: {
+          plan_name: selectedPlan,
+          billing_cycle: billingCycle,
+          success_url: BILLING_SUCCESS_URL,
+          cancel_url: BILLING_CANCEL_URL
+        }
+      })
+      if (resp?.data?.url) {
+        window.open(resp.data.url, "_blank", "noopener,noreferrer")
+      } else if (!resp?.ok) {
+        message.error(resp?.error || t('settings:tldw.billing.checkoutFailed', 'Checkout failed.'))
+      } else {
+        message.error(t('settings:tldw.billing.checkoutFailed', 'Checkout failed.'))
+      }
+    } catch (error: any) {
+      message.error(error?.message || t('settings:tldw.billing.checkoutFailed', 'Checkout failed.'))
+    } finally {
+      setBillingLoading(false)
+    }
+  }
+
+  const handleBillingPortal = async () => {
+    setBillingLoading(true)
+    try {
+      const resp = await apiSend<{ url?: string }>({
+        path: "/api/v1/billing/portal" as PathOrUrl,
+        method: "POST",
+        body: { return_url: BILLING_RETURN_URL }
+      })
+      if (resp?.data?.url) {
+        window.open(resp.data.url, "_blank", "noopener,noreferrer")
+      } else if (!resp?.ok) {
+        message.error(resp?.error || t('settings:tldw.billing.portalFailed', 'Unable to open billing portal.'))
+      } else {
+        message.error(t('settings:tldw.billing.portalFailed', 'Unable to open billing portal.'))
+      }
+    } catch (error: any) {
+      message.error(error?.message || t('settings:tldw.billing.portalFailed', 'Unable to open billing portal.'))
+    } finally {
+      setBillingLoading(false)
+    }
+  }
+
   const openHealthDiagnostics = () => {
     navigate("/settings/health")
   }
+
+  const selectedPlanDetails = billingPlans.find((plan) => plan.name === selectedPlan) || null
+  const planOptions = billingPlans.map((plan) => ({
+    value: plan.name,
+    label: (
+      <div className="flex items-center justify-between gap-2">
+        <span>{plan.display_name}</span>
+        <span className="text-xs text-text-muted">
+          {formatPlanPrice(plan, billingCycle)}
+        </span>
+      </div>
+    )
+  }))
+
+  const usageOrder = [
+    "api_calls_day",
+    "llm_tokens_month",
+    "storage_mb",
+    "team_members",
+    "transcription_minutes_month",
+    "rag_queries_day",
+    "concurrent_jobs"
+  ]
+  const usageEntries = Object.entries(billingUsage?.usage ?? {})
+  const usageChecks = billingUsage?.limit_checks ?? {}
+  const sortedUsageEntries = usageEntries.sort((a, b) => {
+    const aIndex = usageOrder.indexOf(a[0])
+    const bIndex = usageOrder.indexOf(b[0])
+    const aRank = aIndex === -1 ? usageOrder.length + 1 : aIndex
+    const bRank = bIndex === -1 ? usageOrder.length + 1 : bIndex
+    if (aRank !== bRank) return aRank - bRank
+    return a[0].localeCompare(b[0])
+  })
+
+  const isSamePlan = !!billingStatus?.plan_name && selectedPlan === billingStatus?.plan_name
+  const isSameCycle = !!billingStatus?.billing_cycle && billingStatus?.billing_cycle === billingCycle
 
   if (initializing) {
     return (
@@ -665,28 +1005,87 @@ export const TldwSettings = () => {
                 showIcon
                 className="mb-4"
               />
-              
               <Form.Item
-                label={t('settings:tldw.fields.username.label', 'Username')}
-                name="username"
-                rules={[{ required: true, message: t('settings:tldw.fields.username.required', 'Please enter your username') }]}
+                label={t('settings:tldw.loginMethod.label', 'Login Method')}
               >
-                <Input placeholder={t('settings:tldw.fields.username.placeholder', 'Enter username')} />
+                <Segmented
+                  options={[
+                    { label: t('settings:tldw.loginMethod.magic', 'Magic link'), value: 'magic-link' },
+                    { label: t('settings:tldw.loginMethod.password', 'Password'), value: 'password' }
+                  ]}
+                  value={loginMethod}
+                  onChange={(value) => {
+                    if (value === 'magic-link' || value === 'password') {
+                      setLoginMethod(value)
+                    }
+                  }}
+                />
               </Form.Item>
 
-              <Form.Item
-                label={t('settings:tldw.fields.password.label', 'Password')}
-                name="password"
-                rules={[{ required: true, message: t('settings:tldw.fields.password.required', 'Please enter your password') }]}
-              >
-                <Input.Password placeholder={t('settings:tldw.fields.password.placeholder', 'Enter password')} />
-              </Form.Item>
+              {loginMethod === 'password' ? (
+                <>
+                  <Form.Item
+                    label={t('settings:tldw.fields.username.label', 'Username')}
+                    name="username"
+                    rules={[{ required: true, message: t('settings:tldw.fields.username.required', 'Please enter your username') }]}
+                  >
+                    <Input placeholder={t('settings:tldw.fields.username.placeholder', 'Enter username')} />
+                  </Form.Item>
 
-              <Form.Item>
-                <Button type="primary" onClick={handleLogin}>
-                  {t('settings:tldw.buttons.login', 'Login')}
-                </Button>
-              </Form.Item>
+                  <Form.Item
+                    label={t('settings:tldw.fields.password.label', 'Password')}
+                    name="password"
+                    rules={[{ required: true, message: t('settings:tldw.fields.password.required', 'Please enter your password') }]}
+                  >
+                    <Input.Password placeholder={t('settings:tldw.fields.password.placeholder', 'Enter password')} />
+                  </Form.Item>
+
+                  <Form.Item>
+                    <Button type="primary" onClick={handleLogin}>
+                      {t('settings:tldw.buttons.login', 'Login')}
+                    </Button>
+                  </Form.Item>
+                </>
+              ) : (
+                <>
+                  <Form.Item
+                    label={t('settings:tldw.magicLink.email.label', 'Email')}
+                    name="magicEmail"
+                    rules={[{ required: true, message: t('settings:tldw.magicLink.email.required', 'Please enter your email') }]}
+                  >
+                    <Input
+                      placeholder={t('settings:tldw.magicLink.email.placeholder', 'you@company.com')}
+                      value={magicEmail}
+                      onChange={(e) => setMagicEmail(e.target.value)}
+                    />
+                  </Form.Item>
+
+                  <Form.Item
+                    label={t('settings:tldw.magicLink.token.label', 'Magic link token')}
+                    name="magicToken"
+                    rules={[{ required: true, message: t('settings:tldw.magicLink.token.required', 'Please paste your magic link token') }]}
+                  >
+                    <Input
+                      placeholder={t('settings:tldw.magicLink.token.placeholder', 'Paste the token from your email')}
+                      value={magicToken}
+                      onChange={(e) => setMagicToken(e.target.value)}
+                    />
+                  </Form.Item>
+
+                  <Form.Item>
+                    <Space>
+                      <Button onClick={handleSendMagicLink} loading={magicSending}>
+                        {magicSent
+                          ? t('settings:tldw.magicLink.resend', 'Resend magic link')
+                          : t('settings:tldw.magicLink.send', 'Send magic link')}
+                      </Button>
+                      <Button type="primary" onClick={handleVerifyMagicLink}>
+                        {t('settings:tldw.magicLink.verify', 'Verify & Login')}
+                      </Button>
+                    </Space>
+                  </Form.Item>
+                </>
+              )}
             </>
           )}
 
@@ -1064,6 +1463,220 @@ export const TldwSettings = () => {
             ]}
           />
         </Form>
+
+        {authMode === 'multi-user' && isLoggedIn && (
+          <div className="mt-6 rounded-lg border border-border bg-surface2 p-4">
+            <div className="flex flex-wrap items-center justify-between gap-3">
+              <div>
+                <h3 className="text-base font-semibold text-text">
+                  {t('settings:tldw.billing.title', 'Billing & usage')}
+                </h3>
+                <p className="text-xs text-text-muted">
+                  {t(
+                    'settings:tldw.billing.subtitle',
+                    'Manage your plan, billing cycle, and usage limits.'
+                  )}
+                </p>
+              </div>
+              <Space>
+                <Button onClick={() => void loadBilling()} loading={billingLoading}>
+                  {t('settings:tldw.billing.refresh', 'Refresh')}
+                </Button>
+                <Button onClick={handleBillingPortal} loading={billingLoading}>
+                  {t('settings:tldw.billing.portal', 'Billing portal')}
+                </Button>
+              </Space>
+            </div>
+
+            {billingError && (
+              <Alert
+                type="error"
+                showIcon
+                className="mt-4"
+                message={t('settings:tldw.billing.errorTitle', 'Billing unavailable')}
+                description={billingError}
+              />
+            )}
+
+            {!billingError && (
+              <div className="mt-4 space-y-4">
+                {billingStatus && (
+                  <div className="rounded border border-border bg-surface p-3">
+                    <div className="flex flex-wrap items-center gap-2 text-sm">
+                      <span className="font-medium">
+                        {t('settings:tldw.billing.currentPlan', 'Current plan')}
+                      </span>
+                      <Tag color={billingStatusColor(billingStatus.status)}>
+                        {billingStatusLabel(billingStatus.status)}
+                      </Tag>
+                      <span className="text-text">
+                        {billingStatus.plan_display_name || billingStatus.plan_name}
+                      </span>
+                      {billingStatus.billing_cycle && (
+                        <Tag>
+                          {billingStatus.billing_cycle === 'yearly'
+                            ? t('settings:tldw.billing.cycle.yearly', 'Yearly')
+                            : t('settings:tldw.billing.cycle.monthly', 'Monthly')}
+                        </Tag>
+                      )}
+                    </div>
+                    <div className="mt-2 text-xs text-text-muted flex flex-wrap gap-4">
+                      <span>
+                        {t('settings:tldw.billing.renewal', 'Renews')}:{" "}
+                        {formatDate(billingStatus.current_period_end)}
+                      </span>
+                      {billingStatus.trial_end && (
+                        <span>
+                          {t('settings:tldw.billing.trialEnds', 'Trial ends')}:{" "}
+                          {formatDate(billingStatus.trial_end)}
+                        </span>
+                      )}
+                    </div>
+                    {billingStatus.cancel_at_period_end && (
+                      <Alert
+                        type="warning"
+                        showIcon
+                        className="mt-3"
+                        message={t(
+                          'settings:tldw.billing.cancelAtPeriodEnd',
+                          'Subscription will cancel at period end.'
+                        )}
+                      />
+                    )}
+                  </div>
+                )}
+
+                {billingUsage?.has_exceeded && (
+                  <Alert
+                    type="error"
+                    showIcon
+                    message={t(
+                      'settings:tldw.billing.limitExceeded',
+                      'Usage has exceeded one or more plan limits.'
+                    )}
+                  />
+                )}
+                {!billingUsage?.has_exceeded && billingUsage?.has_warnings && (
+                  <Alert
+                    type="warning"
+                    showIcon
+                    message={t(
+                      'settings:tldw.billing.limitWarning',
+                      'Approaching plan limits for some resources.'
+                    )}
+                  />
+                )}
+
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                  <div className="rounded border border-border bg-surface p-3">
+                    <div className="text-sm font-medium mb-2">
+                      {t('settings:tldw.billing.selectPlan', 'Select a plan')}
+                    </div>
+                    <Select
+                      className="w-full"
+                      placeholder={t('settings:tldw.billing.choosePlan', 'Choose a plan')}
+                      options={planOptions}
+                      value={selectedPlan || undefined}
+                      onChange={(value) => setSelectedPlan(value)}
+                      disabled={billingPlans.length === 0}
+                    />
+                    <div className="mt-3">
+                      <span className="text-xs text-text-muted">
+                        {t('settings:tldw.billing.billingCycle', 'Billing cycle')}
+                      </span>
+                      <div className="mt-2">
+                        <Segmented
+                          options={[
+                            { label: t('settings:tldw.billing.cycle.monthly', 'Monthly'), value: 'monthly' },
+                            { label: t('settings:tldw.billing.cycle.yearly', 'Yearly'), value: 'yearly' }
+                          ]}
+                          value={billingCycle}
+                          onChange={(value) => {
+                            if (value === 'monthly' || value === 'yearly') {
+                              setBillingCycle(value)
+                            }
+                          }}
+                        />
+                      </div>
+                    </div>
+                    {selectedPlanDetails && (
+                      <div className="mt-3 text-xs text-text-muted space-y-1">
+                        <div className="font-medium text-text">
+                          {selectedPlanDetails.display_name}
+                        </div>
+                        {selectedPlanDetails.description && (
+                          <div>{selectedPlanDetails.description}</div>
+                        )}
+                        <div>
+                          {t('settings:tldw.billing.price', 'Price')}:{" "}
+                          {formatPlanPrice(selectedPlanDetails, billingCycle)}
+                        </div>
+                      </div>
+                    )}
+                    <div className="mt-4 flex flex-wrap gap-2">
+                      <Button
+                        type="primary"
+                        onClick={handleCheckout}
+                        loading={billingLoading}
+                        disabled={!selectedPlan || (isSamePlan && isSameCycle)}
+                      >
+                        {isSamePlan && isSameCycle
+                          ? t('settings:tldw.billing.currentPlanCta', 'Current plan')
+                          : t('settings:tldw.billing.checkout', 'Continue to checkout')}
+                      </Button>
+                      {billingPlans.length === 0 && !billingLoading && (
+                        <span className="text-xs text-text-subtle">
+                          {t('settings:tldw.billing.noPlans', 'No plans available yet.')}
+                        </span>
+                      )}
+                    </div>
+                  </div>
+
+                  <div className="rounded border border-border bg-surface p-3">
+                    <div className="text-sm font-medium mb-2">
+                      {t('settings:tldw.billing.usageTitle', 'Usage')}
+                    </div>
+                    {sortedUsageEntries.length === 0 && (
+                      <span className="text-xs text-text-muted">
+                        {t('settings:tldw.billing.usageEmpty', 'Usage data will appear after activity.')}
+                      </span>
+                    )}
+                    {sortedUsageEntries.length > 0 && (
+                      <div className="space-y-2">
+                        {sortedUsageEntries.map(([key, value]) => {
+                          const check = usageChecks[key] || {}
+                          const limit = typeof check.limit !== 'undefined'
+                            ? check.limit
+                            : billingUsage?.limits?.[key]
+                          const statusColor = check.exceeded
+                            ? 'red'
+                            : check.warning
+                              ? 'orange'
+                              : 'green'
+                          return (
+                            <div key={key} className="flex flex-wrap items-center justify-between gap-2 text-xs">
+                              <span className="text-text">{formatUsageLabel(key)}</span>
+                              <div className="flex items-center gap-2">
+                                <span className="text-text-muted">
+                                  {formatNumber(value)} / {formatLimitValue(limit, check.unlimited)}
+                                </span>
+                                {typeof check.percent_used === 'number' && !check.unlimited && (
+                                  <Tag color={statusColor}>
+                                    {Math.round(check.percent_used)}%
+                                  </Tag>
+                                )}
+                              </div>
+                            </div>
+                          )
+                        })}
+                      </div>
+                    )}
+                  </div>
+                </div>
+              </div>
+            )}
+          </div>
+        )}
       </div>
     </Spin>
   )

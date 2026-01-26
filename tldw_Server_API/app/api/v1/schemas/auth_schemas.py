@@ -175,6 +175,38 @@ class PasswordResetConfirm(BaseModel):
     }
 
 
+class MagicLinkRequest(BaseModel):
+    """Request a magic link sign-in email."""
+    email: EmailStr = Field(..., description="Email address to send sign-in link")
+
+    @field_validator('email')
+    @classmethod
+    def email_lowercase(cls, v):
+        """Normalize email to lowercase"""
+        return v.lower()
+
+    model_config = {
+        "json_schema_extra": {
+            "example": {
+                "email": "user@example.com"
+            }
+        }
+    }
+
+
+class MagicLinkVerifyRequest(BaseModel):
+    """Verify a magic link token."""
+    token: str = Field(..., description="Magic link token")
+
+    model_config = {
+        "json_schema_extra": {
+            "example": {
+                "token": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9..."
+            }
+        }
+    }
+
+
 #######################################################################################################################
 #
 # Response Schemas

@@ -1387,67 +1387,119 @@ def migration_030_create_subscription_plans(conn: sqlite3.Connection) -> None:
         {
             "name": "free",
             "display_name": "Free",
-            "description": "Get started with basic features",
+            "description": "Internal/default plan (not publicly listed)",
             "price_usd_monthly": 0,
             "price_usd_yearly": 0,
             "sort_order": 0,
+            "is_public": 0,
             "limits_json": json.dumps({
                 "storage_mb": 1024,
                 "api_calls_day": 100,
                 "api_calls_month": 3000,
                 "llm_tokens_day": 10000,
                 "llm_tokens_month": 300000,
-                "llm_cost_month_usd": 0,
                 "transcription_minutes_month": 10,
                 "rag_queries_day": 50,
                 "concurrent_jobs": 1,
                 "team_members": 1,
                 "rate_limit_rpm": 10,
-                "features": ["basic_search", "fts5_search", "basic_chat"]
+                "features": ["basic_search", "basic_chat"]
+            })
+        },
+        {
+            "name": "starter",
+            "display_name": "Starter",
+            "description": "For individuals getting started",
+            "price_usd_monthly": 10,
+            "price_usd_yearly": 100,
+            "sort_order": 1,
+            "is_public": 1,
+            "limits_json": json.dumps({
+                "storage_mb": 2048,
+                "api_calls_day": 1000,
+                "api_calls_month": 30000,
+                "llm_tokens_month": 4000000,
+                "llm_tokens_premium_month": 80000,
+                "max_context_tokens": 64000,
+                "byok_enabled": True,
+                "byok_keys_saved": 1,
+                "notebooks": 100,
+                "sources_per_notebook": 50,
+                "ingestion_pages_month": 2000,
+                "ingestion_pages_day": 150,
+                "scheduled_refresh": "manual",
+                "max_upload_mb": 50,
+                "transcription_minutes_month": 120,
+                "tts_minutes_month": 30,
+                "rag_queries_day": 1000,
+                "concurrent_jobs": 2,
+                "team_members": 1,
+                "rate_limit_rpm": 20,
+                "features": ["basic_search", "basic_chat", "byok"]
+            })
+        },
+        {
+            "name": "plus",
+            "display_name": "Plus",
+            "description": "For power users who need more capacity",
+            "price_usd_monthly": 20,
+            "price_usd_yearly": 200,
+            "sort_order": 2,
+            "is_public": 1,
+            "limits_json": json.dumps({
+                "storage_mb": 10240,
+                "api_calls_day": 5000,
+                "api_calls_month": 150000,
+                "llm_tokens_month": 12000000,
+                "llm_tokens_premium_month": 200000,
+                "max_context_tokens": 128000,
+                "byok_enabled": True,
+                "byok_keys_saved": 3,
+                "notebooks": 300,
+                "sources_per_notebook": 100,
+                "ingestion_pages_month": 10000,
+                "ingestion_pages_day": 750,
+                "scheduled_refresh": "weekly",
+                "max_upload_mb": 200,
+                "transcription_minutes_month": 300,
+                "tts_minutes_month": 90,
+                "rag_queries_day": 5000,
+                "concurrent_jobs": 5,
+                "team_members": 1,
+                "rate_limit_rpm": 60,
+                "features": ["*", "byok", "rag_advanced", "vector_search"]
             })
         },
         {
             "name": "pro",
             "display_name": "Pro",
-            "description": "For power users and small teams",
-            "price_usd_monthly": 29,
-            "price_usd_yearly": 290,
-            "sort_order": 1,
+            "description": "For teams and professional usage",
+            "price_usd_monthly": 30,
+            "price_usd_yearly": 300,
+            "sort_order": 3,
+            "is_public": 1,
             "limits_json": json.dumps({
-                "storage_mb": 10240,
-                "api_calls_day": 5000,
-                "api_calls_month": 150000,
-                "llm_tokens_day": 500000,
-                "llm_tokens_month": 15000000,
-                "llm_cost_month_usd": 50,
-                "transcription_minutes_month": 300,
-                "rag_queries_day": 500,
-                "concurrent_jobs": 5,
+                "storage_mb": 30720,
+                "api_calls_day": 15000,
+                "api_calls_month": 450000,
+                "llm_tokens_month": 18000000,
+                "llm_tokens_premium_month": 300000,
+                "max_context_tokens": 200000,
+                "byok_enabled": True,
+                "byok_keys_saved": 10,
+                "notebooks": 1000,
+                "sources_per_notebook": 300,
+                "ingestion_pages_month": 30000,
+                "ingestion_pages_day": 2000,
+                "scheduled_refresh": "daily",
+                "max_upload_mb": 500,
+                "transcription_minutes_month": 500,
+                "tts_minutes_month": 150,
+                "rag_queries_day": 15000,
+                "concurrent_jobs": 10,
                 "team_members": 5,
                 "rate_limit_rpm": 120,
-                "features": ["*", "rag_advanced", "vector_search", "priority_support"]
-            })
-        },
-        {
-            "name": "enterprise",
-            "display_name": "Enterprise",
-            "description": "For organizations with advanced needs",
-            "price_usd_monthly": 199,
-            "price_usd_yearly": 1990,
-            "sort_order": 2,
-            "limits_json": json.dumps({
-                "storage_mb": 102400,
-                "api_calls_day": 50000,
-                "api_calls_month": 1500000,
-                "llm_tokens_day": 5000000,
-                "llm_tokens_month": 150000000,
-                "llm_cost_month_usd": 500,
-                "transcription_minutes_month": 3000,
-                "rag_queries_day": 5000,
-                "concurrent_jobs": 20,
-                "team_members": -1,
-                "rate_limit_rpm": 600,
-                "features": ["*", "sso", "audit_logs", "dedicated_support", "custom_models"]
+                "features": ["*", "byok", "rag_advanced", "vector_search", "priority_support", "audit_logs"]
             })
         }
     ]
@@ -1456,11 +1508,11 @@ def migration_030_create_subscription_plans(conn: sqlite3.Connection) -> None:
         conn.execute(
             """
             INSERT OR IGNORE INTO subscription_plans
-            (name, display_name, description, price_usd_monthly, price_usd_yearly, limits_json, sort_order)
-            VALUES (?, ?, ?, ?, ?, ?, ?)
+            (name, display_name, description, price_usd_monthly, price_usd_yearly, limits_json, sort_order, is_public)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (plan["name"], plan["display_name"], plan["description"],
-             plan["price_usd_monthly"], plan["price_usd_yearly"], plan["limits_json"], plan["sort_order"])
+             plan["price_usd_monthly"], plan["price_usd_yearly"], plan["limits_json"], plan["sort_order"], plan.get("is_public", 1))
         )
 
     conn.commit()

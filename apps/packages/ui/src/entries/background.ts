@@ -508,6 +508,9 @@ export default defineBackground({
           if (!token) return { ok: false, status: 401, error: 'Not authenticated. Please login under Settings > tldw.' }
           headers['Authorization'] = `Bearer ${token}`
         }
+        if (cfg?.orgId) {
+          headers['X-TLDW-Org-Id'] = String(cfg.orgId)
+        }
         const controller = new AbortController()
         const timeoutMs =
           Number(payload?.timeoutMs) > 0

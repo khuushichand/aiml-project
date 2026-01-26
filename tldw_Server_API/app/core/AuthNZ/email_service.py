@@ -155,6 +155,66 @@ This link expires in {{ expiry_hours }} hours.
 If you didn't create an account, please ignore this email.
 """
     },
+    "magic_link": {
+        "subject": "Your sign-in link - {{ app_name }}",
+        "html": """
+<!DOCTYPE html>
+<html>
+<head>
+    <style>
+        body { font-family: Arial, sans-serif; line-height: 1.6; color: #333; }
+        .container { max-width: 600px; margin: 0 auto; padding: 20px; }
+        .header { background-color: #0f172a; color: white; padding: 20px; text-align: center; }
+        .content { background-color: #f8f9fa; padding: 30px; margin-top: 20px; }
+        .button { display: inline-block; padding: 12px 30px; background-color: #2563eb;
+                  color: white; text-decoration: none; border-radius: 5px; margin: 20px 0; }
+        .code-box { background: #fff; border: 1px solid #e5e7eb; padding: 12px;
+                    margin: 16px 0; border-radius: 6px; font-family: monospace; word-break: break-all; }
+        .footer { margin-top: 30px; padding-top: 20px; border-top: 1px solid #dee2e6;
+                  font-size: 0.9em; color: #6c757d; }
+        .note { background-color: #fff3cd; border: 1px solid #ffc107; padding: 10px;
+                margin: 16px 0; border-radius: 5px; }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <h1>{{ app_name }}</h1>
+        </div>
+        <div class="content">
+            <h2>Sign in to your account</h2>
+            <p>Hello{{ user_label }},</p>
+            <p>Use the link below to sign in. This link expires in {{ expiry_minutes }} minute(s).</p>
+            <center>
+                <a href="{{ magic_link }}" class="button">Sign in</a>
+            </center>
+            <p>If you prefer, copy the token below and paste it in the extension:</p>
+            <div class="code-box">{{ magic_token }}</div>
+            <div class="note">
+                <strong>Security notice:</strong> If you did not request this, you can ignore this email.
+            </div>
+        </div>
+        <div class="footer">
+            <p>This is an automated message from {{ app_name }}.</p>
+        </div>
+    </div>
+</body>
+</html>
+""",
+        "text": """
+Sign in to {{ app_name }}
+
+Hello{{ user_label }},
+
+Use this link to sign in (expires in {{ expiry_minutes }} minute(s)):
+{{ magic_link }}
+
+Or copy this token into the extension:
+{{ magic_token }}
+
+If you did not request this, you can ignore this email.
+"""
+    },
     "mfa_enabled": {
         "subject": "Two-Factor Authentication Enabled - {{ app_name }}",
         "html": """
@@ -488,6 +548,37 @@ class EmailService:
         html_body = html_template.render(**template_data)
         text_body = text_template.render(**template_data)
         subject = Template(EMAIL_TEMPLATES["email_verification"]["subject"]).render(**template_data)
+
+        return await self.send_email(to_email, subject, html_body, text_body)
+
+    async def send_magic_link_email(
+        self,
+        *,
+        to_email: str,
+        magic_token: str,
+        expires_in_minutes: int,
+        username: Optional[str] = None,
+        base_url: Optional[str] = None
+    ) -> bool:
+        """Send magic link sign-in email."""
+        base_url = base_url or os.getenv("BASE_URL", "http://localhost:8000")
+        magic_link = f"{base_url}/magic-link?token={magic_token}"
+
+        user_label = f" {username}" if username else ""
+        template_data = {
+            "app_name": self.app_name,
+            "user_label": user_label,
+            "magic_link": magic_link,
+            "magic_token": magic_token,
+            "expiry_minutes": expires_in_minutes,
+        }
+
+        html_template = Template(EMAIL_TEMPLATES["magic_link"]["html"])
+        text_template = Template(EMAIL_TEMPLATES["magic_link"]["text"])
+
+        html_body = html_template.render(**template_data)
+        text_body = text_template.render(**template_data)
+        subject = Template(EMAIL_TEMPLATES["magic_link"]["subject"]).render(**template_data)
 
         return await self.send_email(to_email, subject, html_body, text_body)
 

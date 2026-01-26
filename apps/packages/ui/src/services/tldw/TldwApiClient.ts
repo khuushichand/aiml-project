@@ -24,6 +24,7 @@ export interface TldwConfig {
   apiKey?: string
   accessToken?: string
   refreshToken?: string
+  orgId?: number
   authMode: 'single-user' | 'multi-user'
 }
 
@@ -555,6 +556,9 @@ export class TldwApiClient {
       }
     } else if (config?.authMode === "multi-user" && config.accessToken) {
       this.headers["Authorization"] = `Bearer ${config.accessToken}`
+    }
+    if (config?.orgId) {
+      this.headers["X-TLDW-Org-Id"] = String(config.orgId)
     }
   }
 

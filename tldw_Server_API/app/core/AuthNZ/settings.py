@@ -95,6 +95,11 @@ class Settings(BaseSettings):
         description="Refresh token expiration time in days"
     )
 
+    MAGIC_LINK_EXPIRE_MINUTES: int = Field(
+        default=15,
+        description="Magic link token expiration time in minutes"
+    )
+
     JWT_ALGORITHM: str = Field(
         default="HS256",
         description="JWT signing algorithm"
@@ -1009,6 +1014,7 @@ def _load_overrides_from_config() -> dict:
         maybe_set("RATE_LIMIT_BURST", "rate_limit_burst", lambda v: int(v))
         maybe_set("ACCESS_TOKEN_EXPIRE_MINUTES", "access_token_expire_minutes", lambda v: int(v))
         maybe_set("REFRESH_TOKEN_EXPIRE_DAYS", "refresh_token_expire_days", lambda v: int(v))
+        maybe_set("MAGIC_LINK_EXPIRE_MINUTES", "magic_link_expire_minutes", lambda v: int(v))
         maybe_set("REDIS_URL", "redis_url", lambda v: v.strip())
         maybe_set("SECURITY_ALERTS_ENABLED", "security_alerts_enabled", _bool_from_str)
         maybe_set("SECURITY_ALERT_MIN_SEVERITY", "security_alert_min_severity", lambda v: v.strip())

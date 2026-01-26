@@ -23,6 +23,7 @@ import { useTranslation } from "react-i18next"
 import { useStorage } from "@plasmohq/storage/hook"
 import { DOCUMENTATION_URL } from "@/config/constants"
 import { tldwClient } from "@/services/tldw/TldwApiClient"
+import { tldwAuth } from "@/services/tldw/TldwAuth"
 import {
   getTldwServerURL,
   DEFAULT_TLDW_API_KEY,
@@ -41,6 +42,7 @@ import { getProviderDisplayName, normalizeProviderKey } from "@/utils/provider-r
 import {
   validateApiKey,
   validateMultiUserAuth,
+  validateMagicLinkAuth,
   categorizeConnectionError,
   type ConnectionErrorKind,
   type ValidationResult,
@@ -48,6 +50,7 @@ import {
 import { ProgressItem, type ProgressStatus } from "./ProgressItem"
 
 type AuthMode = "single-user" | "multi-user"
+type LoginMethod = "magic-link" | "password"
 
 type ConnectionProgress = {
   serverReachable: ProgressStatus
@@ -173,6 +176,11 @@ export function OnboardingConnectForm({ onFinish }: Props) {
   const [apiKey, setApiKey] = useState(DEFAULT_TLDW_API_KEY)
   const [username, setUsername] = useState("")
   const [password, setPassword] = useState("")
+  const [loginMethod, setLoginMethod] = useState<LoginMethod>("magic-link")
+  const [magicEmail, setMagicEmail] = useState("")
+  const [magicToken, setMagicToken] = useState("")
+  const [magicSent, setMagicSent] = useState(false)
+  const [magicSending, setMagicSending] = useState(false)
   const [showAdvanced, setShowAdvanced] = useState(false)
   const [authTouched, setAuthTouched] = useState(false)
   const [selectedModel, setSelectedModel] = useStorage<string | null>(
@@ -344,6 +352,21 @@ export function OnboardingConnectForm({ onFinish }: Props) {
         missingApiKey,
         missingUsername: false,
         missingPassword: false,
+        missingMagicEmail: false,
+        missingMagicToken: false,
+      }
+    }
+
+    if (loginMethod === "magic-link") {
+      const missingMagicEmail = magicEmail.trim().length === 0
+      const missingMagicToken = magicToken.trim().length === 0
+      return {
+        valid: !missingMagicEmail && !missingMagicToken,
+        missingApiKey: false,
+        missingUsername: false,
+        missingPassword: false,
+        missingMagicEmail,
+        missingMagicToken,
       }
     }
 
@@ -354,14 +377,16 @@ export function OnboardingConnectForm({ onFinish }: Props) {
       missingApiKey: false,
       missingUsername,
       missingPassword,
+      missingMagicEmail: false,
+      missingMagicToken: false,
     }
-  }, [authMode, apiKey, username, password])
+  }, [authMode, apiKey, username, password, loginMethod, magicEmail, magicToken])
 
   const showAuthErrors = authTouched && !authValidation.valid
 
   useEffect(() => {
     setAuthTouched(false)
-  }, [authMode])
+  }, [authMode, loginMethod])
 
   // Derive error messages from errorKind
   const errorHint = useMemo(() => {
@@ -401,6 +426,43 @@ export function OnboardingConnectForm({ onFinish }: Props) {
     }
   }, [errorKind, t])
 
+  const handleSendMagicLink = useCallback(async () => {
+    if (!magicEmail.trim()) {
+      dispatchUi({
+        type: "SET_ERROR",
+        errorKind: "auth_invalid",
+        errorMessage: t(
+          "settings:onboarding.magicLink.missingEmail",
+          "Enter your email to receive a magic link."
+        ),
+      })
+      return
+    }
+    setMagicSending(true)
+    try {
+      await tldwAuth.requestMagicLink(magicEmail.trim())
+      setMagicSent(true)
+      message.success(
+        t(
+          "settings:onboarding.magicLink.sent",
+          "Magic link sent. Check your inbox."
+        )
+      )
+    } catch (error: unknown) {
+      const { status, message: msg } = (() => {
+        const err = error as { status?: number; message?: string }
+        return { status: err?.status ?? null, message: err?.message ?? null }
+      })()
+      dispatchUi({
+        type: "SET_ERROR",
+        errorKind: categorizeConnectionError(status, msg) ?? "auth_invalid",
+        errorMessage: mapMultiUserLoginErrorMessage(t, error, "onboarding"),
+      })
+    } finally {
+      setMagicSending(false)
+    }
+  }, [magicEmail, t, dispatchUi])
+
   // Handle progressive connection test
   const handleConnect = useCallback(async () => {
     if (!urlValidation.valid) return
@@ -431,8 +493,10 @@ export function OnboardingConnectForm({ onFinish }: Props) {
 
       // Validate auth credentials
       let authResult: ValidationResult | null = null
-      if (authMode === "multi-user" && username && password) {
+      if (authMode === "multi-user" && loginMethod === "password" && username && password) {
         authResult = await validateMultiUserAuth(username, password, t)
+      } else if (authMode === "multi-user" && loginMethod === "magic-link" && magicToken) {
+        authResult = await validateMagicLinkAuth(magicToken, t)
       } else if (authMode === "single-user" && apiKey) {
         // Validate API key before saving
         authResult = await validateApiKey(serverUrl, apiKey, t)
@@ -522,6 +586,8 @@ export function OnboardingConnectForm({ onFinish }: Props) {
     apiKey,
     username,
     password,
+    loginMethod,
+    magicToken,
     t,
     actions,
     dispatchUi,
@@ -1019,80 +1085,213 @@ export function OnboardingConnectForm({ onFinish }: Props) {
           </div>
         ) : (
           <div className="space-y-3">
-            <div>
-              <label className="mb-1.5 flex items-center gap-2 text-sm font-medium text-text">
-                <User className="size-4" />
-                {t("settings:onboarding.username.label", "Username")}
-              </label>
-              <Input
-                placeholder={t(
-                  "settings:onboarding.username.placeholder",
-                  "Enter username"
-                )}
-                value={username}
-                onChange={(e) => setUsername(e.target.value)}
+            <div className="flex gap-2">
+              <button
+                type="button"
+                onClick={() => setLoginMethod("magic-link")}
                 disabled={isConnecting}
-                size="large"
-                className="rounded-2xl"
-                status={
-                  showAuthErrors && authValidation.missingUsername ? "error" : undefined
-                }
-                aria-describedby={
-                  showAuthErrors && authValidation.missingUsername
-                    ? "username-error"
-                    : undefined
-                }
-              />
-              {showAuthErrors && authValidation.missingUsername && (
-                <p
-                  id="username-error"
-                  role="alert"
-                  className="mt-1 text-xs text-danger"
-                >
-                  {t(
-                    "settings:onboarding.usernameRequired",
-                    "Enter your username to continue."
-                  )}
-                </p>
-              )}
-            </div>
-            <div>
-              <label className="mb-1.5 flex items-center gap-2 text-sm font-medium text-text">
+                className={cn(
+                  "flex-1 flex items-center justify-center gap-2 rounded-full border px-4 py-2 text-sm font-medium transition-colors",
+                  loginMethod === "magic-link"
+                    ? "border-primary/40 bg-primary/10 text-primary"
+                    : "border-border/70 text-text-muted hover:bg-surface2"
+                )}
+              >
+                <Sparkles className="size-4" />
+                {t("settings:onboarding.loginMethod.magic", "Magic link")}
+              </button>
+              <button
+                type="button"
+                onClick={() => setLoginMethod("password")}
+                disabled={isConnecting}
+                className={cn(
+                  "flex-1 flex items-center justify-center gap-2 rounded-full border px-4 py-2 text-sm font-medium transition-colors",
+                  loginMethod === "password"
+                    ? "border-primary/40 bg-primary/10 text-primary"
+                    : "border-border/70 text-text-muted hover:bg-surface2"
+                )}
+              >
                 <Lock className="size-4" />
-                {t("settings:onboarding.password.label", "Password")}
-              </label>
-              <Input.Password
-                placeholder={t(
-                  "settings:onboarding.password.placeholder",
-                  "Enter password"
-                )}
-                value={password}
-                onChange={(e) => setPassword(e.target.value)}
-                disabled={isConnecting}
-                size="large"
-                className="rounded-2xl"
-                status={
-                  showAuthErrors && authValidation.missingPassword ? "error" : undefined
-                }
-                aria-describedby={
-                  showAuthErrors && authValidation.missingPassword
-                    ? "password-error"
-                    : undefined
-                }
-              />
-              {showAuthErrors && authValidation.missingPassword && (
-                <p
-                  id="password-error"
-                  role="alert"
-                  className="mt-1 text-xs text-danger"
-                >
-                  {t(
-                    "settings:onboarding.passwordRequired",
-                    "Enter your password to continue."
-                  )}
-                </p>
-              )}
+                {t("settings:onboarding.loginMethod.password", "Password")}
+              </button>
             </div>
+
+            {loginMethod === "magic-link" ? (
+              <div className="space-y-3">
+                <div>
+                  <label className="mb-1.5 flex items-center gap-2 text-sm font-medium text-text">
+                    <User className="size-4" />
+                    {t("settings:onboarding.magicLink.email.label", "Email")}
+                  </label>
+                  <Input
+                    placeholder={t(
+                      "settings:onboarding.magicLink.email.placeholder",
+                      "you@company.com"
+                    )}
+                    value={magicEmail}
+                    onChange={(e) => setMagicEmail(e.target.value)}
+                    disabled={isConnecting}
+                    size="large"
+                    className="rounded-2xl"
+                    status={
+                      showAuthErrors && authValidation.missingMagicEmail
+                        ? "error"
+                        : undefined
+                    }
+                    aria-describedby={
+                      showAuthErrors && authValidation.missingMagicEmail
+                        ? "magic-email-error"
+                        : undefined
+                    }
+                  />
+                  {showAuthErrors && authValidation.missingMagicEmail && (
+                    <p
+                      id="magic-email-error"
+                      role="alert"
+                      className="mt-1 text-xs text-danger"
+                    >
+                      {t(
+                        "settings:onboarding.magicLink.emailRequired",
+                        "Enter your email to continue."
+                      )}
+                    </p>
+                  )}
+                </div>
+                <div>
+                  <label className="mb-1.5 flex items-center gap-2 text-sm font-medium text-text">
+                    <Sparkles className="size-4" />
+                    {t("settings:onboarding.magicLink.token.label", "Magic link token")}
+                  </label>
+                  <Input
+                    placeholder={t(
+                      "settings:onboarding.magicLink.token.placeholder",
+                      "Paste the token from your email"
+                    )}
+                    value={magicToken}
+                    onChange={(e) => setMagicToken(e.target.value)}
+                    disabled={isConnecting}
+                    size="large"
+                    className="rounded-2xl"
+                    status={
+                      showAuthErrors && authValidation.missingMagicToken
+                        ? "error"
+                        : undefined
+                    }
+                    aria-describedby={
+                      showAuthErrors && authValidation.missingMagicToken
+                        ? "magic-token-error"
+                        : undefined
+                    }
+                  />
+                  {showAuthErrors && authValidation.missingMagicToken && (
+                    <p
+                      id="magic-token-error"
+                      role="alert"
+                      className="mt-1 text-xs text-danger"
+                    >
+                      {t(
+                        "settings:onboarding.magicLink.tokenRequired",
+                        "Paste the magic link token to continue."
+                      )}
+                    </p>
+                  )}
+                </div>
+                <div className="flex items-center gap-2">
+                  <Button
+                    onClick={handleSendMagicLink}
+                    loading={magicSending}
+                    disabled={isConnecting}
+                  >
+                    {magicSent
+                      ? t("settings:onboarding.magicLink.resend", "Resend magic link")
+                      : t("settings:onboarding.magicLink.send", "Send magic link")}
+                  </Button>
+                  <p className="text-xs text-text-muted">
+                    {t(
+                      "settings:onboarding.magicLink.help",
+                      "Send a sign-in link, then paste the token from your email."
+                    )}
+                  </p>
+                </div>
+              </div>
+            ) : (
+              <div className="space-y-3">
+                <div>
+                  <label className="mb-1.5 flex items-center gap-2 text-sm font-medium text-text">
+                    <User className="size-4" />
+                    {t("settings:onboarding.username.label", "Username")}
+                  </label>
+                  <Input
+                    placeholder={t(
+                      "settings:onboarding.username.placeholder",
+                      "Enter username"
+                    )}
+                    value={username}
+                    onChange={(e) => setUsername(e.target.value)}
+                    disabled={isConnecting}
+                    size="large"
+                    className="rounded-2xl"
+                    status={
+                      showAuthErrors && authValidation.missingUsername ? "error" : undefined
+                    }
+                    aria-describedby={
+                      showAuthErrors && authValidation.missingUsername
+                        ? "username-error"
+                        : undefined
+                    }
+                  />
+                  {showAuthErrors && authValidation.missingUsername && (
+                    <p
+                      id="username-error"
+                      role="alert"
+                      className="mt-1 text-xs text-danger"
+                    >
+                      {t(
+                        "settings:onboarding.usernameRequired",
+                        "Enter your username to continue."
+                      )}
+                    </p>
+                  )}
+                </div>
+                <div>
+                  <label className="mb-1.5 flex items-center gap-2 text-sm font-medium text-text">
+                    <Lock className="size-4" />
+                    {t("settings:onboarding.password.label", "Password")}
+                  </label>
+                  <Input.Password
+                    placeholder={t(
+                      "settings:onboarding.password.placeholder",
+                      "Enter password"
+                    )}
+                    value={password}
+                    onChange={(e) => setPassword(e.target.value)}
+                    disabled={isConnecting}
+                    size="large"
+                    className="rounded-2xl"
+                    status={
+                      showAuthErrors && authValidation.missingPassword ? "error" : undefined
+                    }
+                    aria-describedby={
+                      showAuthErrors && authValidation.missingPassword
+                        ? "password-error"
+                        : undefined
+                    }
+                  />
+                  {showAuthErrors && authValidation.missingPassword && (
+                    <p
+                      id="password-error"
+                      role="alert"
+                      className="mt-1 text-xs text-danger"
+                    >
+                      {t(
+                        "settings:onboarding.passwordRequired",
+                        "Enter your password to continue."
+                      )}
+                    </p>
+                  )}
+                </div>
+              </div>
+            )}
           </div>
         )}
 
