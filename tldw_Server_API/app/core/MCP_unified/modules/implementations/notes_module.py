@@ -6,7 +6,7 @@ Returns normalized result schema with 0-1 scores and 300-char snippets by defaul
 """
 
 import asyncio
-from typing import Dict, Any, List, Optional
+from typing import Dict, Any, List, Optional, Iterable
 from loguru import logger
 
 from ..base import BaseModule, ModuleConfig, create_tool_definition
@@ -135,6 +135,99 @@ class NotesModule(BaseModule):
                 },
                 metadata={"category": "retrieval", "readOnlyHint": True},
             ),
+            create_tool_definition(
+                name="notes.create",
+                description="Create a new note.",
+                parameters={
+                    "properties": {
+                        "title": {"type": "string", "minLength": 1, "maxLength": 512},
+                        "content": {"type": "string", "minLength": 1, "maxLength": 500000},
+                        "tags": {"type": "array", "items": {"type": "string"}},
+                    },
+                    "required": ["title", "content"],
+                },
+                metadata={"category": "management", "auth_required": True},
+            ),
+            create_tool_definition(
+                name="notes.update",
+                description="Update note title/content.",
+                parameters={
+                    "properties": {
+                        "note_id": {"type": "string"},
+                        "updates": {
+                            "type": "object",
+                            "properties": {
+                                "title": {"type": "string", "maxLength": 512},
+                                "content": {"type": "string", "maxLength": 500000},
+                            },
+                        },
+                        "expected_version": {"type": "integer"},
+                    },
+                    "required": ["note_id", "updates"],
+                },
+                metadata={"category": "management", "auth_required": True},
+            ),
+            create_tool_definition(
+                name="notes.delete",
+                description="Delete a note (soft delete by default; permanent delete requires admin).",
+                parameters={
+                    "properties": {
+                        "note_id": {"type": "string"},
+                        "permanent": {"type": "boolean", "default": False},
+                        "expected_version": {"type": "integer"},
+                    },
+                    "required": ["note_id"],
+                },
+                metadata={"category": "management", "auth_required": True},
+            ),
+            create_tool_definition(
+                name="notes.tags.add",
+                description="Add tags to a note.",
+                parameters={
+                    "properties": {
+                        "note_id": {"type": "string"},
+                        "tags": {"type": "array", "items": {"type": "string"}},
+                    },
+                    "required": ["note_id", "tags"],
+                },
+                metadata={"category": "management", "auth_required": True},
+            ),
+            create_tool_definition(
+                name="notes.tags.remove",
+                description="Remove tags from a note.",
+                parameters={
+                    "properties": {
+                        "note_id": {"type": "string"},
+                        "tags": {"type": "array", "items": {"type": "string"}},
+                    },
+                    "required": ["note_id", "tags"],
+                },
+                metadata={"category": "management", "auth_required": True},
+            ),
+            create_tool_definition(
+                name="notes.tags.set",
+                description="Replace tags on a note with the provided list.",
+                parameters={
+                    "properties": {
+                        "note_id": {"type": "string"},
+                        "tags": {"type": "array", "items": {"type": "string"}},
+                    },
+                    "required": ["note_id", "tags"],
+                },
+                metadata={"category": "management", "auth_required": True},
+            ),
+            create_tool_definition(
+                name="notes.tags.list",
+                description="List tags for a note, or list all tags when note_id is omitted.",
+                parameters={
+                    "properties": {
+                        "note_id": {"type": "string"},
+                        "limit": {"type": "integer", "minimum": 1, "maximum": 200, "default": 50},
+                        "offset": {"type": "integer", "minimum": 0, "default": 0},
+                    },
+                },
+                metadata={"category": "retrieval", "readOnlyHint": True, "auth_required": True},
+            ),
         ]
 
     async def execute_tool(self, tool_name: str, arguments: Dict[str, Any], context: Any | None = None) -> Any:
@@ -147,6 +240,20 @@ class NotesModule(BaseModule):
             return await self._search_notes(args, context)
         if tool_name == "notes.get":
             return await self._get_note(args, context)
+        if tool_name == "notes.create":
+            return await self._create_note(args, context)
+        if tool_name == "notes.update":
+            return await self._update_note(args, context)
+        if tool_name == "notes.delete":
+            return await self._delete_note(args, context)
+        if tool_name == "notes.tags.add":
+            return await self._tags_add(args, context)
+        if tool_name == "notes.tags.remove":
+            return await self._tags_remove(args, context)
+        if tool_name == "notes.tags.set":
+            return await self._tags_set(args, context)
+        if tool_name == "notes.tags.list":
+            return await self._tags_list(args, context)
         raise ValueError(f"Unknown tool: {tool_name}")
 
     def _open_db(self, context: Any) -> CharactersRAGDB:
@@ -208,6 +315,68 @@ class NotesModule(BaseModule):
             snip = int(retrieval.get("snippet_length", 300))
             if snip < 50 or snip > 2000:
                 raise ValueError("retrieval.snippet_length must be 50..2000")
+        elif tool_name == "notes.create":
+            title = arguments.get("title")
+            content = arguments.get("content")
+            if not isinstance(title, str) or not (1 <= len(title.strip()) <= 512):
+                raise ValueError("title must be 1..512 chars")
+            if not isinstance(content, str) or not (1 <= len(content) <= 500000):
+                raise ValueError("content must be 1..500000 chars")
+            tags = arguments.get("tags")
+            if tags is not None:
+                self._validate_tags(tags, allow_empty=False)
+        elif tool_name == "notes.update":
+            note_id = arguments.get("note_id")
+            if not isinstance(note_id, str) or not note_id:
+                raise ValueError("note_id must be a non-empty string")
+            updates = arguments.get("updates")
+            if not isinstance(updates, dict) or not updates:
+                raise ValueError("updates must be a non-empty object")
+            for k, v in updates.items():
+                if k == "title":
+                    if not isinstance(v, str) or len(v) > 512:
+                        raise ValueError("title must be a string <= 512 chars")
+                elif k == "content":
+                    if not isinstance(v, str) or len(v) > 500000:
+                        raise ValueError("content must be a string <= 500000 chars")
+                else:
+                    raise ValueError(f"unsupported update field: {k}")
+            if arguments.get("expected_version") is not None:
+                ev = int(arguments.get("expected_version"))
+                if ev <= 0:
+                    raise ValueError("expected_version must be a positive integer")
+        elif tool_name == "notes.delete":
+            note_id = arguments.get("note_id")
+            if not isinstance(note_id, str) or not note_id:
+                raise ValueError("note_id must be a non-empty string")
+            if "permanent" in arguments and not isinstance(arguments.get("permanent"), bool):
+                raise ValueError("permanent must be a boolean")
+            if arguments.get("expected_version") is not None:
+                ev = int(arguments.get("expected_version"))
+                if ev <= 0:
+                    raise ValueError("expected_version must be a positive integer")
+        elif tool_name in {"notes.tags.add", "notes.tags.remove"}:
+            note_id = arguments.get("note_id")
+            if not isinstance(note_id, str) or not note_id:
+                raise ValueError("note_id must be a non-empty string")
+            tags = arguments.get("tags")
+            self._validate_tags(tags, allow_empty=False)
+        elif tool_name == "notes.tags.set":
+            note_id = arguments.get("note_id")
+            if not isinstance(note_id, str) or not note_id:
+                raise ValueError("note_id must be a non-empty string")
+            tags = arguments.get("tags")
+            self._validate_tags(tags, allow_empty=True)
+        elif tool_name == "notes.tags.list":
+            note_id = arguments.get("note_id")
+            if note_id is not None and (not isinstance(note_id, str) or not note_id):
+                raise ValueError("note_id must be a non-empty string when provided")
+            limit = int(arguments.get("limit", 50)) if arguments.get("limit") is not None else 50
+            offset = int(arguments.get("offset", 0)) if arguments.get("offset") is not None else 0
+            if limit < 1 or limit > 200:
+                raise ValueError("limit must be 1..200")
+            if offset < 0:
+                raise ValueError("offset must be >= 0")
 
     async def _get_note(self, args: Dict[str, Any], context: Any | None) -> Dict[str, Any]:
         note_id: str = args.get("note_id")
@@ -231,6 +400,45 @@ class NotesModule(BaseModule):
             mode,
             snippet_len,
         )
+
+    async def _create_note(self, args: Dict[str, Any], context: Any | None) -> Dict[str, Any]:
+        title = args.get("title")
+        content = args.get("content")
+        tags = args.get("tags") or []
+        return await asyncio.to_thread(self._create_note_sync, context, title, content, tags)
+
+    async def _update_note(self, args: Dict[str, Any], context: Any | None) -> Dict[str, Any]:
+        note_id = args.get("note_id")
+        updates = args.get("updates") or {}
+        expected_version = args.get("expected_version")
+        return await asyncio.to_thread(self._update_note_sync, context, note_id, updates, expected_version)
+
+    async def _delete_note(self, args: Dict[str, Any], context: Any | None) -> Dict[str, Any]:
+        note_id = args.get("note_id")
+        permanent = bool(args.get("permanent", False))
+        expected_version = args.get("expected_version")
+        return await asyncio.to_thread(self._delete_note_sync, context, note_id, permanent, expected_version)
+
+    async def _tags_add(self, args: Dict[str, Any], context: Any | None) -> Dict[str, Any]:
+        note_id = args.get("note_id")
+        tags = args.get("tags") or []
+        return await asyncio.to_thread(self._tags_add_sync, context, note_id, tags)
+
+    async def _tags_remove(self, args: Dict[str, Any], context: Any | None) -> Dict[str, Any]:
+        note_id = args.get("note_id")
+        tags = args.get("tags") or []
+        return await asyncio.to_thread(self._tags_remove_sync, context, note_id, tags)
+
+    async def _tags_set(self, args: Dict[str, Any], context: Any | None) -> Dict[str, Any]:
+        note_id = args.get("note_id")
+        tags = args.get("tags") or []
+        return await asyncio.to_thread(self._tags_set_sync, context, note_id, tags)
+
+    async def _tags_list(self, args: Dict[str, Any], context: Any | None) -> Dict[str, Any]:
+        note_id = args.get("note_id")
+        limit = int(args.get("limit", 50))
+        offset = int(args.get("offset", 0))
+        return await asyncio.to_thread(self._tags_list_sync, context, note_id, limit, offset)
 
     def _search_notes_sync(
         self,
@@ -348,3 +556,257 @@ class NotesModule(BaseModule):
                 db.close_all_connections()
             except Exception as exc:
                 logger.debug("Failed to close ChaChaNotes DB connections after note fetch: {}", exc)
+
+    def _create_note_sync(
+        self,
+        context: Any | None,
+        title: str,
+        content: str,
+        tags: Iterable[str],
+    ) -> Dict[str, Any]:
+        db = self._open_db(context)
+        try:
+            note_id = db.add_note(title=title, content=content)
+            if not note_id:
+                raise ValueError("Failed to create note")
+            norm_tags = self._normalize_tags(tags)
+            if norm_tags:
+                self._apply_tags(db, note_id, norm_tags)
+            row = db.get_note_by_id(note_id)
+            if not row:
+                raise ValueError("Created note not found")
+            meta = self._build_note_meta(row, snippet_len=300)
+            return {"note_id": note_id, "success": True, "meta": meta}
+        finally:
+            try:
+                db.close_all_connections()
+            except Exception as exc:
+                logger.debug("Failed to close ChaChaNotes DB connections after create: {}", exc)
+
+    def _update_note_sync(
+        self,
+        context: Any | None,
+        note_id: str,
+        updates: Dict[str, Any],
+        expected_version: Any,
+    ) -> Dict[str, Any]:
+        db = self._open_db(context)
+        try:
+            row = db.get_note_by_id(note_id)
+            if not row:
+                raise ValueError(f"Note not found: {note_id}")
+            current_version = int(row.get("version") or 1)
+            ev = int(expected_version) if expected_version is not None else current_version
+            updated_fields = list(updates.keys())
+            db.update_note(note_id, updates, ev)
+            return {"note_id": note_id, "updated_fields": updated_fields, "success": True}
+        finally:
+            try:
+                db.close_all_connections()
+            except Exception as exc:
+                logger.debug("Failed to close ChaChaNotes DB connections after update: {}", exc)
+
+    def _delete_note_sync(
+        self,
+        context: Any | None,
+        note_id: str,
+        permanent: bool,
+        expected_version: Any,
+    ) -> Dict[str, Any]:
+        if permanent and not self._is_admin(context):
+            raise PermissionError("Admin role required for permanent delete")
+        db = self._open_db(context)
+        try:
+            row = db.get_note_by_id(note_id)
+            if not row and not permanent:
+                raise ValueError(f"Note not found: {note_id}")
+            current_version = int(row.get("version") or 1) if row else None
+            ev = int(expected_version) if expected_version is not None else current_version
+            deleted = db.delete_note(note_id, expected_version=ev, hard_delete=permanent)
+            if not deleted:
+                raise ValueError(f"Note not found: {note_id}")
+            return {
+                "note_id": note_id,
+                "action": "permanently_deleted" if permanent else "soft_deleted",
+                "success": True,
+            }
+        finally:
+            try:
+                db.close_all_connections()
+            except Exception as exc:
+                logger.debug("Failed to close ChaChaNotes DB connections after delete: {}", exc)
+
+    def _tags_add_sync(self, context: Any | None, note_id: str, tags: Iterable[str]) -> Dict[str, Any]:
+        db = self._open_db(context)
+        try:
+            if not db.get_note_by_id(note_id):
+                raise ValueError(f"Note not found: {note_id}")
+            norm_tags = self._normalize_tags(tags)
+            if norm_tags:
+                existing = {t.lower() for t in self._tags_for_note(db, note_id)}
+                for tag in norm_tags:
+                    if tag in existing:
+                        continue
+                    kid = self._ensure_keyword(db, tag)
+                    if kid is not None:
+                        db.link_note_to_keyword(note_id, int(kid))
+            return {"note_id": note_id, "tags": self._tags_for_note(db, note_id), "success": True}
+        finally:
+            try:
+                db.close_all_connections()
+            except Exception as exc:
+                logger.debug("Failed to close ChaChaNotes DB connections after tags add: {}", exc)
+
+    def _tags_remove_sync(self, context: Any | None, note_id: str, tags: Iterable[str]) -> Dict[str, Any]:
+        db = self._open_db(context)
+        try:
+            if not db.get_note_by_id(note_id):
+                raise ValueError(f"Note not found: {note_id}")
+            norm_tags = self._normalize_tags(tags)
+            for tag in norm_tags:
+                kw = db.get_keyword_by_text(tag)
+                if kw and kw.get("id") is not None:
+                    db.unlink_note_from_keyword(note_id, int(kw["id"]))
+            return {"note_id": note_id, "tags": self._tags_for_note(db, note_id), "success": True}
+        finally:
+            try:
+                db.close_all_connections()
+            except Exception as exc:
+                logger.debug("Failed to close ChaChaNotes DB connections after tags remove: {}", exc)
+
+    def _tags_set_sync(self, context: Any | None, note_id: str, tags: Iterable[str]) -> Dict[str, Any]:
+        db = self._open_db(context)
+        try:
+            if not db.get_note_by_id(note_id):
+                raise ValueError(f"Note not found: {note_id}")
+            desired = set(self._normalize_tags(tags))
+            existing_rows = db.get_keywords_for_note(note_id)
+            existing = {str(r.get("keyword")).lower(): int(r.get("id")) for r in existing_rows if r.get("keyword") is not None}
+
+            # Remove tags not desired
+            for tag, kid in existing.items():
+                if tag not in desired:
+                    db.unlink_note_from_keyword(note_id, int(kid))
+
+            # Add missing tags
+            for tag in desired:
+                if tag in existing:
+                    continue
+                kid = self._ensure_keyword(db, tag)
+                if kid is not None:
+                    db.link_note_to_keyword(note_id, int(kid))
+
+            return {"note_id": note_id, "tags": self._tags_for_note(db, note_id), "success": True}
+        finally:
+            try:
+                db.close_all_connections()
+            except Exception as exc:
+                logger.debug("Failed to close ChaChaNotes DB connections after tags set: {}", exc)
+
+    def _tags_list_sync(self, context: Any | None, note_id: Optional[str], limit: int, offset: int) -> Dict[str, Any]:
+        db = self._open_db(context)
+        try:
+            if note_id:
+                if not db.get_note_by_id(note_id):
+                    raise ValueError(f"Note not found: {note_id}")
+                tags = self._tags_for_note(db, note_id)
+                sliced = tags[offset: offset + limit]
+                has_more = (offset + len(sliced)) < len(tags)
+                return {
+                    "note_id": note_id,
+                    "tags": sliced,
+                    "has_more": has_more,
+                    "next_offset": (offset + len(sliced)) if has_more else None,
+                }
+            rows = db.list_keywords(limit=limit, offset=offset)
+            tags = [str(r.get("keyword")) for r in rows if r.get("keyword") is not None]
+            total = db.count_keywords()
+            has_more = (offset + len(tags)) < total
+            return {
+                "note_id": None,
+                "tags": tags,
+                "has_more": has_more,
+                "next_offset": (offset + len(tags)) if has_more else None,
+            }
+        finally:
+            try:
+                db.close_all_connections()
+            except Exception as exc:
+                logger.debug("Failed to close ChaChaNotes DB connections after tags list: {}", exc)
+
+    def _build_note_meta(self, row: Dict[str, Any], snippet_len: int = 300) -> Dict[str, Any]:
+        content = row.get("content") or ""
+        return {
+            "id": row.get("id"),
+            "source": "notes",
+            "title": row.get("title"),
+            "snippet": _make_snippet(content, None, snippet_len),
+            "uri": f"notes://{row.get('id')}",
+            "score": 1.0,
+            "score_type": "fts",
+            "created_at": row.get("created_at"),
+            "last_modified": row.get("last_modified") or row.get("updated_at"),
+            "version": row.get("version"),
+            "tags": None,
+            "loc": None,
+        }
+
+    def _is_admin(self, context: Any | None) -> bool:
+        try:
+            roles = (getattr(context, "metadata", {}) or {}).get("roles")
+            return isinstance(roles, list) and any(str(r).lower() == "admin" for r in roles)
+        except Exception:
+            return False
+
+    def _validate_tags(self, tags: Any, *, allow_empty: bool) -> None:
+        if not isinstance(tags, list):
+            raise ValueError("tags must be a list of strings")
+        if not tags and not allow_empty:
+            raise ValueError("tags cannot be empty")
+        for t in tags:
+            if not isinstance(t, str) or not t.strip():
+                raise ValueError("tags must be non-empty strings")
+            if len(t.strip()) > 64:
+                raise ValueError("each tag must be <= 64 chars")
+        if len(tags) > 50:
+            raise ValueError("tags must contain <= 50 items")
+
+    def _normalize_tags(self, tags: Iterable[str]) -> List[str]:
+        out: List[str] = []
+        seen = set()
+        for t in tags or []:
+            if not isinstance(t, str):
+                continue
+            norm = t.strip().lower()
+            if not norm:
+                continue
+            if len(norm) > 64:
+                raise ValueError("each tag must be <= 64 chars")
+            if norm in seen:
+                continue
+            seen.add(norm)
+            out.append(norm)
+            if len(out) > 50:
+                raise ValueError("tags must contain <= 50 items")
+        return out
+
+    def _ensure_keyword(self, db: CharactersRAGDB, tag: str) -> Optional[int]:
+        try:
+            existing = db.get_keyword_by_text(tag)
+            if existing and existing.get("id") is not None:
+                return int(existing["id"])
+            kid = db.add_keyword(tag)
+            return int(kid) if kid is not None else None
+        except Exception:
+            return None
+
+    def _apply_tags(self, db: CharactersRAGDB, note_id: str, tags: List[str]) -> None:
+        for tag in tags:
+            kid = self._ensure_keyword(db, tag)
+            if kid is None:
+                continue
+            db.link_note_to_keyword(note_id, int(kid))
+
+    def _tags_for_note(self, db: CharactersRAGDB, note_id: str) -> List[str]:
+        rows = db.get_keywords_for_note(note_id)
+        return [str(r.get("keyword")).lower() for r in rows if r.get("keyword") is not None]

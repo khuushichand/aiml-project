@@ -11,7 +11,7 @@ import { ThemeToggle } from '@/components/ThemeToggle';
 import { OrgContextSwitcher } from '@/components/OrgContextSwitcher';
 import { usePermissions } from '@/components/PermissionGuard';
 import { useToast } from '@/components/ui/toast';
-import { navigation } from '@/lib/navigation';
+import { navigationSections, type NavigationItem } from '@/lib/navigation';
 
 // Mobile menu context
 interface MobileMenuContextType {
@@ -34,12 +34,19 @@ export function useMobileMenu() {
 
 // Mobile header with hamburger menu
 function MobileHeader() {
-  const { toggle } = useMobileMenu();
+  const { toggle, isOpen } = useMobileMenu();
 
   return (
     <div className="lg:hidden fixed top-0 left-0 right-0 z-40 flex h-14 items-center justify-between border-b bg-card px-4">
-      <Button variant="ghost" size="icon" onClick={toggle}>
-        <Menu className="h-5 w-5" />
+      <Button
+        variant="ghost"
+        size="icon"
+        onClick={toggle}
+        aria-label={isOpen ? 'Close navigation menu' : 'Open navigation menu'}
+        aria-expanded={isOpen}
+        aria-controls="mobile-navigation"
+      >
+        <Menu className="h-5 w-5" aria-hidden="true" />
       </Button>
       <h1 className="text-lg font-bold">tldw Admin</h1>
       <ThemeToggle />
@@ -69,14 +76,22 @@ function SidebarContent({ onNavigate }: { onNavigate?: () => void }) {
     if (onNavigate) onNavigate();
   };
 
-  // Filter navigation based on permissions
-  const visibleNavigation = navigation.filter((item) => {
+  // Filter items based on permissions
+  const isItemVisible = (item: NavigationItem) => {
     if (!item.permission && !item.role) return true;
     if (permLoading) return false;
     if (item.permission && hasPermission(item.permission)) return true;
     if (item.role && hasRole(item.role)) return true;
     return false;
-  });
+  };
+
+  // Get visible sections with visible items
+  const visibleSections = navigationSections
+    .map((section) => ({
+      ...section,
+      items: section.items.filter(isItemVisible),
+    }))
+    .filter((section) => section.items.length > 0);
 
   return (
     <>
@@ -99,30 +114,40 @@ function SidebarContent({ onNavigate }: { onNavigate?: () => void }) {
         <OrgContextSwitcher />
       </div>
 
-      {/* Navigation */}
-      <nav className="flex-1 space-y-1 px-3 py-4 overflow-y-auto">
-        {visibleNavigation.map((item) => {
-          const Icon = item.icon;
-          const isActive = pathname === item.href ||
-            (item.href !== '/' && pathname.startsWith(item.href));
+      {/* Navigation with sections */}
+      <nav className="flex-1 px-3 py-4 overflow-y-auto" aria-label="Main navigation">
+        {visibleSections.map((section, sectionIndex) => (
+          <div key={section.title} className={sectionIndex > 0 ? 'mt-6' : ''}>
+            <h3 className="px-3 mb-2 text-xs font-semibold text-muted-foreground uppercase tracking-wider">
+              {section.title}
+            </h3>
+            <div className="space-y-1">
+              {section.items.map((item) => {
+                const Icon = item.icon;
+                const isActive = pathname === item.href ||
+                  (item.href !== '/' && pathname.startsWith(item.href));
 
-          return (
-            <Link
-              key={item.name}
-              href={item.href}
-              onClick={handleNavClick}
-              className={cn(
-                'flex items-center gap-3 rounded-lg px-3 py-2 text-sm font-medium transition-colors',
-                isActive
-                  ? 'bg-primary/10 text-primary border border-primary/20'
-                  : 'text-foreground hover:bg-muted'
-              )}
-            >
-              <Icon className="h-5 w-5 flex-shrink-0" />
-              <span className="truncate">{item.name}</span>
-            </Link>
-          );
-        })}
+                return (
+                  <Link
+                    key={item.name}
+                    href={item.href}
+                    onClick={handleNavClick}
+                    className={cn(
+                      'flex items-center gap-3 rounded-lg px-3 py-2 text-sm font-medium transition-colors',
+                      isActive
+                        ? 'bg-primary/10 text-primary border border-primary/20'
+                        : 'text-foreground hover:bg-muted'
+                    )}
+                    aria-current={isActive ? 'page' : undefined}
+                  >
+                    <Icon className="h-5 w-5 flex-shrink-0" aria-hidden="true" />
+                    <span className="truncate">{item.name}</span>
+                  </Link>
+                );
+              })}
+            </div>
+          </div>
+        ))}
       </nav>
 
       {/* Logout */}
@@ -165,16 +190,23 @@ function MobileSidebar() {
 
       {/* Drawer */}
       <div
+        id="mobile-navigation"
         className={cn(
           'lg:hidden fixed inset-y-0 left-0 z-50 w-64 bg-card border-r transform transition-transform duration-200 ease-in-out',
           isOpen ? 'translate-x-0' : '-translate-x-full'
         )}
+        aria-hidden={!isOpen}
       >
         {/* Close button */}
         <div className="flex h-14 items-center justify-between border-b px-4">
           <h1 className="text-lg font-bold">tldw Admin</h1>
-          <Button variant="ghost" size="icon" onClick={close}>
-            <X className="h-5 w-5" />
+          <Button
+            variant="ghost"
+            size="icon"
+            onClick={close}
+            aria-label="Close navigation menu"
+          >
+            <X className="h-5 w-5" aria-hidden="true" />
           </Button>
         </div>
 

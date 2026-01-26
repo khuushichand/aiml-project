@@ -14,9 +14,28 @@ import { Alert, AlertDescription } from '@/components/ui/alert';
 import { Badge } from '@/components/ui/badge';
 import { useConfirm } from '@/components/ui/confirm-dialog';
 import { useToast } from '@/components/ui/toast';
-import { RefreshCw, Briefcase, Filter, AlertTriangle, Eye, RotateCcw, XCircle, Repeat } from 'lucide-react';
+import { RefreshCw, Briefcase, Filter, AlertTriangle, Eye, RotateCcw, XCircle, Repeat, Clock, Plus, X, Paperclip } from 'lucide-react';
+import { AccessibleIconButton } from '@/components/ui/accessible-icon-button';
 import { api, ApiError } from '@/lib/api-client';
 import { formatDateTime } from '@/lib/format';
+
+interface SlaPolicy {
+  id: string;
+  name: string;
+  job_type?: string;
+  max_processing_time_seconds: number;
+  max_wait_time_seconds: number;
+  priority_boost?: number;
+  enabled: boolean;
+}
+
+interface JobAttachment {
+  id: string;
+  name: string;
+  content_type: string;
+  size_bytes: number;
+  created_at?: string;
+}
 
 interface JobItem {
   id: number;
@@ -98,6 +117,21 @@ export default function JobsPage() {
   const [jobDetailLoading, setJobDetailLoading] = useState(false);
   const [jobDetailError, setJobDetailError] = useState('');
 
+  // SLA Policies
+  const [slaPolicies, setSlaPolicies] = useState<SlaPolicy[]>([]);
+  const [slaPoliciesLoading, setSlaPoliciesLoading] = useState(false);
+  const [showSlaForm, setShowSlaForm] = useState(false);
+  const [slaFormSaving, setSlaFormSaving] = useState(false);
+  const [slaFormName, setSlaFormName] = useState('');
+  const [slaFormJobType, setSlaFormJobType] = useState('');
+  const [slaFormMaxProcessing, setSlaFormMaxProcessing] = useState('3600');
+  const [slaFormMaxWait, setSlaFormMaxWait] = useState('300');
+  const [slaFormEnabled, setSlaFormEnabled] = useState(true);
+
+  // Job Attachments
+  const [jobAttachments, setJobAttachments] = useState<JobAttachment[]>([]);
+  const [attachmentsLoading, setAttachmentsLoading] = useState(false);
+
   const [filters, setFilters] = useState({
     domain: '',
     queue: '',
@@ -143,10 +177,11 @@ export default function JobsPage() {
     setError('');
     setRoutesUnavailable(false);
 
-    const [statsResult, jobsResult, staleResult] = await Promise.allSettled([
+    const [statsResult, jobsResult, staleResult, slaResult] = await Promise.allSettled([
       api.getJobsStats(statsParams),
       api.getJobs(listParams),
       api.getJobsStale(statsParams),
+      api.getJobSlaPolicies(),
     ]);
 
     const sawNotFound = [statsResult, jobsResult, staleResult].some(
@@ -172,6 +207,17 @@ export default function JobsPage() {
       setStaleGroups([]);
     }
 
+    if (slaResult.status === 'fulfilled') {
+      const data = slaResult.value as { policies?: SlaPolicy[]; items?: SlaPolicy[] };
+      setSlaPolicies(
+        Array.isArray(data.policies) ? data.policies :
+        Array.isArray(data.items) ? data.items :
+        Array.isArray(data) ? data as SlaPolicy[] : []
+      );
+    } else {
+      setSlaPolicies([]);
+    }
+
     setLoading(false);
   }, [listParams, statsParams]);
 
@@ -194,16 +240,82 @@ export default function JobsPage() {
     setJobDetail(null);
     setJobDetailError('');
     setJobDetailLoading(true);
+    setJobAttachments([]);
+    setAttachmentsLoading(true);
     try {
-      const detail = await api.getJobDetail(job.id, { domain: job.domain });
-      setJobDetail(detail as JobDetail);
+      const [detail, attachments] = await Promise.allSettled([
+        api.getJobDetail(job.id, { domain: job.domain }),
+        api.getJobAttachments(String(job.id)),
+      ]);
+      if (detail.status === 'fulfilled') {
+        setJobDetail(detail.value as JobDetail);
+      } else {
+        const message = detail.reason instanceof Error ? detail.reason.message : 'Failed to load job detail';
+        setJobDetailError(message);
+      }
+      if (attachments.status === 'fulfilled') {
+        const data = attachments.value as { attachments?: JobAttachment[]; items?: JobAttachment[] };
+        setJobAttachments(
+          Array.isArray(data.attachments) ? data.attachments :
+          Array.isArray(data.items) ? data.items :
+          Array.isArray(data) ? data as JobAttachment[] : []
+        );
+      }
     } catch (err: unknown) {
       const message = err instanceof Error ? err.message : 'Failed to load job detail';
       setJobDetailError(message);
       setJobDetail(null);
     } finally {
       setJobDetailLoading(false);
+      setAttachmentsLoading(false);
     }
+  };
+
+  const handleCreateSlaPolicy = async () => {
+    if (!slaFormName.trim()) {
+      showError('Name required', 'Please enter a policy name');
+      return;
+    }
+    const maxProcessing = parseInt(slaFormMaxProcessing, 10);
+    const maxWait = parseInt(slaFormMaxWait, 10);
+    if (Number.isNaN(maxProcessing) || maxProcessing < 1) {
+      showError('Invalid value', 'Max processing time must be at least 1 second');
+      return;
+    }
+    if (Number.isNaN(maxWait) || maxWait < 1) {
+      showError('Invalid value', 'Max wait time must be at least 1 second');
+      return;
+    }
+
+    try {
+      setSlaFormSaving(true);
+      await api.createJobSlaPolicy({
+        name: slaFormName.trim(),
+        job_type: slaFormJobType.trim() || undefined,
+        max_processing_time_seconds: maxProcessing,
+        max_wait_time_seconds: maxWait,
+        enabled: slaFormEnabled,
+      });
+      success('SLA policy created', `Policy "${slaFormName}" has been created`);
+      setShowSlaForm(false);
+      setSlaFormName('');
+      setSlaFormJobType('');
+      setSlaFormMaxProcessing('3600');
+      setSlaFormMaxWait('300');
+      setSlaFormEnabled(true);
+      void loadData();
+    } catch (err: unknown) {
+      const message = err instanceof Error ? err.message : 'Failed to create SLA policy';
+      showError('Create failed', message);
+    } finally {
+      setSlaFormSaving(false);
+    }
+  };
+
+  const formatBytes = (bytes: number) => {
+    if (bytes < 1024) return `${bytes} B`;
+    if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
+    return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
   };
 
   const handleCloseDetail = () => {
@@ -481,6 +593,140 @@ export default function JobsPage() {
             </Card>
           </div>
 
+          {/* SLA Policies */}
+          <Card className="mb-6">
+            <CardHeader>
+              <div className="flex items-center justify-between">
+                <div>
+                  <CardTitle className="flex items-center gap-2">
+                    <Clock className="h-5 w-5" />
+                    SLA Policies
+                  </CardTitle>
+                  <CardDescription>Service level agreements for job processing times</CardDescription>
+                </div>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={() => setShowSlaForm(!showSlaForm)}
+                >
+                  <Plus className="mr-2 h-4 w-4" />
+                  New Policy
+                </Button>
+              </div>
+            </CardHeader>
+            <CardContent>
+              {/* Create SLA Policy Form */}
+              {showSlaForm && (
+                <div className="mb-4 p-4 border rounded-lg space-y-4">
+                  <div className="flex items-center justify-between">
+                    <span className="font-medium">New SLA Policy</span>
+                    <AccessibleIconButton
+                      icon={X}
+                      label="Close form"
+                      variant="ghost"
+                      onClick={() => setShowSlaForm(false)}
+                    />
+                  </div>
+                  <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
+                    <div className="space-y-1">
+                      <Label htmlFor="sla-name">Policy Name</Label>
+                      <Input
+                        id="sla-name"
+                        placeholder="e.g., Standard Export"
+                        value={slaFormName}
+                        onChange={(e) => setSlaFormName(e.target.value)}
+                      />
+                    </div>
+                    <div className="space-y-1">
+                      <Label htmlFor="sla-job-type">Job Type (optional)</Label>
+                      <Input
+                        id="sla-job-type"
+                        placeholder="e.g., export"
+                        value={slaFormJobType}
+                        onChange={(e) => setSlaFormJobType(e.target.value)}
+                      />
+                    </div>
+                    <div className="space-y-1">
+                      <Label htmlFor="sla-max-processing">Max Processing (sec)</Label>
+                      <Input
+                        id="sla-max-processing"
+                        type="number"
+                        min="1"
+                        value={slaFormMaxProcessing}
+                        onChange={(e) => setSlaFormMaxProcessing(e.target.value)}
+                      />
+                    </div>
+                    <div className="space-y-1">
+                      <Label htmlFor="sla-max-wait">Max Wait (sec)</Label>
+                      <Input
+                        id="sla-max-wait"
+                        type="number"
+                        min="1"
+                        value={slaFormMaxWait}
+                        onChange={(e) => setSlaFormMaxWait(e.target.value)}
+                      />
+                    </div>
+                  </div>
+                  <div className="flex items-center gap-4">
+                    <div className="flex items-center gap-2">
+                      <input
+                        type="checkbox"
+                        id="sla-enabled"
+                        checked={slaFormEnabled}
+                        onChange={(e) => setSlaFormEnabled(e.target.checked)}
+                        className="h-4 w-4"
+                      />
+                      <Label htmlFor="sla-enabled">Enabled</Label>
+                    </div>
+                    <Button onClick={handleCreateSlaPolicy} disabled={slaFormSaving}>
+                      {slaFormSaving ? 'Creating...' : 'Create Policy'}
+                    </Button>
+                  </div>
+                </div>
+              )}
+
+              {/* SLA Policies List */}
+              {slaPoliciesLoading ? (
+                <div className="text-muted-foreground">Loading SLA policies...</div>
+              ) : slaPolicies.length === 0 ? (
+                <div className="text-muted-foreground text-center py-4">
+                  No SLA policies configured. Create one to define processing time expectations.
+                </div>
+              ) : (
+                <Table>
+                  <TableHeader>
+                    <TableRow>
+                      <TableHead>Name</TableHead>
+                      <TableHead>Job Type</TableHead>
+                      <TableHead className="text-right">Max Processing</TableHead>
+                      <TableHead className="text-right">Max Wait</TableHead>
+                      <TableHead>Status</TableHead>
+                    </TableRow>
+                  </TableHeader>
+                  <TableBody>
+                    {slaPolicies.map((policy) => (
+                      <TableRow key={policy.id}>
+                        <TableCell className="font-medium">{policy.name}</TableCell>
+                        <TableCell>{policy.job_type || 'All'}</TableCell>
+                        <TableCell className="text-right">
+                          {Math.floor(policy.max_processing_time_seconds / 60)}m {policy.max_processing_time_seconds % 60}s
+                        </TableCell>
+                        <TableCell className="text-right">
+                          {Math.floor(policy.max_wait_time_seconds / 60)}m {policy.max_wait_time_seconds % 60}s
+                        </TableCell>
+                        <TableCell>
+                          <Badge variant={policy.enabled ? 'default' : 'secondary'}>
+                            {policy.enabled ? 'Enabled' : 'Disabled'}
+                          </Badge>
+                        </TableCell>
+                      </TableRow>
+                    ))}
+                  </TableBody>
+                </Table>
+              )}
+            </CardContent>
+          </Card>
+
           <Card>
             <CardHeader>
               <CardTitle>Recent jobs</CardTitle>
@@ -540,33 +786,27 @@ export default function JobsPage() {
                                   <Eye className="mr-2 h-4 w-4" />
                                   View
                                 </Button>
-                                <Button
+                                <AccessibleIconButton
+                                  icon={RotateCcw}
+                                  label={canRetry ? 'Retry job' : 'Retry available for failed jobs'}
                                   variant="outline"
-                                  size="icon"
                                   onClick={() => handleRetryJob(job)}
                                   disabled={!canRetry}
-                                  title={canRetry ? 'Retry job' : 'Retry available for failed jobs'}
-                                >
-                                  <RotateCcw className="h-4 w-4" />
-                                </Button>
-                                <Button
+                                />
+                                <AccessibleIconButton
+                                  icon={Repeat}
+                                  label={canRequeue ? 'Requeue job' : 'Requeue available for quarantined jobs'}
                                   variant="outline"
-                                  size="icon"
                                   onClick={() => handleRequeueJob(job)}
                                   disabled={!canRequeue}
-                                  title={canRequeue ? 'Requeue job' : 'Requeue available for quarantined jobs'}
-                                >
-                                  <Repeat className="h-4 w-4" />
-                                </Button>
-                                <Button
+                                />
+                                <AccessibleIconButton
+                                  icon={XCircle}
+                                  label={canCancel ? 'Cancel job' : 'Cancel available for queued or processing jobs'}
                                   variant="outline"
-                                  size="icon"
                                   onClick={() => handleCancelJob(job)}
                                   disabled={!canCancel}
-                                  title={canCancel ? 'Cancel job' : 'Cancel available for queued or processing jobs'}
-                                >
-                                  <XCircle className="h-4 w-4" />
-                                </Button>
+                                />
                               </div>
                             </TableCell>
                           </TableRow>
@@ -660,6 +900,42 @@ export default function JobsPage() {
                       {formatJson(jobDetail.result)}
                     </pre>
                   </div>
+
+                  {/* Job Attachments */}
+                  {attachmentsLoading ? (
+                    <div className="text-sm text-muted-foreground">Loading attachments...</div>
+                  ) : jobAttachments.length > 0 && (
+                    <div className="space-y-2">
+                      <Label className="flex items-center gap-2">
+                        <Paperclip className="h-4 w-4" />
+                        Attachments ({jobAttachments.length})
+                      </Label>
+                      <div className="rounded-md border">
+                        <Table>
+                          <TableHeader>
+                            <TableRow>
+                              <TableHead>Name</TableHead>
+                              <TableHead>Type</TableHead>
+                              <TableHead className="text-right">Size</TableHead>
+                              <TableHead>Created</TableHead>
+                            </TableRow>
+                          </TableHeader>
+                          <TableBody>
+                            {jobAttachments.map((attachment) => (
+                              <TableRow key={attachment.id}>
+                                <TableCell className="font-medium">{attachment.name}</TableCell>
+                                <TableCell className="text-muted-foreground">{attachment.content_type}</TableCell>
+                                <TableCell className="text-right">{formatBytes(attachment.size_bytes)}</TableCell>
+                                <TableCell className="text-muted-foreground">
+                                  {formatJobDateTime(attachment.created_at)}
+                                </TableCell>
+                              </TableRow>
+                            ))}
+                          </TableBody>
+                        </Table>
+                      </div>
+                    </div>
+                  )}
                 </div>
               )}
             </DialogContent>

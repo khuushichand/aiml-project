@@ -11,11 +11,14 @@ import { api } from '@/lib/api-client';
 import AlertsPanel from './components/AlertsPanel';
 import MetricsChart from './components/MetricsChart';
 import MetricsGrid from './components/MetricsGrid';
+import NotificationsPanel from './components/NotificationsPanel';
 import SystemStatusPanel from './components/SystemStatusPanel';
 import WatchlistsPanel from './components/WatchlistsPanel';
 import type {
   Metric,
   MetricsHistoryPoint,
+  NotificationSettings,
+  RecentNotification,
   SystemAlert,
   SystemHealthStatus,
   SystemStatusItem,
@@ -101,6 +104,7 @@ export default function MonitoringPage() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
   const [success, setSuccess] = useState('');
+  const [lastUpdated, setLastUpdated] = useState<Date | null>(null);
   const successTimerRef = useRef<number | null>(null);
 
   // Create watchlist dialog
@@ -112,6 +116,11 @@ export default function MonitoringPage() {
     type: 'resource',
     threshold: 80,
   });
+
+  // Notification settings
+  const [notificationSettings, setNotificationSettings] = useState<NotificationSettings | null>(null);
+  const [recentNotifications, setRecentNotifications] = useState<RecentNotification[]>([]);
+  const [notificationsSaving, setNotificationsSaving] = useState(false);
 
   const appendMetricsHistory = useCallback((cpu: number, memory: number) => {
     const time = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
@@ -147,6 +156,8 @@ export default function MonitoringPage() {
         healthData,
         llmHealthData,
         ragHealthData,
+        notificationSettingsData,
+        recentNotificationsData,
       ] = await Promise.allSettled([
         api.getMetrics(),
         api.getWatchlists(),
@@ -154,6 +165,8 @@ export default function MonitoringPage() {
         api.getHealth(),
         api.getLlmHealth(),
         api.getRagHealth(),
+        api.getNotificationSettings(),
+        api.getRecentNotifications(),
       ]);
 
       [
@@ -163,11 +176,42 @@ export default function MonitoringPage() {
         { name: 'health', result: healthData },
         { name: 'llmHealth', result: llmHealthData },
         { name: 'ragHealth', result: ragHealthData },
+        { name: 'notificationSettings', result: notificationSettingsData },
+        { name: 'recentNotifications', result: recentNotificationsData },
       ].forEach(({ name, result }) => {
         if (result.status === 'rejected') {
           console.warn(`Failed to load ${name}:`, result.reason);
         }
       });
+
+      // Process notification settings
+      if (notificationSettingsData.status === 'fulfilled') {
+        const data = notificationSettingsData.value as NotificationSettings;
+        setNotificationSettings(data || {
+          channels: [],
+          alert_threshold: 'warning',
+          digest_enabled: false,
+          digest_frequency: 'daily',
+        });
+      } else {
+        // Set default settings if API not available
+        setNotificationSettings({
+          channels: [],
+          alert_threshold: 'warning',
+          digest_enabled: false,
+          digest_frequency: 'daily',
+        });
+      }
+
+      // Process recent notifications
+      if (recentNotificationsData.status === 'fulfilled') {
+        const data = recentNotificationsData.value as { notifications?: RecentNotification[]; items?: RecentNotification[] };
+        setRecentNotifications(
+          Array.isArray(data.notifications) ? data.notifications :
+          Array.isArray(data.items) ? data.items :
+          Array.isArray(data) ? data as RecentNotification[] : []
+        );
+      }
 
       // Process metrics
       if (metricsData.status === 'fulfilled' && metricsData.value) {
@@ -257,6 +301,7 @@ export default function MonitoringPage() {
       ]);
 
       void loadMetricsHistorySample();
+      setLastUpdated(new Date());
     } catch (err: unknown) {
       console.error('Failed to load monitoring data:', err);
       setError(err instanceof Error && err.message ? err.message : 'Failed to load monitoring data');
@@ -373,6 +418,44 @@ export default function MonitoringPage() {
     }
   };
 
+  const handleSaveNotificationSettings = async (settings: NotificationSettings) => {
+    try {
+      setNotificationsSaving(true);
+      setError('');
+      await api.updateNotificationSettings(settings as unknown as Record<string, unknown>);
+      setNotificationSettings(settings);
+      setSuccess('Notification settings saved');
+    } catch (err: unknown) {
+      console.error('Failed to save notification settings:', err);
+      setError(err instanceof Error && err.message ? err.message : 'Failed to save notification settings');
+    } finally {
+      setNotificationsSaving(false);
+    }
+  };
+
+  const handleTestNotification = async () => {
+    try {
+      setError('');
+      await api.testNotification();
+      setSuccess('Test notification sent');
+      // Reload recent notifications
+      try {
+        const data = await api.getRecentNotifications();
+        const result = data as { notifications?: RecentNotification[]; items?: RecentNotification[] };
+        setRecentNotifications(
+          Array.isArray(result.notifications) ? result.notifications :
+          Array.isArray(result.items) ? result.items :
+          Array.isArray(result) ? result as RecentNotification[] : []
+        );
+      } catch {
+        // Ignore reload errors
+      }
+    } catch (err: unknown) {
+      console.error('Failed to send test notification:', err);
+      setError(err instanceof Error && err.message ? err.message : 'Failed to send test notification');
+    }
+  };
+
   const activeAlerts = alerts.filter((a) => !a.acknowledged);
 
   return (
@@ -386,10 +469,17 @@ export default function MonitoringPage() {
                   System health, metrics, and alerts
                 </p>
               </div>
-              <Button variant="outline" onClick={loadData} disabled={loading}>
-                <RefreshCw className={`mr-2 h-4 w-4 ${loading ? 'animate-spin' : ''}`} />
-                Refresh
-              </Button>
+              <div className="flex items-center gap-4">
+                {lastUpdated && (
+                  <span className="text-sm text-muted-foreground" aria-live="polite">
+                    Last updated: {lastUpdated.toLocaleTimeString()}
+                  </span>
+                )}
+                <Button variant="outline" onClick={loadData} disabled={loading}>
+                  <RefreshCw className={`mr-2 h-4 w-4 ${loading ? 'animate-spin' : ''}`} aria-hidden="true" />
+                  Refresh
+                </Button>
+              </div>
             </div>
 
             {error && (
@@ -436,7 +526,17 @@ export default function MonitoringPage() {
               />
             </div>
 
-            <SystemStatusPanel systemStatus={systemStatus} />
+            <div className="grid gap-6 lg:grid-cols-2 mt-6">
+              <NotificationsPanel
+                settings={notificationSettings}
+                recentNotifications={recentNotifications}
+                loading={loading}
+                saving={notificationsSaving}
+                onSave={handleSaveNotificationSettings}
+                onTest={handleTestNotification}
+              />
+              <SystemStatusPanel systemStatus={systemStatus} />
+            </div>
           </div>
       </ResponsiveLayout>
     </PermissionGuard>

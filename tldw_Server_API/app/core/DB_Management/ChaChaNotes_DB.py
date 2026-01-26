@@ -8419,6 +8419,35 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
                          exc_info=True)
             raise
 
+    def delete_note(self, note_id: str, expected_version: Optional[int] = None, hard_delete: bool = False) -> bool:
+        """Soft or hard delete a note."""
+        now = self._get_current_utc_timestamp_iso()
+        try:
+            with self.transaction() as conn:
+                row = conn.execute("SELECT id, version, deleted FROM notes WHERE id = ?", (note_id,)).fetchone()
+                if not row:
+                    return False
+                cur_ver = int(row["version"])
+                deleted = bool(row["deleted"])
+                if hard_delete:
+                    conn.execute("DELETE FROM notes WHERE id = ?", (note_id,))
+                    return True
+                if deleted:
+                    return True
+                if expected_version is not None and cur_ver != expected_version:
+                    raise ConflictError("Version mismatch deleting note", entity="notes", identifier=note_id)
+                deleted_val = True if self.backend_type == BackendType.POSTGRESQL else 1
+                rc = conn.execute(
+                    "UPDATE notes SET deleted = ?, last_modified = ?, version = ?, client_id = ? "
+                    "WHERE id = ? AND deleted = 0",
+                    (deleted_val, now, cur_ver + 1, self.client_id, note_id),
+                ).rowcount
+                return rc > 0
+        except BackendDatabaseError as e:
+            raise CharactersRAGDBError(f"Failed to delete note: {e}") from e
+        except sqlite3.Error as e:
+            raise CharactersRAGDBError(f"Failed to delete note: {e}") from e
+
     def search_notes(self, search_term: str, limit: int = 10, offset: int = 0) -> List[Dict[str, Any]]:
         """Searches notes_fts (title and content) with optional pagination."""
         # FTS5 requires wrapping terms with special characters in double quotes

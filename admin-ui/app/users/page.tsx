@@ -19,6 +19,7 @@ import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, D
 import { Checkbox } from '@/components/ui/checkbox';
 import { Form, FormCheckbox, FormInput, FormSelect } from '@/components/ui/form';
 import { Eye, Key, Search, Plus, Trash2, UserCheck, UserX, BookmarkPlus, BookmarkX } from 'lucide-react';
+import { AccessibleIconButton } from '@/components/ui/accessible-icon-button';
 import { api } from '@/lib/api-client';
 import { User } from '@/types';
 import { ExportMenu } from '@/components/ui/export-menu';
@@ -558,8 +559,12 @@ function UsersPageContent() {
               <CardContent className="pt-6">
                 <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
                   <div className="relative max-w-md w-full">
-                    <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
+                    <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" aria-hidden="true" />
+                    <label htmlFor="users-search" className="sr-only">
+                      Search users by username, email, or role
+                    </label>
                     <Input
+                      id="users-search"
                       placeholder="Search by username, email, or role..."
                       value={searchQuery || ''}
                       onChange={(e) => handleSearchChange(e.target.value)}
@@ -761,7 +766,17 @@ function UsersPageContent() {
                               <TableCell>
                                 <div className="space-y-1">
                                   <div className="text-xs">{storage.text}</div>
-                                  <div className="w-20 bg-gray-200 rounded-full h-1.5">
+                                  <div
+                                    className="w-20 bg-gray-200 rounded-full h-1.5"
+                                    role="progressbar"
+                                    aria-valuenow={Math.round(storage.percentage)}
+                                    aria-valuemin={0}
+                                    aria-valuemax={100}
+                                    aria-label={`Storage usage: ${Math.round(storage.percentage)}%${
+                                      storage.percentage > 90 ? ', critical' :
+                                      storage.percentage > 70 ? ', warning' : ''
+                                    }`}
+                                  >
                                     <div
                                       className={`h-1.5 rounded-full ${
                                         storage.percentage > 90 ? 'bg-red-500' :
@@ -781,36 +796,37 @@ function UsersPageContent() {
                               <TableCell className="text-right">
                                 <div className="flex justify-end gap-1">
                                   <Link href={`/users/${user.id}`}>
-                                    <Button variant="ghost" size="sm" title="View details">
-                                      <Eye className="h-4 w-4" />
-                                    </Button>
+                                    <AccessibleIconButton
+                                      icon={Eye}
+                                      label="View user details"
+                                      variant="ghost"
+                                      size="sm"
+                                    />
                                   </Link>
                                   <Link href={`/users/${user.id}/api-keys`}>
-                                    <Button variant="ghost" size="sm" title="Manage API keys">
-                                      <Key className="h-4 w-4" />
-                                    </Button>
+                                    <AccessibleIconButton
+                                      icon={Key}
+                                      label="Manage API keys"
+                                      variant="ghost"
+                                      size="sm"
+                                    />
                                   </Link>
-                                  <Button
+                                  <AccessibleIconButton
+                                    icon={user.is_active ? UserX : UserCheck}
+                                    label={user.is_active ? 'Deactivate user' : 'Activate user'}
                                     variant="ghost"
                                     size="sm"
-                                    title={user.is_active ? 'Deactivate user' : 'Activate user'}
                                     onClick={() => handleToggleActive(user)}
-                                  >
-                                    {user.is_active ? (
-                                      <UserX className="h-4 w-4" />
-                                    ) : (
-                                      <UserCheck className="h-4 w-4" />
-                                    )}
-                                  </Button>
-                                  <Button
+                                  />
+                                  <AccessibleIconButton
+                                    icon={Trash2}
+                                    label={isCurrentUser ? 'Cannot delete yourself' : 'Delete user'}
                                     variant="ghost"
                                     size="sm"
-                                    title={isCurrentUser ? 'Cannot delete yourself' : 'Delete user'}
                                     onClick={() => handleDeleteUser(user)}
                                     disabled={isCurrentUser}
-                                  >
-                                    <Trash2 className="h-4 w-4 text-destructive" />
-                                  </Button>
+                                    iconClassName="text-destructive"
+                                  />
                                 </div>
                               </TableCell>
                             </TableRow>

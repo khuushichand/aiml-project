@@ -21,8 +21,17 @@ import { ActivitySection } from '@/components/dashboard/ActivitySection';
 import { RecentActivityCard } from '@/components/dashboard/RecentActivityCard';
 import { QuickActionsCard } from '@/components/dashboard/QuickActionsCard';
 import {
-  Building2, Clipboard, Settings, Trash2, UserPlus
+  Building2, Clipboard, Settings, Trash2, UserPlus, ShieldAlert
 } from 'lucide-react';
+import { AccessibleIconButton } from '@/components/ui/accessible-icon-button';
+
+type SecurityHealthData = {
+  risk_score?: number;
+  recent_security_events?: number;
+  failed_logins_24h?: number;
+  suspicious_activity?: number;
+  mfa_adoption_rate?: number;
+};
 import { api } from '@/lib/api-client';
 import { AuditLog, LLMProvider, Organization, RegistrationCode, RegistrationSettings, User } from '@/types';
 import { buildDashboardUIStats, type DashboardUIStats } from '@/lib/dashboard';
@@ -249,6 +258,7 @@ export default function DashboardPage() {
   const [creatingOrg, setCreatingOrg] = useState(false);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [securityHealth, setSecurityHealth] = useState<SecurityHealthData | null>(null);
 
   const loadDashboardData = useCallback(async () => {
     try {
@@ -270,6 +280,7 @@ export default function DashboardPage() {
         registrationSettingsResult,
         registrationCodesResult,
         healthResult,
+        securityHealthResult,
       ] = await Promise.allSettled([
         api.getDashboardStats(),
         api.getUsers(orgParams),
@@ -281,6 +292,7 @@ export default function DashboardPage() {
         api.getRegistrationSettings(),
         api.getRegistrationCodes(),
         api.getHealth(),
+        api.getSecurityHealth(),
       ]);
 
       const users = processUsers(usersResult);
@@ -315,6 +327,20 @@ export default function DashboardPage() {
         return 'unknown';
       })();
       setServerStatus({ state: healthState, checkedAt: new Date().toISOString() });
+
+      // Process security health
+      if (securityHealthResult.status === 'fulfilled') {
+        setSecurityHealth(securityHealthResult.value as SecurityHealthData);
+      } else {
+        // Set default values if endpoint not available
+        setSecurityHealth({
+          risk_score: 0,
+          recent_security_events: 0,
+          failed_logins_24h: 0,
+          suspicious_activity: 0,
+          mfa_adoption_rate: 0,
+        });
+      }
 
       const { activeUsers, totalStorage, totalQuota } = computeUserStats(users);
 
@@ -351,6 +377,7 @@ export default function DashboardPage() {
         { key: 'registration_settings', label: 'registration settings', result: registrationSettingsResult },
         { key: 'registration_codes', label: 'registration codes', result: registrationCodesResult },
         { key: 'health', label: 'health', result: healthResult },
+        { key: 'security_health', label: 'security health', result: securityHealthResult },
       ].filter((entry): entry is {
         key: string;
         label: string;
@@ -751,13 +778,12 @@ export default function DashboardPage() {
                       <p className="text-xs text-muted-foreground">Latest code</p>
                       <div className="mt-2 flex items-center justify-between gap-2">
                         <span className="font-mono text-xs break-all">{latestRegistrationCode.code}</span>
-                        <Button
+                        <AccessibleIconButton
+                          icon={Clipboard}
+                          label="Copy registration code"
                           variant="ghost"
-                          size="icon"
                           onClick={() => copyToClipboard(latestRegistrationCode.code, 'Registration code')}
-                        >
-                          <Clipboard className="h-4 w-4" />
-                        </Button>
+                        />
                       </div>
                     </div>
                   )}
@@ -783,20 +809,18 @@ export default function DashboardPage() {
                               </p>
                             </div>
                             <div className="flex items-center gap-1">
-                              <Button
+                              <AccessibleIconButton
+                                icon={Clipboard}
+                                label="Copy registration code"
                                 variant="ghost"
-                                size="icon"
                                 onClick={() => copyToClipboard(code.code, 'Registration code')}
-                              >
-                                <Clipboard className="h-4 w-4" />
-                              </Button>
-                              <Button
+                              />
+                              <AccessibleIconButton
+                                icon={Trash2}
+                                label="Delete registration code"
                                 variant="ghost"
-                                size="icon"
                                 onClick={() => handleRegistrationDelete(code)}
-                              >
-                                <Trash2 className="h-4 w-4" />
-                              </Button>
+                              />
                             </div>
                           </div>
                         );
@@ -919,6 +943,72 @@ export default function DashboardPage() {
                     <Link href="/audit">
                       <Button variant="ghost" size="sm" className="w-full">
                         Audit logs
+                      </Button>
+                    </Link>
+                  </div>
+                </CardContent>
+              </Card>
+            </div>
+
+            {/* Security Health Card */}
+            <div className="mt-6">
+              <Card>
+                <CardHeader>
+                  <CardTitle className="flex items-center gap-2">
+                    <ShieldAlert className="h-5 w-5" />
+                    Security Overview
+                  </CardTitle>
+                  <CardDescription>Security posture and recent activity</CardDescription>
+                </CardHeader>
+                <CardContent>
+                  <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-5">
+                    <div className="space-y-1">
+                      <p className="text-xs text-muted-foreground">Risk Score</p>
+                      <div className="flex items-center gap-2">
+                        <span className={`text-2xl font-bold ${
+                          (securityHealth?.risk_score ?? 0) > 70 ? 'text-red-500' :
+                          (securityHealth?.risk_score ?? 0) > 30 ? 'text-yellow-500' :
+                          'text-green-500'
+                        }`}>
+                          {securityHealth?.risk_score ?? 0}
+                        </span>
+                        <span className="text-xs text-muted-foreground">/ 100</span>
+                      </div>
+                    </div>
+                    <div className="space-y-1">
+                      <p className="text-xs text-muted-foreground">Security Events (24h)</p>
+                      <p className="text-2xl font-bold">{securityHealth?.recent_security_events ?? 0}</p>
+                    </div>
+                    <div className="space-y-1">
+                      <p className="text-xs text-muted-foreground">Failed Logins (24h)</p>
+                      <p className={`text-2xl font-bold ${
+                        (securityHealth?.failed_logins_24h ?? 0) > 10 ? 'text-red-500' : ''
+                      }`}>
+                        {securityHealth?.failed_logins_24h ?? 0}
+                      </p>
+                    </div>
+                    <div className="space-y-1">
+                      <p className="text-xs text-muted-foreground">Suspicious Activity</p>
+                      <p className={`text-2xl font-bold ${
+                        (securityHealth?.suspicious_activity ?? 0) > 0 ? 'text-yellow-500' : ''
+                      }`}>
+                        {securityHealth?.suspicious_activity ?? 0}
+                      </p>
+                    </div>
+                    <div className="space-y-1">
+                      <p className="text-xs text-muted-foreground">MFA Adoption</p>
+                      <p className="text-2xl font-bold">{securityHealth?.mfa_adoption_rate ?? 0}%</p>
+                    </div>
+                  </div>
+                  <div className="mt-4 flex flex-wrap gap-2">
+                    <Link href="/security">
+                      <Button variant="outline" size="sm">
+                        Security Dashboard
+                      </Button>
+                    </Link>
+                    <Link href="/audit?filter=security">
+                      <Button variant="ghost" size="sm">
+                        Security Audit Logs
                       </Button>
                     </Link>
                   </div>

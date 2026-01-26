@@ -14,7 +14,7 @@ import { Badge } from '@/components/ui/badge';
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle, DialogTrigger } from '@/components/ui/dialog';
 import { useConfirm } from '@/components/ui/confirm-dialog';
 import {
-  ArrowLeft, Building2, Users, UserPlus, Mail, Trash2, Key, Shield, Copy, Plus, Eye, EyeOff
+  ArrowLeft, Building2, Users, UserPlus, Mail, Trash2, Key, Shield, Copy, Plus, Eye, EyeOff, ListChecks
 } from 'lucide-react';
 import { api } from '@/lib/api-client';
 import { Organization, OrgMember, Team, ProviderSecret, User } from '@/types';
@@ -55,6 +55,20 @@ export default function OrganizationDetailPage() {
   const [byokApiKey, setByokApiKey] = useState('');
   const [showByokApiKey, setShowByokApiKey] = useState(false);
 
+  // Watchlist Settings
+  type WatchlistSettings = {
+    watchlists_enabled?: boolean;
+    default_threshold?: number;
+    notification_email?: string;
+    alert_on_breach?: boolean;
+  };
+  const [watchlistSettings, setWatchlistSettings] = useState<WatchlistSettings | null>(null);
+  const [watchlistLoading, setWatchlistLoading] = useState(false);
+  const [watchlistSaving, setWatchlistSaving] = useState(false);
+  const [editWatchlistEnabled, setEditWatchlistEnabled] = useState(false);
+  const [editWatchlistThreshold, setEditWatchlistThreshold] = useState('');
+  const [editWatchlistAlertOnBreach, setEditWatchlistAlertOnBreach] = useState(false);
+
   const loadData = useCallback(async () => {
     setLoading(true);
     setError('');
@@ -90,6 +104,29 @@ export default function OrganizationDetailPage() {
 
     if (byokData.status === 'fulfilled') {
       setByokKeys(Array.isArray(byokData.value) ? byokData.value : []);
+    }
+
+    // Load watchlist settings separately (may not be available)
+    try {
+      setWatchlistLoading(true);
+      const watchData = await api.getOrgWatchlistSettings(orgId);
+      const settings = watchData as WatchlistSettings;
+      setWatchlistSettings(settings);
+      setEditWatchlistEnabled(settings?.watchlists_enabled ?? false);
+      setEditWatchlistThreshold(settings?.default_threshold?.toString() || '100');
+      setEditWatchlistAlertOnBreach(settings?.alert_on_breach ?? true);
+    } catch {
+      // Set defaults if endpoint unavailable
+      setWatchlistSettings({
+        watchlists_enabled: false,
+        default_threshold: 100,
+        alert_on_breach: true,
+      });
+      setEditWatchlistEnabled(false);
+      setEditWatchlistThreshold('100');
+      setEditWatchlistAlertOnBreach(true);
+    } finally {
+      setWatchlistLoading(false);
     }
 
     setLoading(false);
@@ -249,6 +286,35 @@ export default function OrganizationDetailPage() {
     } catch (err: unknown) {
       console.error('Failed to delete BYOK key:', err);
       setError(err instanceof Error && err.message ? err.message : 'Failed to delete provider key');
+    }
+  };
+
+  const handleSaveWatchlistSettings = async () => {
+    try {
+      setWatchlistSaving(true);
+      setError('');
+      const threshold = parseInt(editWatchlistThreshold, 10);
+      if (Number.isNaN(threshold) || threshold < 1) {
+        setError('Threshold must be at least 1');
+        return;
+      }
+      await api.updateOrgWatchlistSettings(orgId, {
+        watchlists_enabled: editWatchlistEnabled,
+        default_threshold: threshold,
+        alert_on_breach: editWatchlistAlertOnBreach,
+      });
+      setWatchlistSettings({
+        ...watchlistSettings,
+        watchlists_enabled: editWatchlistEnabled,
+        default_threshold: threshold,
+        alert_on_breach: editWatchlistAlertOnBreach,
+      });
+      setSuccess('Watchlist settings saved');
+    } catch (err: unknown) {
+      const message = err instanceof Error ? err.message : 'Failed to save watchlist settings';
+      setError(message);
+    } finally {
+      setWatchlistSaving(false);
     }
   };
 
@@ -740,6 +806,69 @@ export default function OrganizationDetailPage() {
                         ))}
                       </TableBody>
                     </Table>
+                  )}
+                </CardContent>
+              </Card>
+
+              {/* Watchlist Settings */}
+              <Card className="lg:col-span-2">
+                <CardHeader>
+                  <CardTitle className="flex items-center gap-2">
+                    <ListChecks className="h-5 w-5" />
+                    Watchlist Settings
+                  </CardTitle>
+                  <CardDescription>
+                    Configure usage watchlists and alerts for this organization
+                  </CardDescription>
+                </CardHeader>
+                <CardContent>
+                  {watchlistLoading ? (
+                    <div className="text-center text-muted-foreground py-4">Loading...</div>
+                  ) : (
+                    <div className="space-y-4">
+                      <div className="grid gap-4 sm:grid-cols-3">
+                        <div className="flex items-center justify-between p-3 border rounded-lg">
+                          <div>
+                            <Label>Enable Watchlists</Label>
+                            <p className="text-xs text-muted-foreground">Track usage and spending</p>
+                          </div>
+                          <input
+                            type="checkbox"
+                            checked={editWatchlistEnabled}
+                            onChange={(e) => setEditWatchlistEnabled(e.target.checked)}
+                            className="h-4 w-4"
+                          />
+                        </div>
+                        <div className="space-y-1 p-3 border rounded-lg">
+                          <Label htmlFor="watchlist-threshold">Default Threshold</Label>
+                          <Input
+                            id="watchlist-threshold"
+                            type="number"
+                            min="1"
+                            value={editWatchlistThreshold}
+                            onChange={(e) => setEditWatchlistThreshold(e.target.value)}
+                            disabled={!editWatchlistEnabled}
+                          />
+                          <p className="text-xs text-muted-foreground">Usage limit before alerts</p>
+                        </div>
+                        <div className="flex items-center justify-between p-3 border rounded-lg">
+                          <div>
+                            <Label>Alert on Breach</Label>
+                            <p className="text-xs text-muted-foreground">Send notifications when exceeded</p>
+                          </div>
+                          <input
+                            type="checkbox"
+                            checked={editWatchlistAlertOnBreach}
+                            onChange={(e) => setEditWatchlistAlertOnBreach(e.target.checked)}
+                            disabled={!editWatchlistEnabled}
+                            className="h-4 w-4"
+                          />
+                        </div>
+                      </div>
+                      <Button onClick={handleSaveWatchlistSettings} disabled={watchlistSaving}>
+                        {watchlistSaving ? 'Saving...' : 'Save Settings'}
+                      </Button>
+                    </div>
                   )}
                 </CardContent>
               </Card>

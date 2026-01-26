@@ -340,3 +340,5 @@ wizard.log
 /apps/tldw-frontend/test-results
 apps/Databases/system_logs.jsonl.lock
 apps/Databases/system_logs.jsonl
+tldw_Server_API/Config_Files/session_encryption.key
+tldw_Server_API/Config_Files/session_encryption.key

@@ -322,8 +322,12 @@ function OrganizationsPageContent() {
               <CardContent className="pt-6">
                 <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
                   <div className="relative max-w-md w-full">
-                    <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
+                    <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" aria-hidden="true" />
+                    <label htmlFor="orgs-search" className="sr-only">
+                      Search organizations by name or slug
+                    </label>
                     <Input
+                      id="orgs-search"
                       placeholder="Search organizations by name or slug..."
                       value={searchQuery || ''}
                       onChange={(e) => handleSearchChange(e.target.value)}

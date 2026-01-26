@@ -5,6 +5,7 @@ Handles structured data formats while preserving structure and relationships.
 """
 
 import json
+import re
 import xml.etree.ElementTree as ET
 from xml.etree.ElementTree import ParseError
 from typing import List, Dict, Any, Optional, Tuple, Generator
@@ -43,6 +44,17 @@ def _get_chunking_str(key: str, default: str) -> str:
         return default
 from ..exceptions import InvalidInputError, ChunkingError
 from ..security_logger import get_security_logger, SecurityEventType
+
+# Precompiled XML security patterns (ASCII-only)
+_DOCTYPE_SYSTEM_RE = re.compile(r'<!DOCTYPE\s+[^>]*\bSYSTEM\b', re.IGNORECASE)
+_ENTITY_DECL_RE = re.compile(r'<!ENTITY\b', re.IGNORECASE)
+
+
+def _contains_unsafe_xml_decls(text: str) -> bool:
+    """Return True if XML text contains unsafe DOCTYPE SYSTEM or ENTITY declarations."""
+    if not text:
+        return False
+    return bool(_DOCTYPE_SYSTEM_RE.search(text) or _ENTITY_DECL_RE.search(text))
 
 
 class JSONChunkingStrategy(BaseChunkingStrategy):
@@ -740,11 +752,11 @@ class XMLChunkingStrategy(BaseChunkingStrategy):
                 # Import the common submodule explicitly to reference exception types
                 from defusedxml import common as defused_common
 
-                # Additional pre-check for DOCTYPE SYSTEM which might not always be caught
-                if 'DOCTYPE' in text and 'SYSTEM' in text:
-                    logger.error("XML contains DOCTYPE SYSTEM declaration")
+                # Additional pre-check for unsafe DOCTYPE SYSTEM / ENTITY declarations
+                if _contains_unsafe_xml_decls(text):
+                    logger.error("XML contains unsafe DOCTYPE SYSTEM or ENTITY declaration")
                     self._security_logger.log_xxe_attempt(text[:500], source="xml_chunk")
-                    raise InvalidInputError("XML contains DOCTYPE SYSTEM declaration which is not allowed for security reasons")
+                    raise InvalidInputError("XML contains unsafe DOCTYPE SYSTEM or ENTITY declaration which is not allowed for security reasons")
 
                 try:
                     root = DefusedET.fromstring(text)
@@ -763,9 +775,9 @@ class XMLChunkingStrategy(BaseChunkingStrategy):
                 parser.default = lambda x: None  # Ignore undefined entities
 
                 # Pre-check for dangerous XML constructs
-                if '<!DOCTYPE' in text or '<!ENTITY' in text or 'SYSTEM' in text:
+                if _contains_unsafe_xml_decls(text):
                     raise InvalidInputError(
-                        "XML contains potentially dangerous DTD/Entity declarations. "
+                        "XML contains unsafe DOCTYPE SYSTEM or ENTITY declaration. "
                         "These are not allowed for security reasons."
                     )
 
@@ -823,10 +835,10 @@ class XMLChunkingStrategy(BaseChunkingStrategy):
                 import defusedxml.ElementTree as DefusedET
                 from defusedxml import common as defused_common
 
-                if 'DOCTYPE' in text and 'SYSTEM' in text:
-                    logger.error("XML contains DOCTYPE SYSTEM declaration")
+                if _contains_unsafe_xml_decls(text):
+                    logger.error("XML contains unsafe DOCTYPE SYSTEM or ENTITY declaration")
                     self._security_logger.log_xxe_attempt(text[:500], source="xml_chunk")
-                    raise InvalidInputError("XML contains DOCTYPE SYSTEM declaration which is not allowed for security reasons")
+                    raise InvalidInputError("XML contains unsafe DOCTYPE SYSTEM or ENTITY declaration which is not allowed for security reasons")
 
                 try:
                     root = DefusedET.fromstring(text)
@@ -842,9 +854,9 @@ class XMLChunkingStrategy(BaseChunkingStrategy):
                 parser.entity = {}
                 parser.default = lambda x: None
 
-                if '<!DOCTYPE' in text or '<!ENTITY' in text or 'SYSTEM' in text:
+                if _contains_unsafe_xml_decls(text):
                     raise InvalidInputError(
-                        "XML contains potentially dangerous DTD/Entity declarations. "
+                        "XML contains unsafe DOCTYPE SYSTEM or ENTITY declaration. "
                         "These are not allowed for security reasons."
                     )
 

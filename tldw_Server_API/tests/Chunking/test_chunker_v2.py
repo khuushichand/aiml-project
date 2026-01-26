@@ -279,7 +279,7 @@ class TestV2Chunker:
         assert any(call.args and call.args[0] == "code_ast" for call in spy.call_args_list)
 
     def test_process_text_tokenizer_override(self):
-        """tokenizer_name_or_path parameter should update the token strategy."""
+        """tokenizer_name_or_path should use per-call strategy without mutating cached tokens."""
         chunker = Chunker()
         text = "one two three four five six seven eight nine ten"
         chunker.process_text(
@@ -288,7 +288,7 @@ class TestV2Chunker:
             tokenizer_name_or_path="test-tokenizer",
         )
         token_strategy = chunker.get_strategy("tokens")
-        assert getattr(token_strategy, "tokenizer_name", None) == "test-tokenizer"
+        assert getattr(token_strategy, "tokenizer_name", None) != "test-tokenizer"
 
     def test_process_text_rejects_non_string_input(self):
         """process_text should raise on non-string inputs."""

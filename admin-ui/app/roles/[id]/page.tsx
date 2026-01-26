@@ -11,10 +11,23 @@ import { Alert, AlertDescription } from '@/components/ui/alert';
 import { Badge } from '@/components/ui/badge';
 import { Checkbox } from '@/components/ui/checkbox';
 import { useConfirm } from '@/components/ui/confirm-dialog';
-import { ArrowLeft, Shield, Lock, Save, Users, Trash2, Check, X } from 'lucide-react';
+import { ArrowLeft, Shield, Lock, Save, Users, Trash2, Check, X, Clock, Wrench } from 'lucide-react';
 import { api } from '@/lib/api-client';
 import { Role, Permission, User } from '@/types';
+import { Label } from '@/components/ui/label';
 import Link from 'next/link';
+
+type RateLimits = {
+  requests_per_minute?: number | null;
+  requests_per_hour?: number | null;
+  requests_per_day?: number | null;
+};
+
+type ToolPermission = {
+  id?: number;
+  tool_name: string;
+  granted: boolean;
+};
 
 const MAX_DESCRIPTION_LENGTH = 500;
 const USER_LIST_LIMIT = 10;
@@ -66,6 +79,18 @@ export default function RoleDetailPage() {
   const [editName, setEditName] = useState('');
   const [editDescription, setEditDescription] = useState('');
 
+  // Rate Limits
+  const [rateLimits, setRateLimits] = useState<RateLimits>({});
+  const [editRpm, setEditRpm] = useState('');
+  const [editRph, setEditRph] = useState('');
+  const [editRpd, setEditRpd] = useState('');
+  const [rateLimitsSaving, setRateLimitsSaving] = useState(false);
+
+  // Tool Permissions
+  const [toolPermissions, setToolPermissions] = useState<ToolPermission[]>([]);
+  const [toolPermissionsLoading, setToolPermissionsLoading] = useState(false);
+  const [newToolPrefix, setNewToolPrefix] = useState('');
+
   useEffect(() => {
     if (!success) {
       return;
@@ -80,11 +105,12 @@ export default function RoleDetailPage() {
       setError('');
       setWarning('');
 
-      const [roleData, allPermsData, rolePermsData, usersData] = await Promise.allSettled([
+      const [roleData, allPermsData, rolePermsData, usersData, toolPermsData] = await Promise.allSettled([
         api.getRole(roleId),
         api.getPermissions(),
         api.getRolePermissions(roleId),
         api.getRoleUsers(roleId),
+        api.getRoleToolPermissions(roleId),
       ]);
 
       const getErrorMessage = (reason: unknown, fallback: string) =>
@@ -96,9 +122,17 @@ export default function RoleDetailPage() {
       }
 
       if (roleData.status === 'fulfilled') {
-        setRole(roleData.value);
-        setEditName(roleData.value.name || '');
-        setEditDescription(roleData.value.description || '');
+        const roleValue = roleData.value as Role & { rate_limits?: RateLimits };
+        setRole(roleValue);
+        setEditName(roleValue.name || '');
+        setEditDescription(roleValue.description || '');
+        // Set rate limits from role data if available
+        if (roleValue.rate_limits) {
+          setRateLimits(roleValue.rate_limits);
+          setEditRpm(roleValue.rate_limits.requests_per_minute?.toString() || '');
+          setEditRph(roleValue.rate_limits.requests_per_hour?.toString() || '');
+          setEditRpd(roleValue.rate_limits.requests_per_day?.toString() || '');
+        }
       }
 
       const errors: string[] = [];
@@ -121,6 +155,14 @@ export default function RoleDetailPage() {
         setRoleUsers(Array.isArray(usersData.value) ? usersData.value : []);
       } else {
         errors.push(getErrorMessage(usersData.reason, 'Failed to load role users'));
+      }
+
+      if (toolPermsData.status === 'fulfilled') {
+        const tools = toolPermsData.value as { tools?: ToolPermission[]; items?: ToolPermission[] };
+        setToolPermissions(Array.isArray(tools.tools) ? tools.tools : Array.isArray(tools.items) ? tools.items : []);
+      } else {
+        // Tool permissions might not be implemented, just log warning
+        console.warn('Failed to load tool permissions:', toolPermsData.reason);
       }
 
       if (errors.length > 0) {
@@ -221,6 +263,124 @@ export default function RoleDetailPage() {
       router.push('/roles');
     } catch (err: unknown) {
       setError(err instanceof Error && err.message ? err.message : 'Failed to delete role');
+    }
+  };
+
+  const parseOptionalInt = (value: string): number | undefined => {
+    const trimmed = value.trim();
+    if (!trimmed) return undefined;
+    const parsed = parseInt(trimmed, 10);
+    return Number.isFinite(parsed) && parsed >= 0 ? parsed : undefined;
+  };
+
+  const handleSaveRateLimits = async () => {
+    try {
+      setRateLimitsSaving(true);
+      setError('');
+      const data: RateLimits = {};
+      const rpm = parseOptionalInt(editRpm);
+      const rph = parseOptionalInt(editRph);
+      const rpd = parseOptionalInt(editRpd);
+      if (rpm !== undefined) data.requests_per_minute = rpm;
+      if (rph !== undefined) data.requests_per_hour = rph;
+      if (rpd !== undefined) data.requests_per_day = rpd;
+
+      await api.setRoleRateLimits(roleId, data);
+      setRateLimits(data);
+      setSuccess('Rate limits updated');
+    } catch (err: unknown) {
+      console.error('Failed to update rate limits:', err);
+      setError(err instanceof Error && err.message ? err.message : 'Failed to update rate limits');
+    } finally {
+      setRateLimitsSaving(false);
+    }
+  };
+
+  const handleClearRateLimits = async () => {
+    const confirmed = await confirm({
+      title: 'Clear Rate Limits',
+      message: 'This will remove all custom rate limits for this role. Users will fall back to default limits.',
+      confirmText: 'Clear',
+      variant: 'danger',
+    });
+    if (!confirmed) return;
+
+    try {
+      setRateLimitsSaving(true);
+      setError('');
+      await api.setRoleRateLimits(roleId, {
+        requests_per_minute: undefined,
+        requests_per_hour: undefined,
+        requests_per_day: undefined,
+      });
+      setRateLimits({});
+      setEditRpm('');
+      setEditRph('');
+      setEditRpd('');
+      setSuccess('Rate limits cleared');
+    } catch (err: unknown) {
+      console.error('Failed to clear rate limits:', err);
+      setError(err instanceof Error && err.message ? err.message : 'Failed to clear rate limits');
+    } finally {
+      setRateLimitsSaving(false);
+    }
+  };
+
+  const handleGrantToolsByPrefix = async () => {
+    const prefix = newToolPrefix.trim();
+    if (!prefix) {
+      setError('Please enter a tool prefix (e.g., "read:" or "mcp:")');
+      return;
+    }
+
+    try {
+      setToolPermissionsLoading(true);
+      setError('');
+      await api.grantToolPermissionsByPrefix(roleId, prefix);
+      setSuccess(`Tool permissions granted for prefix "${prefix}"`);
+      setNewToolPrefix('');
+      // Reload tool permissions
+      const toolPermsData = await api.getRoleToolPermissions(roleId);
+      const tools = toolPermsData as { tools?: ToolPermission[]; items?: ToolPermission[] };
+      setToolPermissions(Array.isArray(tools.tools) ? tools.tools : Array.isArray(tools.items) ? tools.items : []);
+    } catch (err: unknown) {
+      console.error('Failed to grant tool permissions:', err);
+      setError(err instanceof Error && err.message ? err.message : 'Failed to grant tool permissions');
+    } finally {
+      setToolPermissionsLoading(false);
+    }
+  };
+
+  const handleRevokeToolsByPrefix = async () => {
+    const prefix = newToolPrefix.trim();
+    if (!prefix) {
+      setError('Please enter a tool prefix to revoke (e.g., "read:" or "mcp:")');
+      return;
+    }
+
+    const confirmed = await confirm({
+      title: 'Revoke Tool Permissions',
+      message: `Revoke all tool permissions matching prefix "${prefix}" from this role?`,
+      confirmText: 'Revoke',
+      variant: 'danger',
+    });
+    if (!confirmed) return;
+
+    try {
+      setToolPermissionsLoading(true);
+      setError('');
+      await api.revokeToolPermissionsByPrefix(roleId, prefix);
+      setSuccess(`Tool permissions revoked for prefix "${prefix}"`);
+      setNewToolPrefix('');
+      // Reload tool permissions
+      const toolPermsData = await api.getRoleToolPermissions(roleId);
+      const tools = toolPermsData as { tools?: ToolPermission[]; items?: ToolPermission[] };
+      setToolPermissions(Array.isArray(tools.tools) ? tools.tools : Array.isArray(tools.items) ? tools.items : []);
+    } catch (err: unknown) {
+      console.error('Failed to revoke tool permissions:', err);
+      setError(err instanceof Error && err.message ? err.message : 'Failed to revoke tool permissions');
+    } finally {
+      setToolPermissionsLoading(false);
     }
   };
 
@@ -458,6 +618,148 @@ export default function RoleDetailPage() {
                             +{roleUsers.length - USER_LIST_LIMIT} more users
                           </p>
                         )}
+                      </div>
+                    )}
+                  </CardContent>
+                </Card>
+              </div>
+
+              {/* Rate Limits and Tool Permissions */}
+              <div className="grid gap-6 lg:grid-cols-2 mt-6">
+                {/* Rate Limits Card */}
+                <Card>
+                  <CardHeader>
+                    <CardTitle className="flex items-center gap-2">
+                      <Clock className="h-5 w-5" />
+                      Rate Limits
+                    </CardTitle>
+                    <CardDescription>
+                      Set custom rate limits for users with this role
+                      {role.is_system && ' (read-only for system roles)'}
+                    </CardDescription>
+                  </CardHeader>
+                  <CardContent className="space-y-4">
+                    <div className="grid gap-4">
+                      <div className="space-y-1">
+                        <Label htmlFor="rate-rpm">Requests per Minute</Label>
+                        <Input
+                          id="rate-rpm"
+                          type="number"
+                          min="0"
+                          placeholder="e.g., 60"
+                          value={editRpm}
+                          onChange={(e) => setEditRpm(e.target.value)}
+                          disabled={role.is_system}
+                        />
+                      </div>
+                      <div className="space-y-1">
+                        <Label htmlFor="rate-rph">Requests per Hour</Label>
+                        <Input
+                          id="rate-rph"
+                          type="number"
+                          min="0"
+                          placeholder="e.g., 1000"
+                          value={editRph}
+                          onChange={(e) => setEditRph(e.target.value)}
+                          disabled={role.is_system}
+                        />
+                      </div>
+                      <div className="space-y-1">
+                        <Label htmlFor="rate-rpd">Requests per Day</Label>
+                        <Input
+                          id="rate-rpd"
+                          type="number"
+                          min="0"
+                          placeholder="e.g., 10000"
+                          value={editRpd}
+                          onChange={(e) => setEditRpd(e.target.value)}
+                          disabled={role.is_system}
+                        />
+                      </div>
+                    </div>
+                    <div className="flex gap-2">
+                      <Button
+                        onClick={handleSaveRateLimits}
+                        disabled={rateLimitsSaving || role.is_system}
+                      >
+                        {rateLimitsSaving ? 'Saving...' : 'Save Rate Limits'}
+                      </Button>
+                      {(rateLimits.requests_per_minute || rateLimits.requests_per_hour || rateLimits.requests_per_day) && (
+                        <Button
+                          variant="outline"
+                          onClick={handleClearRateLimits}
+                          disabled={rateLimitsSaving || role.is_system}
+                        >
+                          Clear
+                        </Button>
+                      )}
+                    </div>
+                    {(rateLimits.requests_per_minute || rateLimits.requests_per_hour || rateLimits.requests_per_day) && (
+                      <div className="text-sm text-muted-foreground mt-2">
+                        Current limits:{' '}
+                        {rateLimits.requests_per_minute && `${rateLimits.requests_per_minute}/min`}
+                        {rateLimits.requests_per_minute && rateLimits.requests_per_hour && ', '}
+                        {rateLimits.requests_per_hour && `${rateLimits.requests_per_hour}/hr`}
+                        {(rateLimits.requests_per_minute || rateLimits.requests_per_hour) && rateLimits.requests_per_day && ', '}
+                        {rateLimits.requests_per_day && `${rateLimits.requests_per_day}/day`}
+                      </div>
+                    )}
+                  </CardContent>
+                </Card>
+
+                {/* Tool Permissions Card */}
+                <Card>
+                  <CardHeader>
+                    <CardTitle className="flex items-center gap-2">
+                      <Wrench className="h-5 w-5" />
+                      Tool Permissions
+                    </CardTitle>
+                    <CardDescription>
+                      Manage MCP and API tool access for this role
+                      {role.is_system && ' (read-only for system roles)'}
+                    </CardDescription>
+                  </CardHeader>
+                  <CardContent className="space-y-4">
+                    <div className="flex gap-2">
+                      <Input
+                        placeholder="Tool prefix (e.g., mcp:, read:, write:)"
+                        value={newToolPrefix}
+                        onChange={(e) => setNewToolPrefix(e.target.value)}
+                        disabled={role.is_system || toolPermissionsLoading}
+                      />
+                      <Button
+                        onClick={handleGrantToolsByPrefix}
+                        disabled={role.is_system || toolPermissionsLoading || !newToolPrefix.trim()}
+                      >
+                        Grant
+                      </Button>
+                      <Button
+                        variant="outline"
+                        onClick={handleRevokeToolsByPrefix}
+                        disabled={role.is_system || toolPermissionsLoading || !newToolPrefix.trim()}
+                      >
+                        Revoke
+                      </Button>
+                    </div>
+                    {toolPermissions.length > 0 ? (
+                      <div className="max-h-48 overflow-y-auto space-y-1">
+                        {toolPermissions.map((tool, index) => (
+                          <div
+                            key={tool.id || `tool-${index}`}
+                            className={`flex items-center justify-between p-2 rounded text-sm ${
+                              tool.granted ? 'bg-green-50 dark:bg-green-900/20' : 'bg-muted/30'
+                            }`}
+                          >
+                            <code className="font-mono text-xs">{tool.tool_name}</code>
+                            <Badge variant={tool.granted ? 'default' : 'secondary'}>
+                              {tool.granted ? 'Granted' : 'Denied'}
+                            </Badge>
+                          </div>
+                        ))}
+                      </div>
+                    ) : (
+                      <div className="text-sm text-muted-foreground text-center py-4">
+                        No tool permissions configured. Use prefix patterns to grant access.
                       </div>
                     )}
                   </CardContent>

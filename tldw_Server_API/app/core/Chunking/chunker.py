@@ -1509,6 +1509,9 @@ class Chunker:
         tokenizer_override = options_raw.get("tokenizer_name")
         if tokenizer_override is None:
             tokenizer_override = options_raw.get("tokenizer_name_or_path")
+        if isinstance(tokenizer_override, str):
+            tokenizer_override = tokenizer_override.strip() or None
+        use_per_call_strategy = bool(tokenizer_override) and method == ChunkingMethod.TOKENS.value
         strategy_options: Dict[str, Any] = dict(options_raw)
         strategy_options.pop("code_mode", None)
         strategy_options.pop("tokenizer_name", None)
@@ -1571,8 +1574,8 @@ class Chunker:
         strategy_lock = self._strategy_lock if self._strategy_cache_mode == "shared" else nullcontext()
         try:
             with strategy_lock:
-                # Get strategy lazily per cache mode
-                strategy = self._get_strategy_for_call(method)
+                # Get strategy lazily per cache mode; force per-call strategy for tokenizer overrides
+                strategy = self._create_strategy_instance(method) if use_per_call_strategy else self._get_strategy_for_call(method)
                 self._sync_strategy_llm(strategy, llm_call_func=effective_llm_call, llm_config=effective_llm_cfg)
                 # Allow token strategy to switch tokenizer dynamically
                 if method == ChunkingMethod.TOKENS.value and tokenizer_override:
@@ -1692,6 +1695,9 @@ class Chunker:
         tokenizer_override = options_raw.get("tokenizer_name")
         if tokenizer_override is None:
             tokenizer_override = options_raw.get("tokenizer_name_or_path")
+        if isinstance(tokenizer_override, str):
+            tokenizer_override = tokenizer_override.strip() or None
+        use_per_call_strategy = bool(tokenizer_override) and method == ChunkingMethod.TOKENS.value
         strategy_options: Dict[str, Any] = dict(options_raw)
         strategy_options.pop("code_mode", None)
         strategy_options.pop("tokenizer_name", None)
@@ -1701,8 +1707,8 @@ class Chunker:
         strategy_lock = self._strategy_lock if self._strategy_cache_mode == "shared" else nullcontext()
         try:
             with strategy_lock:
-                # Get strategy lazily (supports factory registration)
-                strategy = self._get_strategy_for_call(method)
+                # Get strategy lazily (supports factory registration); force per-call strategy for tokenizer overrides
+                strategy = self._create_strategy_instance(method) if use_per_call_strategy else self._get_strategy_for_call(method)
                 self._sync_strategy_llm(strategy, llm_call_func=effective_llm_call, llm_config=effective_llm_cfg)
                 if method == ChunkingMethod.TOKENS.value and tokenizer_override:
                     try:
@@ -1801,6 +1807,9 @@ class Chunker:
         tokenizer_override = options_raw.get("tokenizer_name")
         if tokenizer_override is None:
             tokenizer_override = options_raw.get("tokenizer_name_or_path")
+        if isinstance(tokenizer_override, str):
+            tokenizer_override = tokenizer_override.strip() or None
+        use_per_call_strategy = bool(tokenizer_override) and method == ChunkingMethod.TOKENS.value
         strategy_options: Dict[str, Any] = dict(options_raw)
         strategy_options.pop("code_mode", None)
         strategy_options.pop("tokenizer_name", None)
@@ -1809,8 +1818,8 @@ class Chunker:
         effective_llm_call, effective_llm_cfg = self._get_effective_llm_hooks()
         strategy_lock = self._strategy_lock if self._strategy_cache_mode == "shared" else nullcontext()
         with strategy_lock:
-            # Get strategy lazily (supports factory registration)
-            strategy = self._get_strategy_for_call(method)
+            # Get strategy lazily (supports factory registration); force per-call strategy for tokenizer overrides
+            strategy = self._create_strategy_instance(method) if use_per_call_strategy else self._get_strategy_for_call(method)
             self._sync_strategy_llm(strategy, llm_call_func=effective_llm_call, llm_config=effective_llm_cfg)
             if method == ChunkingMethod.TOKENS.value and tokenizer_override:
                 try:
