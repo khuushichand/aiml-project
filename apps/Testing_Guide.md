@@ -70,6 +70,89 @@ cd tldw-frontend
 npx playwright test e2e/smoke
 ```
 
+### Workflow E2E Tests
+
+The webapp includes comprehensive workflow tests that verify user journeys from end to end.
+
+**Test files:**
+- `e2e/workflows/chat.spec.ts` - Chat workflow (15 tests)
+- `e2e/workflows/media-ingest.spec.ts` - Media ingestion workflow
+- `e2e/workflows/search.spec.ts` - Search/RAG workflow
+- `e2e/workflows/settings.spec.ts` - Settings configuration workflow
+
+**Run workflow tests:**
+```bash
+cd tldw-frontend
+
+# Run all workflow tests
+npx playwright test e2e/workflows/
+
+# Run specific workflow
+npx playwright test e2e/workflows/chat.spec.ts
+npx playwright test e2e/workflows/media-ingest.spec.ts
+npx playwright test e2e/workflows/search.spec.ts
+npx playwright test e2e/workflows/settings.spec.ts
+
+# Run with UI for debugging
+npx playwright test e2e/workflows/ --ui
+
+# Run with headed browser
+npx playwright test e2e/workflows/ --headed
+```
+
+**What's tested:**
+
+| Workflow | Coverage |
+|----------|----------|
+| **Chat** | Basic chat flow, streaming responses, chat history, character selection, error handling, command palette, markdown/code rendering |
+| **Media Ingestion** | File upload, URL ingestion, metadata editing, quick ingest, content review flow |
+| **Search/RAG** | Basic search, empty results, filters (type/date/tag), result interaction, semantic vs keyword search |
+| **Settings** | Server config, persistence, validation, LLM provider config, chat settings, navigation |
+
+### Page Objects & Test Utilities
+
+Reusable test infrastructure is located in `e2e/utils/`:
+
+```
+e2e/utils/
+├── helpers.ts           # Common test helpers (seedAuth, waitForConnection, etc.)
+├── fixtures.ts          # Extended Playwright fixtures with diagnostics
+├── index.ts             # Barrel export
+└── page-objects/
+    ├── ChatPage.ts      # Chat page interactions
+    ├── MediaPage.ts     # Media page interactions
+    ├── SearchPage.ts    # Search page interactions
+    ├── SettingsPage.ts  # Settings page interactions
+    └── index.ts         # Barrel export
+```
+
+**Usage in tests:**
+```typescript
+import { test, expect, skipIfServerUnavailable } from "../utils/fixtures"
+import { ChatPage } from "../utils/page-objects"
+import { seedAuth, TEST_CONFIG } from "../utils/helpers"
+
+test("should send a message", async ({ authedPage, serverInfo }) => {
+  skipIfServerUnavailable(serverInfo)
+
+  const chatPage = new ChatPage(authedPage)
+  await chatPage.goto()
+  await chatPage.sendMessage("Hello!")
+  await chatPage.waitForResponse()
+})
+```
+
+**Key fixtures:**
+- `authedPage` - Page pre-seeded with auth config
+- `serverInfo` - Server availability and model info
+- `diagnostics` - Console/error collection for debugging
+
+**Key helpers:**
+- `seedAuth(page)` - Seed localStorage with auth config
+- `waitForConnection(page)` - Wait for app connection state
+- `skipIfServerUnavailable(serverInfo)` - Skip test if server is down
+- `skipIfNoModels(serverInfo)` - Skip test if no LLM models available
+
 ## Unit tests (preferred: bun)
 
 ### Webapp (Vitest)
@@ -108,3 +191,14 @@ bun test --config vitest.extension.config.ts
 - `TLDW_E2E_SERVER_URL` + `TLDW_E2E_API_KEY` set.
 - Playwright browsers installed.
 - For web: app running at `TLDW_WEB_URL` (or allow auto‑start).
+
+## Test counts (webapp)
+
+| Category | Tests | Files |
+|----------|-------|-------|
+| Smoke tests | 70+ | `e2e/smoke/` |
+| Workflow tests | 105 | `e2e/workflows/` |
+| Real-server workflows | 19 | `e2e/real-server-workflows.spec.ts` |
+| Login tests | 2 | `e2e/login.spec.ts` |
+
+Total: **~200 E2E tests** for the webapp.
