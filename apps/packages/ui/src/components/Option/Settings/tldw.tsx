@@ -76,6 +76,22 @@ type BillingUsage = {
   has_exceeded?: boolean
 }
 
+type BillingInvoice = {
+  id: number
+  amount_cents: number
+  currency?: string
+  status?: string
+  description?: string | null
+  invoice_pdf_url?: string | null
+  created_at?: string | null
+  amount_display?: string
+}
+
+type BillingInvoiceList = {
+  items: BillingInvoice[]
+  total: number
+}
+
 const TIMEOUT_PRESETS: Record<TimeoutPresetKey, TimeoutValues> = {
   balanced: {
     request: 10,
@@ -140,6 +156,11 @@ export const TldwSettings = () => {
   const [billingPlans, setBillingPlans] = useState<BillingPlan[]>([])
   const [billingStatus, setBillingStatus] = useState<BillingSubscription | null>(null)
   const [billingUsage, setBillingUsage] = useState<BillingUsage | null>(null)
+  const [billingInvoices, setBillingInvoices] = useState<BillingInvoice[]>([])
+  const [billingInvoicesTotal, setBillingInvoicesTotal] = useState(0)
+  const [billingInvoicesLoading, setBillingInvoicesLoading] = useState(false)
+  const [billingInvoicesError, setBillingInvoicesError] = useState<string | null>(null)
+  const [billingActionLoading, setBillingActionLoading] = useState(false)
   const [selectedPlan, setSelectedPlan] = useState<string | null>(null)
   const [billingCycle, setBillingCycle] = useState<'monthly' | 'yearly'>('monthly')
 
@@ -314,6 +335,41 @@ export const TldwSettings = () => {
       default:
         return t('settings:tldw.billing.status.unknown', 'Unknown')
     }
+  }
+
+  const invoiceStatusColor = (status?: string | null) => {
+    switch (status) {
+      case "succeeded":
+        return "green"
+      case "failed":
+        return "red"
+      case "pending":
+        return "orange"
+      default:
+        return "default"
+    }
+  }
+
+  const invoiceStatusLabel = (status?: string | null) => {
+    switch (status) {
+      case "succeeded":
+        return t('settings:tldw.billing.invoice.status.paid', 'Paid')
+      case "failed":
+        return t('settings:tldw.billing.invoice.status.failed', 'Failed')
+      case "pending":
+        return t('settings:tldw.billing.invoice.status.pending', 'Pending')
+      default:
+        return t('settings:tldw.billing.invoice.status.unknown', 'Unknown')
+    }
+  }
+
+  const formatInvoiceAmount = (invoice: BillingInvoice) => {
+    if (invoice.amount_display) {
+      return invoice.amount_display
+    }
+    const currency = (invoice.currency || "usd").toUpperCase()
+    const amount = typeof invoice.amount_cents === "number" ? invoice.amount_cents / 100 : 0
+    return `$${amount.toFixed(2)} ${currency}`
   }
 
   useEffect(() => {
@@ -494,9 +550,34 @@ export const TldwSettings = () => {
     }
   }
 
+  const loadInvoices = async () => {
+    if (authMode !== 'multi-user' || !isLoggedIn) return
+    setBillingInvoicesLoading(true)
+    setBillingInvoicesError(null)
+    try {
+      const resp = await apiSend<BillingInvoiceList>({
+        path: "/api/v1/billing/invoices?limit=20" as PathOrUrl,
+        method: "GET"
+      })
+      if (!resp.ok) {
+        setBillingInvoicesError(resp.error || 'Failed to load invoices')
+        setBillingInvoices(resp.data?.items || [])
+        setBillingInvoicesTotal(resp.data?.total || 0)
+        return
+      }
+      setBillingInvoices(resp.data?.items || [])
+      setBillingInvoicesTotal(resp.data?.total || 0)
+    } catch (err: any) {
+      setBillingInvoicesError(err?.message || 'Failed to load invoices')
+    } finally {
+      setBillingInvoicesLoading(false)
+    }
+  }
+
   useEffect(() => {
     if (authMode === 'multi-user' && isLoggedIn) {
       void loadBilling()
+      void loadInvoices()
     }
   }, [authMode, isLoggedIn])
 
@@ -806,6 +887,82 @@ export const TldwSettings = () => {
     } finally {
       setBillingLoading(false)
     }
+  }
+
+  const handleCancelSubscription = async (atPeriodEnd: boolean) => {
+    setBillingActionLoading(true)
+    try {
+      const resp = await apiSend<{ canceled?: boolean; current_period_end?: string }>({
+        path: "/api/v1/billing/subscription/cancel" as PathOrUrl,
+        method: "POST",
+        body: { at_period_end: atPeriodEnd }
+      })
+      if (!resp.ok) {
+        message.error(resp.error || t('settings:tldw.billing.cancelFailed', 'Unable to cancel subscription.'))
+        return
+      }
+      message.success(
+        atPeriodEnd
+          ? t('settings:tldw.billing.cancelScheduled', 'Subscription will cancel at period end.')
+          : t('settings:tldw.billing.cancelled', 'Subscription cancelled.')
+      )
+      await loadBilling()
+      await loadInvoices()
+    } catch (error: any) {
+      message.error(error?.message || t('settings:tldw.billing.cancelFailed', 'Unable to cancel subscription.'))
+    } finally {
+      setBillingActionLoading(false)
+    }
+  }
+
+  const handleResumeSubscription = async () => {
+    setBillingActionLoading(true)
+    try {
+      const resp = await apiSend<{ resumed?: boolean }>({
+        path: "/api/v1/billing/subscription/resume" as PathOrUrl,
+        method: "POST"
+      })
+      if (!resp.ok) {
+        message.error(resp.error || t('settings:tldw.billing.resumeFailed', 'Unable to resume subscription.'))
+        return
+      }
+      message.success(t('settings:tldw.billing.resumed', 'Subscription resumed.'))
+      await loadBilling()
+      await loadInvoices()
+    } catch (error: any) {
+      message.error(error?.message || t('settings:tldw.billing.resumeFailed', 'Unable to resume subscription.'))
+    } finally {
+      setBillingActionLoading(false)
+    }
+  }
+
+  const confirmCancelSubscription = () => {
+    Modal.confirm({
+      title: t('settings:tldw.billing.cancelTitle', 'Cancel subscription?'),
+      content: t(
+        'settings:tldw.billing.cancelBody',
+        'This will cancel your subscription at the end of the current billing period.'
+      ),
+      okText: t('settings:tldw.billing.cancelConfirm', 'Cancel at period end'),
+      okType: 'danger',
+      cancelText: t('common:keep', 'Keep subscription'),
+      centered: true,
+      onOk: () => handleCancelSubscription(true)
+    })
+  }
+
+  const confirmResumeSubscription = () => {
+    Modal.confirm({
+      title: t('settings:tldw.billing.resumeTitle', 'Resume subscription?'),
+      content: t(
+        'settings:tldw.billing.resumeBody',
+        'This will keep your subscription active and remove the scheduled cancellation.'
+      ),
+      okText: t('settings:tldw.billing.resumeConfirm', 'Resume subscription'),
+      cancelText: t('common:cancel', 'Cancel'),
+      centered: true,
+      onOk: () => handleResumeSubscription()
+    })
   }
 
   const openHealthDiagnostics = () => {
@@ -1479,7 +1636,13 @@ export const TldwSettings = () => {
                 </p>
               </div>
               <Space>
-                <Button onClick={() => void loadBilling()} loading={billingLoading}>
+                <Button
+                  onClick={() => {
+                    void loadBilling()
+                    void loadInvoices()
+                  }}
+                  loading={billingLoading || billingInvoicesLoading}
+                >
                   {t('settings:tldw.billing.refresh', 'Refresh')}
                 </Button>
                 <Button onClick={handleBillingPortal} loading={billingLoading}>
@@ -1543,6 +1706,33 @@ export const TldwSettings = () => {
                         )}
                       />
                     )}
+                    <div className="mt-3 flex flex-wrap gap-2">
+                      {!billingStatus.cancel_at_period_end &&
+                        billingStatus.status !== 'canceled' && (
+                          <Button
+                            danger
+                            onClick={confirmCancelSubscription}
+                            loading={billingActionLoading}
+                          >
+                            {t(
+                              'settings:tldw.billing.cancelAction',
+                              'Cancel at period end'
+                            )}
+                          </Button>
+                        )}
+                      {billingStatus.cancel_at_period_end &&
+                        billingStatus.status !== 'canceled' && (
+                          <Button
+                            onClick={confirmResumeSubscription}
+                            loading={billingActionLoading}
+                          >
+                            {t(
+                              'settings:tldw.billing.resumeAction',
+                              'Resume subscription'
+                            )}
+                          </Button>
+                        )}
+                    </div>
                   </div>
                 )}
 
@@ -1672,6 +1862,86 @@ export const TldwSettings = () => {
                       </div>
                     )}
                   </div>
+                </div>
+
+                <div className="rounded border border-border bg-surface p-3">
+                  <div className="flex flex-wrap items-center justify-between gap-2">
+                    <div className="text-sm font-medium">
+                      {t('settings:tldw.billing.invoices.title', 'Invoice history')}
+                    </div>
+                    {billingInvoicesTotal > 0 && (
+                      <span className="text-xs text-text-muted">
+                        {t(
+                          'settings:tldw.billing.invoices.total',
+                          'Total: {{count}}',
+                          { count: billingInvoicesTotal }
+                        )}
+                      </span>
+                    )}
+                  </div>
+                  {billingInvoicesLoading && (
+                    <div className="mt-2 text-xs text-text-muted">
+                      {t('settings:tldw.billing.invoices.loading', 'Loading invoices…')}
+                    </div>
+                  )}
+                  {billingInvoicesError && (
+                    <Alert
+                      type="error"
+                      showIcon
+                      className="mt-3"
+                      message={t('settings:tldw.billing.invoices.error', 'Unable to load invoices')}
+                      description={billingInvoicesError}
+                    />
+                  )}
+                  {!billingInvoicesLoading && !billingInvoicesError && billingInvoices.length === 0 && (
+                    <div className="mt-2 text-xs text-text-muted">
+                      {t('settings:tldw.billing.invoices.empty', 'No invoices yet.')}
+                    </div>
+                  )}
+                  {!billingInvoicesError && billingInvoices.length > 0 && (
+                    <div className="mt-3 space-y-2">
+                      {billingInvoices.map((invoice) => (
+                        <div
+                          key={invoice.id}
+                          className="flex flex-wrap items-center justify-between gap-2 border-b border-border/50 pb-2 text-xs"
+                        >
+                          <div className="space-y-1">
+                            <div className="font-medium text-text">
+                              {formatInvoiceAmount(invoice)}
+                            </div>
+                            <div className="text-text-muted">
+                              {formatDate(invoice.created_at)}{" "}
+                              {invoice.description ? `· ${invoice.description}` : `· #${invoice.id}`}
+                            </div>
+                          </div>
+                          <div className="flex items-center gap-2">
+                            <Tag color={invoiceStatusColor(invoice.status)}>
+                              {invoiceStatusLabel(invoice.status)}
+                            </Tag>
+                            {invoice.invoice_pdf_url && (
+                              <a
+                                href={invoice.invoice_pdf_url}
+                                target="_blank"
+                                rel="noreferrer"
+                                className="text-primary hover:text-primaryStrong underline"
+                              >
+                                {t('settings:tldw.billing.invoices.pdf', 'PDF')}
+                              </a>
+                            )}
+                          </div>
+                        </div>
+                      ))}
+                      {billingInvoicesTotal > billingInvoices.length && (
+                        <div className="text-xs text-text-muted">
+                          {t(
+                            'settings:tldw.billing.invoices.showing',
+                            'Showing {{count}} of {{total}}',
+                            { count: billingInvoices.length, total: billingInvoicesTotal }
+                          )}
+                        </div>
+                      )}
+                    </div>
+                  )}
                 </div>
               </div>
             )}

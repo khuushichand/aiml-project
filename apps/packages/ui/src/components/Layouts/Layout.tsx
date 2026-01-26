@@ -447,14 +447,11 @@ function RootLayoutShell({
   const effectiveHideHeader =
     (overridesMatch && overrides?.hideHeader) || props.hideHeader || false
 
-  if (globalShell) {
+  React.useEffect(() => {
+    if (!globalShell) return
     globalShell.mounted = true
     globalShell.ownerId = ownerId
     globalShell.setOverrides = setOverrides
-  }
-
-  React.useEffect(() => {
-    if (!globalShell) return
     return () => {
       if (
         globalShell.setOverrides === setOverrides &&

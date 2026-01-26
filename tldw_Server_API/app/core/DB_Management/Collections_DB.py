@@ -493,8 +493,7 @@ class CollectionsDatabase:
             );
             CREATE INDEX IF NOT EXISTS idx_outputs_user ON outputs(user_id);
             CREATE INDEX IF NOT EXISTS idx_outputs_run ON outputs(run_id);
-            CREATE INDEX IF NOT EXISTS idx_outputs_workspace_tag ON outputs(workspace_tag);
-            CREATE UNIQUE INDEX IF NOT EXISTS ux_outputs_user_title_format ON outputs(user_id, title, format) WHERE deleted = FALSE;
+            -- NOTE: workspace_tag/deleted indexes are created after backfill to avoid schema init failures
 
             CREATE TABLE IF NOT EXISTS reading_digest_schedules (
                 id TEXT PRIMARY KEY,
@@ -661,8 +660,7 @@ class CollectionsDatabase:
             );
             CREATE INDEX IF NOT EXISTS idx_outputs_user ON outputs(user_id);
             CREATE INDEX IF NOT EXISTS idx_outputs_run ON outputs(run_id);
-            CREATE INDEX IF NOT EXISTS idx_outputs_workspace_tag ON outputs(workspace_tag);
-            CREATE UNIQUE INDEX IF NOT EXISTS ux_outputs_user_title_format ON outputs(user_id, title, format) WHERE deleted = 0;
+            -- NOTE: workspace_tag/deleted indexes are created after backfill to avoid schema init failures
 
             CREATE TABLE IF NOT EXISTS reading_digest_schedules (
                 id TEXT PRIMARY KEY,
