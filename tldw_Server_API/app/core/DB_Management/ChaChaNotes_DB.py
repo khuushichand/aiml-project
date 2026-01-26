@@ -375,7 +375,7 @@ class CharactersRAGDB:
         is_memory_db (bool): True if the database is in-memory.
         db_path_str (str): String representation of the database path for SQLite connection.
     """
-    _CURRENT_SCHEMA_VERSION = 16  # Schema v16 adds Writing Wordcloud caching tables
+    _CURRENT_SCHEMA_VERSION = 17  # Schema v17 adds workspace_tag to quizzes
     _SCHEMA_NAME = "rag_char_chat_schema"  # Used for the db_schema_version table
     _ALLOWED_CONVERSATION_STATES: Tuple[str, ...] = ("in-progress", "resolved", "backlog", "non-viable")
     _DEFAULT_CONVERSATION_STATE = "in-progress"
@@ -1736,6 +1736,7 @@ CREATE TABLE IF NOT EXISTS quizzes (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   name TEXT NOT NULL,
   description TEXT,
+  workspace_tag TEXT,
   media_id INTEGER,
   total_questions INTEGER DEFAULT 0,
   time_limit_seconds INTEGER,
@@ -2148,6 +2149,22 @@ UPDATE db_schema_version
    SET version = 16
  WHERE schema_name = 'rag_char_chat_schema'
    AND version < 16;
+"""
+
+    # --- Migration: V16 -> V17 (Workspace tag for quizzes) ---
+    _MIGRATION_SQL_V16_TO_V17 = """
+/*───────────────────────────────────────────────────────────────
+  Migration to Version 17 - Quizzes workspace_tag (2026-02-18)
+───────────────────────────────────────────────────────────────*/
+PRAGMA foreign_keys = ON;
+
+ALTER TABLE quizzes ADD COLUMN workspace_tag TEXT;
+CREATE INDEX IF NOT EXISTS idx_quizzes_workspace_tag ON quizzes(workspace_tag);
+
+UPDATE db_schema_version
+   SET version = 17
+ WHERE schema_name = 'rag_char_chat_schema'
+   AND version < 17;
 """
 
     _MIGRATION_SQL_V10_TO_V11_POSTGRES = """
@@ -3244,6 +3261,26 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
             logger.error(f"[{self._SCHEMA_NAME}] Unexpected error during migration V15->V16: {e}", exc_info=True)
             raise SchemaError(f"Unexpected error migrating to V16 for '{self._SCHEMA_NAME}': {e}") from e
 
+    def _migrate_from_v16_to_v17(self, conn: sqlite3.Connection):
+        """Migrates schema from V16 to V17 (Workspace tag for quizzes)."""
+        logger.info(f"Migrating '{self._SCHEMA_NAME}' schema from V16 to V17 for DB: {self.db_path_str}...")
+        try:
+            conn.executescript(self._MIGRATION_SQL_V16_TO_V17)
+            final_version = self._get_db_version(conn)
+            if final_version != 17:
+                raise SchemaError(
+                    f"[{self._SCHEMA_NAME}] Migration V16->V17 failed version check. Expected 17, got: {final_version}"
+                )
+            logger.info(f"[{self._SCHEMA_NAME}] Migration to V17 completed.")
+        except sqlite3.Error as e:
+            logger.error(f"[{self._SCHEMA_NAME}] Migration V16->V17 failed: {e}", exc_info=True)
+            raise SchemaError(f"Migration V16->V17 failed for '{self._SCHEMA_NAME}': {e}") from e
+        except SchemaError:
+            raise
+        except Exception as e:
+            logger.error(f"[{self._SCHEMA_NAME}] Unexpected error during migration V16->V17: {e}", exc_info=True)
+            raise SchemaError(f"Unexpected error migrating to V17 for '{self._SCHEMA_NAME}': {e}") from e
+
     def _initialize_schema(self):
         if self.backend_type == BackendType.SQLITE:
             self._initialize_schema_sqlite()
@@ -3422,6 +3459,9 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
                     if target_version >= 16 and current_db_version == 15:
                         self._migrate_from_v15_to_v16(conn)
                         current_db_version = self._get_db_version(conn)
+                    if target_version >= 17 and current_db_version == 16:
+                        self._migrate_from_v16_to_v17(conn)
+                        current_db_version = self._get_db_version(conn)
                 # Ensure helpful indexes that may have been introduced post-creation
                 try:
                     conn.execute("CREATE INDEX IF NOT EXISTS idx_flashcards_created_at ON flashcards(created_at)")
@@ -3578,6 +3618,9 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
                     elif current_initial_version == 15 and target_version >= 16:
                         self._migrate_from_v15_to_v16(conn)
                         current_db_version = self._get_db_version(conn)
+                    elif current_initial_version == 16 and target_version >= 17:
+                        self._migrate_from_v16_to_v17(conn)
+                        current_db_version = self._get_db_version(conn)
                     else:
                         raise SchemaError(
                             f"Migration path undefined for '{self._SCHEMA_NAME}' from version {current_initial_version} to {target_version}. "
@@ -3599,6 +3642,9 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
                     current_db_version = self._get_db_version(conn)
                 if target_version >= 16 and current_db_version == 15:
                     self._migrate_from_v15_to_v16(conn)
+                    current_db_version = self._get_db_version(conn)
+                if target_version >= 17 and current_db_version == 16:
+                    self._migrate_from_v16_to_v17(conn)
                     current_db_version = self._get_db_version(conn)
 
                 final_version_check = self._get_db_version(conn)
@@ -3702,6 +3748,9 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
             if current_version < 16:
                 self._apply_postgres_migration_script(self._MIGRATION_SQL_V15_TO_V16, conn, expected_version=16)
                 current_version = 16
+            if current_version < 17:
+                self._apply_postgres_migration_script(self._MIGRATION_SQL_V16_TO_V17, conn, expected_version=17)
+                current_version = 17
 
             if current_version > target_version:
                 raise SchemaError(
@@ -4106,6 +4155,163 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
         except Exception as e:
             logger.warning(f"set_message_metadata_extra failed for {message_id}: {e}")
             return False
+
+    def set_message_rag_context(
+        self,
+        message_id: str,
+        rag_context: Dict[str, Any],
+        merge: bool = True
+    ) -> bool:
+        """
+        Store RAG context (citations, retrieved documents, search settings) with a message.
+
+        This persists RAG search results and citations in message_metadata.extra_json
+        under the 'rag_context' key for later retrieval and export.
+
+        Args:
+            message_id: The message ID to attach RAG context to
+            rag_context: Dict containing:
+                - search_query: The original search query
+                - search_mode: Search mode used (fts/vector/hybrid)
+                - settings_snapshot: Key RAG settings used
+                - retrieved_documents: List of retrieved docs with scores/excerpts
+                - generated_answer: AI-generated answer (if any)
+                - citations: Citation metadata
+                - claims_verified: Verification results (if any)
+                - timestamp: ISO timestamp
+                - feedback_id: Analytics ID
+            merge: If True, merge with existing extra data; if False, replace entire extra
+
+        Returns:
+            bool: True if successful, False otherwise
+        """
+        try:
+            # Get current metadata to preserve other extra fields
+            current = self.get_message_metadata(message_id) or {}
+            current_extra = current.get('extra') or {}
+
+            if merge and isinstance(current_extra, dict):
+                # Merge: preserve existing extra fields, update rag_context
+                new_extra = dict(current_extra)
+                new_extra['rag_context'] = rag_context
+            else:
+                # Replace: only keep rag_context
+                new_extra = {'rag_context': rag_context}
+
+            return self.add_message_metadata(
+                message_id,
+                tool_calls=current.get('tool_calls'),
+                extra=new_extra
+            )
+        except Exception as e:
+            logger.warning(f"set_message_rag_context failed for {message_id}: {e}")
+            return False
+
+    def get_message_rag_context(self, message_id: str) -> Optional[Dict[str, Any]]:
+        """
+        Retrieve RAG context stored with a message.
+
+        Returns the rag_context dict from message_metadata.extra_json,
+        or None if no RAG context is stored.
+        """
+        try:
+            metadata = self.get_message_metadata(message_id)
+            if not metadata:
+                return None
+            extra = metadata.get('extra')
+            if not isinstance(extra, dict):
+                return None
+            return extra.get('rag_context')
+        except Exception as e:
+            logger.warning(f"get_message_rag_context failed for {message_id}: {e}")
+            return None
+
+    def get_messages_with_rag_context(
+        self,
+        conversation_id: str,
+        limit: int = 100,
+        offset: int = 0,
+        include_rag_context: bool = True
+    ) -> List[Dict[str, Any]]:
+        """
+        Retrieve messages for a conversation with optional RAG context attached.
+
+        This is optimized for the Knowledge QA page to load conversation history
+        with full citation data.
+
+        Args:
+            conversation_id: The conversation to fetch messages from
+            limit: Maximum number of messages to return
+            offset: Number of messages to skip
+            include_rag_context: If True, attach rag_context to each message
+
+        Returns:
+            List of message dicts, each optionally including 'rag_context' key
+        """
+        try:
+            messages = self.get_messages_for_conversation(
+                conversation_id,
+                limit=limit,
+                offset=offset
+            )
+
+            if not include_rag_context:
+                return messages
+
+            # Attach RAG context to each message
+            for msg in messages:
+                msg_id = msg.get('id')
+                if msg_id:
+                    rag_context = self.get_message_rag_context(msg_id)
+                    if rag_context:
+                        msg['rag_context'] = rag_context
+
+            return messages
+        except Exception as e:
+            logger.warning(f"get_messages_with_rag_context failed for conversation {conversation_id}: {e}")
+            return []
+
+    def get_conversation_citations(self, conversation_id: str) -> List[Dict[str, Any]]:
+        """
+        Retrieve all citations from a conversation's messages.
+
+        This aggregates all retrieved_documents from rag_context across
+        all messages in a conversation, useful for export and citation
+        bibliography generation.
+
+        Returns:
+            List of unique retrieved documents with their source message IDs
+        """
+        try:
+            messages = self.get_messages_for_conversation(conversation_id, limit=1000)
+            citations_by_id: Dict[str, Dict[str, Any]] = {}
+
+            for msg in messages:
+                msg_id = msg.get('id')
+                if not msg_id:
+                    continue
+
+                rag_context = self.get_message_rag_context(msg_id)
+                if not rag_context:
+                    continue
+
+                retrieved_docs = rag_context.get('retrieved_documents', [])
+                for doc in retrieved_docs:
+                    doc_id = doc.get('id') or doc.get('chunk_id') or f"anon_{len(citations_by_id)}"
+                    if doc_id not in citations_by_id:
+                        citations_by_id[doc_id] = {
+                            **doc,
+                            'message_ids': [msg_id],
+                            'first_cited_at': msg.get('timestamp')
+                        }
+                    else:
+                        if msg_id not in citations_by_id[doc_id]['message_ids']:
+                            citations_by_id[doc_id]['message_ids'].append(msg_id)
+
+            return list(citations_by_id.values())
+        except Exception as e:
+            logger.warning(f"get_conversation_citations failed for conversation {conversation_id}: {e}")
+            return []
 
     def backfill_tool_calls_from_inline(self, strip_inline: bool = False, limit: Optional[int] = None) -> Dict[str, int]:
         """Scan assistant messages for an inline "[tool_calls]: <json>" suffix and backfill message_metadata.
@@ -9472,6 +9678,7 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
         self,
         name: str,
         description: Optional[str] = None,
+        workspace_tag: Optional[str] = None,
         media_id: Optional[int] = None,
         time_limit_seconds: Optional[int] = None,
         passing_score: Optional[int] = None,
@@ -9482,13 +9689,14 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
         try:
             with self.transaction() as conn:
                 insert_sql = (
-                    "INSERT INTO quizzes(name, description, media_id, total_questions, time_limit_seconds, "
+                    "INSERT INTO quizzes(name, description, workspace_tag, media_id, total_questions, time_limit_seconds, "
                     "passing_score, deleted, client_id, version, created_at, last_modified) "
-                    "VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
+                    "VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
                 )
                 params = (
                     name,
                     description,
+                    workspace_tag,
                     media_id,
                     0,
                     time_limit_seconds,
@@ -9518,7 +9726,7 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
         """Get quiz by ID, returns None if not found or deleted (unless include_deleted)."""
         deleted_clause = "" if include_deleted else "AND deleted = 0"
         query = (
-            "SELECT id, name, description, media_id, total_questions, time_limit_seconds, passing_score, "
+            "SELECT id, name, description, workspace_tag, media_id, total_questions, time_limit_seconds, passing_score, "
             "deleted, client_id, version, created_at, last_modified "
             "FROM quizzes WHERE id = ? " + deleted_clause
         )
@@ -9533,6 +9741,7 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
         self,
         q: Optional[str] = None,
         media_id: Optional[int] = None,
+        workspace_tag: Optional[str] = None,
         include_deleted: bool = False,
         limit: int = 50,
         offset: int = 0,
@@ -9545,6 +9754,9 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
         if media_id is not None:
             where_clauses.append("media_id = ?")
             params.append(media_id)
+        if workspace_tag:
+            where_clauses.append("workspace_tag = ?")
+            params.append(workspace_tag)
         if q:
             where_clauses.append("(LOWER(name) LIKE ? OR LOWER(description) LIKE ?)")
             q_like = f"%{q.lower()}%"
@@ -9552,7 +9764,7 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
 
         where_sql = " AND ".join(where_clauses)
         query = (
-            "SELECT id, name, description, media_id, total_questions, time_limit_seconds, passing_score, "
+            "SELECT id, name, description, workspace_tag, media_id, total_questions, time_limit_seconds, passing_score, "
             "deleted, client_id, version, created_at, last_modified "
             f"FROM quizzes WHERE {where_sql} ORDER BY last_modified DESC LIMIT ? OFFSET ?"
         )
@@ -9570,7 +9782,7 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
     def update_quiz(self, quiz_id: int, updates: Dict[str, Any], client_id: str = "unknown") -> bool:
         """Update quiz fields, returns True if successful."""
         expected_version = updates.pop("expected_version", None)
-        allowed = {"name", "description", "media_id", "time_limit_seconds", "passing_score"}
+        allowed = {"name", "description", "workspace_tag", "media_id", "time_limit_seconds", "passing_score"}
         set_parts = []
         params: List[Any] = []
         for k, v in updates.items():

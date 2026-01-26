@@ -77,7 +77,7 @@ async def run(
                 while True:
                     msg = await ws.recv()
                     if isinstance(msg, (bytes, bytearray)):
-                        f.write(msg)
+                        await asyncio.to_thread(f.write, msg)
                         continue
                     try:
                         data = json.loads(msg)

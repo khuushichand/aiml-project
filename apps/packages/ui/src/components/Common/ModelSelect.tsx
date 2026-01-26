@@ -1,5 +1,5 @@
 import { useQuery } from "@tanstack/react-query"
-import { Avatar, Dropdown, Tooltip } from "antd"
+import { Avatar, Dropdown, Tooltip, type MenuProps } from "antd"
 import { LucideBrain } from "lucide-react"
 import React from "react"
 import { useTranslation } from "react-i18next"
@@ -10,9 +10,20 @@ import { getProviderDisplayName } from "@/utils/provider-registry"
 import { ProviderIcons } from "./ProviderIcon"
 import { IconButton } from "./IconButton"
 
-type Props = {
+export type Props = {
   iconClassName?: string
   showSelectedName?: boolean
+}
+
+type ChatModel = {
+  model: string
+  nickname?: string
+  provider?: string
+  details?: {
+    capabilities?: string[]
+  }
+  avatar?: string
+  name?: string
 }
 
 export const ModelSelect: React.FC<Props> = ({iconClassName = "size-5", showSelectedName = false}) => {
@@ -21,16 +32,14 @@ export const ModelSelect: React.FC<Props> = ({iconClassName = "size-5", showSele
   const selectedModelValue =
     typeof selectedModel === "string" ? selectedModel : null
   const [menuDensity] = useStorage("menuDensity", "comfortable")
-  const { data } = useQuery({
+  const { data } = useQuery<ChatModel[]>({
     queryKey: ["getAllModelsForSelect"],
-    queryFn: async () => {
-      const models = await fetchChatModels({ returnEmpty: false })
-      return models
-    }
+    queryFn: () => fetchChatModels({ returnEmpty: false })
   })
 
-  const groupedItems = React.useMemo(() => {
-    const groups = new Map<string, any[]>()
+  const groupedItems = React.useMemo<NonNullable<MenuProps["items"]>>(() => {
+    type MenuItem = NonNullable<MenuProps["items"]>[number]
+    const groups = new Map<string, MenuItem[]>()
     const localProviders = new Set(["lmstudio", "llamafile", "ollama", "ollama2", "llamacpp", "vllm", "custom"]) // group as "custom"
     for (const d of data || []) {
       const normalizedProvider =
@@ -41,9 +50,8 @@ export const ModelSelect: React.FC<Props> = ({iconClassName = "size-5", showSele
       const groupKey = providerRaw === 'chrome' ? 'default' : (localProviders.has(providerRaw) ? 'custom' : providerRaw)
       const providerLabel = getProviderDisplayName(normalizedProvider)
       const modelLabel = d.nickname || d.model
-      const details: any = d.details || {}
-      const caps: string[] = Array.isArray(details.capabilities)
-        ? details.capabilities
+      const caps = Array.isArray(d.details?.capabilities)
+        ? d.details.capabilities
         : []
       const hasVision = caps.includes("vision")
       const hasTools = caps.includes("tools")
@@ -99,7 +107,7 @@ export const ModelSelect: React.FC<Props> = ({iconClassName = "size-5", showSele
       groups.get(groupKey)!.push(item)
     }
     // Build grouped menu items
-    const items: any[] = []
+    const items: MenuItem[] = []
     for (const [groupKey, children] of groups) {
       const labelText =
         groupKey === "default"
@@ -121,7 +129,7 @@ export const ModelSelect: React.FC<Props> = ({iconClassName = "size-5", showSele
       })
     }
     return items
-  }, [data, selectedModelValue, setSelectedModel])
+  }, [data, selectedModelValue, setSelectedModel, t])
 
   // Get display name for selected model
   const selectedModelDisplay = React.useMemo(() => {
@@ -145,7 +153,8 @@ export const ModelSelect: React.FC<Props> = ({iconClassName = "size-5", showSele
               overflowY: "scroll"
             },
             className: `no-scrollbar ${menuDensity === 'compact' ? 'menu-density-compact' : 'menu-density-comfortable'}`,
-            selectedKeys: selectedModelValue ? [selectedModelValue] : []
+            selectedKeys: selectedModelValue ? [selectedModelValue] : [],
+            selectable: true
           }}
           placement={"topLeft"}
           trigger={["click"]}>

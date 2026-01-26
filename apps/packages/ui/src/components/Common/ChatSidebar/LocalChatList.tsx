@@ -39,7 +39,6 @@ import { useConfirmDanger } from "@/components/Common/confirm-danger"
 import { IconButton } from "@/components/Common/IconButton"
 import { useMessageOption } from "@/hooks/useMessageOption"
 import { useStoreChatModelSettings } from "@/store/model"
-import { useFolderActions } from "@/store/folder"
 import { useLoadLocalConversation } from "@/hooks/useLoadLocalConversation"
 import { cn } from "@/libs/utils"
 
@@ -48,7 +47,7 @@ type ChatGroup = {
   items: HistoryInfo[]
 }
 
-interface LocalChatListProps {
+export interface LocalChatListProps {
   searchQuery: string
   selectedChatId: string | null
   onSelectChat?: (chatId: string) => void
@@ -229,19 +228,23 @@ export function LocalChatList({
 
   const chatHistories = useMemo(
     () =>
-      chatHistoriesData?.pages.reduce(
-        (acc, page) => {
-          page.groups.forEach((group) => {
-            const existingGroup = acc.find((g) => g.label === group.label)
-            if (existingGroup) {
-              existingGroup.items.push(...group.items)
-            } else {
-              acc.push({ ...group })
+      chatHistoriesData?.pages.reduce<ChatGroup[]>(
+        (acc, page) =>
+          page.groups.reduce<ChatGroup[]>((pageAcc, group) => {
+            const existingIndex = pageAcc.findIndex((g) => g.label === group.label)
+            if (existingIndex === -1) {
+              return [...pageAcc, { ...group, items: [...group.items] }]
             }
-          })
-          return acc
-        },
-        [] as ChatGroup[]
+
+            const existingGroup = pageAcc[existingIndex]
+            const mergedGroup: ChatGroup = {
+              ...existingGroup,
+              items: [...existingGroup.items, ...group.items]
+            }
+
+            return pageAcc.map((entry, index) => (index === existingIndex ? mergedGroup : entry))
+          }, acc),
+        []
       ) || [],
     [chatHistoriesData]
   )
@@ -288,13 +291,24 @@ export function LocalChatList({
           title: t("common:undo.chatDeleted", "Chat deleted"),
           description: t("common:undo.chatDeletedDesc", "\"{{title}}\" was removed", { title: chatTitle }),
           onUndo: async () => {
-            if (chatData) {
+            try {
               await restoreChat(chatData)
               queryClient.invalidateQueries({ queryKey: ["fetchChatHistory"] })
               // If this was the active chat, reload it
               if (wasActive) {
-                loadLocalConversation(chatData.historyInfo.id)
+                await loadLocalConversation(chatData.historyInfo.id)
               }
+            } catch (error) {
+              const errorMessage =
+                error && typeof error === "object" && "message" in error
+                  ? String((error as { message?: unknown }).message)
+                  : t("common:unknownError", { defaultValue: "Unknown error" })
+              message.error(
+                t("common:undo.restoreChatError", {
+                  defaultValue: "Failed to restore chat: {{error}}",
+                  error: errorMessage
+                })
+              )
             }
           }
         })
@@ -379,6 +393,38 @@ export function LocalChatList({
 
   const effectiveSelectedChatId = selectedChatId ?? historyId ?? null
 
+  const handleRenameSubmit = () => {
+    if (!renamingChat) return
+
+    const newTitle = renameValue.trim()
+    if (!newTitle) {
+      setRenameError(
+        t("common:renameChatEmptyError", {
+          defaultValue: "Title cannot be empty."
+        })
+      )
+      return
+    }
+
+    setRenameError(null)
+    editHistory(
+      { id: renamingChat, title: newTitle },
+      {
+        onSuccess: () => {
+          setRenamingChat(null)
+          setRenameValue("")
+        },
+        onError: () => {
+          message.error(
+            t("common:renameChatError", {
+              defaultValue: "Failed to rename chat."
+            })
+          )
+        }
+      }
+    )
+  }
+
   // Loading state
   if (isLoading) {
     return (
@@ -422,38 +468,6 @@ export function LocalChatList({
     )
   }
 
-  const handleRenameSubmit = () => {
-    if (!renamingChat) return
-
-    const newTitle = renameValue.trim()
-    if (!newTitle) {
-      setRenameError(
-        t("common:renameChatEmptyError", {
-          defaultValue: "Title cannot be empty."
-        })
-      )
-      return
-    }
-
-    setRenameError(null)
-    editHistory(
-      { id: renamingChat, title: newTitle },
-      {
-        onSuccess: () => {
-          setRenamingChat(null)
-          setRenameValue("")
-        },
-        onError: () => {
-          message.error(
-            t("common:renameChatError", {
-              defaultValue: "Failed to rename chat."
-            })
-          )
-        }
-      }
-    )
-  }
-
   return (
     <div className={cn("flex flex-col gap-2", className)}>
       {/* Notification context holder for undo notifications */}
@@ -473,6 +487,7 @@ export function LocalChatList({
       >
         <Input
           autoFocus
+          disabled={renameLoading}
           value={renameValue}
           onChange={(e) => {
             setRenameValue(e.target.value)
@@ -643,7 +658,6 @@ export function LocalChatList({
                       ariaLabel={`${t("option:header.moreActions", "More actions")}: ${chat.title}`}
                       hasPopup="menu"
                       ariaExpanded={openMenuFor === chat.id}
-                      ariaControls={`history-actions-${chat.id}`}
                     >
                       <MoreHorizontal className="w-4 h-4" />
                     </IconButton>

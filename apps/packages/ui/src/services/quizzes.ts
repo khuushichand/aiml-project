@@ -30,6 +30,7 @@ export type Quiz = {
   id: number
   name: string
   description?: string | null
+  workspace_tag?: string | null
   media_id?: number | null
   total_questions: number
   time_limit_seconds?: number | null
@@ -95,6 +96,7 @@ export type QuizAttempt = {
 export type QuizCreate = {
   name: string
   description?: string | null
+  workspace_tag?: string | null
   media_id?: number | null
   time_limit_seconds?: number | null
   passing_score?: number | null
@@ -103,6 +105,7 @@ export type QuizCreate = {
 export type QuizUpdate = {
   name?: string | null
   description?: string | null
+  workspace_tag?: string | null
   media_id?: number | null
   time_limit_seconds?: number | null
   passing_score?: number | null
@@ -140,6 +143,7 @@ export type QuizGenerateRequest = {
   difficulty?: "easy" | "medium" | "hard" | "mixed"
   focus_topics?: string[]
   model?: string
+  workspace_tag?: string | null
 }
 
 // List response types
@@ -162,6 +166,7 @@ export type AttemptListResponse = {
 export type QuizListParams = {
   media_id?: number | null
   q?: string | null
+  workspace_tag?: string | null
   limit?: number
   offset?: number
 }
@@ -190,6 +195,7 @@ export async function listQuizzes(params: QuizListParams = {}): Promise<QuizList
   return await quizzesClient.list<QuizListResponse>({
     media_id: params.media_id,
     q: params.q,
+    workspace_tag: params.workspace_tag,
     limit: params.limit,
     offset: params.offset
   })

@@ -44,7 +44,7 @@ interface ImportMetaEnv {
 }
 
 interface ImportMeta {
-  readonly env?: ImportMetaEnv
+  readonly env: ImportMetaEnv
   glob?: {
     <T = unknown>(
       pattern: string,

@@ -43,7 +43,10 @@ interface ServerChatListProps {
 
 type UpdateChatRequestPayload = {
   chatId: string
-  data: Record<string, unknown>
+  data:
+    | { title?: string }
+    | { topic_label?: string | null }
+    | { state?: ConversationState }
   expectedVersion?: number | null
 }
 
@@ -85,6 +88,14 @@ export function ServerChatList({
   )
   const selectServerChat = useSelectServerChat()
   const clearChat = useClearChat()
+  const { resetWizard, addSource, setWizardStep } = useDataTablesStore(
+    (state) => ({
+      resetWizard: state.resetWizard,
+      addSource: state.addSource,
+      setWizardStep: state.setWizardStep
+    }),
+    shallow
+  )
   const [openMenuFor, setOpenMenuFor] = React.useState<string | null>(null)
   const [renamingChat, setRenamingChat] =
     React.useState<ServerChatHistoryItem | null>(null)
@@ -103,43 +114,54 @@ export function ServerChatList({
   const [bulkTagPickerOpen, setBulkTagPickerOpen] = React.useState(false)
   const [bulkDeleteConfirmOpen, setBulkDeleteConfirmOpen] = React.useState(false)
 
-  const openExtensionUrl = (
-    path: `/options.html${string}` | `/sidepanel.html${string}`
-  ) => {
-    try {
-      if (browser?.runtime?.getURL) {
-        const url = browser.runtime.getURL(path)
-        if (browser.tabs?.create) {
-          browser.tabs.create({ url })
-        } else {
-          window.open(url, "_blank")
+  const openExtensionUrl = React.useCallback(
+    (path: `/options.html${string}` | `/sidepanel.html${string}`) => {
+      try {
+        if (browser?.runtime?.getURL) {
+          const url = browser.runtime.getURL(path)
+          if (browser.tabs?.create) {
+            browser.tabs.create({ url })
+          } else {
+            window.open(url, "_blank")
+          }
+          return
         }
-        return
+      } catch (err) {
+        console.debug("[ServerChatList] openExtensionUrl browser API unavailable:", err)
       }
-    } catch (err) {
-      console.debug("[ServerChatList] openExtensionUrl browser API unavailable:", err)
-    }
 
-    try {
-      if (typeof chrome !== "undefined" && chrome.runtime?.getURL) {
-        const url = chrome.runtime.getURL(path)
-        window.open(url, "_blank")
-        return
+      try {
+        if (typeof chrome !== "undefined" && chrome.runtime?.getURL) {
+          const url = chrome.runtime.getURL(path)
+          window.open(url, "_blank")
+          return
+        }
+        if (
+          typeof chrome !== "undefined" &&
+          chrome.runtime?.openOptionsPage &&
+          path.includes("/options.html")
+        ) {
+          chrome.runtime.openOptionsPage()
+          return
+        }
+      } catch (err) {
+        console.debug("[ServerChatList] openExtensionUrl chrome API unavailable:", err)
       }
-      if (
-        typeof chrome !== "undefined" &&
-        chrome.runtime?.openOptionsPage &&
-        path.includes("/options.html")
-      ) {
-        chrome.runtime.openOptionsPage()
-        return
-      }
-    } catch (err) {
-      console.debug("[ServerChatList] openExtensionUrl chrome API unavailable:", err)
-    }
 
-    window.open(path, "_blank")
-  }
+      let fallbackUrl: string = path
+      try {
+        fallbackUrl = new URL(path, window.location.origin).toString()
+      } catch (err) {
+        console.warn("[ServerChatList] openExtensionUrl failed to build fallback URL:", err)
+      }
+      console.warn(
+        "[ServerChatList] openExtensionUrl runtime API unavailable; falling back to",
+        fallbackUrl
+      )
+      window.open(fallbackUrl, "_blank")
+    },
+    []
+  )
 
   const {
     folderApiAvailable,
@@ -170,16 +192,33 @@ export function ServerChatList({
     queryClient.invalidateQueries({ queryKey: ["serverChatHistory"] })
   }, [queryClient])
 
-  const useUpdateChatMutation = () =>
-    useMutation<ServerChatSummary, Error, UpdateChatRequestPayload>({
-      mutationFn: updateChatRequest,
-      onSettled: invalidateServerChatHistory
-    })
-
-  const { mutate: updateChatMetadata } = useUpdateChatMutation()
-  const { mutate: renameChat, isPending: renameLoading } = useUpdateChatMutation()
-  const { mutate: updateChatTopic, isPending: topicLoading } =
-    useUpdateChatMutation()
+  const { mutate: updateChatMetadata } = useMutation<
+    ServerChatSummary,
+    Error,
+    UpdateChatRequestPayload
+  >({
+    mutationKey: ["updateChatMetadata"],
+    mutationFn: updateChatRequest,
+    onSettled: invalidateServerChatHistory
+  })
+  const { mutate: renameChat, isPending: renameLoading } = useMutation<
+    ServerChatSummary,
+    Error,
+    UpdateChatRequestPayload
+  >({
+    mutationKey: ["renameChat"],
+    mutationFn: updateChatRequest,
+    onSettled: invalidateServerChatHistory
+  })
+  const { mutate: updateChatTopic, isPending: topicLoading } = useMutation<
+    ServerChatSummary,
+    Error,
+    UpdateChatRequestPayload
+  >({
+    mutationKey: ["updateChatTopic"],
+    mutationFn: updateChatRequest,
+    onSettled: invalidateServerChatHistory
+  })
 
   const {
     data: serverChatData,
@@ -263,26 +302,45 @@ export function ServerChatList({
         window.location.pathname.endsWith("options.html")
       const navigateFn = (window as Window & { __tldwNavigate?: (path: string) => void })
         .__tldwNavigate
-      const dataTableStore = useDataTablesStore.getState()
 
-      await startCreateTableFromChat(
-        {
-          id: chat.id,
-          title: chat.title,
-          topic_label: chat.topic_label
-        },
-        {
-          isOptionsPage,
-          navigate: navigateFn,
-          resetWizard: dataTableStore.resetWizard,
-          addSource: dataTableStore.addSource,
-          setWizardStep: dataTableStore.setWizardStep,
-          queuePrefill: queueDataTablesPrefill,
-          openOptionsPage: () => openExtensionUrl("/options.html#/data-tables")
-        }
-      )
+      try {
+        await startCreateTableFromChat(
+          {
+            id: chat.id,
+            title: chat.title,
+            topic_label: chat.topic_label
+          },
+          {
+            isOptionsPage,
+            navigate: navigateFn,
+            resetWizard,
+            addSource,
+            setWizardStep,
+            queuePrefill: queueDataTablesPrefill,
+            openOptionsPage: () => openExtensionUrl("/options.html#/data-tables")
+          }
+        )
+      } catch (error) {
+        console.error("[ServerChatList] Failed to start table creation", {
+          error,
+          chatId: chat.id
+        })
+        resetWizard()
+        message.error(
+          t("dataTables:createFromChatError", {
+            defaultValue: "Failed to start table creation."
+          })
+        )
+      }
     },
-    []
+    [
+      addSource,
+      openExtensionUrl,
+      queueDataTablesPrefill,
+      resetWizard,
+      setWizardStep,
+      t
+    ]
   )
 
   React.useEffect(() => {
@@ -407,7 +465,6 @@ export function ServerChatList({
               setServerChatState(resolvedState)
               setServerChatVersion(updated?.version ?? null)
             }
-            queryClient.invalidateQueries({ queryKey: ["serverChatHistory"] })
           },
           onError: () => {
             message.error(
@@ -420,7 +477,6 @@ export function ServerChatList({
       )
     },
     [
-      queryClient,
       serverChatId,
       setServerChatState,
       setServerChatVersion,
@@ -584,7 +640,7 @@ export function ServerChatList({
   }
 
   // Loading state
-  if (status === "pending" || isLoading) {
+  if (isLoading) {
     return (
       <div className={cn("flex justify-center items-center py-8", className)}>
         <Skeleton active paragraph={{ rows: 4 }} />

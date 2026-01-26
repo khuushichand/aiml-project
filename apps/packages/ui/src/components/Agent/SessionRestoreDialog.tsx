@@ -44,10 +44,11 @@ export const SessionRestoreDialog: FC<SessionRestoreDialogProps> = ({
     if (pendingApprovals.length === 0) return null
 
     const fileChangePrefixes = ["fs.write", "fs.apply_patch"]
-    const fileChanges = pendingApprovals.filter((a) =>
-      fileChangePrefixes.some((prefix) => a.toolName.startsWith(prefix))
-    ).length
-    const commands = pendingApprovals.filter((a) => a.toolName.startsWith("exec.")).length
+    const fileChanges = pendingApprovals.filter((a) => {
+      const toolName = a.toolName ?? ""
+      return fileChangePrefixes.some((prefix) => toolName.startsWith(prefix))
+    }).length
+    const commands = pendingApprovals.filter((a) => (a.toolName ?? "").startsWith("exec.")).length
     const other = pendingApprovals.length - fileChanges - commands
 
     return { total: pendingApprovals.length, fileChanges, commands, other }

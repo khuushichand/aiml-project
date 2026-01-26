@@ -16,6 +16,22 @@ const OptionIndex = () => {
   const { uxState, hasCompletedFirstRun } = useConnectionUxState()
   const { checkOnce, beginOnboarding, markFirstRunComplete } = useConnectionActions()
   const onboardingInitiated = React.useRef(false)
+  const [didHydrate, setDidHydrate] = React.useState(false)
+
+  React.useEffect(() => {
+    let cancelled = false
+    const run = async () => {
+      try {
+        await checkOnce()
+      } finally {
+        if (!cancelled) setDidHydrate(true)
+      }
+    }
+    void run()
+    return () => {
+      cancelled = true
+    }
+  }, [checkOnce])
 
   React.useEffect(() => {
     if (hasCompletedFirstRun) {
@@ -24,11 +40,12 @@ const OptionIndex = () => {
   }, [checkOnce, hasCompletedFirstRun])
 
   React.useEffect(() => {
+    if (!didHydrate) return
     if (!hasCompletedFirstRun && !onboardingInitiated.current) {
       onboardingInitiated.current = true
       void beginOnboarding()
     }
-  }, [hasCompletedFirstRun, beginOnboarding])
+  }, [hasCompletedFirstRun, beginOnboarding, didHydrate])
 
   useFocusComposerOnConnect(phase ?? null)
 

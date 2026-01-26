@@ -1,158 +1,214 @@
-import React from "react"
+import React, { useEffect } from "react"
 import { useTranslation } from "react-i18next"
-import { useNavigate } from "react-router-dom"
-import { PanelRightClose, PanelRightOpen, Bug, FlaskConical } from "lucide-react"
-import { Tooltip } from "antd"
 import { useStorage } from "@plasmohq/storage/hook"
-import { WorkspaceChat } from "./WorkspaceChat"
-import { ParametersSidebar } from "./ParametersSidebar"
-import { DebugPanel } from "./DebugPanel"
-import { useMessageOption } from "@/hooks/useMessageOption"
-import { useSmartScroll } from "@/hooks/useSmartScroll"
-import { ChevronDown } from "lucide-react"
+import { Drawer, Tabs } from "antd"
+import { FileText, MessageSquare, Sparkles } from "lucide-react"
+import {
+  WORKSPACE_LEFT_PANE_KEY,
+  WORKSPACE_RIGHT_PANE_KEY
+} from "@/utils/storage-migrations"
+import { useWorkspaceStore } from "@/store/workspace"
+import { useMobile } from "@/hooks/useMediaQuery"
+import { WorkspaceHeader } from "./WorkspaceHeader"
+import { SourcesPane } from "./SourcesPane"
+import { ChatPane } from "./ChatPane"
+import { StudioPane } from "./StudioPane"
 
 /**
- * WorkspacePlayground - Developer-focused chat interface
+ * WorkspacePlayground - NotebookLM-style three-pane research interface
+ *
+ * Layout at different breakpoints:
+ * - lg+ (1024px+): Full three-pane layout
+ * - md (768-1023px): Chat main, Sources/Studio as slide-out drawers
+ * - sm (<768px): Bottom tab navigation between panes
  *
  * Features:
- * - Compare mode (multi-model side-by-side) - always available
- * - Full model parameters panel
- * - Full RAG settings (all 30+ options)
- * - Debug panel (traces, tokens, timing)
- * - System prompt editor
+ * - Sources Pane (left): Add and manage research sources
+ * - Chat Pane (middle): RAG-powered conversation with selected sources
+ * - Studio Pane (right): Generate outputs (summaries, quizzes, flashcards, etc.)
  */
 export const WorkspacePlayground: React.FC = () => {
   const { t } = useTranslation(["playground", "option", "common"])
-  const navigate = useNavigate()
-  const [sidebarOpen, setSidebarOpen] = useStorage("workspaceSidebarOpen", true)
-  const [debugOpen, setDebugOpen] = useStorage("workspaceDebugOpen", false)
+  const isMobile = useMobile()
 
-  const { messages, streaming } = useMessageOption({
-    forceCompareEnabled: true
-  })
-  const { containerRef, isAutoScrollToBottom, autoScrollToBottom } =
-    useSmartScroll(messages, streaming, 120)
+  // Pane state with persistence
+  const [leftPaneOpen, setLeftPaneOpen] = useStorage(WORKSPACE_LEFT_PANE_KEY, true)
+  const [rightPaneOpen, setRightPaneOpen] = useStorage(WORKSPACE_RIGHT_PANE_KEY, true)
 
-  const handleGoToChat = () => {
-    navigate("/")
+  // Mobile drawer state
+  const [leftDrawerOpen, setLeftDrawerOpen] = React.useState(false)
+  const [rightDrawerOpen, setRightDrawerOpen] = React.useState(false)
+
+  // Mobile tab state
+  const [activeTab, setActiveTab] = React.useState<"sources" | "chat" | "studio">("chat")
+
+  // Workspace store
+  const workspaceId = useWorkspaceStore((s) => s.workspaceId)
+  const initializeWorkspace = useWorkspaceStore((s) => s.initializeWorkspace)
+  const selectedSourceIds = useWorkspaceStore((s) => s.selectedSourceIds)
+  const generatedArtifacts = useWorkspaceStore((s) => s.generatedArtifacts)
+
+  // Initialize workspace on mount if not already initialized
+  useEffect(() => {
+    if (!workspaceId) {
+      initializeWorkspace()
+    }
+  }, [workspaceId, initializeWorkspace])
+
+  const handleToggleLeftPane = () => {
+    if (isMobile) {
+      setLeftDrawerOpen(!leftDrawerOpen)
+    } else {
+      setLeftPaneOpen(!leftPaneOpen)
+    }
   }
 
+  const handleToggleRightPane = () => {
+    if (isMobile) {
+      setRightDrawerOpen(!rightDrawerOpen)
+    } else {
+      setRightPaneOpen(!rightPaneOpen)
+    }
+  }
+
+  // Mobile tab items with badges
+  const mobileTabItems = [
+    {
+      key: "sources",
+      label: (
+        <span className="flex items-center gap-1.5">
+          <FileText className="h-4 w-4" />
+          <span>{t("playground:sources.title", "Sources")}</span>
+          {selectedSourceIds.length > 0 && (
+            <span className="ml-1 rounded-full bg-primary px-1.5 py-0.5 text-xs text-white">
+              {selectedSourceIds.length}
+            </span>
+          )}
+        </span>
+      ),
+      children: <SourcesPane />
+    },
+    {
+      key: "chat",
+      label: (
+        <span className="flex items-center gap-1.5">
+          <MessageSquare className="h-4 w-4" />
+          <span>{t("playground:chat.title", "Chat")}</span>
+        </span>
+      ),
+      children: <ChatPane />
+    },
+    {
+      key: "studio",
+      label: (
+        <span className="flex items-center gap-1.5">
+          <Sparkles className="h-4 w-4" />
+          <span>{t("playground:studio.title", "Studio")}</span>
+          {generatedArtifacts.length > 0 && (
+            <span className="ml-1 rounded-full bg-success px-1.5 py-0.5 text-xs text-white">
+              {generatedArtifacts.length}
+            </span>
+          )}
+        </span>
+      ),
+      children: <StudioPane />
+    }
+  ]
+
+  // Mobile layout (< 768px): Tab navigation
+  if (isMobile) {
+    return (
+      <div className="flex h-full flex-col bg-bg text-text">
+        {/* Mobile Header */}
+        <WorkspaceHeader
+          leftPaneOpen={false}
+          rightPaneOpen={false}
+          onToggleLeftPane={handleToggleLeftPane}
+          onToggleRightPane={handleToggleRightPane}
+          hideToggles
+        />
+
+        {/* Mobile Tabs */}
+        <Tabs
+          activeKey={activeTab}
+          onChange={(key) => setActiveTab(key as typeof activeTab)}
+          items={mobileTabItems}
+          centered
+          className="flex-1 [&_.ant-tabs-content]:h-full [&_.ant-tabs-content-holder]:flex-1 [&_.ant-tabs-tabpane]:h-full"
+          tabBarStyle={{ marginBottom: 0, borderBottom: "1px solid var(--border)" }}
+        />
+      </div>
+    )
+  }
+
+  // Tablet/Desktop layout
   return (
     <div className="flex h-full flex-col bg-bg text-text">
       {/* Header */}
-      <div className="flex items-center justify-between border-b border-border bg-surface px-4 py-3">
-        <div className="flex items-center gap-3">
-          <FlaskConical className="h-5 w-5 text-primary" />
-          <div>
-            <h1 className="text-lg font-semibold text-text">
-              {t("playground:workspace.title", "Workspace Playground")}
-            </h1>
-            <p className="text-xs text-text-muted">
-              {t(
-                "playground:workspace.subtitle",
-                "Developer chat with compare mode and full controls"
-              )}
-            </p>
-          </div>
-        </div>
-        <div className="flex items-center gap-2">
-          <Tooltip title={t("playground:workspace.toggleDebug", "Toggle debug panel")}>
-            <button
-              type="button"
-              onClick={() => setDebugOpen(!debugOpen)}
-              className={`rounded-lg p-2 transition-colors ${
-                debugOpen
-                  ? "bg-primary/10 text-primary"
-                  : "text-text-muted hover:bg-surface2 hover:text-text"
-              }`}
-              aria-pressed={debugOpen}
-            >
-              <Bug className="h-4 w-4" />
-            </button>
-          </Tooltip>
-          <Tooltip
-            title={
-              sidebarOpen
-                ? t("playground:workspace.hideSidebar", "Hide sidebar")
-                : t("playground:workspace.showSidebar", "Show sidebar")
-            }
-          >
-            <button
-              type="button"
-              onClick={() => setSidebarOpen(!sidebarOpen)}
-              className="rounded-lg p-2 text-text-muted transition-colors hover:bg-surface2 hover:text-text"
-              aria-pressed={sidebarOpen}
-            >
-              {sidebarOpen ? (
-                <PanelRightClose className="h-4 w-4" />
-              ) : (
-                <PanelRightOpen className="h-4 w-4" />
-              )}
-            </button>
-          </Tooltip>
-          <button
-            type="button"
-            onClick={handleGoToChat}
-            className="ml-2 rounded-lg border border-border bg-surface px-3 py-1.5 text-sm font-medium text-text transition hover:bg-surface2"
-          >
-            {t("playground:workspace.goToSimpleChat", "Simple Chat")}
-          </button>
-        </div>
-      </div>
+      <WorkspaceHeader
+        leftPaneOpen={!!leftPaneOpen}
+        rightPaneOpen={!!rightPaneOpen}
+        onToggleLeftPane={handleToggleLeftPane}
+        onToggleRightPane={handleToggleRightPane}
+      />
 
-      {/* Main content */}
+      {/* Main three-pane layout */}
       <div className="flex min-h-0 flex-1">
-        {/* Chat area */}
-        <div className="relative flex min-w-0 flex-1 flex-col">
-          <div
-            ref={containerRef}
-            role="log"
-            aria-live="polite"
-            aria-relevant="additions"
-            aria-label={t("playground:aria.chatTranscript", "Chat messages")}
-            className="custom-scrollbar flex-1 min-h-0 w-full overflow-x-hidden overflow-y-auto px-4"
-          >
-            <div className="mx-auto w-full max-w-4xl pb-6">
-              <WorkspaceChat />
-            </div>
-          </div>
-          {/* Scroll to bottom button */}
-          {!isAutoScrollToBottom && (
-            <div className="pointer-events-none absolute bottom-24 left-0 right-0 flex justify-center">
-              <button
-                onClick={() => autoScrollToBottom()}
-                aria-label={t(
-                  "playground:composer.scrollToLatest",
-                  "Scroll to latest messages"
-                )}
-                title={
-                  t(
-                    "playground:composer.scrollToLatest",
-                    "Scroll to latest messages"
-                  ) as string
-                }
-                className="pointer-events-auto rounded-full border border-border bg-surface p-2 text-text-subtle shadow-card transition-colors hover:bg-surface2 focus:outline-none focus-visible:ring-2 focus-visible:ring-focus"
-              >
-                <ChevronDown className="size-4 text-text-subtle" aria-hidden="true" />
-              </button>
-            </div>
-          )}
-        </div>
-
-        {/* Right sidebar - Parameters */}
-        {sidebarOpen && (
-          <div className="hidden w-80 shrink-0 border-l border-border bg-surface lg:block">
-            <ParametersSidebar />
-          </div>
+        {/* Left pane - Sources (desktop) */}
+        {leftPaneOpen && (
+          <aside className="hidden w-72 shrink-0 border-r border-border bg-surface lg:flex lg:flex-col">
+            <SourcesPane onHide={() => setLeftPaneOpen(false)} />
+          </aside>
         )}
-      </div>
 
-      {/* Debug panel - bottom drawer */}
-      {debugOpen && (
-        <div className="h-64 shrink-0 border-t border-border bg-surface">
-          <DebugPanel onClose={() => setDebugOpen(false)} />
-        </div>
-      )}
+        {/* Left pane - Sources (tablet drawer) */}
+        <Drawer
+          title={
+            <span className="flex items-center gap-2">
+              <FileText className="h-4 w-4" />
+              {t("playground:sources.title", "Sources")}
+            </span>
+          }
+          placement="left"
+          onClose={() => setLeftDrawerOpen(false)}
+          open={leftDrawerOpen}
+          width={320}
+          className="lg:hidden"
+          styles={{ body: { padding: 0 } }}
+        >
+          <SourcesPane />
+        </Drawer>
+
+        {/* Center pane - Chat */}
+        <main className="flex min-w-0 flex-1 flex-col">
+          <ChatPane />
+        </main>
+
+        {/* Right pane - Studio (desktop) */}
+        {rightPaneOpen && (
+          <aside className="hidden w-80 shrink-0 border-l border-border bg-surface lg:flex lg:flex-col">
+            <StudioPane onHide={() => setRightPaneOpen(false)} />
+          </aside>
+        )}
+
+        {/* Right pane - Studio (tablet drawer) */}
+        <Drawer
+          title={
+            <span className="flex items-center gap-2">
+              <Sparkles className="h-4 w-4" />
+              {t("playground:studio.title", "Studio")}
+            </span>
+          }
+          placement="right"
+          onClose={() => setRightDrawerOpen(false)}
+          open={rightDrawerOpen}
+          width={360}
+          className="lg:hidden"
+          styles={{ body: { padding: 0 } }}
+        >
+          <StudioPane />
+        </Drawer>
+      </div>
     </div>
   )
 }

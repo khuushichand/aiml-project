@@ -455,7 +455,7 @@ export const ROUTE_DEFINITIONS: RouteDefinition[] = [
     element: <OptionModelPlayground />,
     nav: {
       group: "workspace",
-      labelToken: "option:header.modelPlayground",
+      labelToken: "option:header.workspacePlayground",
       icon: FlaskConical,
       order: 5,
       beta: true
@@ -583,7 +583,7 @@ export const ROUTE_DEFINITIONS: RouteDefinition[] = [
     element: <OptionWorkspacePlayground />,
     nav: {
       group: "workspace",
-      labelToken: "option:header.workspacePlayground",
+      labelToken: "option:header.modelPlayground",
       icon: FlaskConical,
       order: 0,
       beta: true

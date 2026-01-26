@@ -3210,7 +3210,7 @@ export const PlaygroundForm = ({ droppedFiles }: Props) => {
           </div>
         )}
         <Link
-          to="/workspace-playground"
+          to="/model-playground"
           title={t("playground:actions.workspacePlayground", "Multi-model compare") as string}
           className="flex w-full items-center justify-between rounded-md px-2 py-1 text-sm text-text transition hover:bg-surface2"
         >
@@ -3812,7 +3812,7 @@ export const PlaygroundForm = ({ droppedFiles }: Props) => {
               onRemoveFile={removeUploadedFile}
               onClearFiles={clearUploadedFiles}
             />
-            {/* Link to Workspace Playground for Compare mode */}
+            {/* Link to Model Playground for Compare mode */}
             <div>
               <div className="flex w-full min-w-0 bg-transparent">
                 <form
@@ -4027,6 +4027,7 @@ export const PlaygroundForm = ({ droppedFiles }: Props) => {
                         />
                         <textarea
                           id="textarea-message"
+                          data-testid="chat-input"
                           onCompositionStart={() => {
                             if (!isFirefoxTarget) {
                               setTyping(true)

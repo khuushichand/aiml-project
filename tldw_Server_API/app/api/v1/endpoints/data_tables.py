@@ -175,6 +175,7 @@ def _table_summary_from_row(
         uuid=str(row.get("uuid") or ""),
         name=str(row.get("name") or ""),
         description=row.get("description"),
+        workspace_tag=row.get("workspace_tag"),
         prompt=str(row.get("prompt") or ""),
         column_hints=_parse_json_value(row.get("column_hints_json")),
         status=str(row.get("status") or ""),
@@ -416,6 +417,7 @@ async def generate_data_table(
             name=req.name.strip(),
             prompt=req.prompt.strip(),
             description=req.description,
+            workspace_tag=req.workspace_tag,
             column_hints=column_hints,
             status="queued",
             row_count=0,
@@ -540,6 +542,7 @@ async def generate_data_table(
 async def list_data_tables(
     status_filter: Optional[str] = Query(None, description="Filter by status"),
     search: Optional[str] = Query(None, description="Search by name/description"),
+    workspace_tag: Optional[str] = Query(None, description="Filter by workspace tag"),
     limit: int = Query(50, ge=1, le=500),
     offset: int = Query(0, ge=0),
     current_user: User = Depends(get_request_user),
@@ -551,6 +554,7 @@ async def list_data_tables(
     rows = db.list_data_tables(
         status=status_filter,
         search=search,
+        workspace_tag=workspace_tag,
         limit=limit,
         offset=offset,
         owner_user_id=owner_user_id,
@@ -558,6 +562,7 @@ async def list_data_tables(
     total = db.count_data_tables(
         status=status_filter,
         search=search,
+        workspace_tag=workspace_tag,
         owner_user_id=owner_user_id,
     )
     table_ids = []

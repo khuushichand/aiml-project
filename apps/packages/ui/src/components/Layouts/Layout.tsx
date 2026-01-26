@@ -24,6 +24,7 @@ import { Sidebar } from "../Option/Sidebar"
 import { Header } from "./Header"
 import { QuickIngestModalHost } from "@/components/Layouts/QuickIngestButton"
 import { useMigration } from "../../hooks/useMigration"
+import { useStorageMigrations } from "@/hooks/useStorageMigrations"
 import { useChatSidebar } from "@/hooks/useFeatureFlags"
 import { ChatSidebar } from "@/components/Common/ChatSidebar"
 import { EventOnlyHosts } from "@/components/Common/EventHosts"
@@ -73,6 +74,7 @@ const OptionLayoutInner: React.FC<OptionLayoutProps> = ({
   const { t } = useTranslation(["option", "common", "settings"])
   const [openModelSettings, setOpenModelSettings] = useState(false)
   const { isLoading: migrationLoading } = useMigration()
+  useStorageMigrations()
   const { demoEnabled } = useDemoMode()
   const [showChatSidebar] = useChatSidebar()
   const location = useLocation()

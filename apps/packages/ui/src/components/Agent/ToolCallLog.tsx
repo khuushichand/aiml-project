@@ -309,6 +309,16 @@ export const ToolCallLog: FC<ToolCallLogProps> = ({
 }) => {
   const { t } = useTranslation("common")
   const scrollRef = useRef<HTMLDivElement>(null)
+  const isAtBottomRef = useRef(true)
+  const scrollThreshold = 40
+
+  const updateIsAtBottom = () => {
+    const container = scrollRef.current
+    if (!container) return
+    const distanceFromBottom =
+      container.scrollHeight - container.scrollTop - container.clientHeight
+    isAtBottomRef.current = distanceFromBottom <= scrollThreshold
+  }
 
   // Get human-readable, localized tool name
   const getToolDisplayName = (name: string): string => {
@@ -319,8 +329,14 @@ export const ToolCallLog: FC<ToolCallLogProps> = ({
 
   // Auto-scroll to bottom
   useEffect(() => {
-    if (autoScroll && scrollRef.current) {
-      scrollRef.current.scrollTop = scrollRef.current.scrollHeight
+    const container = scrollRef.current
+    if (!autoScroll || !container) {
+      return
+    }
+    const wasAtBottom = isAtBottomRef.current
+    if (wasAtBottom) {
+      container.scrollTop = container.scrollHeight
+      isAtBottomRef.current = true
     }
   }, [entries, autoScroll])
 
@@ -335,6 +351,7 @@ export const ToolCallLog: FC<ToolCallLogProps> = ({
   return (
     <div
       ref={scrollRef}
+      onScroll={updateIsAtBottom}
       className={`space-y-1 overflow-y-auto ${className}`}
     >
       {entries.map((entry) => {
@@ -388,7 +405,7 @@ export const ToolCallLog: FC<ToolCallLogProps> = ({
 
               {/* Result preview */}
               {entry.status === "complete" && resultPreview && (
-                <span className="ml-auto text-xs text-text-subtle">
+                <span className="ml-auto max-w-[150px] truncate text-xs text-text-subtle md:max-w-[200px] lg:max-w-[300px]">
                   {resultPreview}
                 </span>
               )}

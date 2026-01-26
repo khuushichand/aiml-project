@@ -121,3 +121,67 @@ def test_websearch_kagi_engine(monkeypatch):
         data = resp.json()
         assert "web_search_results_dict" in data
         assert data["web_search_results_dict"]["results"]
+
+
+def test_websearch_exa_engine(monkeypatch):
+    from tldw_Server_API.app.core.Web_Scraping import WebSearch_APIs as ws
+
+    def fake_perform_websearch(search_engine, search_query, *args, **kwargs):
+        assert search_engine == "exa"
+        return {
+            "results": [
+                {
+                    "title": "Exa Result",
+                    "url": "https://exa.example/article",
+                    "content": "Exa content.",
+                    "metadata": {"date_published": "2024-01-01"},
+                }
+            ],
+            "total_results_found": 1,
+            "search_time": 0.01,
+        }
+
+    monkeypatch.setattr(ws, "perform_websearch", fake_perform_websearch)
+
+    app = _mini_app_with_user()
+    with TestClient(app) as client:
+        resp = client.post(
+            "/api/v1/research/websearch",
+            json={"query": "q", "engine": "exa", "result_count": 2, "aggregate": False},
+        )
+        assert resp.status_code == 200
+        data = resp.json()
+        assert "web_search_results_dict" in data
+        assert data["web_search_results_dict"]["results"]
+
+
+def test_websearch_firecrawl_engine(monkeypatch):
+    from tldw_Server_API.app.core.Web_Scraping import WebSearch_APIs as ws
+
+    def fake_perform_websearch(search_engine, search_query, *args, **kwargs):
+        assert search_engine == "firecrawl"
+        return {
+            "results": [
+                {
+                    "title": "Firecrawl Result",
+                    "url": "https://firecrawl.example/article",
+                    "content": "Firecrawl content.",
+                    "metadata": {"date_published": "2024-02-02"},
+                }
+            ],
+            "total_results_found": 1,
+            "search_time": 0.02,
+        }
+
+    monkeypatch.setattr(ws, "perform_websearch", fake_perform_websearch)
+
+    app = _mini_app_with_user()
+    with TestClient(app) as client:
+        resp = client.post(
+            "/api/v1/research/websearch",
+            json={"query": "q", "engine": "firecrawl", "result_count": 2, "aggregate": False},
+        )
+        assert resp.status_code == 200
+        data = resp.json()
+        assert "web_search_results_dict" in data
+        assert data["web_search_results_dict"]["results"]

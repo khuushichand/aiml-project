@@ -84,6 +84,8 @@ from tldw_Server_API.app.api.v1.schemas.chat_request_schemas import (
     DEFAULT_LLM_PROVIDER,
     API_KEYS as SCHEMAS_API_KEYS,
     get_api_keys,
+    RagContext,
+    RagContextDocument,
 )
 from tldw_Server_API.app.core.DB_Management.ChaChaNotes_DB import (
     CharactersRAGDB,
@@ -160,6 +162,7 @@ from tldw_Server_API.app.api.v1.API_Deps.auth_deps import (
     get_auth_principal,
 )
 from tldw_Server_API.app.core.AuthNZ.llm_budget_guard import enforce_llm_budget
+from pydantic import BaseModel, Field, ConfigDict
 from tldw_Server_API.app.core.AuthNZ.rbac import user_has_permission
 from tldw_Server_API.app.core.AuthNZ.permissions import SYSTEM_LOGS
 from tldw_Server_API.app.core.AuthNZ.byok_runtime import (
@@ -3554,3 +3557,261 @@ async def get_chat_analytics(
     except Exception as exc:
         logger.error(f"Chat analytics failed: {exc}", exc_info=True)
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Failed to fetch analytics") from exc
+
+
+# ---------------------------------------------------------------------------
+# RAG Context Persistence Endpoints
+# ---------------------------------------------------------------------------
+
+
+class RagContextPersistRequest(BaseModel):
+    """Request body for persisting RAG context with a message."""
+
+    message_id: str = Field(..., description="The message ID to attach RAG context to")
+    rag_context: RagContext = Field(..., description="The RAG context to persist")
+
+
+class RagContextPersistResponse(BaseModel):
+    """Response for RAG context persistence."""
+
+    success: bool = Field(..., description="Whether the operation succeeded")
+    message_id: str = Field(..., description="The message ID that was updated")
+    error: Optional[str] = Field(None, description="Error message if operation failed")
+
+
+class MessageWithRagContextResponse(BaseModel):
+    """Response containing a message with its RAG context."""
+
+    id: str
+    conversation_id: str
+    sender: str
+    content: Optional[str] = None
+    timestamp: Optional[str] = None
+    rag_context: Optional[Dict[str, Any]] = None
+
+
+class ConversationCitationsResponse(BaseModel):
+    """Response containing all citations from a conversation."""
+
+    conversation_id: str
+    citations: List[Dict[str, Any]] = Field(
+        default_factory=list,
+        description="All unique citations from the conversation"
+    )
+    total_count: int = Field(0, description="Total number of unique citations")
+
+
+@router.post(
+    "/messages/{message_id}/rag-context",
+    response_model=RagContextPersistResponse,
+    summary="Persist RAG context with a message",
+    description="""
+    Store RAG search results, citations, and settings with a message.
+
+    This endpoint allows the frontend to persist RAG context after a search
+    is performed, enabling citation persistence for Knowledge QA conversations.
+
+    The RAG context includes:
+    - Search query and mode used
+    - Retrieved documents with scores and excerpts
+    - Generated answer (if any)
+    - Citation metadata
+    - Settings snapshot for reproducibility
+    """,
+    tags=["chat", "rag"],
+    dependencies=[
+        Depends(rbac_rate_limit("chat.messages.rag_context")),
+        Depends(require_token_scope("any", require_if_present=True, endpoint_id="chat.messages.rag_context")),
+    ],
+)
+async def persist_rag_context(
+    message_id: str = Path(..., description="The message ID to attach RAG context to"),
+    request_body: RagContextPersistRequest = Body(...),
+    db: CharactersRAGDB = Depends(get_chacha_db_for_user),
+    current_user: User = Depends(get_request_user),
+):
+    """Persist RAG context (citations, retrieved documents, settings) with a message."""
+    try:
+        # Verify the message exists and belongs to the user
+        message = db.get_message_by_id(message_id)
+        if not message:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=f"Message {message_id} not found"
+            )
+
+        # Convert RagContext to dict for storage
+        rag_context_dict = request_body.rag_context.model_dump(exclude_none=True)
+
+        # Add timestamp if not provided
+        if 'timestamp' not in rag_context_dict:
+            rag_context_dict['timestamp'] = datetime.now(timezone.utc).isoformat()
+
+        # Persist the RAG context
+        success = db.set_message_rag_context(message_id, rag_context_dict)
+
+        if not success:
+            return RagContextPersistResponse(
+                success=False,
+                message_id=message_id,
+                error="Failed to persist RAG context"
+            )
+
+        return RagContextPersistResponse(
+            success=True,
+            message_id=message_id
+        )
+
+    except HTTPException:
+        raise
+    except Exception as exc:
+        logger.error(f"Failed to persist RAG context for message {message_id}: {exc}", exc_info=True)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Failed to persist RAG context"
+        ) from exc
+
+
+@router.get(
+    "/messages/{message_id}/rag-context",
+    response_model=Dict[str, Any],
+    summary="Get RAG context for a message",
+    description="Retrieve the RAG context stored with a message, including citations and search settings.",
+    tags=["chat", "rag"],
+    dependencies=[
+        Depends(rbac_rate_limit("chat.messages.rag_context")),
+        Depends(require_token_scope("any", require_if_present=True, endpoint_id="chat.messages.rag_context")),
+    ],
+)
+async def get_rag_context(
+    message_id: str = Path(..., description="The message ID to get RAG context for"),
+    db: CharactersRAGDB = Depends(get_chacha_db_for_user),
+    current_user: User = Depends(get_request_user),
+):
+    """Retrieve RAG context stored with a message."""
+    try:
+        # Verify the message exists
+        message = db.get_message_by_id(message_id)
+        if not message:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=f"Message {message_id} not found"
+            )
+
+        rag_context = db.get_message_rag_context(message_id)
+        if not rag_context:
+            return {"rag_context": None}
+
+        return {"rag_context": rag_context}
+
+    except HTTPException:
+        raise
+    except Exception as exc:
+        logger.error(f"Failed to get RAG context for message {message_id}: {exc}", exc_info=True)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Failed to retrieve RAG context"
+        ) from exc
+
+
+@router.get(
+    "/conversations/{conversation_id}/messages-with-context",
+    response_model=List[Dict[str, Any]],
+    summary="Get conversation messages with RAG context",
+    description="""
+    Retrieve messages from a conversation with their RAG context attached.
+
+    This is optimized for the Knowledge QA page to load conversation history
+    with full citation data for each message.
+    """,
+    tags=["chat", "rag"],
+    dependencies=[
+        Depends(rbac_rate_limit("chat.conversations.messages")),
+        Depends(require_token_scope("any", require_if_present=True, endpoint_id="chat.conversations.messages")),
+    ],
+)
+async def get_messages_with_rag_context(
+    conversation_id: str = Path(..., description="The conversation ID"),
+    limit: int = Query(100, ge=1, le=500, description="Maximum messages to return"),
+    offset: int = Query(0, ge=0, description="Number of messages to skip"),
+    include_rag_context: bool = Query(True, description="Whether to include RAG context"),
+    db: CharactersRAGDB = Depends(get_chacha_db_for_user),
+    current_user: User = Depends(get_request_user),
+):
+    """Get messages from a conversation with optional RAG context."""
+    try:
+        # Verify conversation exists
+        conversation = db.get_conversation_by_id(conversation_id)
+        if not conversation:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=f"Conversation {conversation_id} not found"
+            )
+
+        messages = db.get_messages_with_rag_context(
+            conversation_id,
+            limit=limit,
+            offset=offset,
+            include_rag_context=include_rag_context
+        )
+
+        return messages
+
+    except HTTPException:
+        raise
+    except Exception as exc:
+        logger.error(f"Failed to get messages with RAG context for conversation {conversation_id}: {exc}", exc_info=True)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Failed to retrieve messages"
+        ) from exc
+
+
+@router.get(
+    "/conversations/{conversation_id}/citations",
+    response_model=ConversationCitationsResponse,
+    summary="Get all citations from a conversation",
+    description="""
+    Retrieve all unique citations from a conversation's messages.
+
+    This aggregates all retrieved documents from RAG context across
+    all messages, useful for generating a citation bibliography
+    or export.
+    """,
+    tags=["chat", "rag"],
+    dependencies=[
+        Depends(rbac_rate_limit("chat.conversations.citations")),
+        Depends(require_token_scope("any", require_if_present=True, endpoint_id="chat.conversations.citations")),
+    ],
+)
+async def get_conversation_citations(
+    conversation_id: str = Path(..., description="The conversation ID"),
+    db: CharactersRAGDB = Depends(get_chacha_db_for_user),
+    current_user: User = Depends(get_request_user),
+):
+    """Get all citations from a conversation."""
+    try:
+        # Verify conversation exists
+        conversation = db.get_conversation_by_id(conversation_id)
+        if not conversation:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=f"Conversation {conversation_id} not found"
+            )
+
+        citations = db.get_conversation_citations(conversation_id)
+
+        return ConversationCitationsResponse(
+            conversation_id=conversation_id,
+            citations=citations,
+            total_count=len(citations)
+        )
+
+    except HTTPException:
+        raise
+    except Exception as exc:
+        logger.error(f"Failed to get citations for conversation {conversation_id}: {exc}", exc_info=True)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Failed to retrieve citations"
+        ) from exc

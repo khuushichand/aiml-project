@@ -14,7 +14,7 @@ import {
 export const SidepanelSettingsHeader = () => {
   const { t , i18n} = useTranslation("common")
   const isRTL = i18n?.dir?.() === "rtl"
-  const logoSrc = typeof logoImage === "string" ? logoImage : logoImage.src
+  const logoSrc = logoImage
  
   const [uiMode, setUiMode] = useSetting(UI_MODE_SETTING)
 

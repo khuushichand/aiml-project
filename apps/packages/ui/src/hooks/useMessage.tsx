@@ -388,26 +388,29 @@ export const useMessage = () => {
     }
     let fullText = ""
     let contentToSave = ""
-    let embedURL: string, embedHTML: string, embedType: string
+    let embedURL = ""
+    let embedHTML = ""
+    let embedType = "html"
     let embedPDF: { content: string; page: number }[] = []
+    if (chatWithWebsiteEmbedding) {
+      const {
+        content: html,
+        url: websiteUrl,
+        type,
+        pdf
+      } = await getContentFromCurrentTab(true)
 
-    const {
-      content: html,
-      url: websiteUrl,
-      type,
-      pdf
-    } = await getContentFromCurrentTab(chatWithWebsiteEmbedding)
-
-    embedHTML = html
-    embedURL = websiteUrl
-    embedType = type
-    embedPDF = pdf
-    if (messages.length === 0) {
-      setCurrentURL(websiteUrl)
-    } else if (currentURL !== websiteUrl) {
-      setCurrentURL(websiteUrl)
-    } else {
-      embedURL = currentURL
+      embedHTML = html
+      embedURL = websiteUrl
+      embedType = type
+      embedPDF = pdf
+      if (messages.length === 0) {
+        setCurrentURL(websiteUrl)
+      } else if (currentURL !== websiteUrl) {
+        setCurrentURL(websiteUrl)
+      } else {
+        embedURL = currentURL
+      }
     }
     setMessages(newMessage)
     try {
@@ -479,8 +482,8 @@ export const useMessage = () => {
           console.error('tldw ragSearch failed, falling back to inline context', e)
         }
       }
-      if (!context) {
-        if (type === "html") {
+      if (!context && chatWithWebsiteEmbedding) {
+        if (embedType === "html") {
           context = embedHTML.slice(0, maxWebsiteContext)
         } else {
           context = embedPDF
@@ -492,7 +495,7 @@ export const useMessage = () => {
         source = [
           {
             name: embedURL,
-            type: type,
+            type: embedType,
             mode: "chat",
             url: embedURL,
             pageContent: context,

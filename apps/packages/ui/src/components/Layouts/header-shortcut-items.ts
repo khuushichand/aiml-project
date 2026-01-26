@@ -153,14 +153,14 @@ export const HEADER_SHORTCUT_GROUPS: HeaderShortcutGroup[] = [
         id: "model-playground",
         to: "/model-playground",
         icon: FlaskConical,
-        labelKey: "option:header.modelPlayground",
+        labelKey: "option:header.workspacePlayground",
         labelDefault: "Model Playground"
       },
       {
         id: "workspace-playground",
         to: "/workspace-playground",
         icon: GitCompare,
-        labelKey: "option:header.workspacePlayground",
+        labelKey: "option:header.modelPlayground",
         labelDefault: "Workspace Playground"
       },
       {

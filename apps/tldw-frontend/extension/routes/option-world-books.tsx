@@ -1,4 +1,4 @@
-import OptionLayout from "~/components/Layouts/Layout"
+import OptionLayout from "@web/extension/components/Layouts/Layout"
 import { WorldBooksWorkspace } from "~/components/Option/WorldBooks/WorldBooksWorkspace"
 
 const OptionWorldBooksWorkspaceRoute = () => {

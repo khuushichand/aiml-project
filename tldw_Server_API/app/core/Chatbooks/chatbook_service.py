@@ -3014,9 +3014,47 @@ class ChatbookService:
                             "bundled": True
                         })
 
-                    # Placeholder for future citation export support
-                    if not message_payload["citations"]:
-                        self._note_todo("Conversation export lacks citation metadata; awaiting upstream storage.")
+                    # Extract citations from RAG context if available
+                    try:
+                        rag_context = self._db.get_message_rag_context(msg['id'])
+                        if rag_context:
+                            # Include retrieved documents as citations
+                            retrieved_docs = rag_context.get('retrieved_documents', [])
+                            for doc in retrieved_docs:
+                                citation_entry = {
+                                    "id": doc.get('id'),
+                                    "source_type": doc.get('source_type'),
+                                    "title": doc.get('title'),
+                                    "score": doc.get('score'),
+                                    "excerpt": doc.get('excerpt'),
+                                    "url": doc.get('url'),
+                                    "page_number": doc.get('page_number'),
+                                    "chunk_id": doc.get('chunk_id'),
+                                }
+                                # Remove None values for cleaner export
+                                citation_entry = {k: v for k, v in citation_entry.items() if v is not None}
+                                if citation_entry:
+                                    message_payload["citations"].append(citation_entry)
+
+                            # Also include formal citations if present
+                            formal_citations = rag_context.get('citations', [])
+                            if formal_citations:
+                                message_payload["formal_citations"] = formal_citations
+
+                            # Include the RAG settings snapshot for reproducibility
+                            settings_snapshot = rag_context.get('settings_snapshot')
+                            if settings_snapshot:
+                                message_payload["rag_settings"] = settings_snapshot
+
+                            # Include generated answer metadata
+                            if rag_context.get('generated_answer'):
+                                message_payload["rag_generated_answer"] = rag_context.get('generated_answer')
+
+                            # Include search query for context
+                            if rag_context.get('search_query'):
+                                message_payload["rag_search_query"] = rag_context.get('search_query')
+                    except Exception as cite_err:
+                        logger.debug(f"Failed to extract citations for message {msg['id']}: {cite_err}")
 
                     conversation_messages.append(message_payload)
 

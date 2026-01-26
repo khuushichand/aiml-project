@@ -222,6 +222,7 @@ async def generate_quiz_from_media(
     difficulty: str = "mixed",
     focus_topics: Optional[List[str]] = None,
     model: Optional[str] = None,
+    workspace_tag: Optional[str] = None,
 ) -> Dict[str, Any]:
     """
     Generate a quiz from media content using an LLM.
@@ -307,6 +308,7 @@ async def generate_quiz_from_media(
     quiz_id = db.create_quiz(
         name=f"Quiz: {quiz_title}" if quiz_title else f"Quiz: Media #{media_id}",
         description="Auto-generated quiz from media content",
+        workspace_tag=workspace_tag,
         media_id=media_id,
     )
     for idx, question in enumerate(questions):

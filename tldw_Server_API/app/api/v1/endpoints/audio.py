@@ -2563,6 +2563,8 @@ async def list_tts_voices(
 
             raise HTTPException(status_code=404, detail=f"Provider '{provider}' not found or unavailable")
         return all_voices
+    except HTTPException:
+        raise
     except Exception as e:
         logger.error(f"Error listing TTS voices: {e}", exc_info=True)
         request_id = ensure_request_id(request)

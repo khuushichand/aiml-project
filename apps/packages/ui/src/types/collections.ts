@@ -197,6 +197,7 @@ export interface GenerateOutputRequest {
   item_ids?: string[]
   run_id?: string
   title?: string
+  workspace_tag?: string
   data?: Record<string, object>
 }
 
@@ -208,6 +209,7 @@ export interface OutputArtifact {
   storage_path: string
   media_item_id?: string
   created_at: string
+  workspace_tag?: string
 }
 
 export interface TemplatesListParams {

@@ -63,12 +63,12 @@ const buildBlocks = (
 }
 
 /**
- * WorkspaceChat - Chat interface for Workspace Playground
+ * ModelPlaygroundChat - Chat interface for Model Playground
  *
  * Always has compare mode available with a simplified, developer-focused UI.
  * Includes the message input directly in this component.
  */
-export const WorkspaceChat: React.FC = () => {
+export const ModelPlaygroundChat: React.FC = () => {
   const { t } = useTranslation(["playground", "common"])
   const notification = useAntdNotification()
   const textareaRef = React.useRef<HTMLTextAreaElement>(null)

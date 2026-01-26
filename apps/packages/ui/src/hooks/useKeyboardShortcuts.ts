@@ -167,7 +167,12 @@ export function useShortcut(
 
     document.addEventListener("keydown", handler)
     return () => document.removeEventListener("keydown", handler)
-  }, [shortcut.key, JSON.stringify(shortcut.modifiers), ...deps])
+  }, [
+    shortcut.key,
+    JSON.stringify(shortcut.modifiers),
+    shortcut.allowInInput,
+    ...deps
+  ])
 }
 
 /**

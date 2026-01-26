@@ -483,6 +483,7 @@ class CollectionsDatabase:
                 format TEXT NOT NULL,
                 storage_path TEXT NOT NULL,
                 metadata_json TEXT,
+                workspace_tag TEXT,
                 created_at TEXT NOT NULL,
                 media_item_id BIGINT,
                 chatbook_path TEXT,
@@ -492,6 +493,7 @@ class CollectionsDatabase:
             );
             CREATE INDEX IF NOT EXISTS idx_outputs_user ON outputs(user_id);
             CREATE INDEX IF NOT EXISTS idx_outputs_run ON outputs(run_id);
+            CREATE INDEX IF NOT EXISTS idx_outputs_workspace_tag ON outputs(workspace_tag);
             CREATE UNIQUE INDEX IF NOT EXISTS ux_outputs_user_title_format ON outputs(user_id, title, format) WHERE deleted = FALSE;
 
             CREATE TABLE IF NOT EXISTS reading_digest_schedules (
@@ -649,6 +651,7 @@ class CollectionsDatabase:
                 format TEXT NOT NULL,
                 storage_path TEXT NOT NULL,
                 metadata_json TEXT,
+                workspace_tag TEXT,
                 created_at TEXT NOT NULL,
                 media_item_id INTEGER,
                 chatbook_path TEXT,
@@ -658,6 +661,7 @@ class CollectionsDatabase:
             );
             CREATE INDEX IF NOT EXISTS idx_outputs_user ON outputs(user_id);
             CREATE INDEX IF NOT EXISTS idx_outputs_run ON outputs(run_id);
+            CREATE INDEX IF NOT EXISTS idx_outputs_workspace_tag ON outputs(workspace_tag);
             CREATE UNIQUE INDEX IF NOT EXISTS ux_outputs_user_title_format ON outputs(user_id, title, format) WHERE deleted = 0;
 
             CREATE TABLE IF NOT EXISTS reading_digest_schedules (
@@ -827,11 +831,26 @@ class CollectionsDatabase:
                     logger.debug("collections backfill: outputs.retention_until already exists or skipped")
                 else:
                     raise
+        if "workspace_tag" not in output_columns:
+            try:
+                self.backend.execute("ALTER TABLE outputs ADD COLUMN workspace_tag TEXT", tuple())
+            except Exception as exc:
+                if _is_backfill_noop_error(exc):
+                    logger.debug("collections backfill: outputs.workspace_tag already exists or skipped")
+                else:
+                    raise
         try:
             self.backend.execute("CREATE UNIQUE INDEX IF NOT EXISTS ux_outputs_user_title_format ON outputs(user_id, title, format) WHERE deleted = 0", tuple())
         except Exception as exc:
             if _is_backfill_noop_error(exc):
                 logger.debug("collections backfill: outputs unique index already exists or skipped")
+            else:
+                raise
+        try:
+            self.backend.execute("CREATE INDEX IF NOT EXISTS idx_outputs_workspace_tag ON outputs(workspace_tag)", tuple())
+        except Exception as exc:
+            if _is_backfill_noop_error(exc):
+                logger.debug("collections backfill: outputs workspace_tag index already exists or skipped")
             else:
                 raise
         # Reading digest schedule backfills
@@ -2525,6 +2544,7 @@ class CollectionsDatabase:
         format: str
         storage_path: str
         metadata_json: Optional[str]
+        workspace_tag: Optional[str]
         created_at: str
         media_item_id: Optional[int]
         chatbook_path: Optional[str]
@@ -2537,6 +2557,7 @@ class CollectionsDatabase:
         format_: str,
         storage_path: str,
         metadata_json: Optional[str] = None,
+        workspace_tag: Optional[str] = None,
         job_id: Optional[int] = None,
         run_id: Optional[int] = None,
         media_item_id: Optional[int] = None,
@@ -2546,8 +2567,8 @@ class CollectionsDatabase:
         now = _utcnow_iso()
         resolved_storage_path = self.resolve_output_storage_path(storage_path)
         q = (
-            "INSERT INTO outputs (user_id, job_id, run_id, type, title, format, storage_path, metadata_json, created_at, media_item_id, chatbook_path, deleted, deleted_at, retention_until) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, NULL, ?)"
+            "INSERT INTO outputs (user_id, job_id, run_id, type, title, format, storage_path, metadata_json, workspace_tag, created_at, media_item_id, chatbook_path, deleted, deleted_at, retention_until) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, NULL, ?)"
         )
         params = (
             self.user_id,
@@ -2558,6 +2579,7 @@ class CollectionsDatabase:
             format_,
             resolved_storage_path,
             metadata_json,
+            workspace_tag,
             now,
             media_item_id,
             chatbook_path,
@@ -2603,7 +2625,7 @@ class CollectionsDatabase:
     def get_output_artifact(self, output_id: int, include_deleted: bool = False) -> "CollectionsDatabase.OutputArtifactRow":
         cond = "id = ? AND user_id = ?" + ("" if include_deleted else " AND deleted = 0")
         q = (
-            "SELECT id, user_id, job_id, run_id, type, title, format, storage_path, metadata_json, created_at, media_item_id, chatbook_path "
+            "SELECT id, user_id, job_id, run_id, type, title, format, storage_path, metadata_json, workspace_tag, created_at, media_item_id, chatbook_path "
             f"FROM outputs WHERE {cond}"
         )
         row = self.backend.execute(q, (output_id, self.user_id)).first
@@ -2652,7 +2674,7 @@ class CollectionsDatabase:
         if not include_deleted:
             where.append("deleted = 0")
         q = (
-            "SELECT id, user_id, job_id, run_id, type, title, format, storage_path, metadata_json, created_at, media_item_id, chatbook_path "
+            "SELECT id, user_id, job_id, run_id, type, title, format, storage_path, metadata_json, workspace_tag, created_at, media_item_id, chatbook_path "
             f"FROM outputs WHERE {' AND '.join(where)} ORDER BY created_at DESC LIMIT 1"
         )
         row = self.backend.execute(q, tuple(params)).first
@@ -2668,6 +2690,7 @@ class CollectionsDatabase:
         job_id: Optional[int] = None,
         run_id: Optional[int] = None,
         type_: Optional[str] = None,
+        workspace_tag: Optional[str] = None,
         include_deleted: bool = False,
         only_deleted: bool = False,
     ) -> tuple[list["CollectionsDatabase.OutputArtifactRow"], int]:
@@ -2686,12 +2709,15 @@ class CollectionsDatabase:
         if type_:
             where.append("type = ?")
             params.append(type_)
+        if workspace_tag:
+            where.append("workspace_tag = ?")
+            params.append(workspace_tag)
         where_sql = " AND ".join(where)
 
         cq = f"SELECT COUNT(*) AS cnt FROM outputs WHERE {where_sql}"
         total = int(self.backend.execute(cq, tuple(params)).scalar or 0)
         sq = (
-            "SELECT id, user_id, job_id, run_id, type, title, format, storage_path, metadata_json, created_at, media_item_id, chatbook_path "
+            "SELECT id, user_id, job_id, run_id, type, title, format, storage_path, metadata_json, workspace_tag, created_at, media_item_id, chatbook_path "
             f"FROM outputs WHERE {where_sql} ORDER BY created_at DESC LIMIT ? OFFSET ?"
         )
         rows = self.backend.execute(sq, tuple(params + [limit, offset])).rows
@@ -2704,6 +2730,7 @@ class CollectionsDatabase:
         limit: int = 200,
         offset: int = 0,
         include_deleted: bool = False,
+        workspace_tag: Optional[str] = None,
     ) -> tuple[list["CollectionsDatabase.OutputArtifactRow"], int]:
         if not types:
             return [], 0
@@ -2714,11 +2741,14 @@ class CollectionsDatabase:
         placeholders = ", ".join(["?"] * len(types))
         where.append(f"type IN ({placeholders})")
         params.extend(types)
+        if workspace_tag:
+            where.append("workspace_tag = ?")
+            params.append(workspace_tag)
         where_sql = " AND ".join(where)
         cq = f"SELECT COUNT(*) AS cnt FROM outputs WHERE {where_sql}"
         total = int(self.backend.execute(cq, tuple(params)).scalar or 0)
         sq = (
-            "SELECT id, user_id, job_id, run_id, type, title, format, storage_path, metadata_json, created_at, media_item_id, chatbook_path "
+            "SELECT id, user_id, job_id, run_id, type, title, format, storage_path, metadata_json, workspace_tag, created_at, media_item_id, chatbook_path "
             f"FROM outputs WHERE {where_sql} ORDER BY created_at DESC LIMIT ? OFFSET ?"
         )
         rows = self.backend.execute(sq, tuple(params + [limit, offset])).rows

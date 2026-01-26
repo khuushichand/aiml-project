@@ -70,6 +70,11 @@ export const ProcessButton: React.FC<ProcessButtonProps> = ({
   }
 
   const tooltip = getTooltip()
+  const stateLabel = running
+    ? "running"
+    : isDisabled
+      ? "disabled"
+      : "ready"
   const button = (
     <Button
       type="primary"
@@ -79,6 +84,8 @@ export const ProcessButton: React.FC<ProcessButtonProps> = ({
       loading={running}
       className={className}
       data-testid="quick-ingest-run"
+      data-state={stateLabel}
+      data-running={running ? "true" : "false"}
       aria-label={buttonLabel}
     >
       {hasMissingFiles && (

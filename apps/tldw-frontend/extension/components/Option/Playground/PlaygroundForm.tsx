@@ -3495,6 +3495,7 @@ export const PlaygroundForm = ({ droppedFiles }: Props) => {
                         />
                         <textarea
                           id="textarea-message"
+                          data-testid="chat-input"
                           onCompositionStart={() => {
                             if (!isFirefoxTarget) {
                               setTyping(true)

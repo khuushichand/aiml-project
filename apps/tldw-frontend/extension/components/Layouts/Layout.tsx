@@ -1,4 +1,4 @@
-import React, { lazy, Suspense, useState } from "react"
+import React, { lazy, Suspense, useState, useContext } from "react"
 
 import { Drawer, Tooltip } from "antd"
 import { EraserIcon, XIcon } from "lucide-react"
@@ -53,6 +53,9 @@ import { DemoModeProvider, useDemoMode } from "@/context/demo-mode"
 type OptionLayoutProps = {
   children: React.ReactNode
   hideHeader?: boolean
+  hideSidebar?: boolean
+  allowNestedHideHeader?: boolean
+  allowNestedHideSidebar?: boolean
 }
 
 const SHORTCUT_LOADING_MIN_MS = 0
@@ -60,7 +63,8 @@ const SHORTCUT_LOADING_MAX_MS = 2500
 
 const OptionLayoutInner: React.FC<OptionLayoutProps> = ({
   children,
-  hideHeader = false
+  hideHeader = false,
+  hideSidebar = false
 }) => {
   const confirmDanger = useConfirmDanger()
   const [sidebarOpen, setSidebarOpen] = useState(false)
@@ -95,6 +99,7 @@ const OptionLayoutInner: React.FC<OptionLayoutProps> = ({
 
   // Create toggle function for sidebar
   const toggleSidebar = () => {
+    if (hideSidebar) return
     if (showChatSidebar && !hideHeader) {
       setChatSidebarCollapsed((prev) => !prev)
       return
@@ -196,7 +201,7 @@ const OptionLayoutInner: React.FC<OptionLayoutProps> = ({
   return (
     <div className="flex min-h-screen w-full">
       {/* Persistent ChatSidebar when feature flag enabled */}
-      {showChatSidebar && !hideHeader && (
+      {showChatSidebar && !hideHeader && !hideSidebar && (
         <ChatSidebar
           collapsed={chatSidebarCollapsed}
           onToggleCollapse={() => setChatSidebarCollapsed((prev) => !prev)}
@@ -218,7 +223,7 @@ const OptionLayoutInner: React.FC<OptionLayoutProps> = ({
           <div className="relative flex min-h-[135vh] flex-col pt-2 sm:pt-3">
             <div className="relative z-20 w-full">
               <Header
-                onToggleSidebar={toggleSidebar}
+                onToggleSidebar={hideSidebar ? undefined : toggleSidebar}
                 sidebarCollapsed={chatSidebarCollapsed}
               />
             </div>
@@ -229,7 +234,7 @@ const OptionLayoutInner: React.FC<OptionLayoutProps> = ({
           </div>
         )}
         {/* Legacy Drawer sidebar - only shown when new ChatSidebar feature is disabled */}
-        {!hideHeader && !showChatSidebar && (
+        {!hideHeader && !showChatSidebar && !hideSidebar && (
           <Drawer
             title={
               <div className="flex items-center justify-between">
@@ -310,7 +315,9 @@ const OptionLayoutInner: React.FC<OptionLayoutProps> = ({
         )}
 
         {/* Quick Chat Helper floating button (legacy layout only) */}
-        {!hideHeader && !showChatSidebar && <QuickChatHelperButton />}
+        {!hideHeader && !showChatSidebar && !hideSidebar && (
+          <QuickChatHelperButton />
+        )}
 
         {/* Timeline Modal - lazy-loaded */}
         {!hideHeader && (
@@ -345,10 +352,118 @@ const OptionLayoutInner: React.FC<OptionLayoutProps> = ({
   )
 }
 
-export default function OptionLayout(props: OptionLayoutProps) {
+type LayoutShellOverrides = {
+  hideHeader?: boolean
+  hideSidebar?: boolean
+}
+
+type LayoutShellContextValue = {
+  inShell: boolean
+  setOverrides?: (overrides: LayoutShellOverrides | null) => void
+}
+
+type LayoutShellGlobal = {
+  mounted: boolean
+  setOverrides?: (overrides: LayoutShellOverrides | null) => void
+}
+
+const LayoutShellContext = React.createContext<LayoutShellContextValue>({
+  inShell: false
+})
+
+const getGlobalShell = (): LayoutShellGlobal | null => {
+  if (typeof globalThis === "undefined") return null
+  const scope = globalThis as typeof globalThis & {
+    __tldwOptionShell?: LayoutShellGlobal
+  }
+  if (!scope.__tldwOptionShell) {
+    scope.__tldwOptionShell = { mounted: false }
+  }
+  return scope.__tldwOptionShell
+}
+
+/**
+ * Component for when OptionLayout is nested inside an existing shell.
+ * Extracted to satisfy React's Rules of Hooks (hooks must not be conditional).
+ */
+function NestedLayoutContent({
+  props,
+  shell,
+  globalShell
+}: {
+  props: OptionLayoutProps
+  shell: LayoutShellContextValue
+  globalShell: LayoutShellGlobal | null
+}) {
+  const requestedOverrides = React.useMemo(() => {
+    const overrides: LayoutShellOverrides = {}
+    if (props.hideHeader) overrides.hideHeader = true
+    if (props.hideSidebar) overrides.hideSidebar = true
+    return Object.keys(overrides).length > 0 ? overrides : null
+  }, [props.hideHeader, props.hideSidebar])
+
+  React.useEffect(() => {
+    const setOverrides = shell.setOverrides || globalShell?.setOverrides
+    if (!setOverrides || !requestedOverrides) return
+    setOverrides(requestedOverrides)
+    return () => setOverrides?.(null)
+  }, [globalShell?.setOverrides, requestedOverrides, shell.setOverrides])
+
+  return <>{props.children}</>
+}
+
+/**
+ * Component for when OptionLayout is the root shell.
+ * Extracted to satisfy React's Rules of Hooks (hooks must not be conditional).
+ */
+function RootLayoutShell({ props, globalShell }: { props: OptionLayoutProps; globalShell: LayoutShellGlobal | null }) {
+  const [overrides, setOverrides] = React.useState<LayoutShellOverrides | null>(
+    null
+  )
+  const allowNestedHideHeader = props.allowNestedHideHeader !== false
+  const allowNestedHideSidebar = props.allowNestedHideSidebar !== false
+  const effectiveHideHeader =
+    (allowNestedHideHeader && overrides?.hideHeader) || props.hideHeader || false
+  const effectiveHideSidebar =
+    (allowNestedHideSidebar && overrides?.hideSidebar) || props.hideSidebar || false
+
+  if (globalShell) {
+    globalShell.mounted = true
+    globalShell.setOverrides = setOverrides
+  }
+
+  React.useEffect(() => {
+    if (!globalShell) return
+    return () => {
+      if (globalShell.setOverrides === setOverrides) {
+        globalShell.setOverrides = undefined
+        globalShell.mounted = false
+      }
+    }
+  }, [globalShell, setOverrides])
+
   return (
     <DemoModeProvider>
-      <OptionLayoutInner {...props} />
+      <LayoutShellContext.Provider value={{ inShell: true, setOverrides }}>
+        <OptionLayoutInner
+          {...props}
+          hideHeader={effectiveHideHeader}
+          hideSidebar={effectiveHideSidebar}
+        />
+      </LayoutShellContext.Provider>
     </DemoModeProvider>
   )
+}
+
+export default function OptionLayout(props: OptionLayoutProps) {
+  const shell = useContext(LayoutShellContext)
+  const globalShell = getGlobalShell()
+
+  // Check if we're nested inside an existing shell
+  if (shell.inShell || globalShell?.mounted) {
+    return <NestedLayoutContent props={props} shell={shell} globalShell={globalShell} />
+  }
+
+  // We're the root shell
+  return <RootLayoutShell props={props} globalShell={globalShell} />
 }

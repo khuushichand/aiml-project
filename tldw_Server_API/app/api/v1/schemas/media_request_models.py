@@ -63,6 +63,15 @@ class MediaUpdateRequest(BaseModel):
     prompt: Optional[str] = Field(None, max_length=10000, description="Prompt (max 10KB)")
     keywords: Optional[List[str]] = Field(None, max_length=50, description="Keywords (max 50)")
 
+
+class MediaKeywordsUpdateRequest(BaseModel):
+    """Request payload for updating media keywords (add/remove/set)."""
+    keywords: List[str] = Field(..., description="Keywords to apply")
+    mode: Literal["add", "remove", "set"] = Field(
+        "add",
+        description="Update mode: add/remove/set (set replaces all keywords).",
+    )
+
 # Make prompt and analysis_content REQUIRED so missing them yields 422
 class VersionCreateRequest(BaseModel):
     content: str = Field(..., max_length=5000000, description="Content (max 5MB)")

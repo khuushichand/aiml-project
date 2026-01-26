@@ -26,9 +26,13 @@ export const useSetting = <T>(setting: SettingDef<T>) => {
     async (next: T | ((prev: T) => T)) => {
       const resolved =
         typeof next === "function" ? (next as (prev: T) => T)(value) : next
-      await setSetting(setting, resolved)
+      const normalized = normalizeSettingValue(setting, resolved)
+      // Update local render state immediately even if storage change events
+      // are not available (web mode).
+      meta?.setRenderValue?.(normalized)
+      await setSetting(setting, normalized)
     },
-    [setting, value]
+    [meta, setting, value]
   )
 
   return [value, setValue, meta] as const

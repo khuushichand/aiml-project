@@ -39,6 +39,7 @@ export type ClientPath =
   | "/api/v1/media"
   | "/api/v1/media/search"
   | "/api/v1/media/add"
+  | "/api/v1/media/{media_id}/keywords"
   | "/api/v1/media/process-audios"
   | "/api/v1/media/process-documents"
   | "/api/v1/media/process-ebooks"

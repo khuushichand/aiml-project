@@ -1,8 +1,9 @@
 import React, { useEffect, useRef, useState } from "react"
 
-type MermaidProps = {
+export type MermaidProps = {
   code: string
   className?: string
+  ariaLabel?: string
 }
 
 type MermaidTheme = "default" | "base" | "dark" | "forest" | "neutral" | "null"
@@ -37,11 +38,12 @@ const resolveMermaidTheme = (): MermaidTheme => {
   return "default"
 }
 
-export const Mermaid: React.FC<MermaidProps> = ({ code, className }) => {
+export const Mermaid: React.FC<MermaidProps> = ({ code, className, ariaLabel }) => {
   const containerRef = useRef<HTMLDivElement | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [theme, setTheme] = useState<MermaidTheme>(() => resolveMermaidTheme())
   const renderIdRef = useRef(0)
+  const initializedThemeRef = useRef<MermaidTheme | null>(null)
 
   useEffect(() => {
     if (typeof window === "undefined") return
@@ -105,11 +107,14 @@ export const Mermaid: React.FC<MermaidProps> = ({ code, className }) => {
         const mermaidModule = await import("mermaid")
         const mermaid = mermaidModule.default
 
-        mermaid.initialize({
-          startOnLoad: false,
-          theme,
-          securityLevel: "strict"
-        })
+        if (initializedThemeRef.current !== theme) {
+          mermaid.initialize({
+            startOnLoad: false,
+            theme,
+            securityLevel: "strict"
+          })
+          initializedThemeRef.current = theme
+        }
         const id = `mermaid-${hashCode(code)}-${renderIdRef.current++}`
         const { svg, bindFunctions } = await mermaid.render(id, code)
 
@@ -147,7 +152,7 @@ export const Mermaid: React.FC<MermaidProps> = ({ code, className }) => {
     <div className={className}>
       <div
         ref={containerRef}
-        aria-label="Mermaid diagram"
+        aria-label={ariaLabel ?? "Mermaid diagram"}
         role="img"
         className="flex items-center justify-center"
       />

@@ -1,4 +1,8 @@
-import { systemPromptForNonRagOption } from "~/services/tldw-server"
+import {
+  systemPromptForNonRagOption,
+  getWebSearchPrompt
+} from "~/services/tldw-server"
+import { SystemMessage } from "@/types/messages"
 import { type ChatHistory, type Message, type ToolChoice } from "~/store/option"
 import { getPromptById } from "@/db/dexie/helpers"
 import { generateHistory } from "@/utils/generate-history"
@@ -21,6 +25,121 @@ interface WebSearchPayload {
   aggregate: boolean
   engine?: string
   result_count?: number
+  searx_url?: string
+  searx_json_mode?: boolean
+  google_domain?: string
+}
+
+/** Raw web search result from API - shape varies by provider */
+interface RawWebSearchResult {
+  title?: string
+  name?: string
+  url?: string
+  link?: string
+  content?: string
+  snippet?: string
+  text?: string
+  publishedDate?: string
+  published?: string
+  metadata?: {
+    title?: string
+    snippet?: string
+    date_published?: string
+  }
+}
+
+/** Normalized web search result */
+interface NormalizedWebSearchResult {
+  title: string
+  url: string
+  snippet: string
+  published: string | null
+}
+
+/** Source entry for web search results */
+interface WebSearchSource {
+  name: string
+  url: string | undefined
+  content: string
+  metadata: {
+    title: string | undefined
+    source: string | undefined
+    date_published: string | undefined
+  }
+  mode: string
+}
+
+const MAX_WEBSEARCH_SNIPPET_LENGTH = 600
+
+const truncateText = (value: string, max = MAX_WEBSEARCH_SNIPPET_LENGTH) => {
+  const trimmed = value.trim()
+  if (trimmed.length <= max) return trimmed
+  return `${trimmed.slice(0, max - 1).trimEnd()}...`
+}
+
+const normalizeWebSearchResult = (result: RawWebSearchResult): NormalizedWebSearchResult => {
+  const title =
+    result?.title || result?.name || result?.metadata?.title || ""
+  const url = result?.url || result?.link || ""
+  const snippet =
+    result?.content ||
+    result?.snippet ||
+    result?.text ||
+    result?.metadata?.snippet ||
+    ""
+  const published =
+    result?.metadata?.date_published ||
+    result?.publishedDate ||
+    result?.published ||
+    null
+
+  return {
+    title: String(title || ""),
+    url: String(url || ""),
+    snippet: truncateText(String(snippet || "")),
+    published
+  }
+}
+
+const buildWebSearchPrompt = async (results: RawWebSearchResult[]): Promise<string | null> => {
+  if (!Array.isArray(results) || results.length === 0) return null
+  const prompt = await getWebSearchPrompt()
+  const now = new Date().toISOString()
+  const formattedResults = results
+    .map((result, index) => {
+      const normalized = normalizeWebSearchResult(result)
+      const lines = [
+        `Result ${index + 1}:`,
+        `Title: ${normalized.title || "Untitled"}`,
+        normalized.url ? `URL: ${normalized.url}` : null,
+        normalized.snippet ? `Snippet: ${normalized.snippet}` : null,
+        normalized.published ? `Published: ${normalized.published}` : null
+      ].filter(Boolean)
+      return lines.join("\n")
+    })
+    .join("\n\n")
+
+  return prompt
+    .replace("{current_date_time}", now)
+    .replace("{search_results}", formattedResults)
+}
+
+const buildWebSearchSources = (results: RawWebSearchResult[]): WebSearchSource[] => {
+  if (!Array.isArray(results)) return []
+  return results.map((result) => {
+    const normalized = normalizeWebSearchResult(result)
+    return {
+      name: normalized.title || normalized.url || "Source",
+      url: normalized.url || undefined,
+      content: normalized.snippet,
+      metadata: {
+        title: normalized.title || undefined,
+        source: normalized.title || normalized.url || undefined,
+        date_published: normalized.published || undefined
+      },
+      mode: "web_search"
+    }
+  })
 }
 
 type NormalChatModeParams = {
@@ -91,81 +210,16 @@ const normalChatModeDefinition: ChatModeDefinition<NormalChatModeParams> = {
     modelId: ctx.resolvedModelId,
     parentMessageId: ctx.resolvedAssistantParentMessageId ?? null
   }),
-  preflight: async (ctx) => {
-    if (!ctx.webSearch) {
-      return null
-    }
-
-    ctx.setIsProcessing(true)
-    if (ctx.setIsSearchingInternet) {
-      ctx.setIsSearchingInternet(true)
-    }
-
-    try {
-      await tldwClient.initialize()
-      const { searchProvider, totalSearchResults } = await getSearchSettings()
-
-      const engineMap: Record<string, string> = {
-        google: "google",
-        duckduckgo: "duckduckgo",
-        brave: "brave",
-        "brave-api": "brave",
-        searxng: "searx",
-        "tavily-api": "tavily",
-        exa: "exa",
-        firecrawl: "firecrawl"
-      }
-      const provider = (searchProvider || "").toLowerCase()
-      const engine = engineMap[provider]
-
-      const payload: WebSearchPayload = {
-        query: ctx.message,
-        aggregate: true
-      }
-      if (engine) {
-        payload.engine = engine
-      }
-      if (typeof totalSearchResults === "number" && totalSearchResults > 0) {
-        payload.result_count = totalSearchResults
-      }
-
-      const res = await tldwClient.webSearch({
-        ...payload,
-        signal: ctx.signal
-      })
-
-      if (res?.error) {
-        throw new Error(
-          typeof res.error === "string"
-            ? res.error
-            : res.error?.message || "Web search failed"
-        )
-      }
-
-      const answer =
-        (res?.final_answer?.text && String(res.final_answer.text)) || ""
-
-      const fullText =
-        answer && answer.trim().length > 0
-          ? answer
-          : "No web search results were returned."
-
-      return {
-        handled: true,
-        fullText,
-        sources: []
-      }
-    } finally {
-      if (ctx.setIsSearchingInternet) {
-        ctx.setIsSearchingInternet(false)
-      }
-    }
+  preflight: async (_ctx) => {
+    return null
   },
   preparePrompt: async (ctx) => {
     const prompt = await systemPromptForNonRagOption()
     const selectedPrompt = await getPromptById(ctx.selectedSystemPrompt)
     const promptId = ctx.selectedSystemPrompt
     let promptContent: string | undefined = undefined
+    let webSearchSources: WebSearchSource[] = []
+    let webSearchSystemMessage: SystemMessage | null = null
 
     let humanMessage = await humanMessageFormatter({
       content: [
@@ -192,6 +246,89 @@ const normalChatModeDefinition: ChatModeDefinition<NormalChatModeParams> = {
         model: ctx.selectedModel,
         useOCR: ctx.useOCR
       })
+    }
+
+    if (ctx.webSearch) {
+      ctx.setIsProcessing(true)
+      if (ctx.setIsSearchingInternet) {
+        ctx.setIsSearchingInternet(true)
+      }
+      try {
+        await tldwClient.initialize()
+        const {
+          searchProvider,
+          totalSearchResults,
+          searxngURL,
+          searxngJSONMode,
+          googleDomain
+        } = await getSearchSettings()
+
+        const engineMap: Record<string, string> = {
+          google: "google",
+          duckduckgo: "duckduckgo",
+          brave: "brave",
+          "brave-api": "brave",
+          searxng: "searx",
+          "tavily-api": "tavily",
+          exa: "exa",
+          firecrawl: "firecrawl",
+          sogou: "sogou",
+          baidu: "baidu",
+          bing: "bing",
+          stract: "stract",
+          startpage: "startpage"
+        }
+        const provider = (searchProvider || "").toLowerCase()
+        const engine = engineMap[provider]
+
+        const payload: WebSearchPayload = {
+          query: ctx.message,
+          aggregate: false
+        }
+        if (engine) {
+          payload.engine = engine
+        }
+        if (typeof totalSearchResults === "number" && totalSearchResults > 0) {
+          payload.result_count = totalSearchResults
+        }
+        if (provider === "searxng" && searxngURL) {
+          payload.searx_url = searxngURL
+        }
+        if (provider === "searxng" && searxngJSONMode) {
+          payload.searx_json_mode = true
+        }
+        if (provider === "google" && googleDomain) {
+          payload.google_domain = googleDomain
+        }
+
+        const res = await tldwClient.webSearch({
+          ...payload,
+          signal: ctx.signal
+        })
+
+        if (res?.error) {
+          throw new Error(
+            typeof res.error === "string"
+              ? res.error
+              : res.error?.message || "Web search failed"
+          )
+        }
+
+        const results = res?.web_search_results_dict?.results || []
+        webSearchSources = buildWebSearchSources(results)
+        const webSearchPrompt = await buildWebSearchPrompt(results)
+        if (webSearchPrompt) {
+          webSearchSystemMessage = await systemPromptFormatter({
+            content: webSearchPrompt
+          })
+        }
+      } catch (error) {
+        console.error("Web search failed, continuing without context", error)
+      } finally {
+        if (ctx.setIsSearchingInternet) {
+          ctx.setIsSearchingInternet(false)
+        }
+      }
     }
 
     let applicationChatHistory = generateHistory(
@@ -238,10 +375,14 @@ const normalChatModeDefinition: ChatModeDefinition<NormalChatModeParams> = {
       templatesActive
     )
 
+    if (webSearchSystemMessage) {
+      applicationChatHistory.push(webSearchSystemMessage)
+    }
+
     return {
       chatHistory: applicationChatHistory,
       humanMessage,
-      sources: [],
+      sources: webSearchSources,
       promptId,
       promptContent
     }

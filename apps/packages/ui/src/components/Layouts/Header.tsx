@@ -77,11 +77,13 @@ export const Header: React.FC<Props> = ({
     window.dispatchEvent(new CustomEvent("tldw:open-shortcuts-modal"))
   }, [])
 
-  const toggleHeaderShortcuts = React.useCallback(() => {
-    void setHeaderShortcutsExpanded(!headerShortcutsExpanded).catch(() => {
+  const toggleHeaderShortcuts = React.useCallback((next?: boolean) => {
+    void setHeaderShortcutsExpanded((prev) =>
+      typeof next === "boolean" ? next : !prev
+    ).catch(() => {
       // ignore storage write failures
     })
-  }, [headerShortcutsExpanded, setHeaderShortcutsExpanded])
+  }, [setHeaderShortcutsExpanded])
 
   const handleTitleEditStart = React.useCallback(() => {
     setIsEditingTitle(true)

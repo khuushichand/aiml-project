@@ -1,4 +1,4 @@
-import { programmingLanguages } from "@/utils/langauge-extension"
+import { programmingLanguages } from "@/utils/language-extension"
 import { Tooltip } from "antd"
 import {
   CopyCheckIcon,
@@ -13,6 +13,7 @@ import { FC, useState, useRef, useEffect, useCallback } from "react"
 import { useTranslation } from "react-i18next"
 import { useStorage } from "@plasmohq/storage/hook"
 import { Highlight } from "prism-react-renderer"
+import DOMPurify from "dompurify"
 import { useUiModeStore } from "@/store/ui-mode"
 import { useArtifactsStore } from "@/store/artifacts"
 import { normalizeLanguage, resolveTheme, safeLanguage } from "@/utils/code-theme"
@@ -35,6 +36,17 @@ const generatePreviewToken = () => {
       .join("")
   }
   return `${Math.random().toString(36).slice(2)}${Date.now().toString(36)}`
+}
+
+const getOrCreateWindowMap = <K, V>(key: string): Map<K, V> => {
+  if (typeof window === "undefined") {
+    return new Map<K, V>()
+  }
+  const win = window as unknown as Record<string, Map<K, V> | undefined>
+  if (!win[key]) {
+    win[key] = new Map<K, V>()
+  }
+  return win[key] as Map<K, V>
 }
 
 export const CodeBlock: FC<Props> = ({ language, value, blockIndex }) => {
@@ -64,12 +76,15 @@ export const CodeBlock: FC<Props> = ({ language, value, blockIndex }) => {
   const viewLabel = isDiagramLanguage
     ? t("view", "View")
     : t("artifactsView", "View code")
+  const downloadLabel = t("downloadCode", "Download code")
+  const copyLabel = t("copyToClipboard", "Copy to clipboard")
   
   const computeKey = () => {
+    const content = value ?? ""
     const base =
       typeof blockIndex === "number"
         ? `${normalizedLanguage}::${blockIndex}`
-        : `${normalizedLanguage}::${value?.slice(0, 200)}`
+        : `${normalizedLanguage}::${content.length}::${content.slice(0, 200)}::${content.slice(-200)}`
     let hash = 0
     for (let i = 0; i < base.length; i++) {
       hash = (hash * 31 + base.charCodeAt(i)) >>> 0
@@ -83,42 +98,21 @@ export const CodeBlock: FC<Props> = ({ language, value, blockIndex }) => {
   const autoOpenMapRef = useRef<Map<string, boolean> | null>(null)
 
   if (!previewMapRef.current) {
-    if (typeof window !== "undefined") {
-      const win = window as any
-      if (!win.__codeBlockPreviewState) {
-        win.__codeBlockPreviewState = new Map<string, boolean>()
-      }
-      previewMapRef.current =
-        win.__codeBlockPreviewState as Map<string, boolean>
-    } else {
-      previewMapRef.current = new Map()
-    }
+    previewMapRef.current = getOrCreateWindowMap<string, boolean>(
+      "__codeBlockPreviewState"
+    )
   }
 
   if (!collapsedMapRef.current) {
-    if (typeof window !== "undefined") {
-      const win = window as any
-      if (!win.__codeBlockCollapsedState) {
-        win.__codeBlockCollapsedState = new Map<string, boolean>()
-      }
-      collapsedMapRef.current =
-        win.__codeBlockCollapsedState as Map<string, boolean>
-    } else {
-      collapsedMapRef.current = new Map()
-    }
+    collapsedMapRef.current = getOrCreateWindowMap<string, boolean>(
+      "__codeBlockCollapsedState"
+    )
   }
 
   if (!autoOpenMapRef.current) {
-    if (typeof window !== "undefined") {
-      const win = window as any
-      if (!win.__artifactAutoOpenState) {
-        win.__artifactAutoOpenState = new Map<string, boolean>()
-      }
-      autoOpenMapRef.current =
-        win.__artifactAutoOpenState as Map<string, boolean>
-    } else {
-      autoOpenMapRef.current = new Map()
-    }
+    autoOpenMapRef.current = getOrCreateWindowMap<string, boolean>(
+      "__artifactAutoOpenState"
+    )
   }
 
   const previewStateMap = previewMapRef.current!
@@ -134,12 +128,16 @@ export const CodeBlock: FC<Props> = ({ language, value, blockIndex }) => {
     if (typeof stored === "boolean") return stored
     return isLong
   })
-  const handleCopy = () => {
-    navigator.clipboard.writeText(value)
-    setIsBtnPressed(true)
-    setTimeout(() => {
-      setIsBtnPressed(false)
-    }, 4000)
+  const handleCopy = async () => {
+    try {
+      await navigator.clipboard.writeText(value)
+      setIsBtnPressed(true)
+      setTimeout(() => {
+        setIsBtnPressed(false)
+      }, 4000)
+    } catch {
+      // Clipboard write failed - optionally show error feedback
+    }
   }
 
   const isPreviewable = ["html", "svg", "xml"].includes(
@@ -147,11 +145,15 @@ export const CodeBlock: FC<Props> = ({ language, value, blockIndex }) => {
   )
 
   const buildPreviewDoc = useCallback(() => {
-    const code = previewValue || ""
+    const rawCode = previewValue || ""
+    const code =
+      normalizedLanguage === "html"
+        ? DOMPurify.sanitize(rawCode, { WHOLE_DOCUMENT: false })
+        : rawCode
     const tokenLiteral = JSON.stringify(previewToken)
     const readyScript =
       `<script>(function(){var token=${tokenLiteral};function sendHeight(){var doc=document.documentElement;var body=document.body;var height=Math.max(doc?doc.scrollHeight:0,body?body.scrollHeight:0);window.parent&&window.parent.postMessage({type:"tldw-preview-resize",height:height,token:token},"*");}window.addEventListener("load",sendHeight);window.addEventListener("resize",sendHeight);if(window.ResizeObserver){var ro=new ResizeObserver(sendHeight);ro.observe(document.documentElement);}window.addEventListener("message",function(event){if(event&&event.data&&event.data.type==="tldw-preview-ping"&&event.data.token===token){sendHeight();}});window.parent&&window.parent.postMessage({type:"tldw-preview-ready",token:token},"*");sendHeight();})();</script>`
-    if ((language || "").toLowerCase() === "svg") {
+    if (normalizedLanguage === "svg") {
       const hasSvgTag = /<svg[\s>]/i.test(code)
       let svgMarkup = hasSvgTag
         ? code
@@ -166,10 +168,13 @@ export const CodeBlock: FC<Props> = ({ language, value, blockIndex }) => {
         )
       }
       
-      return `<!doctype html><html><head><meta charset='utf-8'/><style>html,body{margin:0;padding:0;display:flex;align-items:center;justify-content:center;background:#fff;height:100%;overflow:hidden;}svg{max-width:100%;max-height:100%;}</style></head><body>${svgMarkup}${readyScript}</body></html>`
+      const sanitizedSvg = DOMPurify.sanitize(svgMarkup, {
+        USE_PROFILES: { svg: true }
+      })
+      return `<!doctype html><html><head><meta charset='utf-8'/><style>html,body{margin:0;padding:0;display:flex;align-items:center;justify-content:center;background:#fff;height:100%;overflow:hidden;}svg{max-width:100%;max-height:100%;}</style></head><body>${sanitizedSvg}${readyScript}</body></html>`
     }
     return `<!doctype html><html><head><meta charset='utf-8'/></head><body>${code}${readyScript}</body></html>`
-  }, [previewValue, language, previewToken])
+  }, [previewValue, normalizedLanguage, previewToken])
 
   useEffect(() => {
     if (!showPreview || !isPreviewable) {
@@ -234,11 +239,11 @@ export const CodeBlock: FC<Props> = ({ language, value, blockIndex }) => {
 
   useEffect(() => {
     previewStateMap.set(keyRef.current, showPreview)
-  }, [showPreview, previewStateMap, keyRef])
+  }, [showPreview, previewStateMap])
 
   useEffect(() => {
     collapsedStateMap.set(keyRef.current, collapsed)
-  }, [collapsed, collapsedStateMap, keyRef])
+  }, [collapsed, collapsedStateMap])
 
   useEffect(() => {
     if (debounceTimeoutRef.current) {
@@ -425,6 +430,12 @@ export const CodeBlock: FC<Props> = ({ language, value, blockIndex }) => {
               {isLong && (
                 <button
                   onClick={() => setCollapsed((prev) => !prev)}
+                  aria-label={
+                    collapsed
+                      ? t("expand", "Expand code")
+                      : t("collapse", "Collapse code")
+                  }
+                  aria-expanded={!collapsed}
                   className="inline-flex items-center gap-1 text-[11px] text-text-muted hover:text-text">
                   {collapsed ? (
                     <>
@@ -443,16 +454,18 @@ export const CodeBlock: FC<Props> = ({ language, value, blockIndex }) => {
           </div>
           <div className="sticky top-9 md:top-[5.75rem]">
             <div className="absolute bottom-0 right-2 flex h-9 items-center gap-1">
-              <Tooltip title={t("downloadCode")}>
+              <Tooltip title={downloadLabel}>
                 <button
                   onClick={handleDownload}
+                  aria-label={downloadLabel}
                   className="flex gap-1.5 items-center rounded bg-none p-1 text-xs text-text-muted hover:bg-surface2 hover:text-text focus:outline-none">
                   <DownloadIcon className="size-4" />
                 </button>
               </Tooltip>
-              <Tooltip title={t("copyToClipboard")}>
+              <Tooltip title={copyLabel}>
                 <button
                   onClick={handleCopy}
+                  aria-label={copyLabel}
                   className="flex gap-1.5 items-center rounded bg-none p-1 text-xs text-text-muted hover:bg-surface2 hover:text-text focus:outline-none">
                   {!isBtnPressed ? (
                     <CopyIcon className="size-4" />

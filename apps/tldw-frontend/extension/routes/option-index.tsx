@@ -7,7 +7,7 @@ import {
 } from "@/hooks/useConnectionState"
 import { useFocusComposerOnConnect } from "@/hooks/useComposerFocus"
 import { OnboardingWizard } from "@/components/Option/Onboarding/OnboardingWizard"
-import OptionLayout from "~/components/Layouts/Layout"
+import OptionLayout from "@web/extension/components/Layouts/Layout"
 import { Playground } from "~/components/Option/Playground/Playground"
 
 const OptionIndex = () => {
@@ -35,7 +35,7 @@ const OptionIndex = () => {
   // the onboarding wizard (“Welcome — Let’s get you connected”).
   if (!hasCompletedFirstRun) {
     return (
-      <OptionLayout hideHeader>
+      <OptionLayout hideHeader hideSidebar>
         <OnboardingWizard
           onFinish={async () => {
             try {

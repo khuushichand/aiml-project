@@ -49,3 +49,61 @@ def test_parse_tavily_results_maps_fields():
     assert r["metadata"]["author"] == "A"
     assert r["metadata"]["language"] == "en"
     assert r["metadata"]["relevance_score"] == 0.8
+
+
+def test_parse_exa_results_maps_fields():
+    from tldw_Server_API.app.core.Web_Scraping.WebSearch_APIs import parse_exa_results
+    out = {}
+    raw = {
+        "results": [
+            {
+                "title": "Exa Title",
+                "url": "https://exa.example",
+                "summary": "Summary text",
+                "publishedDate": "2024-05-05",
+                "author": "Author",
+                "language": "en",
+                "score": 0.9,
+            }
+        ]
+    }
+    parse_exa_results(raw, out)
+    assert out.get("processing_error") is None
+    assert len(out["results"]) == 1
+    r = out["results"][0]
+    assert r["title"] == "Exa Title"
+    assert r["url"] == "https://exa.example"
+    assert r["content"] == "Summary text"
+    assert r["metadata"]["date_published"] == "2024-05-05"
+    assert r["metadata"]["author"] == "Author"
+    assert r["metadata"]["language"] == "en"
+    assert r["metadata"]["relevance_score"] == 0.9
+
+
+def test_parse_firecrawl_results_maps_fields():
+    from tldw_Server_API.app.core.Web_Scraping.WebSearch_APIs import parse_firecrawl_results
+    out = {}
+    raw = {
+        "data": [
+            {
+                "title": "Firecrawl Title",
+                "url": "https://firecrawl.example",
+                "description": "Description text",
+                "publishedDate": "2024-06-06",
+                "author": "Author",
+                "language": "en",
+                "score": 0.7,
+            }
+        ]
+    }
+    parse_firecrawl_results(raw, out)
+    assert out.get("processing_error") is None
+    assert len(out["results"]) == 1
+    r = out["results"][0]
+    assert r["title"] == "Firecrawl Title"
+    assert r["url"] == "https://firecrawl.example"
+    assert r["content"] == "Description text"
+    assert r["metadata"]["date_published"] == "2024-06-06"
+    assert r["metadata"]["author"] == "Author"
+    assert r["metadata"]["language"] == "en"
+    assert r["metadata"]["relevance_score"] == 0.7

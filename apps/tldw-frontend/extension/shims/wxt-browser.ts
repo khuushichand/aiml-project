@@ -94,7 +94,18 @@ const getStorageBackend = () => {
   return null
 }
 
-const storageArea = {
+const storageOnChanged = createEventTarget()
+
+const parseStoredValue = (raw: string | null): unknown => {
+  if (raw == null) return raw
+  try {
+    return JSON.parse(raw)
+  } catch {
+    return raw
+  }
+}
+
+const createStorageArea = (areaName: "local" | "sync" | "session") => ({
   get: (
     keys?: string | string[] | null,
     callback?: (items: Record<string, unknown>) => void
@@ -105,25 +116,17 @@ const storageArea = {
       callback?.(result)
       return Promise.resolve(result)
     }
-    const parseValue = (raw: string | null): unknown => {
-      if (raw == null) return raw
-      try {
-        return JSON.parse(raw)
-      } catch {
-        return raw
-      }
-    }
     if (!keys) {
       for (let i = 0; i < backend.length; i += 1) {
         const key = backend.key(i)
         if (key) {
-          result[key] = parseValue(backend.getItem(key))
+          result[key] = parseStoredValue(backend.getItem(key))
         }
       }
     } else {
       const keyList = Array.isArray(keys) ? keys : [keys]
       keyList.forEach((key) => {
-        result[key] = parseValue(backend.getItem(key))
+        result[key] = parseStoredValue(backend.getItem(key))
       })
     }
     callback?.(result)
@@ -131,36 +134,79 @@ const storageArea = {
   },
   set: (items: Record<string, unknown>, callback?: () => void) => {
     const backend = getStorageBackend()
+    const changes: Record<string, { oldValue?: unknown; newValue?: unknown }> =
+      {}
     if (backend) {
       Object.entries(items).forEach(([key, value]) => {
-        backend.setItem(key, JSON.stringify(value))
+        const oldRaw = backend.getItem(key)
+        const newRaw = JSON.stringify(value)
+        if (oldRaw !== newRaw) {
+          changes[key] = {
+            oldValue: parseStoredValue(oldRaw),
+            newValue: parseStoredValue(newRaw)
+          }
+        }
+        backend.setItem(key, newRaw)
       })
+    }
+    if (Object.keys(changes).length > 0) {
+      storageOnChanged.trigger(changes, areaName)
     }
     callback?.()
     return Promise.resolve()
   },
   remove: (keys: string | string[], callback?: () => void) => {
     const backend = getStorageBackend()
+    const changes: Record<string, { oldValue?: unknown; newValue?: unknown }> =
+      {}
     if (backend) {
       const keyList = Array.isArray(keys) ? keys : [keys]
-      keyList.forEach((key) => backend.removeItem(key))
+      keyList.forEach((key) => {
+        const oldRaw = backend.getItem(key)
+        if (oldRaw !== null) {
+          changes[key] = {
+            oldValue: parseStoredValue(oldRaw),
+            newValue: undefined
+          }
+        }
+        backend.removeItem(key)
+      })
+    }
+    if (Object.keys(changes).length > 0) {
+      storageOnChanged.trigger(changes, areaName)
     }
     callback?.()
     return Promise.resolve()
   },
   clear: (callback?: () => void) => {
     const backend = getStorageBackend()
-    backend?.clear()
+    const changes: Record<string, { oldValue?: unknown; newValue?: unknown }> =
+      {}
+    if (backend) {
+      for (let i = 0; i < backend.length; i += 1) {
+        const key = backend.key(i)
+        if (!key) continue
+        const oldRaw = backend.getItem(key)
+        changes[key] = {
+          oldValue: parseStoredValue(oldRaw),
+          newValue: undefined
+        }
+      }
+      backend.clear()
+    }
+    if (Object.keys(changes).length > 0) {
+      storageOnChanged.trigger(changes, areaName)
+    }
     callback?.()
     return Promise.resolve()
   }
-}
+})
 
 const storage = {
-  local: storageArea,
-  sync: storageArea,
-  session: storageArea,
-  onChanged: createEventTarget()
+  local: createStorageArea("local"),
+  sync: createStorageArea("sync"),
+  session: createStorageArea("session"),
+  onChanged: storageOnChanged
 }
 
 const permissions = {

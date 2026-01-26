@@ -42,6 +42,7 @@ New table `writing_wordclouds` in ChaChaNotes DB:
 - `id` (TEXT, primary key; hash of text + options)
 - `status` (queued|running|ready|failed)
 - `options_json`, `words_json`, `meta_json`, `error`
+- `input_chars` (INTEGER)
 - timestamps + `client_id`
 
 Cached results keyed by a stable SHA-256 hash of `text + options_json`.
@@ -55,7 +56,6 @@ Cached results keyed by a stable SHA-256 hash of `text + options_json`.
 
 ## Tokenization/Weights
 - Normalize to lowercase.
-- Regex tokens over `[\\w'-]+`, filter by length.
+- Regex tokens over `[\w'-]+`, filter by length.
 - Optional stopword removal (default English list).
 - Weight = raw frequency.
-

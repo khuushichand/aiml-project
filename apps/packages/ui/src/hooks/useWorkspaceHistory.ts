@@ -182,11 +182,13 @@ export function useWorkspaceHistory(
 export function useAutoSelectWorkspace(
   existingWorkspaces: Workspace[],
   currentSelectedId: string | null,
-  onSelect: (workspace: Workspace) => void
+  onSelect: (workspace: Workspace) => void,
+  enabled: boolean = true
 ): void {
   const existingIds = existingWorkspaces.map((w) => w.id)
 
   useEffect(() => {
+    if (!enabled) return
     // Only run if no workspace is currently selected
     if (currentSelectedId || existingWorkspaces.length === 0) return
 
@@ -205,5 +207,5 @@ export function useAutoSelectWorkspace(
     }
 
     autoSelect()
-  }, [existingWorkspaces, currentSelectedId, existingIds, onSelect])
+  }, [enabled, existingWorkspaces, currentSelectedId, existingIds, onSelect])
 }

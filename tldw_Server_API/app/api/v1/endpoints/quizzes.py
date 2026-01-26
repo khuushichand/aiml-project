@@ -35,13 +35,14 @@ router = APIRouter(prefix="/quizzes", tags=["quizzes"])
 def list_quizzes(
     q: Optional[str] = None,
     media_id: Optional[int] = None,
+    workspace_tag: Optional[str] = None,
     limit: int = Query(50, ge=1, le=200),
     offset: int = Query(0, ge=0),
     db: CharactersRAGDB = Depends(get_chacha_db_for_user),
 ):
     """List quizzes with pagination and optional filters."""
     try:
-        return db.list_quizzes(q=q, media_id=media_id, limit=limit, offset=offset)
+        return db.list_quizzes(q=q, media_id=media_id, workspace_tag=workspace_tag, limit=limit, offset=offset)
     except CharactersRAGDBError as e:
         logger.error(f"Failed to list quizzes: {e}")
         raise HTTPException(status_code=500, detail="Failed to list quizzes")
@@ -274,6 +275,7 @@ async def generate_quiz(
             difficulty=request.difficulty,
             focus_topics=request.focus_topics,
             model=request.model,
+            workspace_tag=request.workspace_tag,
         )
     except ConflictError as e:
         raise HTTPException(status_code=404, detail=str(e))

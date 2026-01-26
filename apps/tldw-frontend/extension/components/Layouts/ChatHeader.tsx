@@ -25,7 +25,7 @@ type ChatHeaderProps = {
   showTimelineButton?: boolean
   onOpenTimeline?: () => void
   shortcutsExpanded: boolean
-  onToggleShortcuts: () => void
+  onToggleShortcuts: (next?: boolean) => void
   commandKeyLabel: string
 }
 
@@ -97,7 +97,7 @@ export function ChatHeader({
             <Tooltip title={shortcutsToggleLabel} placement="bottom">
               <button
                 type="button"
-                onClick={onToggleShortcuts}
+                onClick={() => onToggleShortcuts(!shortcutsExpanded)}
                 aria-label={shortcutsToggleLabel as string}
                 className="inline-flex items-center justify-center rounded-md p-1.5 text-text-muted hover:bg-surface2 hover:text-text"
                 title={shortcutsToggleLabel}
@@ -208,7 +208,12 @@ export function ChatHeader({
           </Tooltip>
         </div>
       </div>
-      <HeaderShortcuts className="px-4 pb-2 pt-1" showToggle={false} />
+      <HeaderShortcuts
+        className="px-4 pb-2 pt-1"
+        showToggle={false}
+        expanded={shortcutsExpanded}
+        onExpandedChange={onToggleShortcuts}
+      />
     </header>
   )
 }
