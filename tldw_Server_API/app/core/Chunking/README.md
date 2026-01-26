@@ -207,7 +207,7 @@ Behavior by method and overlap:
   - overlap > 0: emits all chunks for each buffer, then carries the trailing `overlap` tokens from the last chunk forward. The first chunk of the next buffer may repeat those tokens. When reconstructing, drop a matching prefix (up to `overlap` tokens) from the first chunk after each boundary.
   - overlap == 0: emits all chunks except the last during a buffer read and carries the full last chunk into the next buffer.
 - sentences and other methods
-  - overlap > 0: emits all but the last chunk for each buffer and carries that last chunk forward so the overlap happens at the buffer boundary (deduplicate by removing a matching prefix on boundary).
+  - overlap > 0: emits all but the last chunk for each buffer and carries that last chunk forward so the overlap happens at the buffer boundary (deduplicate by removing a matching prefix on boundary). Note: the carried overlap is the full last chunk (not capped to the configured overlap size).
   - overlap == 0: same withholding of the final chunk per buffer as above.
 
 In both cases, the boundary join uses a method-aware separator to avoid token fragmentation (a space for `words`, newlines for structure-heavy kinds). If you need exact source fidelity, prefer `chunk_text_with_metadata` or `process_text`, which normalize returned text to original spans by `start_offset`/`end_offset`.
@@ -245,6 +245,7 @@ Behavior (JSON):
   - `{ "__meta_ref__": "<id>", "metadata": { ... } }`
   - Subsequent chunks include `{ "data": [...], "__meta_ref__": "<id>" }` (for a list) or the analogous dict form.
   - When `output_format = 'text'`, these objects are rendered via `_json_to_text`.
+- `JSONChunkingStrategy.chunk_with_metadata(...)` always returns chunk text sliced from the original JSON string to preserve offsets; `output_format` is recorded in metadata but does not change the returned chunk text.
 
 ### Strategies (Built-in)
 - `words`, `sentences`, `paragraphs`, `fixed_size`, `tokens`, `semantic`, `json`, `xml`, `ebook_chapters`, `propositions`, `rolling_summarize`, `structure_aware`, `code` (Python AST / heuristic based on `code_mode`), `code_ast` (force AST).

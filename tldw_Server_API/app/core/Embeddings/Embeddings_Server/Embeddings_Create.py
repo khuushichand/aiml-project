@@ -19,8 +19,6 @@ from typing import Any, Dict, List, Optional, Annotated, Literal
 #
 # Third-party Libraries
 import numpy as np
-import onnxruntime as ort
-from huggingface_hub import model_info  # Assuming this is used in _ensure_hf_revision
 from loguru import logger
 from pydantic import BaseModel, Field
 from prometheus_client import Counter, Gauge  # Assuming these are defined elsewhere or used directly
@@ -45,6 +43,31 @@ def _import_transformers():
     except Exception as e:
         raise ImportError(
             "'transformers' is required for this embeddings provider. Install transformers to proceed."
+        ) from e
+
+
+_ORT_IMPORT_ERROR: Optional[Exception] = None
+try:
+    import onnxruntime as ort  # type: ignore
+except Exception as e:
+    ort = None  # type: ignore[assignment]
+    _ORT_IMPORT_ERROR = e
+
+
+def _import_onnxruntime():
+    """Lazily import onnxruntime only when actually needed."""
+    global ort, _ORT_IMPORT_ERROR
+    if ort is not None:
+        return ort
+    try:
+        import onnxruntime as _ort  # type: ignore
+        ort = _ort
+        _ORT_IMPORT_ERROR = None
+        return _ort
+    except Exception as e:
+        _ORT_IMPORT_ERROR = e
+        raise ImportError(
+            "'onnxruntime' is required for the ONNX embeddings provider. Install onnxruntime to proceed."
         ) from e
 #
 # Local Imports
@@ -443,7 +466,17 @@ def _ensure_hf_revision(model_name_or_path: str, expected_sha: Optional[str]) ->
         logger.debug(f"No revision SHA provided for {model_name_or_path}, skipping check.")
         return
     try:
-        info = model_info(model_name_or_path, revision=expected_sha)  # Check against the specific revision
+        try:
+            from huggingface_hub import model_info as _model_info  # type: ignore
+        except Exception as import_exc:
+            logger.warning(
+                "huggingface_hub not available; skipping revision verification for {}. "
+                "Install huggingface_hub to enable commit hash checks. Error: {}",
+                model_name_or_path,
+                import_exc,
+            )
+            return
+        info = _model_info(model_name_or_path, revision=expected_sha)  # Check against the specific revision
         actual_sha = info.sha
         if actual_sha != expected_sha:
             logger.error(
@@ -1174,6 +1207,13 @@ class HuggingFaceEmbedder:
             if self.unload_timer:
                 self.unload_timer.cancel()
                 self.unload_timer = None
+        # Update memory accounting outside the model lock to avoid lock ordering issues.
+        try:
+            with embedding_models_lock:
+                if self.model_identifier in model_memory_usage:
+                    model_memory_usage[self.model_identifier] = 0.0
+        except Exception:
+            pass
 
     def create_embeddings(self, texts: List[str]) -> np.ndarray:
         self.load_model()
@@ -1476,6 +1516,7 @@ class ONNXEmbedder:
 
         with self._lock:
             if self.session is None:
+                ort_mod = _import_onnxruntime()
                 session_load_attempted = True
                 log_counter("onnx_model_load_attempt", labels={"model_id": self.model_identifier})
 
@@ -1485,7 +1526,7 @@ class ONNXEmbedder:
                     f"Loading ONNX model for {self.model_identifier} from {self.onnx_model_file_path} "
                     f"with providers: {self.device_providers}"
                 )
-                self.session = ort.InferenceSession(self.onnx_model_file_path, providers=self.device_providers)
+                self.session = ort_mod.InferenceSession(self.onnx_model_file_path, providers=self.device_providers)
 
                 ACTIVE_EMBEDDERS.labels(provider="onnx", model_id=self.model_identifier).inc()
                 log_counter("onnx_model_load_success", labels={"model_id": self.model_identifier})
@@ -1514,6 +1555,13 @@ class ONNXEmbedder:
             if self.unload_timer:
                 self.unload_timer.cancel()
                 self.unload_timer = None
+        # Update memory accounting outside the model lock to avoid lock ordering issues.
+        try:
+            with embedding_models_lock:
+                if self.model_identifier in model_memory_usage:
+                    model_memory_usage[self.model_identifier] = 0.0
+        except Exception:
+            pass
 
     def create_embeddings(self, texts: List[str]) -> np.ndarray:
         self.load_model()  # Handles locking, model loading/conversion, and timer reset
@@ -1760,11 +1808,27 @@ def create_embeddings_batch(
                         except Exception:
                             pass
                         evict_lru_models(keep_model_id=model_id_to_use)
+                        if not check_memory_limit(estimated_size):
+                            logger.error(
+                                "Memory limit still exceeded after eviction; refusing to load model {}.",
+                                model_id_to_use,
+                            )
+                            raise RuntimeError(
+                                f"Embeddings model '{model_id_to_use}' exceeds memory limit and no evictable models are available."
+                            )
 
                     # Evict LRU models if at capacity
                     if len(embedding_models) >= MAX_MODELS_IN_MEMORY:
                         logger.info(f"At model capacity ({MAX_MODELS_IN_MEMORY}), evicting LRU models")
                         evict_lru_models(keep_model_id=model_id_to_use)
+                        if len(embedding_models) >= MAX_MODELS_IN_MEMORY:
+                            logger.error(
+                                "Model cache still at capacity after eviction; refusing to load model {}.",
+                                model_id_to_use,
+                            )
+                            raise RuntimeError(
+                                f"Embeddings model cache at capacity and no evictable models are available for '{model_id_to_use}'."
+                            )
 
                     os.makedirs(model_cache_dir, exist_ok=True)
                     embedding_models[model_id_to_use] = HuggingFaceEmbedder(
@@ -1827,11 +1891,27 @@ def create_embeddings_batch(
                         except Exception:
                             pass
                         evict_lru_models(keep_model_id=model_id_to_use)
+                        if not check_memory_limit(estimated_size):
+                            logger.error(
+                                "Memory limit still exceeded after eviction; refusing to load ONNX model {}.",
+                                model_id_to_use,
+                            )
+                            raise RuntimeError(
+                                f"Embeddings model '{model_id_to_use}' exceeds memory limit and no evictable models are available."
+                            )
 
                     # Evict LRU models if at capacity
                     if len(embedding_models) >= MAX_MODELS_IN_MEMORY:
                         logger.info(f"At model capacity ({MAX_MODELS_IN_MEMORY}), evicting LRU models")
                         evict_lru_models(keep_model_id=model_id_to_use)
+                        if len(embedding_models) >= MAX_MODELS_IN_MEMORY:
+                            logger.error(
+                                "Model cache still at capacity after eviction; refusing to load ONNX model {}.",
+                                model_id_to_use,
+                            )
+                            raise RuntimeError(
+                                f"Embeddings model cache at capacity and no evictable models are available for '{model_id_to_use}'."
+                            )
 
                     embedding_models[model_id_to_use] = ONNXEmbedder(
                         model_id_to_use,

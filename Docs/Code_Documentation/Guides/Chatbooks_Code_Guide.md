@@ -142,9 +142,13 @@ Navigation:
   - With filters/pagination: `curl -sS "$API/chatbooks/export/jobs?status=completed&limit=20&offset=0&order_by=created_at&order_desc=true" -H "X-API-KEY: $KEY"`
 - Download
   - `curl -OJ "$API/chatbooks/download/<job_id>" -H "X-API-KEY: $KEY"`
+- Remove export job (completed/cancelled)
+  - `curl -sS -X DELETE "$API/chatbooks/export/jobs/<job_id>/remove" -H "X-API-KEY: $KEY"`
 - Import (sync)
   - `curl -sS -X POST "$API/chatbooks/import" -H "X-API-KEY: $KEY" -F "file=@/path/to/file.chatbook" -F 'conflict_resolution=skip' -F 'async_mode=false'`
   - Note: Import options are sent as multipart form fields alongside the uploaded file.
+- Remove import job (completed/cancelled)
+  - `curl -sS -X DELETE "$API/chatbooks/import/jobs/<job_id>/remove" -H "X-API-KEY: $KEY"`
 - Preview
   - `curl -sS -X POST "$API/chatbooks/preview" -H "X-API-KEY: $KEY" -F "file=@/path/to/file.chatbook"`
 

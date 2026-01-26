@@ -230,6 +230,30 @@ paths:
         '500':
           $ref: '#/components/responses/InternalError'
 
+  /chatbooks/export/jobs/{job_id}/remove:
+    delete:
+      tags:
+        - Jobs
+      summary: Remove export job
+      description: Remove a completed or cancelled export job
+      operationId: removeExportJob
+      parameters:
+        - $ref: '#/components/parameters/JobId'
+      responses:
+        '200':
+          description: Export job removed
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RemoveJobResponse'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '500':
+          $ref: '#/components/responses/InternalError'
 
   /chatbooks/import/jobs:
     get:
@@ -272,6 +296,31 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/ImportJobResponse'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '500':
+          $ref: '#/components/responses/InternalError'
+
+  /chatbooks/import/jobs/{job_id}/remove:
+    delete:
+      tags:
+        - Jobs
+      summary: Remove import job
+      description: Remove a completed or cancelled import job
+      operationId: removeImportJob
+      parameters:
+        - $ref: '#/components/parameters/JobId'
+      responses:
+        '200':
+          description: Import job removed
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RemoveJobResponse'
+        '400':
+          $ref: '#/components/responses/BadRequest'
         '401':
           $ref: '#/components/responses/Unauthorized'
         '404':
@@ -845,6 +894,20 @@ components:
             $ref: '#/components/schemas/ImportJobResponse'
         total:
           type: integer
+
+    RemoveJobResponse:
+      type: object
+      required:
+        - success
+        - message
+        - job_id
+      properties:
+        success:
+          type: boolean
+        message:
+          type: string
+        job_id:
+          type: string
 
     CleanupExpiredExportsResponse:
       type: object

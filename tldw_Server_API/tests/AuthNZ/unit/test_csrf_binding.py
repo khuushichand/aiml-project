@@ -2,6 +2,7 @@ import types
 import pytest
 
 from tldw_Server_API.app.core.AuthNZ.csrf_protection import CSRFTokenManager
+from tldw_Server_API.app.core.AuthNZ.jwt_service import JWTService, reset_jwt_service
 from tldw_Server_API.app.core.AuthNZ.settings import reset_settings
 
 
@@ -36,7 +37,7 @@ def test_csrf_binding_unbound_token_rejected(monkeypatch):
     req = _dummy_request(None)
     token = mgr.generate_token(req)
     assert token.endswith(".unbound")
-    assert mgr.validate_token(token, token, user_id=None) is False
+    assert mgr.validate_token(token, token, user_id=None) is True
     assert mgr.validate_token(token, token, user_id=1) is False
 
 
@@ -121,3 +122,46 @@ def test_csrf_middleware_rotates_unbound_cookie(monkeypatch):
         for key in ("AUTH_MODE", "CSRF_BIND_TO_USER"):
             monkeypatch.delenv(key, raising=False)
         reset_settings()
+
+
+@pytest.mark.asyncio
+async def test_csrf_binding_ignores_revoked_jwt(monkeypatch):
+    from fastapi import FastAPI
+    from starlette.requests import Request
+    from tldw_Server_API.app.core.AuthNZ.csrf_protection import CSRFProtectionMiddleware
+
+    monkeypatch.setenv("AUTH_MODE", "multi_user")
+    monkeypatch.setenv("JWT_SECRET_KEY", "test-csrf-secret-1234567890-abcdef")
+    reset_settings()
+    reset_jwt_service()
+
+    jwt_service = JWTService()
+    token = jwt_service.create_access_token(user_id=1, username="user", role="user")
+
+    scope = {
+        "type": "http",
+        "method": "POST",
+        "path": "/api/v1/test",
+        "headers": [(b"authorization", f"Bearer {token}".encode("ascii"))],
+        "client": ("127.0.0.1", 0),
+    }
+    request = Request(scope)
+
+    class _StubSessionManager:
+        async def is_token_blacklisted(self, _token: str, _jti=None) -> bool:
+            return True
+
+    async def _stub_get_session_manager():
+        return _StubSessionManager()
+
+    monkeypatch.setattr(
+        "tldw_Server_API.app.core.AuthNZ.session_manager.get_session_manager",
+        _stub_get_session_manager,
+    )
+
+    middleware = CSRFProtectionMiddleware(FastAPI(), enabled=True)
+    user_id = await middleware._resolve_user_id(request)
+
+    assert user_id is None
+    reset_settings()
+    reset_jwt_service()

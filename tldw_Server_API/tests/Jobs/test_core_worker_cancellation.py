@@ -1,5 +1,6 @@
 import asyncio
 import time
+from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
@@ -111,3 +112,95 @@ async def test_core_worker_honors_mid_processing_cancellation(monkeypatch, tmp_p
             break
         await asyncio.sleep(0.05)
     assert ej2.status.name == "CANCELLED"
+
+
+@pytest.mark.asyncio
+async def test_core_worker_rejects_unsupported_import_media(monkeypatch, tmp_path):
+    # Prepare isolated jobs DB
+    jobs_db = tmp_path / "jobs.db"
+    ensure_jobs_tables(jobs_db)
+    jm = JobManager(jobs_db)
+
+    from tldw_Server_API.app.core.Chatbooks.chatbook_models import ImportStatus
+
+    class FakeImportJob:
+        def __init__(self, jid: str):
+            self.job_id = jid
+            self.status = ImportStatus.PENDING
+            self.started_at = None
+            self.completed_at = None
+            self.error_message = None
+
+    class FakeChatbookService:
+        jobs = {}
+        called = False
+
+        def __init__(self, user_id, db, **kwargs):
+            pass
+
+        def _get_import_job(self, jid: str):
+            return FakeChatbookService.jobs.get(jid)
+
+        def _save_import_job(self, ij):
+            FakeChatbookService.jobs[ij.job_id] = ij
+
+        def _import_chatbook_sync(self, *args, **kwargs):
+            FakeChatbookService.called = True
+            return True, "ok", []
+
+        def _resolve_import_archive_path(self, file_ref):
+            return Path(file_ref)
+
+    import tldw_Server_API.app.services.core_jobs_worker as worker
+
+    class JMProxy:
+        def __init__(self):
+            self._jm = jm
+
+        def __getattr__(self, name):
+            return getattr(self._jm, name)
+
+    monkeypatch.setattr(worker, "JobManager", JMProxy)
+    monkeypatch.setattr(worker, "ChatbookService", FakeChatbookService)
+    monkeypatch.setattr(worker, "_build_chacha_db_for_user", lambda _user_id: None)
+
+    # Seed import job state for worker
+    FakeChatbookService.jobs["cb-imp-1"] = FakeImportJob("cb-imp-1")
+
+    # Create dummy archive file for cleanup
+    file_path = tmp_path / "import.chatbook"
+    file_path.write_text("dummy", encoding="utf-8")
+
+    job = jm.create_job(
+        domain="chatbooks",
+        queue="default",
+        job_type="import",
+        payload={
+            "action": "import",
+            "chatbooks_job_id": "cb-imp-1",
+            "file_token": str(file_path),
+            "import_media": True,
+        },
+        owner_user_id="1",
+    )
+
+    stop_event = asyncio.Event()
+    run_task = asyncio.create_task(worker.run_chatbooks_core_jobs_worker(stop_event))
+
+    await asyncio.sleep(0.3)
+    stop_event.set()
+    try:
+        await asyncio.wait_for(run_task, timeout=2.0)
+    except asyncio.TimeoutError:
+        run_task.cancel()
+        try:
+            await run_task
+        except asyncio.CancelledError:
+            pass
+
+    jr = jm.get_job(int(job["id"]))
+    assert jr["status"] == "failed"
+    assert FakeChatbookService.called is False
+    ij = FakeChatbookService.jobs["cb-imp-1"]
+    assert ij.status == ImportStatus.FAILED
+    assert "Media/embedding imports are not supported" in (ij.error_message or "")

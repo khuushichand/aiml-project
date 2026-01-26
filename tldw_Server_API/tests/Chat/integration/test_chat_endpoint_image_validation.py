@@ -21,10 +21,12 @@ from tldw_Server_API.app.api.v1.API_Deps.ChaCha_Notes_DB_Deps import get_chacha_
 
 
 @pytest.mark.unit
-def test_chat_endpoint_large_data_image_accepted_by_size_and_flagged_by_image_validation():
+def test_chat_endpoint_large_data_image_accepted_by_size_and_flagged_by_image_validation(monkeypatch):
     # Configure strict request JSON size but allow endpoint to accept due to redaction
-    os.environ["CHAT_REQUEST_MAX_SIZE"] = "1000"  # tight cap
-    os.environ["CHAT_IMAGE_MAX_MB"] = "1"  # small image limit to trigger validation failure
+    monkeypatch.setenv("CHAT_REQUEST_MAX_SIZE", "1000")  # tight cap
+    monkeypatch.setenv("CHAT_IMAGE_MAX_MB", "1")  # small image limit to trigger validation failure
+    # Explicitly disable base64 enforcement to preserve the redaction-only path
+    monkeypatch.setenv("CHAT_ENFORCE_BASE64_IMAGE_LIMIT", "0")
 
     # Create temp DB
     with tempfile.NamedTemporaryFile(suffix=".db", delete=False) as tmp:
@@ -144,8 +146,8 @@ def test_chat_endpoint_large_data_image_accepted_by_size_and_flagged_by_image_va
 
 
 @pytest.mark.unit
-def test_chat_endpoint_rejects_oversized_image_when_enforcement_enabled(monkeypatch):
-    monkeypatch.setenv("CHAT_ENFORCE_BASE64_IMAGE_LIMIT", "1")
+def test_chat_endpoint_rejects_oversized_image_by_default(monkeypatch):
+    monkeypatch.delenv("CHAT_ENFORCE_BASE64_IMAGE_LIMIT", raising=False)
     monkeypatch.setenv("CHAT_IMAGE_MAX_MB", "1")
 
     with tempfile.NamedTemporaryFile(suffix=".db", delete=False) as tmp:

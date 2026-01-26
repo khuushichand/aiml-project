@@ -5,6 +5,7 @@ from starlette.requests import Request
 
 from tldw_Server_API.app.api.v1.API_Deps import auth_deps
 from tldw_Server_API.app.core.AuthNZ import auth_principal_resolver
+from tldw_Server_API.app.core.AuthNZ import User_DB_Handling
 from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import get_request_user
 from tldw_Server_API.app.core.AuthNZ.jwt_service import JWTService, reset_jwt_service
 from tldw_Server_API.app.core.AuthNZ.settings import reset_settings
@@ -173,4 +174,93 @@ async def test_get_auth_principal_rejects_legacy_token_header(monkeypatch):
         await auth_principal_resolver.get_auth_principal(request)
 
     assert exc.value.status_code == 401
+    reset_settings()
+
+
+@pytest.mark.asyncio
+async def test_single_user_test_key_rejected_outside_test_context_for_auth_principal(monkeypatch):
+    monkeypatch.setenv("AUTH_MODE", "single_user")
+    monkeypatch.setenv("SINGLE_USER_API_KEY", "primary-key-123456")
+    monkeypatch.setenv("SINGLE_USER_TEST_API_KEY", "test-key-abcdef")
+    monkeypatch.setenv("SINGLE_USER_FIXED_ID", "1")
+    reset_settings()
+
+    monkeypatch.setattr(auth_principal_resolver, "_is_test_context", lambda: False)
+    monkeypatch.setattr(User_DB_Handling, "_is_test_context", lambda: False)
+
+    class _StubApiKeyManager:
+        async def validate_api_key(self, **_kwargs):
+            return None
+
+    async def _stub_get_api_key_manager():
+        return _StubApiKeyManager()
+
+    monkeypatch.setattr(User_DB_Handling, "get_api_key_manager", _stub_get_api_key_manager)
+
+    request = _build_request({"Authorization": "Bearer test-key-abcdef"})
+    with pytest.raises(HTTPException) as exc:
+        await auth_principal_resolver.get_auth_principal(request)
+
+    assert exc.value.status_code == 401
+    reset_settings()
+
+
+@pytest.mark.asyncio
+async def test_single_user_test_key_rejected_outside_test_context_for_get_request_user(monkeypatch):
+    monkeypatch.setenv("AUTH_MODE", "single_user")
+    monkeypatch.setenv("SINGLE_USER_API_KEY", "primary-key-123456")
+    monkeypatch.setenv("SINGLE_USER_TEST_API_KEY", "test-key-abcdef")
+    monkeypatch.setenv("SINGLE_USER_FIXED_ID", "1")
+    reset_settings()
+
+    monkeypatch.setattr(User_DB_Handling, "_is_test_context", lambda: False)
+
+    class _StubApiKeyManager:
+        async def validate_api_key(self, **_kwargs):
+            return None
+
+    async def _stub_get_api_key_manager():
+        return _StubApiKeyManager()
+
+    monkeypatch.setattr(User_DB_Handling, "get_api_key_manager", _stub_get_api_key_manager)
+
+    request = _build_request({})
+    with pytest.raises(HTTPException) as exc:
+        await get_request_user(request, api_key="test-key-abcdef", token=None)
+
+    assert exc.value.status_code == 401
+    reset_settings()
+
+
+@pytest.mark.asyncio
+async def test_get_request_user_bypass_requires_strict_test_context(monkeypatch):
+    monkeypatch.setenv("TESTING", "true")
+    monkeypatch.setenv("EVALS_HEAVY_ADMIN_ONLY", "false")
+    monkeypatch.delenv("TEST_MODE", raising=False)
+    monkeypatch.delenv("TLDW_TEST_MODE", raising=False)
+    reset_settings()
+
+    monkeypatch.setattr(User_DB_Handling, "_is_strict_test_bypass_context", lambda: False)
+
+    request = _build_request({})
+    with pytest.raises(HTTPException) as exc:
+        await get_request_user(request, api_key=None, token=None)
+
+    assert exc.value.status_code == 401
+    reset_settings()
+
+
+@pytest.mark.asyncio
+async def test_get_request_user_bypass_allows_strict_test_context(monkeypatch):
+    monkeypatch.setenv("AUTH_MODE", "single_user")
+    monkeypatch.setenv("TESTING", "true")
+    monkeypatch.setenv("TEST_MODE", "true")
+    monkeypatch.setenv("EVALS_HEAVY_ADMIN_ONLY", "false")
+    monkeypatch.setenv("SINGLE_USER_TEST_API_KEY", "test-key-abcdef")
+    reset_settings()
+
+    request = _build_request({})
+    user = await get_request_user(request, api_key=None, token=None)
+
+    assert getattr(user, "username", None) == "single_user"
     reset_settings()

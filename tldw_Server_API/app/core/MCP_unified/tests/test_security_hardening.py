@@ -8,6 +8,7 @@ from tldw_Server_API.app.core.MCP_unified.config import get_config
 from tldw_Server_API.app.core.MCP_unified.auth.jwt_manager import get_jwt_manager
 from tldw_Server_API.app.core.MCP_unified.auth.authnz_rbac import AuthNZRBAC, Resource, Action
 from fastapi import WebSocketDisconnect
+from tldw_Server_API.app.core.AuthNZ.exceptions import InvalidTokenError
 
 
 class FakeWebSocket:
@@ -113,6 +114,51 @@ async def test_ws_header_bearer_auth_accepts(monkeypatch):
     if ws.closed:
         # If closed, it should not be due to auth failures
         assert ws.close_args[0] != 1008
+
+
+@pytest.mark.asyncio
+async def test_ws_invalid_authnz_token_allows_api_key(monkeypatch):
+    os.environ["MCP_WS_ALLOWED_ORIGINS"] = "*"
+    os.environ["MCP_WS_AUTH_REQUIRED"] = "1"
+    os.environ["MCP_WS_ALLOW_QUERY_AUTH"] = "0"
+    try:
+        get_config.cache_clear()  # type: ignore[attr-defined]
+    except Exception:
+        pass
+
+    class _ApiKeyMgr:
+        async def validate_api_key(self, api_key: str, ip_address: str | None = None):
+            return {"user_id": "1", "scopes": ["read"]}
+
+    async def _get_api_key_manager_stub():
+        return _ApiKeyMgr()
+
+    async def _verify_jwt_and_fetch_user_stub(*_args, **_kwargs):
+        raise InvalidTokenError("invalid")
+
+    import tldw_Server_API.app.core.AuthNZ.api_key_manager as api_key_mod
+    import tldw_Server_API.app.core.AuthNZ.User_DB_Handling as user_db_mod
+    import tldw_Server_API.app.core.MCP_unified.server as server_mod
+
+    monkeypatch.setattr(api_key_mod, "get_api_key_manager", _get_api_key_manager_stub)
+    monkeypatch.setattr(user_db_mod, "verify_jwt_and_fetch_user", _verify_jwt_and_fetch_user_stub)
+    monkeypatch.setattr(server_mod, "_is_authnz_access_token", lambda _token: True)
+
+    server = MCPServer()
+    server.config.ws_allowed_origins = ["*"]
+    server.config.ws_auth_required = True
+    ws = FakeWebSocket(
+        headers={
+            "origin": "https://any.com",
+            "Authorization": "Bearer invalid",
+            "X-API-KEY": "valid-key",
+        }
+    )
+
+    await server.handle_websocket(ws, client_id="c4")
+    assert ws.accepted is True
+    if ws.closed:
+        assert "Authentication failed" not in (ws.close_args[1] or "")
 
 
 

@@ -201,7 +201,10 @@ class AuthNZMonitor:
         # Update appropriate Prometheus metric
         if metric_type in [MetricType.AUTH_ATTEMPT, MetricType.AUTH_SUCCESS, MetricType.AUTH_FAILURE]:
             method = labels.get('method', 'unknown')
-            status = 'success' if metric_type == MetricType.AUTH_SUCCESS else 'failure'
+            if metric_type == MetricType.AUTH_ATTEMPT:
+                status = 'attempt'
+            else:
+                status = 'success' if metric_type == MetricType.AUTH_SUCCESS else 'failure'
             auth_attempts_total.labels(method=method, status=status).inc(value)
 
         elif metric_type in [MetricType.API_KEY_CREATED, MetricType.API_KEY_ROTATED, MetricType.API_KEY_REVOKED]:

@@ -36,6 +36,29 @@ def test_parse_regex_with_arrow_inside_pattern():
 
 
 @pytest.mark.unit
+def test_literal_starting_with_slash_is_not_regex():
+    svc = ModerationService()
+    lines = [
+        "/etc/passwd",
+    ]
+    with tempfile.NamedTemporaryFile(mode="w+", delete=False) as tmp:
+        tmp.write("\n".join(lines) + "\n")
+        tmp_path = tmp.name
+    try:
+        rules = svc._load_block_patterns(tmp_path)
+        pol = ModerationPolicy(enabled=True, block_patterns=rules)
+        flagged, _ = svc.check_text("path /etc/passwd here", pol)
+        assert flagged is True
+        flagged2, _ = svc.check_text("etc passwd", pol)
+        assert flagged2 is False
+    finally:
+        try:
+            os.unlink(tmp_path)
+        except Exception:
+            pass
+
+
+@pytest.mark.unit
 def test_load_block_patterns_and_evaluate_actions():
     svc = ModerationService()
     # Create a temporary blocklist with categories after action
@@ -231,6 +254,38 @@ def test_blocklist_update_preserves_pii_rules(monkeypatch):
             isinstance(rule, PatternRule) and rule.categories and "pii" in rule.categories
             for rule in svc._global_policy.block_patterns
         )
+    finally:
+        try:
+            os.unlink(tmp_path)
+        except Exception:
+            pass
+
+
+@pytest.mark.unit
+def test_uncategorized_category_allows_untagged_rules():
+    svc = ModerationService()
+    lines = [
+        "secret -> block",
+    ]
+    with tempfile.NamedTemporaryFile(mode="w+", delete=False) as tmp:
+        tmp.write("\n".join(lines) + "\n")
+        tmp_path = tmp.name
+    try:
+        rules = svc._load_block_patterns(tmp_path)
+        pol = ModerationPolicy(
+            enabled=True,
+            input_enabled=True,
+            output_enabled=True,
+            input_action="block",
+            output_action="redact",
+            redact_replacement="[REDACTED]",
+            per_user_overrides=False,
+            block_patterns=rules,
+            categories_enabled={"uncategorized"},
+        )
+        act, _red, _pattern, cat = svc.evaluate_action("secret", pol, "input")
+        assert act == "block"
+        assert cat == "uncategorized"
     finally:
         try:
             os.unlink(tmp_path)

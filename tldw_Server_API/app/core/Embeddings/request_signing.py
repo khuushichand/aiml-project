@@ -9,6 +9,7 @@ import base64
 from typing import Dict, Any, Optional, Tuple
 from datetime import datetime, timedelta
 import secrets
+import threading
 
 from loguru import logger
 from tldw_Server_API.app.core.Embeddings.audit_adapter import log_security_violation
@@ -217,6 +218,7 @@ class NonceManager:
         self.ttl_seconds = ttl_seconds
         self.used_nonces: Dict[str, datetime] = {}
         self.last_cleanup = datetime.utcnow()
+        self._lock = threading.Lock()
 
     def is_valid_nonce(self, nonce: str) -> bool:
         """
@@ -228,17 +230,18 @@ class NonceManager:
         Returns:
             True if valid (not used), False otherwise
         """
-        # Cleanup old nonces periodically
-        if (datetime.utcnow() - self.last_cleanup).seconds > 3600:
-            self._cleanup_old_nonces()
+        with self._lock:
+            # Cleanup old nonces periodically (use total_seconds to handle day rollover)
+            if (datetime.utcnow() - self.last_cleanup).total_seconds() > 3600:
+                self._cleanup_old_nonces()
 
-        # Check if nonce was used
-        if nonce in self.used_nonces:
-            return False
+            # Check if nonce was used
+            if nonce in self.used_nonces:
+                return False
 
-        # Mark as used
-        self.used_nonces[nonce] = datetime.utcnow()
-        return True
+            # Mark as used
+            self.used_nonces[nonce] = datetime.utcnow()
+            return True
 
     def _cleanup_old_nonces(self):
         """Remove expired nonces"""

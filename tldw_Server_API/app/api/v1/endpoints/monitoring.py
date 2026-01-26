@@ -296,6 +296,13 @@ async def update_notifications_settings(
 
     svc = get_notification_service()
     data = payload.model_dump(exclude_unset=True)
+    if "file" in data:
+        file_val = data.get("file")
+        if file_val is None or not str(file_val).strip():
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Notification file path must be non-empty",
+            )
     updated = svc.update_settings(**data)
     return NotificationSettings(**updated)
 

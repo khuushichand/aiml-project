@@ -164,6 +164,54 @@ def test_topic_monitoring_streaming_dedupe(tmp_path, monkeypatch):
     assert len(items) == 1
 
 
+def test_topic_monitoring_streaming_dedupe_is_per_watchlist(tmp_path, monkeypatch):
+    db_file = tmp_path / "alerts.db"
+    monkeypatch.setenv("MONITORING_ALERTS_DB", str(db_file))
+    monkeypatch.setenv("MONITORING_ENABLED", "true")
+    wl_file = tmp_path / "watchlists.json"
+    wl_file.write_text(json.dumps({"watchlists": []}), encoding="utf-8")
+    monkeypatch.setenv("MONITORING_WATCHLISTS_FILE", str(wl_file))
+
+    _reset_topic_monitoring_service()
+    svc = get_topic_monitoring_service()
+    svc.reload()
+
+    rule = WatchlistRule(rule_id="shared-rule", pattern="alert", category="custom", severity="warning")
+    wl1 = Watchlist(
+        name="Streaming WL One",
+        description="First watchlist",
+        enabled=True,
+        scope_type="user",
+        scope_id="u1",
+        rules=[rule],
+    )
+    wl2 = Watchlist(
+        name="Streaming WL Two",
+        description="Second watchlist",
+        enabled=True,
+        scope_type="user",
+        scope_id="u1",
+        rules=[rule],
+    )
+    svc.upsert_watchlist(wl1)
+    svc.upsert_watchlist(wl2)
+
+    created = svc.evaluate_and_alert(
+        user_id="u1",
+        text="alert me please",
+        source="chat.output",
+        source_id="stream-1",
+        chunk_id="stream-1:1",
+        chunk_seq=1,
+    )
+
+    assert created == 2
+
+    db = TopicMonitoringDB(db_path=str(db_file))
+    items = db.list_alerts(user_id="u1")
+    assert len(items) == 2
+
+
 def test_topic_monitoring_allows_duplicate_rule_ids_across_watchlists(tmp_path, monkeypatch):
     db_file = tmp_path / "alerts.db"
     monkeypatch.setenv("MONITORING_ALERTS_DB", str(db_file))

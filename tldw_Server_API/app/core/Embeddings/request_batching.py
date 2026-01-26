@@ -9,6 +9,8 @@ from typing import List, Dict, Any, Optional, Tuple, Callable
 from dataclasses import dataclass
 from collections import deque
 import uuid
+import threading
+import weakref
 
 from loguru import logger
 from pydantic import BaseModel
@@ -102,6 +104,11 @@ class RequestBatcher:
         }
         self._shutdown_requested = False
 
+        try:
+            self._loop = asyncio.get_running_loop()
+        except RuntimeError:
+            self._loop = None
+
         logger.info(
             f"Request batcher initialized: "
             f"enabled={self.enabled}, "
@@ -153,6 +160,15 @@ class RequestBatcher:
         Returns:
             Embedding result when ready
         """
+        loop = asyncio.get_running_loop()
+        if self._loop is None:
+            self._loop = loop
+        elif self._loop is not loop:
+            raise RuntimeError(
+                "RequestBatcher used across multiple event loops; "
+                "call get_batcher() inside each loop."
+            )
+
         metadata = metadata or {}
         user_id = metadata.get("user_id")
 
@@ -199,7 +215,6 @@ class RequestBatcher:
         provider = self._resolve_provider_name(provider, model, config_override)
 
         # Create request
-        loop = asyncio.get_running_loop()
         request = BatchRequest(
             request_id=str(uuid.uuid4()),
             text=text,
@@ -847,15 +862,33 @@ class RequestBatcher:
 
 
 # Global batcher instance
-_batcher: Optional[RequestBatcher] = None
+_batcher_fallback: Optional[RequestBatcher] = None
+_batchers_by_loop: "weakref.WeakKeyDictionary[asyncio.AbstractEventLoop, RequestBatcher]" = (
+    weakref.WeakKeyDictionary()
+)
+_batchers_lock = threading.Lock()
 
 
 def get_batcher() -> RequestBatcher:
     """Get or create the global batcher instance."""
-    global _batcher
-    if _batcher is None:
-        _batcher = RequestBatcher()
-    return _batcher
+    global _batcher_fallback
+    try:
+        loop = asyncio.get_running_loop()
+    except RuntimeError:
+        loop = None
+
+    with _batchers_lock:
+        if loop is not None:
+            batcher = _batchers_by_loop.get(loop)
+            if batcher is None:
+                batcher = RequestBatcher()
+                batcher._loop = loop
+                _batchers_by_loop[loop] = batcher
+            return batcher
+
+        if _batcher_fallback is None:
+            _batcher_fallback = RequestBatcher()
+        return _batcher_fallback
 
 
 def _resolve_provider_model(

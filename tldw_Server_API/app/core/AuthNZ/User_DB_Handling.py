@@ -289,6 +289,27 @@ def _is_test_context() -> bool:
     return False
 
 
+def _is_strict_test_bypass_context() -> bool:
+    """
+    Return True only when an explicit test runtime is detected.
+
+    This is intentionally stricter than `_is_test_context()` so that accidental
+    `TESTING=1` environment leakage does not enable auth bypasses in non-test
+    deployments.
+    """
+    if os.getenv("PYTEST_CURRENT_TEST") is not None:
+        return True
+    for flag in ("TEST_MODE", "TLDW_TEST_MODE"):
+        if os.getenv(flag, "").lower() in {"1", "true", "yes", "on"}:
+            return True
+    try:
+        if getattr(get_settings(), "TEST_MODE", False):
+            return True
+    except Exception:
+        pass
+    return False
+
+
 def _looks_like_jwt(token: Optional[str]) -> bool:
     if not isinstance(token, str):
         return False
@@ -845,9 +866,10 @@ async def authenticate_api_key_user(request: Request, api_key: str) -> User:
             primary_key = getattr(settings, "SINGLE_USER_API_KEY", None)
             if primary_key:
                 allowed_keys.add(primary_key)
-            test_key = os.getenv("SINGLE_USER_TEST_API_KEY")
-            if test_key:
-                allowed_keys.add(test_key)
+            if _is_test_context():
+                test_key = os.getenv("SINGLE_USER_TEST_API_KEY")
+                if test_key:
+                    allowed_keys.add(test_key)
             if api_key in allowed_keys:
                 client_ip = resolve_client_ip(request, settings)
                 if not is_single_user_ip_allowed(client_ip, settings):
@@ -1259,6 +1281,7 @@ async def get_request_user(
             not _prod
             and _os.getenv("TESTING", "").lower() in {"1", "true", "yes", "on"}
             and _os.getenv("EVALS_HEAVY_ADMIN_ONLY", "true").lower() not in {"1", "true", "yes", "on"}
+            and _is_strict_test_bypass_context()
         ):
             logger.info(
                 "TESTING with EVALS_HEAVY_ADMIN_ONLY disabled: "
