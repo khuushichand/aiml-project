@@ -9,9 +9,9 @@ Developer-oriented details (architecture, provider matrix, configuration, and te
 ## Features
 
 ### Core Capabilities
-- **Multi-Provider Support**: OpenAI, ElevenLabs, and nine local adapters (Kokoro, PocketTTS, LuxTTS, Higgs, Chatterbox, Dia, VibeVoice, IndexTTS2, NeuTTS) with a mock adapter for testing.
-- **Voice Cloning**: Voice reference audio accepted by PocketTTS, LuxTTS, Higgs, Chatterbox, Dia, VibeVoice, NeuTTS, and IndexTTS2 (ElevenLabs supports user voices via API).
-- **Streaming Audio**: Real-time chunked streaming across adapters; NeuTTS enables streaming when a quantized (GGUF) backbone is loaded.
+- **Multi-Provider Support**: OpenAI, ElevenLabs, and local adapters (Kokoro, PocketTTS, LuxTTS, Higgs, Chatterbox, Dia, VibeVoice, VibeVoice Realtime, Qwen3-TTS, IndexTTS2, NeuTTS, Supertonic, Supertonic2, EchoTTS) with a mock adapter for testing.
+- **Voice Cloning**: Voice reference audio accepted by PocketTTS, LuxTTS, Higgs, Chatterbox, Dia, VibeVoice, Qwen3-TTS, NeuTTS, IndexTTS2, and EchoTTS (ElevenLabs supports user voices via API).
+- **Streaming Audio**: Real-time chunked streaming across adapters; NeuTTS enables streaming when a quantized (GGUF) backbone is loaded; VibeVoice Realtime uses a WS backend.
 - **Format Support**: Adapter-specific coverage spanning MP3, WAV, OPUS, FLAC, PCM, AAC, and OGG via the shared `AudioFormat` enum.
 - **OpenAI Compatibility**: Drop-in replacement for OpenAI TTS API
 - **Voice Management**: Upload, catalog, quota enforcement, and preview endpoints backed by the `voice_manager` service.
@@ -32,8 +32,12 @@ Developer-oriented details (architecture, provider matrix, configuration, and te
 | **Chatterbox** | Local PyTorch | EN | ✅ (5-20s) | Emotion exaggeration control |
 | **Dia** | Local PyTorch | EN | ✅ (dialogue prompts) | Multi-speaker dialogue specialist |
 | **VibeVoice** | Local PyTorch | 12 | ✅ (Any) | Long-form (90min), spontaneous music |
+| **VibeVoice Realtime** | WS adapter | EN | ❌ | Low-latency streaming (requires realtime backend) |
+| **Qwen3-TTS** | Local PyTorch | Multi (auto/zh/en/ja/ko/de/fr/ru/pt/es/it) | ✅ (CustomVoice) | Multilingual CustomVoice/VoiceDesign/Base |
 | **IndexTTS2** | Local PyTorch | EN/zh | ✅ (reference) | Zero-shot cloning, emotion prompts, low-latency streaming |
 | **NeuTTS** | Local (Hybrid) | EN | ✅ (3-15s) | Instant voice cloning, optional GGUF streaming |
+| **Supertonic** | Local ONNX | Varies (model) | ❌ | User-supplied voice styles |
+| **Supertonic2** | Local ONNX | Varies (model) | ❌ | User-supplied voice styles |
 | **EchoTTS** | Local PyTorch | EN | ✅ (reference) | CUDA-only voice cloning |
 
 \* Current adapter configuration targets English (`tts-1` / `tts-1-hd`). Additional languages depend on OpenAI model availability.
