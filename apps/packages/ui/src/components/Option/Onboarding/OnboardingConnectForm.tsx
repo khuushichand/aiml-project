@@ -24,6 +24,7 @@ import { useStorage } from "@plasmohq/storage/hook"
 import { DOCUMENTATION_URL } from "@/config/constants"
 import { tldwClient } from "@/services/tldw/TldwApiClient"
 import { tldwAuth } from "@/services/tldw/TldwAuth"
+import { mapMultiUserLoginErrorMessage } from "@/services/auth-errors"
 import {
   getTldwServerURL,
   DEFAULT_TLDW_API_KEY,
