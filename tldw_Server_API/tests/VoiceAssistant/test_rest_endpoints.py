@@ -2,13 +2,13 @@
 # Integration tests for Voice Assistant REST endpoints
 #
 #######################################################################################################################
+import importlib
 import json
 import uuid
 from typing import Any, Dict, List, Optional
 
 import pytest
 from fastapi.testclient import TestClient
-from importlib import import_module
 
 from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import User, get_request_user
 from tldw_Server_API.app.core.VoiceAssistant import (
@@ -89,8 +89,20 @@ def client_with_user(monkeypatch, mock_user, tmp_path):
         mock_generate_tts
     )
 
-    mod = import_module("tldw_Server_API.app.main")
-    app = getattr(mod, "app")
+    # Voice routes are not mounted in the minimal test app profile.
+    monkeypatch.setenv("MINIMAL_TEST_APP", "0")
+    monkeypatch.setenv("ULTRA_MINIMAL_APP", "0")
+    # Route toggles are cached; clear to ensure env changes are honored.
+    try:
+        from tldw_Server_API.app.core import config as core_config
+
+        core_config._route_toggle_policy.cache_clear()
+    except Exception:
+        pass
+    from tldw_Server_API.app import main as app_main
+
+    importlib.reload(app_main)
+    app = app_main.app
     app.dependency_overrides[get_request_user] = override_user
     app.dependency_overrides[get_chacha_db_for_user] = override_get_db
 
@@ -489,8 +501,6 @@ class TestVoiceSessionDeleteEndpoint:
             state=VoiceSessionState.IDLE,
         )
         save_voice_session(db, session)
-        # Ensure the request thread sees the committed row.
-        db.close_all_connections()
 
         response = client.delete(f"/api/v1/voice/sessions/{session.session_id}")
 

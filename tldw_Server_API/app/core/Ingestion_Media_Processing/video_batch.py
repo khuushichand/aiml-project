@@ -60,6 +60,7 @@ async def run_video_batch(
         "transcription_model": form_data.transcription_model,
         # Add language if process_videos needs it
         "transcription_language": form_data.transcription_language,
+        "hotwords": getattr(form_data, "hotwords", None),
         "perform_analysis": form_data.perform_analysis,
         "custom_prompt": form_data.custom_prompt,
         "system_prompt": form_data.system_prompt,

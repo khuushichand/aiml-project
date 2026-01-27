@@ -82,6 +82,10 @@ class SubmitAudioJobRequest(BaseModel):
         None,
         description="Transcription model selector (defaults to config when omitted)",
     )
+    hotwords: Optional[str | List[str]] = Field(
+        None,
+        description="Optional hotwords to guide transcription (CSV/JSON string or list). Primarily used by VibeVoice-ASR.",
+    )
     perform_chunking: bool = Field(True, description="Whether to chunk the transcript after STT")
     perform_analysis: bool = Field(False, description="Whether to run LLM analysis after chunking")
     api_name: Optional[str] = Field(None, description="LLM provider key for analysis stage")
@@ -143,6 +147,7 @@ async def submit_audio_job(
 
         payload: Dict[str, Any] = {
             "model": requested_model,
+            "hotwords": req.hotwords,
             "perform_chunking": bool(req.perform_chunking),
             "perform_analysis": bool(req.perform_analysis),
             "api_name": req.api_name,

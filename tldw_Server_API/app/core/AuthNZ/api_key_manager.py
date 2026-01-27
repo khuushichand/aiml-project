@@ -150,6 +150,70 @@ def has_scope(key_scopes: Set[str], required_scope: str) -> bool:
     return required_scope.lower() in key_scopes
 
 
+_READ_METHODS = frozenset({"GET", "HEAD", "OPTIONS"})
+_WRITE_ENDPOINT_HINTS = (
+    "chat.",
+    "rag.",
+    "embeddings",
+    "audio.",
+    "evaluations.",
+    "research.",
+    "media.",
+    "mcp.",
+)
+
+
+def _serialize_scope_value(scope: Optional[Union[str, List[str]]]) -> Optional[str]:
+    """Serialize an optional scope value for storage."""
+    if scope is None:
+        return None
+    if isinstance(scope, (list, tuple, set)):
+        values = [
+            str(s).strip().lower()
+            for s in scope
+            if s is not None and str(s).strip()
+        ]
+        return json.dumps(values) if values else None
+    scope_str = str(scope).strip().lower()
+    return scope_str or None
+
+
+def _infer_virtual_key_scope(
+    *,
+    scope: Optional[Union[str, List[str]]],
+    allowed_methods: Optional[List[str]],
+    allowed_endpoints: Optional[List[str]],
+) -> str:
+    """
+    Infer a safe default scope for virtual keys.
+
+    - Explicit `scope` always wins.
+    - Non-read HTTP methods imply write scope.
+    - Known write-style endpoint hints imply write scope.
+    - Otherwise default to read scope to preserve legacy behavior.
+    """
+    explicit = _serialize_scope_value(scope)
+    if explicit:
+        return explicit
+
+    if allowed_methods:
+        methods_upper = [str(m).strip().upper() for m in allowed_methods if str(m).strip()]
+        if any(m not in _READ_METHODS for m in methods_upper):
+            return "write"
+        return "read"
+
+    if allowed_endpoints:
+        for endpoint_id in allowed_endpoints:
+            ep = str(endpoint_id or "").strip().lower()
+            if not ep:
+                continue
+            if any(ep.startswith(hint) for hint in _WRITE_ENDPOINT_HINTS):
+                return "write"
+        return "read"
+
+    return "read"
+
+
 #######################################################################################################################
 #
 # API Key Manager Class
@@ -511,6 +575,7 @@ class APIKeyManager:
         expires_in_days: Optional[int] = 30,
         org_id: Optional[int] = None,
         team_id: Optional[int] = None,
+        scope: Optional[Union[str, List[str]]] = None,
         allowed_endpoints: Optional[List[str]] = None,
         allowed_providers: Optional[List[str]] = None,
         allowed_models: Optional[List[str]] = None,
@@ -535,6 +600,12 @@ class APIKeyManager:
         if expires_in_days is not None:
             expires_at = datetime.now(timezone.utc) + timedelta(days=expires_in_days)
 
+        effective_scope = _infer_virtual_key_scope(
+            scope=scope,
+            allowed_methods=allowed_methods,
+            allowed_endpoints=allowed_endpoints,
+        )
+
         try:
             repo = self._get_repo()
             key_id = await repo.create_virtual_key_row(
@@ -547,6 +618,7 @@ class APIKeyManager:
                 expires_at=expires_at,
                 org_id=org_id,
                 team_id=team_id,
+                scope=effective_scope,
                 allowed_endpoints=allowed_endpoints,
                 allowed_providers=allowed_providers,
                 allowed_models=allowed_models,
@@ -568,7 +640,8 @@ class APIKeyManager:
                     "day_usd": budget_day_usd,
                     "month_usd": budget_month_usd,
                 },
-                "allowed_endpoints": allowed_endpoints or []
+                "allowed_endpoints": allowed_endpoints or [],
+                "scope": effective_scope,
             })
 
             return {
@@ -576,7 +649,7 @@ class APIKeyManager:
                 "key": full_key,
                 "key_prefix": key_prefix,
                 "name": name,
-                "scope": 'read',
+                "scope": effective_scope,
                 "expires_at": expires_at.isoformat() if expires_at else None,
                 "created_at": datetime.now(timezone.utc).isoformat(),
                 "message": "Store this key securely - it will not be shown again"

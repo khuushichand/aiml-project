@@ -197,6 +197,13 @@ class OpenAITranscriptionRequest(BaseModel):
         default=None,
         description="An optional text to guide the model's style or continue a previous audio segment. The prompt should match the audio language."
     )
+    hotwords: Optional[list[str]] = Field(
+        default=None,
+        description=(
+            "Optional hotwords to guide recognition. Primarily used by "
+            "VibeVoice-ASR; other providers may ignore this field."
+        ),
+    )
     response_format: Literal["json", "text", "srt", "verbose_json", "vtt"] = Field(
         default="json",
         description="The format of the transcript output"

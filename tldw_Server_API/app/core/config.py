@@ -3128,6 +3128,8 @@ def load_and_log_configs():
             lowered = name.lower()
             if lowered in ("faster-whisper", "faster_whisper"):
                 return "faster-whisper"
+            if lowered in ("vibevoice", "vibevoice-asr", "vibevoice_asr"):
+                return "vibevoice"
             return lowered
 
         default_stt_provider = _normalize_stt_provider_name(raw_default_stt_provider)
@@ -3193,6 +3195,19 @@ def load_and_log_configs():
                 return default
             s = str(raw).strip()
             return s if s != "" else default
+
+        # VibeVoice-ASR settings (local inference + optional vLLM HTTP path)
+        vibevoice_enabled = _get_bool('STT-Settings', 'vibevoice_enabled', False)
+        vibevoice_model_id = _get_str('STT-Settings', 'vibevoice_model_id', 'microsoft/VibeVoice-ASR') or 'microsoft/VibeVoice-ASR'
+        vibevoice_device = _get_str('STT-Settings', 'vibevoice_device', 'cuda') or 'cuda'
+        vibevoice_dtype = _get_str('STT-Settings', 'vibevoice_dtype', 'bfloat16') or 'bfloat16'
+        vibevoice_cache_dir = _get_str('STT-Settings', 'vibevoice_cache_dir', './models/vibevoice') or './models/vibevoice'
+        vibevoice_allow_download = _get_bool('STT-Settings', 'vibevoice_allow_download', True)
+        vibevoice_vllm_enabled = _get_bool('STT-Settings', 'vibevoice_vllm_enabled', False)
+        vibevoice_vllm_base_url = _get_str('STT-Settings', 'vibevoice_vllm_base_url', '') or ''
+        vibevoice_vllm_model_id = _get_str('STT-Settings', 'vibevoice_vllm_model_id', vibevoice_model_id) or vibevoice_model_id
+        vibevoice_vllm_api_key = _get_str('STT-Settings', 'vibevoice_vllm_api_key', None)
+        vibevoice_vllm_timeout_seconds = _get_int('STT-Settings', 'vibevoice_vllm_timeout_seconds', 600)
 
         diarization_config = dict(DIARIZATION_CONFIG)
         if config_parser_object.has_section('Diarization'):
@@ -3842,6 +3857,19 @@ def load_and_log_configs():
                 'nemo_model_variant': nemo_model_variant,
                 'nemo_device': nemo_device,
                 'nemo_cache_dir': nemo_cache_dir,
+                # VibeVoice-ASR settings
+                'vibevoice_enabled': vibevoice_enabled,
+                'vibevoice_model_id': vibevoice_model_id,
+                'vibevoice_device': vibevoice_device,
+                'vibevoice_dtype': vibevoice_dtype,
+                'vibevoice_cache_dir': vibevoice_cache_dir,
+                'vibevoice_allow_download': vibevoice_allow_download,
+                # Optional vLLM HTTP path for VibeVoice-ASR
+                'vibevoice_vllm_enabled': vibevoice_vllm_enabled,
+                'vibevoice_vllm_base_url': vibevoice_vllm_base_url,
+                'vibevoice_vllm_model_id': vibevoice_vllm_model_id,
+                'vibevoice_vllm_api_key': vibevoice_vllm_api_key,
+                'vibevoice_vllm_timeout_seconds': vibevoice_vllm_timeout_seconds,
                 # Custom vocabulary settings
                 'custom_vocab_terms_file': stt_custom_vocab_terms_file,
                 'custom_vocab_replacements_file': stt_custom_vocab_replacements_file,
@@ -3857,6 +3885,19 @@ def load_and_log_configs():
                 'nemo_model_variant': nemo_model_variant,
                 'nemo_device': nemo_device,
                 'nemo_cache_dir': nemo_cache_dir,
+                # VibeVoice-ASR settings
+                'vibevoice_enabled': vibevoice_enabled,
+                'vibevoice_model_id': vibevoice_model_id,
+                'vibevoice_device': vibevoice_device,
+                'vibevoice_dtype': vibevoice_dtype,
+                'vibevoice_cache_dir': vibevoice_cache_dir,
+                'vibevoice_allow_download': vibevoice_allow_download,
+                # Optional vLLM HTTP path for VibeVoice-ASR
+                'vibevoice_vllm_enabled': vibevoice_vllm_enabled,
+                'vibevoice_vllm_base_url': vibevoice_vllm_base_url,
+                'vibevoice_vllm_model_id': vibevoice_vllm_model_id,
+                'vibevoice_vllm_api_key': vibevoice_vllm_api_key,
+                'vibevoice_vllm_timeout_seconds': vibevoice_vllm_timeout_seconds,
                 # Custom vocabulary settings
                 'custom_vocab_terms_file': stt_custom_vocab_terms_file,
                 'custom_vocab_replacements_file': stt_custom_vocab_replacements_file,

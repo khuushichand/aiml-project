@@ -1522,6 +1522,10 @@ async def create_transcription(
     ),
     language: Optional[str] = Form(default=None, description="Language of the audio in ISO-639-1 format"),
     prompt: Optional[str] = Form(default=None, description="Optional text to guide the model's style"),
+    hotwords: Optional[str] = Form(
+        default=None,
+        description="Optional hotwords to guide transcription (CSV or JSON list). Primarily used by VibeVoice-ASR.",
+    ),
     response_format: str = Form(default="json", description="Format of the transcript output"),
     temperature: float = Form(default=0.0, ge=0.0, le=1.0, description="Sampling temperature"),
     task: str = Form(
@@ -1754,6 +1758,25 @@ async def create_transcription(
         if task_normalized not in {"transcribe", "translate"}:
             task_normalized = "transcribe"
 
+        # Normalize optional hotwords (CSV or JSON list).
+        hotwords_norm: Optional[list[str]] = None
+        raw_hotwords = (hotwords or "").strip()
+        if raw_hotwords:
+            if raw_hotwords.startswith("["):
+                try:
+                    parsed_hotwords = json.loads(raw_hotwords)
+                    if isinstance(parsed_hotwords, list):
+                        hotwords_norm = [str(x).strip() for x in parsed_hotwords if str(x).strip()]
+                except Exception as hotwords_exc:
+                    logger.debug(f"Failed to parse hotwords JSON; falling back to CSV parsing: {hotwords_exc}")
+            if hotwords_norm is None:
+                hotwords_norm = [part.strip() for part in raw_hotwords.split(",") if part.strip()]
+            if hotwords_norm:
+                # Cap hotword count defensively to avoid unbounded payloads.
+                hotwords_norm = hotwords_norm[:128]
+            else:
+                hotwords_norm = None
+
         # Determine provider from requested model name.
         # We reuse the core STT parser so that HTTP models like
         # "parakeet-mlx", "parakeet-onnx", "qwen2audio-*" route
@@ -1880,6 +1903,7 @@ async def create_transcription(
                         task=task_normalized,
                         word_timestamps=("word" in granularity_tokens),
                         prompt=prompt,
+                        hotwords=hotwords_norm,
                         base_dir=base_dir,
                     )
                     detected_language = artifact.get("language")
@@ -1904,6 +1928,7 @@ async def create_transcription(
                         task=task_normalized,
                         word_timestamps=("word" in granularity_tokens),
                         prompt=prompt,
+                        hotwords=hotwords_norm,
                         base_dir=base_dir,
                     )
                     detected_language = artifact.get("language")

@@ -114,6 +114,7 @@ async def run_audio_batch(
         "inputs": all_inputs,
         "transcription_model": form_data.transcription_model,
         "transcription_language": form_data.transcription_language,
+        "hotwords": getattr(form_data, "hotwords", None),
         "perform_chunking": form_data.perform_chunking,
         "chunk_method": form_data.chunk_method if form_data.chunk_method else None,
         "max_chunk_size": form_data.chunk_size,

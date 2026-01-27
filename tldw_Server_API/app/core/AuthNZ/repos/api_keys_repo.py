@@ -487,6 +487,7 @@ class AuthnzApiKeysRepo:
         expires_at: Optional[datetime],
         org_id: Optional[int],
         team_id: Optional[int],
+        scope: Optional[str],
         allowed_endpoints: Optional[List[str]],
         allowed_providers: Optional[List[str]],
         allowed_models: Optional[List[str]],
@@ -518,6 +519,8 @@ class AuthnzApiKeysRepo:
                 meta_dict["max_calls"] = int(max_calls)
             if max_runs is not None:
                 meta_dict["max_runs"] = int(max_runs)
+
+            scope_value = str(scope).strip().lower() if scope else "read"
 
             async with self.db_pool.transaction() as conn:
                 if hasattr(conn, "fetchval"):
@@ -586,7 +589,7 @@ class AuthnzApiKeysRepo:
                             key_prefix,
                             name,
                             description,
-                            "read",
+                            scope_value,
                             expires_at_param,
                             parent_key_id,
                             org_id,
@@ -623,7 +626,7 @@ class AuthnzApiKeysRepo:
                             key_prefix,
                             name,
                             description,
-                            "read",
+                            scope_value,
                             expires_at_param,
                             parent_key_id,
                             org_id,
@@ -660,7 +663,7 @@ class AuthnzApiKeysRepo:
                             key_prefix,
                             name,
                             description,
-                            "read",
+                            scope_value,
                             expires_at.isoformat() if expires_at else None,
                             parent_key_id,
                             org_id,

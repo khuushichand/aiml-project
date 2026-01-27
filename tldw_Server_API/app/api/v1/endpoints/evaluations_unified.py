@@ -130,7 +130,21 @@ async def _get_admin_principal_if_needed(
 ) -> Optional[AuthPrincipal]:
     """Resolve AuthPrincipal only when heavy-eval admin gating is enabled."""
     if os.getenv("EVALS_HEAVY_ADMIN_ONLY", "true").lower() in {"true", "1", "yes", "on"}:
-        return await get_auth_principal(request)
+        dep = get_auth_principal
+        try:
+            overrides = getattr(request.app, "dependency_overrides", {}) or {}
+            dep = overrides.get(get_auth_principal, get_auth_principal)
+        except Exception:
+            dep = get_auth_principal
+        result = dep(request)
+        try:
+            import inspect as _inspect
+
+            if _inspect.isawaitable(result):
+                result = await result
+        except Exception:
+            result = await get_auth_principal(request)
+        return result
     return None
 
 

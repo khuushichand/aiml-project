@@ -8239,32 +8239,30 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
         if not search_term:
             raise InputError("Search term cannot be empty.")
         is_simple_token = re.fullmatch(r"[\w-]+", search_term) is not None
-        if not is_simple_token:
-            # Keywords search only supports simple tokens to avoid FTS/LIKE injection edge cases.
-            raise InputError("Search term contains unsupported characters.")
         if self.backend_type == BackendType.POSTGRESQL:
-            tsquery = FTSQueryTranslator.normalize_query(search_term, 'postgresql') if is_simple_token else None
-            if tsquery:
-                source_table = self._map_table_for_backend("keywords")
-                fts_column = "keywords_fts_tsv"
-                query = f"""
-                    SELECT k.*, ts_rank(k.{fts_column}, to_tsquery('english', ?)) AS rank
-                    FROM {source_table} k
-                    WHERE k.deleted = FALSE
-                      AND k.{fts_column} @@ to_tsquery('english', ?)
-                    ORDER BY rank DESC, k.last_modified DESC
-                    LIMIT ?
-                """
-                try:
-                    cursor = self.execute_query(query, (tsquery, tsquery, limit))
-                    return [dict(row) for row in cursor.fetchall()]
-                except CharactersRAGDBError as exc:
-                    logger.error("PostgreSQL FTS search failed for keywords term '%s': %s", search_term, exc)
-                    raise
-            if not tsquery and is_simple_token:
+            if is_simple_token:
+                tsquery = FTSQueryTranslator.normalize_query(search_term, 'postgresql')
+                if tsquery:
+                    source_table = self._map_table_for_backend("keywords")
+                    fts_column = "keywords_fts_tsv"
+                    query = f"""
+                        SELECT k.*, ts_rank(k.{fts_column}, to_tsquery('english', ?)) AS rank
+                        FROM {source_table} k
+                        WHERE k.deleted = FALSE
+                          AND k.{fts_column} @@ to_tsquery('english', ?)
+                        ORDER BY rank DESC, k.last_modified DESC
+                        LIMIT ?
+                    """
+                    try:
+                        cursor = self.execute_query(query, (tsquery, tsquery, limit))
+                        return [dict(row) for row in cursor.fetchall()]
+                    except CharactersRAGDBError as exc:
+                        logger.error("PostgreSQL FTS search failed for keywords term '%s': %s", search_term, exc)
+                        raise
                 logger.debug("Keyword search term normalized to empty tsquery for input '%s'", search_term)
                 return []
 
+            # Non-simple tokens (e.g., "C++") skip FTS and fall back to ILIKE.
             source_table = self._map_table_for_backend("keywords")
             escaped = search_term.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
             query = f"""

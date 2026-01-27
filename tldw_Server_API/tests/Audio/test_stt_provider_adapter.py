@@ -74,6 +74,8 @@ def test_resolve_provider_for_model_uses_parser(monkeypatch):
             return ("parakeet", "parakeet", "onnx")
         if model_name.startswith("qwen2audio"):
             return ("qwen2audio", model_name, None)
+        if model_name.startswith("vibevoice"):
+            return ("vibevoice", model_name, None)
         return ("whisper", model_name, None)
 
     monkeypatch.setattr(spa, "parse_transcription_model", fake_parse_transcription_model)
@@ -88,6 +90,11 @@ def test_resolve_provider_for_model_uses_parser(monkeypatch):
     provider, model, variant = registry.resolve_provider_for_model("qwen2audio-test")
     assert provider == "qwen2audio"
     assert model == "qwen2audio-test"
+    assert variant is None
+
+    provider, model, variant = registry.resolve_provider_for_model("vibevoice-asr")
+    assert provider == "vibevoice"
+    assert model == "vibevoice-asr"
     assert variant is None
 
     # Whisper-family models should normalize to faster-whisper.
@@ -128,6 +135,25 @@ def test_resolve_provider_for_model_uses_config_default(monkeypatch):
 
 
 @pytest.mark.unit
+def test_resolve_provider_for_model_uses_vibevoice_defaults(monkeypatch):
+    spa = _import_module()
+
+    def fake_get_stt_config():
+        return {
+            "default_transcriber": "vibevoice-asr",
+            "vibevoice_model_id": "microsoft/VibeVoice-ASR",
+        }
+
+    monkeypatch.setattr(spa, "get_stt_config", fake_get_stt_config)
+
+    registry = spa.SttProviderRegistry()
+    provider, model, variant = registry.resolve_provider_for_model(None)
+    assert provider == "vibevoice"
+    assert model == "microsoft/VibeVoice-ASR"
+    assert variant is None
+
+
+@pytest.mark.unit
 def test_resolve_default_transcription_model_uses_whisper_fallback(monkeypatch):
     spa = _import_module()
 
@@ -162,6 +188,11 @@ def test_capabilities_exposed_for_known_providers():
     assert qwen_caps.supports_batch is True
     assert qwen_caps.supports_streaming is False
 
+    vibe_caps = registry.get_capabilities("vibevoice")
+    assert vibe_caps.supports_batch is True
+    assert vibe_caps.supports_streaming is False
+    assert vibe_caps.supports_diarization is True
+
 
 @pytest.mark.unit
 def test_transcribe_batch_whisper_normalizes_artifact(monkeypatch, tmp_path):
@@ -181,6 +212,7 @@ def test_transcribe_batch_whisper_normalizes_artifact(monkeypatch, tmp_path):
         initial_prompt=None,
         task="transcribe",
         base_dir=None,
+        cancel_check=None,
     ):
 
         assert str(path) == str(audio_file)
@@ -234,6 +266,7 @@ def test_transcribe_batch_parakeet_normalizes_artifact(monkeypatch, tmp_path):
         diarize,
         return_language,
         base_dir=None,
+        cancel_check=None,
     ):
 
         assert str(path) == str(audio_file)

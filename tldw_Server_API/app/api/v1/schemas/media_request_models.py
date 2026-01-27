@@ -265,12 +265,21 @@ class TranscriptionModel(str, Enum):
     PARAKEET_MLX = "parakeet-mlx"
     PARAKEET_ONNX = "parakeet-onnx"
 
+    # VibeVoice-ASR
+    VIBEVOICE = "vibevoice"
+    VIBEVOICE_ASR = "vibevoice-asr"
+    VIBEVOICE_HF = "microsoft/VibeVoice-ASR"
+
 TRANSCRIPTION_MODEL_ENUM = [m.value for m in TranscriptionModel]
 
 class AudioVideoOptions(BaseModel):
     """Pydantic model for Audio/Video specific options"""
     transcription_model: str = Field("deepdml/faster-distil-whisper-large-v3.5", description="Model ID for audio/video transcription")
     transcription_language: str = Field("en", description="Language for audio/video transcription (ISO 639-1 code)")
+    hotwords: Optional[str] = Field(
+        None,
+        description="Optional hotwords to guide transcription (CSV or JSON list). Primarily used by VibeVoice-ASR.",
+    )
     diarize: bool = Field(False, description="Enable speaker diarization (audio/video)")
     timestamp_option: bool = Field(True, description="Include timestamps in the transcription (audio/video)")
     vad_use: bool = Field(False, description="Enable Voice Activity Detection filter during transcription (audio/video)")

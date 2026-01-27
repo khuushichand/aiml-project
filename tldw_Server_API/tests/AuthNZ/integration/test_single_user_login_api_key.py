@@ -37,7 +37,7 @@ async def single_user_client(tmp_path, monkeypatch):
 
     await bootstrap_single_user_profile()
 
-    password = "SingleUser@Pass123!"
+    password = "StrongSU@9xQ4!"
     password_hash = PasswordService().hash_password(password)
     settings = get_settings()
     pool = await get_db_pool()

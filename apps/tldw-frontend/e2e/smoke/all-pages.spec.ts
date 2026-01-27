@@ -16,6 +16,7 @@ import { PAGES, PageEntry, getActivePages, PAGE_COUNT, ACTIVE_PAGE_COUNT } from 
 // Test configuration
 const LOAD_TIMEOUT = 30_000 // 30s max for page load
 const ELEMENT_TIMEOUT = 15_000 // 15s max for element visibility
+const VERBOSE_CONSOLE = process.env.TLDW_SMOKE_VERBOSE_CONSOLE === "1"
 
 /**
  * Format diagnostics for console output
@@ -40,8 +41,12 @@ function formatDiagnostics(
   if (issues.consoleErrors.length) {
     lines.push(`  CONSOLE ERRORS (${issues.consoleErrors.length}):`)
     issues.consoleErrors.forEach((c) => {
-      const truncated = c.text.length > 200 ? c.text.slice(0, 200) + "..." : c.text
-      lines.push(`    - ${truncated}`)
+      const text = VERBOSE_CONSOLE
+        ? c.text
+        : c.text.length > 200
+          ? c.text.slice(0, 200) + "..."
+          : c.text
+      lines.push(`    - ${text}`)
     })
   }
 

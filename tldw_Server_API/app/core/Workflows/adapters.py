@@ -2548,6 +2548,7 @@ async def run_stt_transcribe_adapter(config: Dict[str, Any], context: Dict[str, 
       - file_uri: file:// path to audio/video file
       - model: whisper model name (default 'large-v3')
       - language: source language code (optional)
+      - hotwords: optional list/CSV/JSON string of hotwords
       - diarize: bool (default false)
       - word_timestamps: bool (default false)
 
@@ -2562,6 +2563,7 @@ async def run_stt_transcribe_adapter(config: Dict[str, Any], context: Dict[str, 
         return {"error": str(e)}
     model = str(config.get("model") or "large-v3")
     language = config.get("language") or None
+    hotwords = config.get("hotwords") or None
     diarize = bool(config.get("diarize", False))
     word_ts = bool(config.get("word_timestamps", False))
     try:
@@ -2575,6 +2577,7 @@ async def run_stt_transcribe_adapter(config: Dict[str, Any], context: Dict[str, 
             diarize=diarize,
             word_timestamps=word_ts,
             return_language=True,
+            hotwords=hotwords,
         )
         if isinstance(segs_or_pair, tuple) and len(segs_or_pair) == 2:
             segments, lang = segs_or_pair

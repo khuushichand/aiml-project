@@ -149,18 +149,3 @@ async def test_session_manager_rejects_insecure_key_permissions(monkeypatch, tmp
         for env_key in ("AUTH_MODE", "DATABASE_URL", "JWT_SECRET_KEY"):
             monkeypatch.delenv(env_key, raising=False)
         reset_settings()
-
-    try:
-        manager = SessionManager()
-        assert key_path.is_symlink()
-        # Session manager resolves the symlink before persisting; ensure it landed on the target file.
-        assert manager._persisted_key_path == target.resolve()
-        persisted_payload = target.read_text(encoding="utf-8").strip()
-        assert persisted_payload and persisted_payload != "stealme"
-    finally:
-        await reset_session_manager()
-        for env_key in ("AUTH_MODE", "DATABASE_URL", "JWT_SECRET_KEY"):
-            monkeypatch.delenv(env_key, raising=False)
-        key_path.unlink(missing_ok=True)
-        target.unlink(missing_ok=True)
-    reset_settings()

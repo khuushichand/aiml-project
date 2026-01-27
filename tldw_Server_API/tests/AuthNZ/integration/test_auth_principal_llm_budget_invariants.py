@@ -118,6 +118,14 @@ async def test_llm_budget_guard_overage_preserves_principal_state_alignment(tmp_
     key_id = vk["id"]
     vkey = vk["key"]
 
+    # POST /chat/completions now enforces write scope even when scope="any".
+    # Virtual keys default to "read", so promote this test key explicitly.
+    async with pool.transaction() as conn:
+        if getattr(pool, "pool", None):
+            await conn.execute("UPDATE api_keys SET scope = $1 WHERE id = $2", "write", key_id)
+        else:
+            await conn.execute("UPDATE api_keys SET scope = ? WHERE id = ?", ("write", key_id))
+
     # Remove LLMBudgetMiddleware so the dependency path handles the 402
     from tldw_Server_API.app.main import app
     from tldw_Server_API.app.core.AuthNZ.llm_budget_middleware import LLMBudgetMiddleware

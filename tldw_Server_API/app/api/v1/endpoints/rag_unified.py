@@ -80,7 +80,11 @@ def _build_unified_pipeline_kwargs(
         current_user.username if current_user else None
     )
     payload["user_id"] = current_user.username if current_user else payload.get("user_id")
-    allowed = set(inspect.signature(unified_rag_pipeline).parameters.keys())
+    signature = inspect.signature(unified_rag_pipeline)
+    params = list(signature.parameters.values())
+    if any(p.kind == inspect.Parameter.VAR_KEYWORD for p in params):
+        return payload
+    allowed = set(signature.parameters.keys())
     return {k: v for k, v in payload.items() if k in allowed}
 
 

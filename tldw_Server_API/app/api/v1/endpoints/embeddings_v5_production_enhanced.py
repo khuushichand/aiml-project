@@ -396,7 +396,17 @@ def _tenant_rps_runtime() -> int:
     try:
         env_val = os.getenv("EMBEDDINGS_TENANT_RPS")
         if env_val is not None and str(env_val).strip() != "":
-            return int(env_val)
+            parsed = int(env_val)
+            # In pytest, the global conftest sets EMBEDDINGS_TENANT_RPS=0 to
+            # disable tenant quotas by default. Allow explicit monkeypatches
+            # of TENANT_RPS to override that default within unit tests.
+            if (
+                parsed <= 0
+                and os.getenv("PYTEST_CURRENT_TEST") is not None
+                and int(globals().get("TENANT_RPS", 0) or 0) > 0
+            ):
+                return int(TENANT_RPS)
+            return parsed
     except Exception:
         pass
     return TENANT_RPS

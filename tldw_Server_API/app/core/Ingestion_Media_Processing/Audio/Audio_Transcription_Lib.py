@@ -17,6 +17,7 @@ import asyncio
 import gc
 import glob
 import inspect
+import hashlib
 import json
 import multiprocessing
 import os
@@ -31,7 +32,7 @@ import threading
 import time
 import queue
 from functools import lru_cache
-from typing import Optional, Union, List, Dict, Any, Tuple, Callable
+from typing import Optional, Sequence, Union, List, Dict, Any, Tuple, Callable
 #
 # DEBUG Imports
 #from memory_profiler import profile
@@ -641,6 +642,7 @@ def perform_transcription(
     diarize: bool = False,
     overwrite: bool = False,
     transcription_language: str = 'en',
+    hotwords: Optional[Sequence[str] | str] = None,
     temp_dir: Optional[str] = None,
     end_seconds: Optional[int] = None,
     cancel_check: Optional[Callable[[], bool]] = None,
@@ -670,6 +672,9 @@ def perform_transcription(
             exists, it will be loaded.
         transcription_language: The language code (e.g., 'en', 'es') for
             transcription. Defaults to 'en'.
+        hotwords: Optional hotword hints. Accepts a list/sequence or a JSON/CSV
+            string. This is primarily used by VibeVoice-ASR and ignored by other
+            providers.
         temp_dir: An optional path to a temporary directory. When provided,
             the input and output paths must resolve under this directory.
         end_seconds: Optional absolute end time (in seconds) for transcription.
@@ -757,11 +762,20 @@ def perform_transcription(
         _assert_no_symlink(audio_path_obj, label="Audio output path")
         cache_dir = _resolve_transcript_cache_dir(audio_path_obj, base_dir=base_dir_path)
         transcription_model_sanitized = _sanitize_transcription_model_name(transcription_model)
+        hotwords_suffix = _hotwords_cache_suffix(hotwords)
         segments_json_path = (
-            cache_dir / f"{audio_path_obj.stem}-transcription_model-{transcription_model_sanitized}.segments.json"
+            cache_dir
+            / (
+                f"{audio_path_obj.stem}-transcription_model-"
+                f"{transcription_model_sanitized}{hotwords_suffix}.segments.json"
+            )
         )
         diarized_json_path = (
-            cache_dir / f"{audio_path_obj.stem}-transcription_model-{transcription_model_sanitized}.diarized.json"
+            cache_dir
+            / (
+                f"{audio_path_obj.stem}-transcription_model-"
+                f"{transcription_model_sanitized}{hotwords_suffix}.diarized.json"
+            )
         )
 
         # --- Perform Diarization and Combination (if requested) ---
@@ -806,6 +820,7 @@ def perform_transcription(
                     transcription_model,
                     vad_filter=vad_use,
                     selected_source_lang=transcription_language,
+                    hotwords=hotwords,
                     base_dir=base_dir_path,
                     cancel_check=cancel_check,
                 )
@@ -893,6 +908,7 @@ def perform_transcription(
                 transcription_model,
                 vad_filter=vad_use,
                 selected_source_lang=transcription_language,
+                hotwords=hotwords,
                 base_dir=base_dir_path,
                 cancel_check=cancel_check,
             )
@@ -901,11 +917,14 @@ def perform_transcription(
                 logging.error(f"Transcription generation failed for {audio_file_path} (no segments)")
                 return audio_file_path, None  # Return path, None segments
 
-            # Saving is handled within speech_to_text called by re_generate_transcription
-            # but we already checked for overwrite flag above. If overwrite=True,
-            # speech_to_text should ideally handle the overwrite when saving.
-            # If speech_to_text doesn't handle overwrite, you might need to explicitly delete
-            # the old file here before calling re_generate_transcription if overwrite is True.
+            # Persist a cache artifact keyed by model + hotwords to avoid
+            # cross-contaminating hotword-guided transcripts.
+            try:
+                _assert_no_symlink(segments_json_path, label="Transcript cache file")
+                with open(segments_json_path, "w", encoding="utf-8") as f:
+                    json.dump({"segments": segments}, f, ensure_ascii=False, indent=2)
+            except Exception as cache_err:
+                logging.debug(f"Failed to persist transcript cache artifact: {cache_err}")
 
             logging.info(f"Successfully generated/loaded transcription for {audio_file_path}")
             return audio_file_path, segments
@@ -1506,12 +1525,53 @@ def _map_openai_audio_model_to_whisper_for_jobs(model: Optional[str]) -> str:
     return default_model
 
 
+def _normalize_hotwords(hotwords: Optional[Sequence[str] | str]) -> Optional[List[str]]:
+    """Normalize hotwords from either a list/sequence or a JSON/CSV string."""
+    if hotwords is None:
+        return None
+    if isinstance(hotwords, str):
+        raw = hotwords.strip()
+        if not raw:
+            return None
+        if raw.startswith("["):
+            try:
+                parsed = json.loads(raw)
+                if isinstance(parsed, list):
+                    out = [str(x).strip() for x in parsed if str(x).strip()]
+                    return out or None
+            except Exception:
+                pass
+        out = [part.strip() for part in raw.split(",") if part.strip()]
+        return out or None
+    out = [str(x).strip() for x in hotwords if str(x).strip()]
+    return out or None
+
+
+def _hotwords_cache_suffix(hotwords: Optional[Sequence[str] | str]) -> str:
+    """
+    Return a short, stable cache-key suffix derived from hotwords.
+
+    When hotwords are provided, caching must differentiate between different
+    hotword sets to avoid reusing an incompatible transcript.
+    """
+    hotwords_norm = _normalize_hotwords(hotwords)
+    if not hotwords_norm:
+        return ""
+    canonical = sorted({str(x).strip() for x in hotwords_norm if str(x).strip()})
+    if not canonical:
+        return ""
+    raw = json.dumps(canonical, ensure_ascii=True, separators=(",", ":"))
+    digest = hashlib.sha256(raw.encode("utf-8")).hexdigest()[:12]
+    return f"-hotwords-{digest}"
+
+
 def run_stt_batch_via_registry(
     audio_file_path: str,
     transcription_model: str,
     *,
     vad_filter: bool = False,
     selected_source_lang: str = "en",
+    hotwords: Optional[Sequence[str] | str] = None,
     duration_seconds: Optional[float] = None,
     base_dir: Optional[Path] = None,
     cancel_check: Optional[Callable[[], bool]] = None,
@@ -1523,6 +1583,9 @@ def run_stt_batch_via_registry(
     For Whisper-family models it delegates to `re_generate_transcription` to
     preserve existing caching behaviour; for other providers it uses the
     adapter-based `transcribe_batch` implementation.
+
+    Hotwords are passed through to providers that support them (for example
+    VibeVoice-ASR) and ignored elsewhere.
     """
     from tldw_Server_API.app.core.Ingestion_Media_Processing.Audio.stt_provider_adapter import (  # type: ignore
         get_stt_provider_registry,
@@ -1531,6 +1594,7 @@ def run_stt_batch_via_registry(
     registry = get_stt_provider_registry()
     provider, provider_model, _ = registry.resolve_provider_for_model(transcription_model or "")
     adapter = registry.get_adapter(provider)
+    hotwords_norm = _normalize_hotwords(hotwords)
 
     # Whisper-family models: reuse the canonical regeneration helper so that
     # transcript cache files and error semantics remain unchanged.
@@ -1570,6 +1634,7 @@ def run_stt_batch_via_registry(
         task="transcribe",
         word_timestamps=False,
         prompt=None,
+        hotwords=hotwords_norm,
         base_dir=base_dir,
         cancel_check=cancel_check,
     )
@@ -1591,6 +1656,7 @@ def run_stt_job_via_registry(
     wav_path: str,
     model: Optional[str],
     language: Optional[str],
+    hotwords: Optional[Sequence[str] | str] = None,
     base_dir: Optional[Path] = None,
 ) -> Dict[str, Any]:
     """
@@ -1601,6 +1667,9 @@ def run_stt_job_via_registry(
     Whisper-family models by reusing the same OpenAI-style model mapping
     semantics (e.g., 'whisper-1' -> 'large-v3') while delegating to provider
     adapters for non-Whisper providers.
+
+    Hotwords are passed through to providers that support them (for example
+    VibeVoice-ASR) and ignored elsewhere.
     """
     from tldw_Server_API.app.core.Ingestion_Media_Processing.Audio.stt_provider_adapter import (  # type: ignore
         get_stt_provider_registry,
@@ -1611,6 +1680,7 @@ def run_stt_job_via_registry(
     requested_model = (model or "").strip()
     provider, provider_model, _ = registry.resolve_provider_for_model(requested_model)
     adapter = registry.get_adapter(provider)
+    hotwords_norm = _normalize_hotwords(hotwords)
 
     # Whisper-family models: reuse the OpenAI-compatible alias mapping so
     # that 'whisper-1' and similar identifiers resolve consistently across
@@ -1625,6 +1695,7 @@ def run_stt_job_via_registry(
             task="transcribe",
             word_timestamps=False,
             prompt=None,
+            hotwords=hotwords_norm,
             base_dir=base_dir,
         )
         return artifact
@@ -1638,6 +1709,7 @@ def run_stt_job_via_registry(
         task="transcribe",
         word_timestamps=False,
         prompt=None,
+        hotwords=hotwords_norm,
         base_dir=base_dir,
     )
     return artifact
@@ -2204,6 +2276,7 @@ def parse_transcription_model(model_name: str) -> tuple:
     Returns:
         Tuple of (provider, model, variant)
     """
+    model_name = (model_name or "").strip()
     model_lower = model_name.lower()
 
     # Check for Parakeet models with variants
@@ -2234,6 +2307,18 @@ def parse_transcription_model(model_name: str) -> tuple:
     # Check for Qwen2Audio models
     elif "qwen2audio" in model_lower or "qwen2-audio" in model_lower:
         return ("qwen2audio", model_name, None)
+
+    # Check for VibeVoice-ASR models
+    elif "vibevoice" in model_lower:
+        # Treat bare aliases as the configured default model id.
+        if model_lower in {"vibevoice", "vibevoice-asr", "vibevoice_asr"}:
+            try:
+                stt_cfg = get_stt_config() or {}
+            except Exception:
+                stt_cfg = {}
+            model_id = str(stt_cfg.get("vibevoice_model_id", "microsoft/VibeVoice-ASR")).strip()
+            return ("vibevoice", model_id or "microsoft/VibeVoice-ASR", None)
+        return ("vibevoice", model_name, None)
 
     # Default to whisper for all other models
     else:
@@ -2655,6 +2740,7 @@ def speech_to_text(
     cache_max_total_mb: Optional[float] = None,
     cache_max_files_per_source: Optional[int] = None,
     initial_prompt: Optional[str] = None,
+    hotwords: Optional[Sequence[str] | str] = None,
     task: str = "transcribe",
     input_sample_rate: Optional[int] = None,
     base_dir: Optional[Path] = None,
@@ -2681,6 +2767,9 @@ def speech_to_text(
             segments.
         diarize: Placeholder for diarization flag. This parameter is not currently
             used within this function's transcription logic.
+        hotwords: Optional hotword hints. Accepts a list/sequence or a JSON/CSV
+            string. This is currently used by the VibeVoice-ASR provider and
+            ignored by others.
         task: Whisper decoding task to perform. Valid values are "transcribe"
             (default, transcribe in source language) and "translate" (translate
             non-English speech to English, when supported by the underlying
@@ -2734,6 +2823,7 @@ def speech_to_text(
 
     # Parse the model name to determine the provider
     provider, model, variant = parse_transcription_model(whisper_model)
+    hotwords_norm = _normalize_hotwords(hotwords)
 
     # Normalize task for Whisper-based providers. For non-Whisper providers,
     # this is ignored and we always perform transcription.
@@ -2844,6 +2934,40 @@ def speech_to_text(
             return segments_qwen
         except Exception as e:
             logging.error(f"Qwen2Audio transcription failed, falling back to whisper: {e}")
+            provider = "whisper"
+            model = "distil-whisper-large-v3"
+
+    elif provider == "vibevoice":
+        _check_cancel(cancel_check, label="speech-to-text")
+        if file_path is None:
+            raise ValueError("speech-to-text: VibeVoice-ASR provider requires an audio file path")
+        logging.info("Routing to VibeVoice-ASR transcription")
+        try:
+            from tldw_Server_API.app.core.Ingestion_Media_Processing.Audio.stt_provider_adapter import (  # type: ignore
+                get_stt_provider_registry,
+            )
+
+            registry = get_stt_provider_registry()
+            adapter = registry.get_adapter("vibevoice")
+            model_name_for_provider = model or whisper_model
+            artifact = adapter.transcribe_batch(
+                str(file_path),
+                model=model_name_for_provider,
+                language=selected_source_lang,
+                task=task_normalized,
+                word_timestamps=word_timestamps,
+                prompt=initial_prompt,
+                hotwords=hotwords_norm,
+                base_dir=base_dir_resolved,
+                cancel_check=cancel_check,
+            )
+            segments_vibe = artifact.get("segments") or []
+            language_vibe = artifact.get("language") or selected_source_lang
+            if return_language:
+                return segments_vibe, language_vibe
+            return segments_vibe
+        except Exception as e:
+            logging.error(f"VibeVoice-ASR transcription failed, falling back to whisper: {e}")
             provider = "whisper"
             model = "distil-whisper-large-v3"
 

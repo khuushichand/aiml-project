@@ -88,6 +88,7 @@ Streaming variant (Python):
   - Only treat body as audio when the request succeeds (no exception).
   - On non‑200, parse JSON and surface detail to the caller.
   - Alignment metadata (if available) is returned via `X-TTS-Alignment` (base64url JSON) on non-streaming responses.
+  - `return_download_link` requires `stream: false`. When enabled, the response includes `X-Download-Path` and `X-Generated-File-Id` headers pointing at `/api/v1/storage/files/{id}/download`.
   - For streaming alignment, call `POST /api/v1/audio/speech/metadata` with the same payload.
 
   ———

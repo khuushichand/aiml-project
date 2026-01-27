@@ -296,6 +296,11 @@ const SidepanelChat = () => {
   const [sidebarSearchFocusNonce, setSidebarSearchFocusNonce] = React.useState(0)
   const [composerHeight, setComposerHeight] = React.useState(0)
   const { t } = useTranslation(["playground", "sidepanel", "common"])
+  // Avoid depending on the `t` function in effects; it can be referentially unstable.
+  const newChatLabel = React.useMemo(
+    () => t("sidepanel:tabs.newChat", "New chat"),
+    [t]
+  )
   const notification = useAntdNotification()
   const { cancel: cancelNarration, isSpeaking: isNarrating, speak } = useTTS()
   React.useEffect(() => {
@@ -754,7 +759,7 @@ const SidepanelChat = () => {
         }
         const initialTab: SidepanelChatTab = {
           id: generateID(),
-          label: t("sidepanel:tabs.newChat", "New chat"),
+          label: newChatLabel,
           historyId: legacySnapshot.historyId ?? null,
           serverChatId: null,
           serverChatTopic: null,
@@ -807,7 +812,7 @@ const SidepanelChat = () => {
           }
           const initialTab: SidepanelChatTab = {
             id: generateID(),
-            label: t("sidepanel:tabs.newChat", "New chat"),
+            label: newChatLabel,
             historyId: recentChat.history.id,
             serverChatId: null,
             serverChatTopic: null,
@@ -913,7 +918,7 @@ const SidepanelChat = () => {
         label = fallbackLabel
       }
       if (!label) {
-        label = t("sidepanel:tabs.newChat", "New chat")
+        label = newChatLabel
       }
       if (!isCurrent) return
       useSidepanelChatTabsStore.getState().upsertTab({
@@ -939,7 +944,7 @@ const SidepanelChat = () => {
     historyId,
     serverChatId,
     serverChatTopic,
-    t,
+    newChatLabel,
     truncateTabLabel
   ])
 
@@ -966,7 +971,7 @@ const SidepanelChat = () => {
     const initialTabId = generateID()
     const initialTab: SidepanelChatTab = {
       id: initialTabId,
-      label: t("sidepanel:tabs.newChat", "New chat"),
+      label: newChatLabel,
       historyId: historyId ?? null,
       serverChatId: serverChatId ?? null,
       serverChatTopic: serverChatTopic ?? null,
@@ -982,9 +987,9 @@ const SidepanelChat = () => {
     buildSnapshot,
     historyId,
     isRestoringChat,
+    newChatLabel,
     serverChatId,
     serverChatTopic,
-    t,
     tabs.length
   ])
 
@@ -997,7 +1002,7 @@ const SidepanelChat = () => {
     const newTabId = generateID()
     useSidepanelChatTabsStore.getState().upsertTab({
       id: newTabId,
-      label: t("sidepanel:tabs.newChat", "New chat"),
+      label: newChatLabel,
       historyId: null,
       serverChatId: null,
       serverChatTopic: null,
@@ -1015,7 +1020,7 @@ const SidepanelChat = () => {
     setDropedFile,
     stopStreamingRequest,
     streaming,
-    t
+    newChatLabel
   ])
 
   const handleSelectTab = React.useCallback(
@@ -1130,7 +1135,7 @@ const SidepanelChat = () => {
           {
             id: newTabId,
             label: truncateTabLabel(
-              historyInfo.title || t("sidepanel:tabs.newChat", "New chat")
+              historyInfo.title || newChatLabel
             ),
             labelSource: "auto",
             historyId: historyInfo.id,
@@ -1162,6 +1167,7 @@ const SidepanelChat = () => {
       setIsLoading,
       stopStreamingRequest,
       streaming,
+      newChatLabel,
       t,
       tabs,
       toolChoice,
@@ -1195,7 +1201,7 @@ const SidepanelChat = () => {
           localHistoryId = existingHistory.id
         } else {
           const newHistory = await saveHistory(
-            chat.title || t("sidepanel:tabs.newChat", "New chat"),
+            chat.title || newChatLabel,
             false,
             "server",
             undefined,
@@ -1294,7 +1300,7 @@ const SidepanelChat = () => {
       }
       return localHistoryId
     },
-    [t]
+    [newChatLabel]
   )
 
   const openServerChat = React.useCallback(
@@ -1354,7 +1360,7 @@ const SidepanelChat = () => {
           {
             id: newTabId,
             label: truncateTabLabel(
-              chat.title || t("sidepanel:tabs.newChat", "New chat")
+              chat.title || newChatLabel
             ),
             labelSource: "auto",
             historyId: localHistoryId,
@@ -1390,6 +1396,7 @@ const SidepanelChat = () => {
       setIsLoading,
       stopStreamingRequest,
       streaming,
+      newChatLabel,
       t,
       tabs,
       toolChoice,
@@ -1679,8 +1686,8 @@ const SidepanelChat = () => {
   const activeTabLabel = React.useMemo(() => {
     const active = tabs.find((tab) => tab.id === activeTabId)
     if (active?.label) return active.label
-    return t("sidepanel:tabs.newChat", "New chat")
-  }, [activeTabId, tabs, t])
+    return newChatLabel
+  }, [activeTabId, tabs, newChatLabel])
 
   const commandPaletteChats = React.useMemo(
     () =>

@@ -27,8 +27,9 @@ async def test_handle_audio_transcribe_stage_uses_normalized_artifact(monkeypatc
         "metadata": {"provider": "faster-whisper", "model": "large-v3"},
     }
 
-    def _fake_run_stt_job_via_registry(path, model, language, base_dir=None):
+    def _fake_run_stt_job_via_registry(path, model, language, hotwords=None, base_dir=None, **kwargs):
         assert str(path) == str(wav_path)
+        assert hotwords is None
         assert base_dir is None
         return fake_artifact
 

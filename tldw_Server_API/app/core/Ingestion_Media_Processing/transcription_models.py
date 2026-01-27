@@ -181,6 +181,18 @@ def get_transcription_models_payload() -> Dict[str, Any]:
                 "description": "Cross-platform optimization",
             },
         ],
+        "VibeVoice-ASR": [
+            {
+                "value": "vibevoice-asr",
+                "label": "VibeVoice-ASR (7B)",
+                "description": "Long-form ASR with diarization + hotwords",
+            },
+            {
+                "value": "microsoft/VibeVoice-ASR",
+                "label": "microsoft/VibeVoice-ASR",
+                "description": "Hugging Face model id (local or vLLM HTTP)",
+            },
+        ],
     }
 
     flat_values: List[str] = []

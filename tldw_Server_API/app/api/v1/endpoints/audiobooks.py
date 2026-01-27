@@ -246,14 +246,20 @@ def _detect_chapters(
 
 def _get_job_manager() -> JobManager:
     db_url = (os.getenv("JOBS_DB_URL") or "").strip()
-    cache_key = db_url or "default"
+    db_path = (os.getenv("JOBS_DB_PATH") or "").strip()
+    if db_url:
+        cache_key = f"url:{db_url}"
+    elif db_path:
+        cache_key = f"path:{db_path}"
+    else:
+        cache_key = "default"
     with _job_manager_lock:
         cached = _job_manager_cache.get(cache_key)
         if cached is not None:
             return cached
 
         if not db_url:
-            job_manager = JobManager()
+            job_manager = JobManager(db_path=PathlibPath(db_path)) if db_path else JobManager()
         else:
             backend = "postgres" if db_url.startswith("postgres") else None
             job_manager = JobManager(backend=backend, db_url=db_url)

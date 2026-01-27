@@ -10,6 +10,7 @@ import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
+from tldw_Server_API.app.api.v1.endpoints import audiobooks as audiobooks_endpoints
 from tldw_Server_API.app.api.v1.endpoints.audiobooks import router as audiobooks_router
 from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import User, get_request_user
 from tldw_Server_API.app.core.DB_Management.Collections_DB import CollectionsDatabase
@@ -66,7 +67,17 @@ def user_base_dir(tmp_path, monkeypatch):
 def jobs_db_path(tmp_path, monkeypatch):
     db_path = tmp_path / "jobs.db"
     monkeypatch.setenv("JOBS_DB_PATH", str(db_path))
-    return db_path
+    try:
+        with audiobooks_endpoints._job_manager_lock:
+            audiobooks_endpoints._job_manager_cache.clear()
+    except Exception:
+        pass
+    yield db_path
+    try:
+        with audiobooks_endpoints._job_manager_lock:
+            audiobooks_endpoints._job_manager_cache.clear()
+    except Exception:
+        pass
 
 
 @pytest.fixture()

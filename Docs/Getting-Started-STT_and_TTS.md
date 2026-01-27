@@ -57,6 +57,25 @@ curl -sS -X POST http://127.0.0.1:8000/api/v1/audio/speech \
 ```
 - Play `out.mp3` in your player.
 
+5) (Optional) Return a storage download link in headers
+```bash
+curl -i -sS -X POST http://127.0.0.1:8000/api/v1/audio/speech \
+  -H "X-API-KEY: $SINGLE_USER_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{
+        "model": "tts-1",
+        "voice": "alloy",
+        "input": "Save this to generated files storage",
+        "response_format": "mp3",
+        "stream": false,
+        "return_download_link": true
+      }' \
+  --output out_saved.mp3
+```
+- Look for `X-Download-Path` and `X-Generated-File-Id` in the response headers.
+- The download path will look like `/api/v1/storage/files/{id}/download`.
+- `return_download_link` only works with `stream: false`.
+
 Troubleshooting
 - 401/403: ensure `OPENAI_API_KEY` is set and valid, and you’re passing `X-API-KEY` (single-user) or Bearer token (multi-user).
 - 429: OpenAI rate limit; retry after `retry-after` seconds.
@@ -409,4 +428,4 @@ Notes
 
 ## Model Hints (At-a-Glance)
 - TTS models: `tts-1` (OpenAI), `kokoro`, `eleven_monolingual_v1`, `higgs`, `dia`, `vibevoice`, `neutts`, `index_tts`.
-- STT models: `whisper-1` (faster-whisper), `whisper-large-v3` and `*-ct2` variants, `nemo-canary`, `nemo-parakeet-1.1b`, `qwen2audio`.
+- STT models: `whisper-1` (faster-whisper), `whisper-large-v3` and `*-ct2` variants, `nemo-canary`, `nemo-parakeet-1.1b`, `qwen2audio`, `vibevoice-asr`.

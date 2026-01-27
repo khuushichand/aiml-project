@@ -60,6 +60,9 @@ def _install_auth_capture(app: FastAPI) -> Tuple[Dict[str, Any], Any]:
         return principal
 
     app.dependency_overrides[auth_deps.get_auth_principal] = _capturing_get_auth_principal
+    # Evaluations helpers may call get_auth_principal directly rather than via
+    # dependency injection, so patch the module-level reference as well.
+    auth_deps.get_auth_principal = _capturing_get_auth_principal  # type: ignore[assignment]
     return captured, original_get_auth_principal
 
 
@@ -68,6 +71,40 @@ def _restore_auth_capture(app: FastAPI, original_get_auth_principal: Any) -> Non
         app.dependency_overrides.pop(auth_deps.get_auth_principal, None)
     finally:
         auth_deps.get_auth_principal = original_get_auth_principal  # type: ignore[assignment]
+
+
+def _install_eval_principal_bridge(app: FastAPI) -> Any:
+    """
+    Evaluations routes primarily depend on get_eval_request_user and do not
+    call get_auth_principal directly. Install a bridge that resolves the
+    AuthPrincipal first so invariant capture works as intended.
+    """
+    from typing import Optional
+    from fastapi import Depends, Header
+    from tldw_Server_API.app.api.v1.API_Deps.v1_endpoint_deps import oauth2_scheme
+    from tldw_Server_API.app.api.v1.endpoints import evaluations_auth as eval_auth
+
+    original_get_eval_request_user = eval_auth.get_eval_request_user
+
+    async def _bridged_get_eval_request_user(
+        request: Request,
+        _user_ctx: str = Depends(eval_auth.verify_api_key),
+        api_key: Optional[str] = Header(None, alias="X-API-KEY"),
+        token: Optional[str] = Depends(oauth2_scheme),
+        legacy_token_header: Optional[str] = Header(None, alias="Token"),
+    ) -> eval_auth.User:
+        # Ensure the claim-first principal resolver runs for this request.
+        await auth_deps.get_auth_principal(request)
+        return await original_get_eval_request_user(
+            request,
+            _user_ctx=_user_ctx,
+            api_key=api_key,
+            token=token,
+            legacy_token_header=legacy_token_header,
+        )
+
+    app.dependency_overrides[eval_auth.get_eval_request_user] = _bridged_get_eval_request_user
+    return original_get_eval_request_user
 
 
 def test_evaluations_list_jwt_principal_and_state_alignment(
@@ -143,6 +180,7 @@ def test_evaluations_list_jwt_principal_and_state_alignment(
 
     app = fastapi_app
     captured, original = _install_auth_capture(app)
+    original_eval_user = _install_eval_principal_bridge(app)
     ctx = bypass_api_limits(app)
     try:
         with ctx:
@@ -176,6 +214,10 @@ def test_evaluations_list_jwt_principal_and_state_alignment(
         assert state["org_ids"] == principal["org_ids"]
         assert state["team_ids"] == principal["team_ids"]
     finally:
+        from tldw_Server_API.app.api.v1.endpoints import evaluations_auth as eval_auth
+
+        app.dependency_overrides.pop(eval_auth.get_eval_request_user, None)
+        eval_auth.get_eval_request_user = original_eval_user  # type: ignore[assignment]
         _restore_auth_capture(app, original)
 
 
@@ -293,6 +335,7 @@ def test_evaluations_admin_cleanup_jwt_principal_and_state_alignment(
 
     app = fastapi_app
     captured, original = _install_auth_capture(app)
+    original_eval_user = _install_eval_principal_bridge(app)
     ctx = bypass_api_limits(app)
     try:
         with ctx:
@@ -325,6 +368,10 @@ def test_evaluations_admin_cleanup_jwt_principal_and_state_alignment(
         assert state["org_ids"] == principal["org_ids"]
         assert state["team_ids"] == principal["team_ids"]
     finally:
+        from tldw_Server_API.app.api.v1.endpoints import evaluations_auth as eval_auth
+
+        app.dependency_overrides.pop(eval_auth.get_eval_request_user, None)
+        eval_auth.get_eval_request_user = original_eval_user  # type: ignore[assignment]
         _restore_auth_capture(app, original)
 
 
@@ -450,6 +497,7 @@ def test_evaluations_admin_cleanup_api_key_principal_and_state_alignment(
 
     app = fastapi_app
     captured, original = _install_auth_capture(app)
+    original_eval_user = _install_eval_principal_bridge(app)
     ctx = bypass_api_limits(app)
 
     async def _fake_verify_api_key() -> str:
@@ -494,4 +542,6 @@ def test_evaluations_admin_cleanup_api_key_principal_and_state_alignment(
         assert state["team_ids"] == principal["team_ids"]
     finally:
         app.dependency_overrides.pop(eval_auth.verify_api_key, None)
+        app.dependency_overrides.pop(eval_auth.get_eval_request_user, None)
+        eval_auth.get_eval_request_user = original_eval_user  # type: ignore[assignment]
         _restore_auth_capture(app, original)

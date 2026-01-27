@@ -723,14 +723,21 @@ export const SidepanelChatSidebar = ({
     })
 
   React.useEffect(() => {
+    setSelectedTabIds((prev) => {
+      if (!selectionMode) {
+        return prev.length === 0 ? prev : []
+      }
+      const next = prev.filter((id) => visibleTabIds.includes(id))
+      const unchanged =
+        next.length === prev.length &&
+        next.every((id, index) => id === prev[index])
+      return unchanged ? prev : next
+    })
     if (!selectionMode) {
-      setSelectedTabIds([])
       setBulkFolderPickerOpen(false)
       setBulkTagPickerOpen(false)
       setBulkDeleteConfirmOpen(false)
-      return
     }
-    setSelectedTabIds((prev) => prev.filter((id) => visibleTabIds.includes(id)))
   }, [selectionMode, visibleTabIds])
 
   const handleSelectAllVisible = React.useCallback(() => {

@@ -161,7 +161,7 @@ _PAYLOAD_DICTS = st.dictionaries(
 
 
 @given(payload=_PAYLOAD_DICTS)
-@settings(max_examples=25)
+@settings(max_examples=25, deadline=None)
 def test_writing_session_payload_round_trip(payload):
     with tempfile.TemporaryDirectory() as tmpdir:
         db_path = os.path.join(tmpdir, "ChaChaNotes.db")

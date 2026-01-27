@@ -58,10 +58,23 @@ async def test_reset_password_weak_and_success(monkeypatch):
 
     monkeypatch.setattr(_auth, "is_postgres_backend", _fake_is_pg)
 
+    scope = {
+        "type": "http",
+        "method": "POST",
+        "path": "/api/v1/auth/reset-password",
+        "headers": [],
+        "client": ("203.0.113.10", 1234),
+        "scheme": "http",
+        "query_string": b"",
+        "server": ("testserver", 80),
+    }
+    request = Request(scope)
+
     # Weak password
     with pytest.raises(Exception):
         await _auth.reset_password(
             data=_auth.ResetPasswordRequest(token="tok", new_password="weak"),
+            request=request,
             db=_StubDB(),
             jwt_service=_StubJWT(),
             password_service=_StubPwd(weak=True),
@@ -70,6 +83,7 @@ async def test_reset_password_weak_and_success(monkeypatch):
     # Success path
     out = await _auth.reset_password(
         data=_auth.ResetPasswordRequest(token="tok", new_password="Strong@12345"),
+        request=request,
         db=_StubDB(),
         jwt_service=_StubJWT(),
         password_service=_StubPwd(weak=False),

@@ -439,6 +439,7 @@ curl -s -X POST http://127.0.0.1:8000/api/v1/audio/transcriptions \
 - Audio STT (WS): `WS /api/v1/audio/stream/transcribe` - real-time transcription ([docs](Docs/API-related/Audio_Transcription_API.md))
 - Audio TTS: `POST /api/v1/audio/speech` - text-to-speech (streaming and non-streaming) ([docs](Docs/API-related/TTS_API.md))
 - TTS Voices: `GET /api/v1/audio/voices/catalog` - voice catalog across providers ([docs](Docs/API-related/TTS_API.md))
+- Voice Assistant: `POST /api/v1/voice/command` (REST) and `WS /api/v1/voice/assistant` (real-time) ([docs](Docs/API/Voice_Assistant.md))
 - Audiobooks Parse: `POST /api/v1/audiobooks/parse` - parse + chapter preview ([docs](Docs/Product/Completed/Audiobook_Creation_PRD.md))
 - Audiobooks Jobs: `POST /api/v1/audiobooks/jobs` - create audiobook job; `GET /api/v1/audiobooks/jobs/{job_id}` - status ([docs](Docs/Product/Completed/Audiobook_Creation_PRD.md))
 - Audiobooks Subtitles: `POST /api/v1/audiobooks/subtitles` - render subtitle export ([docs](Docs/Product/Completed/Audiobook_Creation_PRD.md))

@@ -9,9 +9,9 @@ from tldw_Server_API.app.core.TTS.realtime_session import RealtimeSessionHandle,
 
 
 class DummyWebSocket:
-    def __init__(self, payloads):
-        self.headers = {}
-        self.query_params = {}
+    def __init__(self, payloads, *, headers=None, query_params=None):
+        self.headers = dict(headers or {})
+        self.query_params = dict(query_params or {})
         self.client = SimpleNamespace(host="127.0.0.1")
         self._messages = [json.dumps(p) for p in payloads]
         self.sent_bytes = []
@@ -44,6 +44,7 @@ class DummyRealtimeSession(RealtimeTTSSession):
         self._queue: asyncio.Queue = asyncio.Queue()
         self._chunks = chunks
         self._closed = False
+        self.finish_count = 0
 
     async def push_text(self, delta: str) -> None:  # noqa: ARG002
         return None
@@ -54,8 +55,10 @@ class DummyRealtimeSession(RealtimeTTSSession):
 
     async def finish(self) -> None:
         if self._closed:
+            self.finish_count += 1
             return
         self._closed = True
+        self.finish_count += 1
         await self._queue.put(None)
 
     async def audio_stream(self):
@@ -110,3 +113,79 @@ async def test_websocket_tts_realtime_streams_audio(monkeypatch: pytest.MonkeyPa
     assert any(msg.get("type") == "warning" for msg in ws.sent_json)
     assert any(msg.get("type") == "done" for msg in ws.sent_json)
     assert ws.closed is True
+
+
+@pytest.mark.unit
+@pytest.mark.asyncio
+async def test_websocket_tts_realtime_error_frame_shape(monkeypatch: pytest.MonkeyPatch):
+    request_id = "req-error-shape"
+    payloads = [
+        {"type": "config", "model": "vibevoice-realtime-0.5b", "format": "aac"},
+    ]
+    ws = DummyWebSocket(payloads, headers={"x-request-id": request_id})
+
+    async def _auth_stub(*_args, **_kwargs):
+        return True, 1
+
+    async def _can_start_stream_stub(_user_id):
+        return True, None
+
+    async def _finish_stream_stub(_user_id):
+        return None
+
+    async def _get_tts_service_stub():
+        return DummyRealtimeService()
+
+    monkeypatch.setattr(audio, "_audio_ws_authenticate", _auth_stub)
+    monkeypatch.setattr(audio, "can_start_stream", _can_start_stream_stub)
+    monkeypatch.setattr(audio, "finish_stream", _finish_stream_stub)
+    monkeypatch.setattr(audio, "get_tts_service", _get_tts_service_stub)
+
+    await audio.websocket_tts_realtime(ws, token=None)
+
+    err = next((msg for msg in ws.sent_json if msg.get("type") == "error"), None)
+    assert err is not None
+    assert err.get("request_id") == request_id
+    assert err.get("error_type") == "bad_request"
+    assert ws.close_code == 4400
+
+
+@pytest.mark.unit
+@pytest.mark.asyncio
+async def test_websocket_tts_realtime_provider_format_mismatch(monkeypatch: pytest.MonkeyPatch):
+    request_id = "req-provider-mismatch"
+    payloads = [
+        {"type": "config", "model": "vibevoice-realtime-0.5b", "format": "flac"},
+    ]
+    ws = DummyWebSocket(payloads, headers={"x-request-id": request_id})
+    session = DummyRealtimeSession([b"aa"])
+
+    class MismatchRealtimeService:
+        async def open_realtime_session(self, *_args, **_kwargs):
+            return RealtimeSessionHandle(session=session, provider="elevenlabs")
+
+    async def _auth_stub(*_args, **_kwargs):
+        return True, 1
+
+    async def _can_start_stream_stub(_user_id):
+        return True, None
+
+    async def _finish_stream_stub(_user_id):
+        return None
+
+    async def _get_tts_service_stub():
+        return MismatchRealtimeService()
+
+    monkeypatch.setattr(audio, "_audio_ws_authenticate", _auth_stub)
+    monkeypatch.setattr(audio, "can_start_stream", _can_start_stream_stub)
+    monkeypatch.setattr(audio, "finish_stream", _finish_stream_stub)
+    monkeypatch.setattr(audio, "get_tts_service", _get_tts_service_stub)
+
+    await audio.websocket_tts_realtime(ws, token=None)
+
+    err = next((msg for msg in ws.sent_json if msg.get("type") == "error"), None)
+    assert err is not None
+    assert err.get("request_id") == request_id
+    assert err.get("error_type") == "bad_request"
+    assert ws.close_code == 4400
+    assert session.finish_count >= 1

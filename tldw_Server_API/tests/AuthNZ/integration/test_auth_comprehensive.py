@@ -497,10 +497,20 @@ class TestAdminEndpoints:
         self,
         isolated_test_environment,
         admin_headers,
+        monkeypatch,
     ):
         """Test org-scoped registration codes assign membership on signup."""
         client, db_name = isolated_test_environment
         org_suffix = uuid.uuid4().hex[:8]
+
+        # Org-scoped registration codes are opt-in; enable and refresh settings/services.
+        monkeypatch.setenv("ENABLE_ORG_SCOPED_REGISTRATION_CODES", "true")
+        from tldw_Server_API.app.core.AuthNZ.settings import reset_settings
+        from tldw_Server_API.app.services.registration_service import reset_registration_service
+
+        reset_settings()
+        await reset_registration_service()
+
         org_response = client.post(
             "/api/v1/orgs",
             headers=admin_headers,
@@ -572,10 +582,19 @@ class TestAdminEndpoints:
         isolated_test_environment,
         admin_headers,
         auth_headers,
+        monkeypatch,
     ):
         """Test accepting org-scoped registration codes for existing users."""
         client, db_name = isolated_test_environment
         org_suffix = uuid.uuid4().hex[:8]
+
+        monkeypatch.setenv("ENABLE_ORG_SCOPED_REGISTRATION_CODES", "true")
+        from tldw_Server_API.app.core.AuthNZ.settings import reset_settings
+        from tldw_Server_API.app.services.registration_service import reset_registration_service
+
+        reset_settings()
+        await reset_registration_service()
+
         org_response = client.post(
             "/api/v1/orgs",
             headers=admin_headers,

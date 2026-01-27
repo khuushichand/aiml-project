@@ -1117,13 +1117,35 @@ def get_settings() -> Settings:
                 _settings.USER_DATA_BASE_PATH = str(Path(base_dir).resolve())
         except Exception as exc:
             logger.warning(f"AuthNZ settings: failed to align USER_DATA_BASE_PATH with core settings: {exc}")
-        # In pytest/TEST_MODE contexts, default-disable rate limiting to keep tests deterministic
+        # In pytest/TEST_MODE contexts, default-disable rate limiting to keep tests deterministic.
+        # Explicit falsey flags (e.g., TEST_MODE=0) should take precedence so tests can
+        # exercise real rate limiting under pytest.
         try:
             import os as _os, sys as _sys
-            if (
-                _os.getenv("PYTEST_CURRENT_TEST")
-                or _os.getenv("TEST_MODE", "").lower() in ("1", "true", "yes")
-                or "pytest" in _sys.modules
+            truthy = {"1", "true", "yes", "on"}
+            falsy = {"0", "false", "no", "off"}
+
+            def _env_bool(name: str) -> Optional[bool]:
+                raw = _os.getenv(name)
+                if raw is None:
+                    return None
+                norm = str(raw).strip().lower()
+                if norm in truthy:
+                    return True
+                if norm in falsy:
+                    return False
+                return None
+
+            explicit_flags = [
+                _env_bool("TEST_MODE"),
+                _env_bool("TLDW_TEST_MODE"),
+                _env_bool("TESTING"),
+            ]
+            explicit_false = any(flag is False for flag in explicit_flags)
+            explicit_true = any(flag is True for flag in explicit_flags)
+
+            if not explicit_false and (
+                explicit_true or _os.getenv("PYTEST_CURRENT_TEST") or "pytest" in _sys.modules
             ):
                 _settings.RATE_LIMIT_ENABLED = False
         except Exception:

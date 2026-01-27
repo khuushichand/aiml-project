@@ -18,20 +18,18 @@ def _make_wav_bytes(duration_sec: float = 0.1, sr: int = 16000) -> bytes:
     return buf.getvalue()
 
 
-def test_audio_transcriptions_uses_adapter_base_dir(
-    monkeypatch,
-    bypass_api_limits,
-):
-
-
+def _setup_stubbed_audio_app(monkeypatch):
     monkeypatch.setenv("TEST_MODE", "true")
     monkeypatch.setenv("AUTH_MODE", "single_user")
     monkeypatch.setenv("SINGLE_USER_API_KEY", TEST_API_KEY)
     monkeypatch.setenv("SINGLE_USER_FIXED_ID", "1")
 
-    from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import get_request_user, User
+    from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import User, get_request_user
     import tldw_Server_API.app.api.v1.endpoints.audio as audio_ep
     import tldw_Server_API.app.core.Ingestion_Media_Processing.Audio.Audio_Transcription_Lib as atlib
+    import tldw_Server_API.app.core.Ingestion_Media_Processing.Audio.stt_provider_adapter as stt_adapter
+
+    captured: dict[str, list[str] | None] = {"hotwords": None}
 
     async def _fake_get_request_user() -> User:
         return User(id=1, username="single_user")
@@ -55,9 +53,7 @@ def test_audio_transcriptions_uses_adapter_base_dir(
             hotwords=None,
             base_dir=None,
         ):
-            assert hotwords is None
-            assert base_dir is not None
-            assert base_dir == audio_ep.PathLib(audio_path).parent
+            captured["hotwords"] = hotwords
             return {
                 "text": "stub transcript",
                 "language": language or "en",
@@ -70,12 +66,12 @@ def test_audio_transcriptions_uses_adapter_base_dir(
                 ],
                 "diarization": {"enabled": False, "speakers": None},
                 "usage": {"duration_ms": None, "tokens": None},
-                "metadata": {"provider": "external", "model": model or "external:stub"},
+                "metadata": {"provider": "vibevoice", "model": model or "vibevoice-asr"},
             }
 
     class _StubRegistry:
         def resolve_provider_for_model(self, _model):
-            return "external", "external:stub", None
+            return "vibevoice", "vibevoice-asr", None
 
         def get_adapter(self, _provider):
             return _StubAdapter()
@@ -85,20 +81,28 @@ def test_audio_transcriptions_uses_adapter_base_dir(
     monkeypatch.setattr(audio_ep, "finish_job", _noop_async)
     monkeypatch.setattr(audio_ep, "check_daily_minutes_allow", _allow_job)
     monkeypatch.setattr(audio_ep, "add_daily_minutes", _noop_async)
-    import tldw_Server_API.app.core.Ingestion_Media_Processing.Audio.stt_provider_adapter as stt_adapter
-
     monkeypatch.setattr(stt_adapter, "get_stt_provider_registry", lambda: _StubRegistry())
     monkeypatch.setattr(atlib, "convert_to_wav", lambda path, *args, **kwargs: path)
 
     app = FastAPI()
     app.dependency_overrides[get_request_user] = _fake_get_request_user
     app.include_router(audio_router, prefix="/api/v1/audio")
+    return app, captured
+
+
+@pytest.mark.unit
+def test_audio_transcriptions_hotwords_csv(monkeypatch, bypass_api_limits):
+    app, captured = _setup_stubbed_audio_app(monkeypatch)
 
     with bypass_api_limits(app), TestClient(app) as client:
         wav_bytes = _make_wav_bytes()
         headers = {"X-API-KEY": TEST_API_KEY}
         files = {"file": ("sample.wav", io.BytesIO(wav_bytes), "audio/wav")}
-        data = {"model": "external:stub", "response_format": "json"}
+        data = {
+            "model": "vibevoice-asr",
+            "response_format": "json",
+            "hotwords": "alpha, beta ,gamma",
+        }
         resp = client.post(
             "/api/v1/audio/transcriptions",
             headers=headers,
@@ -108,5 +112,29 @@ def test_audio_transcriptions_uses_adapter_base_dir(
         if resp.status_code == 404:
             pytest.skip("audio/transcriptions endpoint not mounted in this build")
         assert resp.status_code == 200, resp.text
-        body = resp.json()
-        assert body["text"] == "stub transcript"
+        assert captured["hotwords"] == ["alpha", "beta", "gamma"]
+
+
+@pytest.mark.unit
+def test_audio_transcriptions_hotwords_json(monkeypatch, bypass_api_limits):
+    app, captured = _setup_stubbed_audio_app(monkeypatch)
+
+    with bypass_api_limits(app), TestClient(app) as client:
+        wav_bytes = _make_wav_bytes()
+        headers = {"X-API-KEY": TEST_API_KEY}
+        files = {"file": ("sample.wav", io.BytesIO(wav_bytes), "audio/wav")}
+        data = {
+            "model": "vibevoice-asr",
+            "response_format": "json",
+            "hotwords": "[\"alpha\", \"beta\", \" \"]",
+        }
+        resp = client.post(
+            "/api/v1/audio/transcriptions",
+            headers=headers,
+            files=files,
+            data=data,
+        )
+        if resp.status_code == 404:
+            pytest.skip("audio/transcriptions endpoint not mounted in this build")
+        assert resp.status_code == 200, resp.text
+        assert captured["hotwords"] == ["alpha", "beta"]

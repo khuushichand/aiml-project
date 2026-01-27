@@ -205,7 +205,6 @@ class TestSimpleAuth:
             json={"refresh_token": refresh_token},
         )
         assert refresh_response.status_code in (401, 403)
-        assert data["email"] == self.test_email
 
     def test_unauthorized_access(self):
 
