@@ -68,6 +68,7 @@
  ```
 
  CSS Structure (following ModelPlayground pattern):
+ ```tsx
  <div className="flex h-full flex-col bg-bg text-text">
    <WorkspaceHeader />
    <div className="flex min-h-0 flex-1">
@@ -76,9 +77,11 @@
      {rightPaneOpen && <StudioPane className="w-80 shrink-0 border-l" />}
    </div>
  </div>
+ ```
 
  3.2 Component Structure
 
+ ```text
  WorkspacePlayground/
  ├── index.tsx                    # Main three-pane layout
  ├── WorkspaceHeader.tsx          # Title + pane toggle buttons
@@ -100,11 +103,13 @@
      ├── GeneratedArtifacts.tsx   # Aggregated outputs list
      ├── ArtifactItem.tsx         # Artifact card with actions
      └── NotesArea.tsx            # Quick notes textarea
+ ```
 
  3.3 State Management
 
  New Store: apps/packages/ui/src/store/workspace.ts
 
+ ```ts
  interface WorkspaceSource {
    id: string
    mediaId: number           // Server-side media ID
@@ -157,6 +162,7 @@
    toggleRightPane: () => void
    reset: () => void
  }
+ ```
 
  Reuse Existing Stores:
  - useStoreMessageOption - Chat messages and streaming (via core-slice)
@@ -549,4 +555,4 @@
 
  ---
  Document Version: 1.1
- Last Updated: 2026-01-25
+ Last Updated: 2026-01-27

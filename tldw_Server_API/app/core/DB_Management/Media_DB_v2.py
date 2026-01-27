@@ -3253,6 +3253,16 @@ class MediaDatabase:
             7: self._postgres_migrate_to_v7,
             8: self._postgres_migrate_to_v8,
             9: self._postgres_migrate_to_v9,
+            10: self._postgres_migrate_to_v10,
+            11: self._postgres_migrate_to_v11,
+            12: self._postgres_migrate_to_v12,
+            13: self._postgres_migrate_to_v13,
+            14: self._postgres_migrate_to_v14,
+            15: self._postgres_migrate_to_v15,
+            16: self._postgres_migrate_to_v16,
+            17: self._postgres_migrate_to_v17,
+            18: self._postgres_migrate_to_v18,
+            19: self._postgres_migrate_to_v19,
         }
 
     def _postgres_migrate_to_v5(self, conn) -> None:
@@ -3449,6 +3459,72 @@ class MediaDatabase:
             f"CREATE INDEX IF NOT EXISTS idx_media_owner_user_id ON {ident('media')}({ident('owner_user_id')})",
             connection=conn,
         )
+
+    def _postgres_migrate_to_v10(self, conn) -> None:
+        """Ensure Claims tables and review extensions exist (PostgreSQL)."""
+
+        self._ensure_postgres_claims_tables(conn)
+        self._ensure_postgres_claims_extensions(conn)
+
+    def _postgres_migrate_to_v11(self, conn) -> None:
+        """Ensure MediaFiles table exists for artifact storage (PostgreSQL)."""
+
+        try:
+            statements = self._convert_sqlite_sql_to_postgres_statements(
+                self._MEDIA_FILES_TABLE_SQL
+            )
+            for stmt in statements:
+                try:
+                    self.backend.execute(stmt, connection=conn)
+                except BackendDatabaseError as exc:
+                    logger.warning(
+                        "Could not apply MediaFiles migration statement on PostgreSQL: %s",
+                        exc,
+                    )
+        except Exception as exc:  # pragma: no cover - defensive
+            logger.warning("MediaFiles Postgres migration v11 failed: %s", exc)
+
+    def _postgres_migrate_to_v12(self, conn) -> None:
+        """Ensure collections and content item tables exist (PostgreSQL)."""
+
+        self._ensure_postgres_collections_tables(conn)
+
+    def _postgres_migrate_to_v13(self, conn) -> None:
+        """Ensure collections tables are indexed and ready (PostgreSQL)."""
+
+        self._ensure_postgres_collections_tables(conn)
+
+    def _postgres_migrate_to_v14(self, conn) -> None:
+        """Ensure Data Tables base schema exists (PostgreSQL)."""
+
+        self._ensure_postgres_data_tables(conn)
+
+    def _postgres_migrate_to_v15(self, conn) -> None:
+        """Ensure Data Tables columns and late additions exist (PostgreSQL)."""
+
+        self._ensure_postgres_data_tables(conn)
+
+    def _postgres_migrate_to_v16(self, conn) -> None:
+        """Ensure Media.source_hash column/index exist (PostgreSQL)."""
+
+        self._ensure_postgres_source_hash_column(conn)
+
+    def _postgres_migrate_to_v17(self, conn) -> None:
+        """Ensure Claims extensions remain aligned (PostgreSQL)."""
+
+        self._ensure_postgres_claims_tables(conn)
+        self._ensure_postgres_claims_extensions(conn)
+
+    def _postgres_migrate_to_v18(self, conn) -> None:
+        """Ensure sequences are synced after structural changes (PostgreSQL)."""
+
+        self._sync_postgres_sequences(conn)
+
+    def _postgres_migrate_to_v19(self, conn) -> None:
+        """Finalise schema ensures (FTS + RLS) for PostgreSQL."""
+
+        self._ensure_postgres_fts(conn)
+        self._ensure_postgres_rls(conn)
 
     def _update_schema_version_postgres(self, conn, version: int) -> None:
         """Ensure schema_version table reflects the supplied version."""
@@ -3744,12 +3820,273 @@ class MediaDatabase:
 
     def _ensure_postgres_data_tables(self, conn) -> None:
         """Ensure Data Tables schema exists on PostgreSQL."""
-        try:
-            statements = self._convert_sqlite_sql_to_postgres_statements(self._DATA_TABLES_SQL)
-            for stmt in statements:
+        statements = self._convert_sqlite_sql_to_postgres_statements(self._DATA_TABLES_SQL)
+        create_tables = [s for s in statements if s.strip().upper().startswith("CREATE TABLE")]
+        other_statements = [s for s in statements if s not in create_tables]
+
+        for stmt in create_tables:
+            try:
                 self.backend.execute(stmt, connection=conn)
+            except BackendDatabaseError as exc:
+                logger.warning(
+                    "Could not ensure Data Tables base table on PostgreSQL: %s",
+                    exc,
+                )
+
+        # Some older PostgreSQL schemas may have partial data_tables definitions.
+        # Ensure late-added columns exist before applying indexes that depend on them.
+        self._ensure_postgres_data_tables_columns(conn)
+
+        for stmt in other_statements:
+            try:
+                self.backend.execute(stmt, connection=conn)
+            except BackendDatabaseError as exc:
+                logger.warning(
+                    "Could not ensure Data Tables index/statement on PostgreSQL: %s",
+                    exc,
+                )
+
+    def _ensure_postgres_columns(
+        self,
+        conn,
+        *,
+        table: str,
+        column_defs: Dict[str, str],
+    ) -> None:
+        """Ensure a set of columns exist on a PostgreSQL table."""
+
+        backend = self.backend
+        ident = backend.escape_identifier
+
+        if not backend.table_exists(table, connection=conn):
+            return
+
+        try:
+            existing = {
+                str(row.get("name") or "").lower()
+                for row in backend.get_table_info(table, connection=conn)
+            }
         except BackendDatabaseError as exc:
-            logger.warning(f"Could not ensure data_tables schema on PostgreSQL: {exc}")
+            logger.warning("Could not introspect PostgreSQL table %s: %s", table, exc)
+            return
+
+        for column, definition in column_defs.items():
+            if column.lower() in existing:
+                continue
+            try:
+                backend.execute(
+                    f"ALTER TABLE {ident(table)} "
+                    f"ADD COLUMN IF NOT EXISTS {ident(column)} {definition}",
+                    connection=conn,
+                )
+            except BackendDatabaseError as exc:
+                logger.warning(
+                    "Could not add PostgreSQL column %s.%s: %s",
+                    table,
+                    column,
+                    exc,
+                )
+
+    def _ensure_postgres_data_tables_columns(self, conn) -> None:
+        """Ensure late-added Data Tables columns and indexes exist on PostgreSQL."""
+
+        backend = self.backend
+        ident = backend.escape_identifier
+
+        try:
+            self._ensure_postgres_columns(
+                conn,
+                table="data_tables",
+                column_defs={
+                    "workspace_tag": "TEXT",
+                    "column_hints_json": "TEXT",
+                    "last_modified": "TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP",
+                    "version": "INTEGER NOT NULL DEFAULT 1",
+                    "client_id": "TEXT NOT NULL DEFAULT ''",
+                    "deleted": "BOOLEAN NOT NULL DEFAULT FALSE",
+                    "prev_version": "BIGINT",
+                    "merge_parent_uuid": "TEXT",
+                },
+            )
+            self._ensure_postgres_columns(
+                conn,
+                table="data_table_columns",
+                column_defs={
+                    "format": "TEXT",
+                    "last_modified": "TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP",
+                    "version": "INTEGER NOT NULL DEFAULT 1",
+                    "client_id": "TEXT NOT NULL DEFAULT ''",
+                    "deleted": "BOOLEAN NOT NULL DEFAULT FALSE",
+                    "prev_version": "BIGINT",
+                    "merge_parent_uuid": "TEXT",
+                },
+            )
+            self._ensure_postgres_columns(
+                conn,
+                table="data_table_rows",
+                column_defs={
+                    "row_hash": "TEXT",
+                    "last_modified": "TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP",
+                    "version": "INTEGER NOT NULL DEFAULT 1",
+                    "client_id": "TEXT NOT NULL DEFAULT ''",
+                    "deleted": "BOOLEAN NOT NULL DEFAULT FALSE",
+                    "prev_version": "BIGINT",
+                    "merge_parent_uuid": "TEXT",
+                },
+            )
+            self._ensure_postgres_columns(
+                conn,
+                table="data_table_sources",
+                column_defs={
+                    "last_modified": "TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP",
+                    "version": "INTEGER NOT NULL DEFAULT 1",
+                    "client_id": "TEXT NOT NULL DEFAULT ''",
+                    "deleted": "BOOLEAN NOT NULL DEFAULT FALSE",
+                    "prev_version": "BIGINT",
+                    "merge_parent_uuid": "TEXT",
+                },
+            )
+
+            if backend.table_exists("data_tables", connection=conn):
+                backend.execute(
+                    f"UPDATE {ident('data_tables')} "
+                    f"SET {ident('client_id')} = %s "
+                    f"WHERE {ident('client_id')} IS NULL OR {ident('client_id')} = ''",
+                    (str(self.client_id),),
+                    connection=conn,
+                )
+                backend.execute(
+                    f"UPDATE {ident('data_tables')} "
+                    f"SET {ident('last_modified')} = CURRENT_TIMESTAMP "
+                    f"WHERE {ident('last_modified')} IS NULL",
+                    connection=conn,
+                )
+                backend.execute(
+                    f"CREATE INDEX IF NOT EXISTS {ident('idx_data_tables_workspace_tag')} "
+                    f"ON {ident('data_tables')} ({ident('workspace_tag')})",
+                    connection=conn,
+                )
+        except BackendDatabaseError as exc:
+            logger.warning(
+                "Could not ensure late Data Tables columns/indexes on PostgreSQL: %s",
+                exc,
+            )
+
+    def _ensure_postgres_claims_tables(self, conn) -> None:
+        """Ensure Claims base tables exist on PostgreSQL."""
+
+        statements = self._convert_sqlite_sql_to_postgres_statements(self._CLAIMS_TABLE_SQL)
+        create_tables = [s for s in statements if s.strip().upper().startswith("CREATE TABLE")]
+        other_statements = [s for s in statements if s not in create_tables]
+
+        for stmt in create_tables:
+            try:
+                self.backend.execute(stmt, connection=conn)
+            except BackendDatabaseError as exc:
+                logger.warning("Could not ensure Claims base table on PostgreSQL: %s", exc)
+
+        # Claims extensions add late columns before index creation.
+        self._ensure_postgres_claims_extensions(conn)
+
+        for stmt in other_statements:
+            try:
+                self.backend.execute(stmt, connection=conn)
+            except BackendDatabaseError as exc:
+                logger.warning("Could not ensure Claims index/statement on PostgreSQL: %s", exc)
+
+    def _ensure_postgres_collections_tables(self, conn) -> None:
+        """Ensure collections/content item tables exist on PostgreSQL."""
+
+        backend = self.backend
+
+        try:
+            backend.execute(
+                (
+                    "CREATE TABLE IF NOT EXISTS output_templates ("
+                    "id SERIAL PRIMARY KEY, user_id TEXT NOT NULL, name TEXT NOT NULL, type TEXT NOT NULL, "
+                    "format TEXT NOT NULL, body TEXT NOT NULL, description TEXT, is_default BOOLEAN NOT NULL DEFAULT FALSE, "
+                    "created_at TIMESTAMPTZ NOT NULL, updated_at TIMESTAMPTZ NOT NULL)"
+                ),
+                connection=conn,
+            )
+            backend.execute(
+                "CREATE UNIQUE INDEX IF NOT EXISTS ux_output_templates_user_name "
+                "ON output_templates(user_id, name)",
+                connection=conn,
+            )
+            backend.execute(
+                (
+                    "CREATE TABLE IF NOT EXISTS reading_highlights ("
+                    "id SERIAL PRIMARY KEY, user_id TEXT NOT NULL, item_id INTEGER NOT NULL, quote TEXT NOT NULL, "
+                    "start_offset INTEGER, end_offset INTEGER, color TEXT, note TEXT, created_at TIMESTAMPTZ NOT NULL, "
+                    "anchor_strategy TEXT NOT NULL DEFAULT 'fuzzy_quote', content_hash_ref TEXT, context_before TEXT, context_after TEXT, "
+                    "state TEXT NOT NULL DEFAULT 'active')"
+                ),
+                connection=conn,
+            )
+            backend.execute(
+                "CREATE INDEX IF NOT EXISTS idx_highlights_user_item ON reading_highlights(user_id, item_id)",
+                connection=conn,
+            )
+            backend.execute(
+                (
+                    "CREATE TABLE IF NOT EXISTS collection_tags ("
+                    "id BIGSERIAL PRIMARY KEY, user_id TEXT NOT NULL, name TEXT NOT NULL, "
+                    "UNIQUE (user_id, name))"
+                ),
+                connection=conn,
+            )
+            backend.execute(
+                (
+                    "CREATE TABLE IF NOT EXISTS content_items ("
+                    "id BIGSERIAL PRIMARY KEY, user_id TEXT NOT NULL, origin TEXT NOT NULL, origin_type TEXT, "
+                    "origin_id BIGINT, url TEXT, canonical_url TEXT, domain TEXT, title TEXT, summary TEXT, notes TEXT, "
+                    "content_hash TEXT, word_count INTEGER, published_at TEXT, status TEXT, favorite INTEGER NOT NULL DEFAULT 0, "
+                    "metadata_json TEXT, media_id BIGINT, job_id BIGINT, run_id BIGINT, source_id BIGINT, read_at TEXT, "
+                    "created_at TEXT NOT NULL, updated_at TEXT NOT NULL)"
+                ),
+                connection=conn,
+            )
+            backend.execute(
+                "CREATE UNIQUE INDEX IF NOT EXISTS ux_content_items_user_canonical "
+                "ON content_items(user_id, canonical_url) WHERE canonical_url IS NOT NULL",
+                connection=conn,
+            )
+            backend.execute(
+                "CREATE UNIQUE INDEX IF NOT EXISTS ux_content_items_user_hash "
+                "ON content_items(user_id, content_hash) WHERE content_hash IS NOT NULL",
+                connection=conn,
+            )
+            backend.execute(
+                "CREATE INDEX IF NOT EXISTS idx_content_items_user_updated "
+                "ON content_items(user_id, updated_at DESC)",
+                connection=conn,
+            )
+            backend.execute(
+                "CREATE INDEX IF NOT EXISTS idx_content_items_user_domain "
+                "ON content_items(user_id, domain)",
+                connection=conn,
+            )
+            backend.execute(
+                "CREATE INDEX IF NOT EXISTS idx_content_items_job "
+                "ON content_items(job_id)",
+                connection=conn,
+            )
+            backend.execute(
+                "CREATE INDEX IF NOT EXISTS idx_content_items_run "
+                "ON content_items(run_id)",
+                connection=conn,
+            )
+            backend.execute(
+                (
+                    "CREATE TABLE IF NOT EXISTS content_item_tags ("
+                    "item_id BIGINT NOT NULL, tag_id BIGINT NOT NULL, "
+                    "UNIQUE (item_id, tag_id))"
+                ),
+                connection=conn,
+            )
+        except BackendDatabaseError as exc:
+            logger.warning("Could not ensure collections tables on PostgreSQL: %s", exc)
 
     def _ensure_postgres_source_hash_column(self, conn) -> None:
         """Ensure Media.source_hash column and index exist on PostgreSQL."""
@@ -7118,7 +7455,7 @@ class MediaDatabase:
                     uuid, name, description, workspace_tag, prompt, column_hints_json, status,
                     row_count, generation_model, last_error,
                     created_at, updated_at, last_modified, version, client_id, deleted
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     table_uuid,

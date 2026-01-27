@@ -35,7 +35,7 @@ Alertmanager listens on:
 
 Edit `Docs/Operations/monitoring/alertmanager_email_webhook.yml`:
 
-- `email_configs`: set `to`, `from`, `smarthost`, `auth_username`, `auth_password`
+- `email_configs`: set `to`, `from`, `smarthost`, `auth_username`, `auth_password_file`
 - `webhook_configs`: set `url` to your alert endpoint
 
 Example (replace values):
@@ -48,12 +48,19 @@ receivers:
         from: "alertmanager@yourdomain.com"
         smarthost: "smtp.yourdomain.com:587"
         auth_username: "alertmanager@yourdomain.com"
-        auth_password: "REPLACE_ME"
+        auth_password_file: "/etc/alertmanager/secrets/smtp_password"
         require_tls: true
         send_resolved: true
     webhook_configs:
       - url: "https://your-alert-endpoint.example.com/alertmanager"
         send_resolved: true
+```
+
+Provide the SMTP password via the mounted secret file used by the monitoring compose:
+
+```bash
+mkdir -p Dockerfiles/Monitoring/secrets
+printf '%s' 'your-smtp-password' > Dockerfiles/Monitoring/secrets/smtp_password
 ```
 
 ## Notes

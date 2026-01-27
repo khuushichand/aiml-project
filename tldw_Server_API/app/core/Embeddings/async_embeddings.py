@@ -371,7 +371,8 @@ class AsyncLocalProvider(AsyncEmbeddingProvider):
                         continue
                     to_drop.append(name)
 
-            while len(self.models) - len(to_drop) >= self.max_models_in_memory:
+            # Only evict when we exceed the limit; keep exactly max_models_in_memory.
+            while len(self.models) - len(to_drop) > self.max_models_in_memory:
                 candidates = [
                     (name, last_used) for name, last_used in self.model_last_used.items()
                     if name != keep and self.model_in_use.get(name, 0) <= 0 and name not in to_drop

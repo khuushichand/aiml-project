@@ -15,7 +15,7 @@ receivers:
         from: "alertmanager@example.com"
         smarthost: "smtp.example.com:587"
         auth_username: "alertmanager@example.com"
-        auth_password: "REPLACE_ME"
+        auth_password_file: "/etc/alertmanager/secrets/smtp_password"
         require_tls: true
         send_resolved: true
         headers:

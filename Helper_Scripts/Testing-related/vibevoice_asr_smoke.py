@@ -25,6 +25,13 @@ import httpx
 
 
 def _resolve_headers(args: argparse.Namespace) -> Dict[str, str]:
+    """
+    Resolve authentication headers from CLI arguments or environment variables.
+
+    Priority: --bearer > --api-key > TLDW_BEARER_TOKEN/TLDW_TOKEN >
+    SINGLE_USER_API_KEY/TLDW_API_KEY. Returns an empty dict if no credentials
+    are found.
+    """
     headers: Dict[str, str] = {}
     if args.bearer:
         headers["Authorization"] = f"Bearer {args.bearer}"
@@ -131,11 +138,11 @@ def main() -> int:
         print(f"Request failed: {exc}", file=sys.stderr)
         return 4
     finally:
-        if "is_temp" in locals() and is_temp:
+        if is_temp:
             try:
                 audio_path.unlink(missing_ok=True)
-            except Exception:
-                pass
+            except OSError as exc:
+                print(f"Warning: failed to clean up temp file: {exc}", file=sys.stderr)
 
     text = str(body.get("text") or "").strip()
     segments = body.get("segments") or []

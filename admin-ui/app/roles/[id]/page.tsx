@@ -90,6 +90,7 @@ export default function RoleDetailPage() {
   // Tool Permissions
   const [toolPermissions, setToolPermissions] = useState<ToolPermission[]>([]);
   const [toolPermissionsLoading, setToolPermissionsLoading] = useState(false);
+  const [toolPermissionsError, setToolPermissionsError] = useState('');
   const [newToolPrefix, setNewToolPrefix] = useState('');
 
   const hasRateLimits = Boolean(
@@ -112,6 +113,7 @@ export default function RoleDetailPage() {
       setLoading(true);
       setError('');
       setWarning('');
+      setToolPermissionsError('');
 
       const [roleData, allPermsData, rolePermsData, usersData, toolPermsData] = await Promise.allSettled([
         api.getRole(roleId),
@@ -123,6 +125,19 @@ export default function RoleDetailPage() {
 
       const getErrorMessage = (reason: unknown, fallback: string) =>
         reason instanceof Error && reason.message ? reason.message : fallback;
+      const formatReason = (reason: unknown) => {
+        if (reason instanceof Error && reason.message) {
+          return `${reason.name}: ${reason.message}`;
+        }
+        if (typeof reason === 'string') {
+          return reason;
+        }
+        try {
+          return JSON.stringify(reason);
+        } catch {
+          return String(reason);
+        }
+      };
 
       if (roleData.status === 'rejected') {
         setError(getErrorMessage(roleData.reason, 'Failed to load role details'));
@@ -174,7 +189,8 @@ export default function RoleDetailPage() {
         const tools = toolPermsData.value as { tools?: ToolPermission[]; items?: ToolPermission[] };
         setToolPermissions(Array.isArray(tools.tools) ? tools.tools : Array.isArray(tools.items) ? tools.items : []);
       } else {
-        // Tool permissions might not be implemented, just log warning
+        const reason = formatReason(toolPermsData.reason);
+        setToolPermissionsError(reason);
         console.warn('Failed to load tool permissions:', toolPermsData.reason);
       }
 
@@ -290,6 +306,12 @@ export default function RoleDetailPage() {
       if (rpm !== null) data.requests_per_minute = rpm;
       if (rph !== null) data.requests_per_hour = rph;
       if (rpd !== null) data.requests_per_day = rpd;
+
+      if (Object.keys(data).length === 0) {
+        setRateLimitsSaving(false);
+        setError('Please specify at least one rate limit');
+        return;
+      }
 
       await api.setRoleRateLimits(roleId, data);
       setRateLimits(data);
@@ -743,7 +765,13 @@ export default function RoleDetailPage() {
                         Revoke
                       </Button>
                     </div>
-                    {toolPermissions.length > 0 ? (
+                    {toolPermissionsError ? (
+                      <Alert variant="destructive">
+                        <AlertDescription>
+                          Failed to load tool permissions: {toolPermissionsError}
+                        </AlertDescription>
+                      </Alert>
+                    ) : toolPermissions.length > 0 ? (
                       <div className="max-h-48 overflow-y-auto space-y-1">
                         {toolPermissions.map((tool, index) => (
                           <div

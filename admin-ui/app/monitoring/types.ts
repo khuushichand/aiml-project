@@ -59,6 +59,7 @@ export interface NotificationChannel {
 }
 
 export interface NotificationSettings {
+  id?: string;
   channels: NotificationChannel[];
   alert_threshold: 'info' | 'warning' | 'error' | 'critical';
   digest_enabled: boolean;

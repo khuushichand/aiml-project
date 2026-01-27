@@ -10,8 +10,11 @@ from fastapi.testclient import TestClient
 
 from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import User, get_request_user
 from tldw_Server_API.app.core.Collections.reading_import_jobs import (
+    READING_IMPORT_DOMAIN,
+    READING_IMPORT_JOB_TYPE,
     ReadingImportJobError,
     handle_reading_import_job,
+    reading_import_queue,
     resolve_reading_import_file,
     stage_reading_import_file,
 )
@@ -126,8 +129,46 @@ def _run_import_job(job_id: int) -> None:
         jm = JobManager()
         job = jm.get_job(job_id)
         assert job is not None
-        result = await handle_reading_import_job(job)
-        jm.complete_job(job_id, result=result, enforce=False)
+        worker_id = "test-reading-import-worker"
+        owner_user_id = str(job.get("owner_user_id") or "")
+        queue = reading_import_queue()
+
+        acquired = None
+        for _attempt in range(5):
+            acquired = jm.acquire_next_job(
+                domain=READING_IMPORT_DOMAIN,
+                queue=queue,
+                lease_seconds=60,
+                worker_id=worker_id,
+                owner_user_id=owner_user_id or None,
+            )
+            if not acquired:
+                continue
+            acquired_id = int(acquired.get("id") or 0)
+            acquired_type = str(acquired.get("job_type") or "")
+            if acquired_id == int(job_id) and acquired_type == READING_IMPORT_JOB_TYPE:
+                break
+            jm.release_job(
+                acquired_id,
+                worker_id=worker_id,
+                lease_id=acquired.get("lease_id"),
+                reason="test_acquired_non_target_job",
+                enforce=False,
+            )
+            acquired = None
+
+        assert acquired is not None, "failed to acquire reading import job for processing"
+        assert int(acquired.get("id") or 0) == int(job_id), "acquired wrong job id"
+        assert str(acquired.get("job_type") or "") == READING_IMPORT_JOB_TYPE, "acquired wrong job type"
+
+        result = await handle_reading_import_job(acquired)
+        jm.complete_job(
+            job_id,
+            result=result,
+            worker_id=worker_id,
+            lease_id=acquired.get("lease_id"),
+            enforce=False,
+        )
 
     asyncio.run(_runner())
 

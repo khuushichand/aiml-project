@@ -15,6 +15,7 @@ import { Badge } from '@/components/ui/badge';
 import { Form, FormInput, FormSelect, FormTextarea } from '@/components/ui/form';
 import { ArrowLeft, Save, Trash2, Mic, MicOff, BarChart3 } from 'lucide-react';
 import { api } from '@/lib/api-client';
+import { parseVoiceCommandInputs } from '@/lib/voice-commands';
 import type { VoiceCommand, VoiceActionType, VoiceCommandUsage } from '@/types';
 import { Skeleton } from '@/components/ui/skeleton';
 import { useConfirm } from '@/components/ui/confirm-dialog';
@@ -113,28 +114,17 @@ export default function VoiceCommandDetailPage({
     try {
       setSaving(true);
 
-      // Parse phrases
-      const phrases = data.phrases
-        .split(/[,\n]/)
-        .map((p) => p.trim())
-        .filter((p) => p.length > 0);
-
-      // Parse action config
-      let actionConfig = {};
-      if (data.action_config) {
-        try {
-          actionConfig = JSON.parse(data.action_config);
-        } catch {
-          setSaveError('Invalid JSON in action config');
-          return;
-        }
+      const parsedInputs = parseVoiceCommandInputs(data.phrases, data.action_config);
+      if (!parsedInputs.ok) {
+        setSaveError(parsedInputs.error);
+        return;
       }
 
       await api.updateVoiceCommand(commandId, {
         name: data.name,
-        phrases,
+        phrases: parsedInputs.phrases,
         action_type: data.action_type,
-        action_config: actionConfig,
+        action_config: parsedInputs.actionConfig,
         description: data.description || undefined,
         priority: data.priority,
         requires_confirmation: data.requires_confirmation,

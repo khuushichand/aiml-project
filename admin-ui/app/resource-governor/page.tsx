@@ -197,13 +197,25 @@ export default function ResourceGovernorPage() {
       const maxTokens = parseOptionalInt(formMaxTokens);
       const maxConcurrent = parseOptionalInt(formMaxConcurrent);
       const priority = parseOptionalInt(formPriority);
+      const isEditMode = Boolean(editingPolicy?.id);
 
       if (maxRpm !== null) payload.max_requests_per_minute = maxRpm;
+      else if (isEditMode) payload.max_requests_per_minute = null;
+
       if (maxRph !== null) payload.max_requests_per_hour = maxRph;
+      else if (isEditMode) payload.max_requests_per_hour = null;
+
       if (maxRpd !== null) payload.max_requests_per_day = maxRpd;
+      else if (isEditMode) payload.max_requests_per_day = null;
+
       if (maxTokens !== null) payload.max_tokens_per_request = maxTokens;
+      else if (isEditMode) payload.max_tokens_per_request = null;
+
       if (maxConcurrent !== null) payload.max_concurrent_requests = maxConcurrent;
+      else if (isEditMode) payload.max_concurrent_requests = null;
+
       if (priority !== null) payload.priority = priority;
+      else if (isEditMode) payload.priority = null;
       if (formDescription.trim()) payload.description = formDescription.trim();
 
       if (editingPolicy?.id) {
@@ -258,11 +270,11 @@ export default function ResourceGovernorPage() {
 
   const getLimitsDisplay = (policy: ResourcePolicy) => {
     const parts: string[] = [];
-    if (policy.max_requests_per_minute) parts.push(`${policy.max_requests_per_minute}/min`);
-    if (policy.max_requests_per_hour) parts.push(`${policy.max_requests_per_hour}/hr`);
-    if (policy.max_requests_per_day) parts.push(`${policy.max_requests_per_day}/day`);
-    if (policy.max_concurrent_requests) parts.push(`${policy.max_concurrent_requests} concurrent`);
-    if (policy.max_tokens_per_request) parts.push(`${policy.max_tokens_per_request} tokens/req`);
+    if (policy.max_requests_per_minute != null) parts.push(`${policy.max_requests_per_minute}/min`);
+    if (policy.max_requests_per_hour != null) parts.push(`${policy.max_requests_per_hour}/hr`);
+    if (policy.max_requests_per_day != null) parts.push(`${policy.max_requests_per_day}/day`);
+    if (policy.max_concurrent_requests != null) parts.push(`${policy.max_concurrent_requests} concurrent`);
+    if (policy.max_tokens_per_request != null) parts.push(`${policy.max_tokens_per_request} tokens/req`);
     return parts.length > 0 ? parts.join(', ') : 'No limits set';
   };
 

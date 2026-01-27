@@ -120,6 +120,7 @@ export default function JobsPage() {
   // SLA Policies
   const [slaPolicies, setSlaPolicies] = useState<SlaPolicy[]>([]);
   const [slaPoliciesLoading, setSlaPoliciesLoading] = useState(false);
+  const [slaPoliciesError, setSlaPoliciesError] = useState<string | null>(null);
   const [showSlaForm, setShowSlaForm] = useState(false);
   const [slaFormSaving, setSlaFormSaving] = useState(false);
   const [slaFormName, setSlaFormName] = useState('');
@@ -175,6 +176,7 @@ export default function JobsPage() {
   const loadData = useCallback(async () => {
     setLoading(true);
     setSlaPoliciesLoading(true);
+    setSlaPoliciesError(null);
     setError('');
     setRoutesUnavailable(false);
 
@@ -217,6 +219,11 @@ export default function JobsPage() {
       );
     } else {
       setSlaPolicies([]);
+      setSlaPoliciesError(
+        isNotFoundError(slaResult.reason)
+          ? 'SLA policies endpoint is unavailable.'
+          : 'Failed to load SLA policies.'
+      );
     }
 
     setSlaPoliciesLoading(false);
@@ -247,7 +254,7 @@ export default function JobsPage() {
     try {
       const [detail, attachments] = await Promise.allSettled([
         api.getJobDetail(job.id, { domain: job.domain }),
-        api.getJobAttachments(String(job.id)),
+        api.getJobAttachments(String(job.id), { domain: job.domain }),
       ]);
       if (detail.status === 'fulfilled') {
         setJobDetail(detail.value as JobDetail);
@@ -695,7 +702,11 @@ export default function JobsPage() {
               )}
 
               {/* SLA Policies List */}
-              {slaPoliciesLoading ? (
+              {slaPoliciesError ? (
+                <Alert variant="destructive" className="mb-4">
+                  <AlertDescription>{slaPoliciesError}</AlertDescription>
+                </Alert>
+              ) : slaPoliciesLoading ? (
                 <div className="text-muted-foreground">Loading SLA policies...</div>
               ) : slaPolicies.length === 0 ? (
                 <div className="text-muted-foreground text-center py-4">

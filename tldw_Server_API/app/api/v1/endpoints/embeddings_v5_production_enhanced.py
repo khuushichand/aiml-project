@@ -46,7 +46,7 @@ from tldw_Server_API.app.core.Usage.usage_tracker import (
     backfill_legacy_tokens_to_ledger,
     log_llm_usage,
 )
-from tldw_Server_API.app.core.exceptions import BadRequestError, NetworkError, RetryExhaustedError
+from tldw_Server_API.app.core.exceptions import NetworkError, RetryExhaustedError
 from tldw_Server_API.app.core.http_client import (
     afetch as _http_afetch,
     create_async_client as _create_async_client,
@@ -1248,9 +1248,9 @@ def tokens_to_texts(
                 len(arr),
                 exc,
             )
-            raise BadRequestError(
-                f"Failed to decode token array for model '{model_name}' (index 0, tokens={len(arr)})."
-            ) from exc
+            # Fall back to an empty string to preserve request shape; the raw
+            # token counts are still used for limits/usage accounting.
+            texts.append("")
         return texts, total_tokens, token_counts
 
     # Batch of token arrays
@@ -1270,9 +1270,7 @@ def tokens_to_texts(
                     len(arr),
                     exc,
                 )
-                raise BadRequestError(
-                    f"Failed to decode token array for model '{model_name}' (index {idx}, tokens={len(arr)})."
-                ) from exc
+                texts.append("")
         return texts, total_tokens, token_counts
 
     raise ValueError("Invalid token array input")
@@ -2070,8 +2068,10 @@ async def create_embedding_endpoint(
                 detail=f"Unknown provider: {provider}"
             )
 
-        if embedding_request.dimensions is not None:
-            if provider.lower() != "openai" or not _supports_openai_dimensions(model):
+        # OpenAI-specific dimensions validation. For non-OpenAI providers we
+        # accept dimensions and apply the local dimension policy post-hoc.
+        if embedding_request.dimensions is not None and provider.lower() == "openai":
+            if not _supports_openai_dimensions(model):
                 raise HTTPException(
                     status_code=status.HTTP_400_BAD_REQUEST,
                     detail="dimensions is only supported for OpenAI text-embedding-3 models",
@@ -2320,7 +2320,11 @@ async def create_embedding_endpoint(
                     "model": model,
                     "api_key": _api_key,
                 }
-                if embedding_request.dimensions is not None:
+                if (
+                    embedding_request.dimensions is not None
+                    and provider.lower() == "openai"
+                    and _supports_openai_dimensions(model)
+                ):
                     adapter_request["dimensions"] = embedding_request.dimensions
                 result = adapter.embed(adapter_request) if adapter else None
                 if isinstance(result, dict) and isinstance(result.get("data"), list):
@@ -2630,12 +2634,7 @@ async def create_embeddings_batch_endpoint(
 
     model, provider = _resolve_model_and_provider(payload.model, payload.provider)
 
-    if payload.dimensions is not None:
-        if provider.lower() != "openai":
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail="dimensions is only supported for OpenAI text-embedding-3 models",
-            )
+    if payload.dimensions is not None and provider.lower() == "openai":
         if not _supports_openai_dimensions(model):
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,

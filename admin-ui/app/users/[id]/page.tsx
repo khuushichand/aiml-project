@@ -219,9 +219,7 @@ export default function UserDetailPage() {
         storage_quota_mb: userValue.storage_quota_mb || 0,
       });
       const normalizedRateLimits = normalizeRateLimits(userValue.rate_limits);
-      if (normalizedRateLimits) {
-        applyRateLimits(normalizedRateLimits);
-      }
+      applyRateLimits(normalizedRateLimits);
 
       try {
         const currentUser = await api.getCurrentUser();
@@ -331,9 +329,7 @@ export default function UserDetailPage() {
 
       if (rateLimitsResult.status === 'fulfilled') {
         const normalizedRateLimits = normalizeRateLimits(rateLimitsResult.value);
-        if (normalizedRateLimits) {
-          applyRateLimits(normalizedRateLimits);
-        }
+        applyRateLimits(normalizedRateLimits);
       }
     } catch (err: unknown) {
       console.error('Failed to load permissions:', err);
@@ -1037,7 +1033,12 @@ export default function UserDetailPage() {
                     <div className="p-4 border rounded-lg space-y-3">
                       <div className="flex items-center justify-between">
                         <span className="font-medium">Add Permission Override</span>
-                        <Button variant="ghost" size="icon" onClick={() => setShowAddOverride(false)}>
+                        <Button
+                          variant="ghost"
+                          size="icon"
+                          onClick={() => setShowAddOverride(false)}
+                          aria-label="Close add permission override"
+                        >
                           <X className="h-4 w-4" />
                         </Button>
                       </div>

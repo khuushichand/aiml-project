@@ -76,10 +76,16 @@ const ToggleBadgeGroup = React.forwardRef<HTMLDivElement, ToggleBadgeGroupProps>
         case 'Home':
           event.preventDefault();
           setFocusedIndex(0);
+          if (!multiSelect) {
+            toggleOption(options[0]);
+          }
           break;
         case 'End':
           event.preventDefault();
           setFocusedIndex(options.length - 1);
+          if (!multiSelect) {
+            toggleOption(options[options.length - 1]);
+          }
           break;
       }
     };
@@ -106,6 +112,7 @@ const ToggleBadgeGroup = React.forwardRef<HTMLDivElement, ToggleBadgeGroupProps>
     }, [focusedIndex]);
 
     const badgeSize = size === 'sm' ? 'px-2 py-0.5 text-xs' : 'px-2.5 py-1 text-sm';
+    const hasSelectedOption = !multiSelect && options.some((opt) => selected.includes(opt));
 
     return (
       <div
@@ -124,13 +131,17 @@ const ToggleBadgeGroup = React.forwardRef<HTMLDivElement, ToggleBadgeGroupProps>
       >
         {options.map((option, index) => {
           const isSelected = selected.includes(option);
+          const isInitialTabStop =
+            focusedIndex === -1 &&
+            ((!multiSelect && isSelected) ||
+              (index === 0 && (multiSelect || !hasSelectedOption)));
           return (
             <button
               key={option}
               type="button"
               role={multiSelect ? 'checkbox' : 'radio'}
               aria-checked={isSelected}
-              tabIndex={focusedIndex === index || (focusedIndex === -1 && index === 0) ? 0 : -1}
+              tabIndex={focusedIndex === index || isInitialTabStop ? 0 : -1}
               onClick={() => toggleOption(option)}
               onKeyDown={(e) => handleKeyDown(e, index)}
               onFocus={() => setFocusedIndex(index)}

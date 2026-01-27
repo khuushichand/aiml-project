@@ -664,8 +664,10 @@ export const api = {
       method: 'POST',
       body: JSON.stringify(data),
     }),
-  getJobAttachments: (jobId: string) =>
-    requestJson(`/admin/jobs/${encodeURIComponent(jobId)}/attachments`),
+  getJobAttachments: (jobId: string | number, params?: Record<string, string>) => {
+    const queryParams = params ? new URLSearchParams(params).toString() : '';
+    return requestJson(`/admin/jobs/${encodeURIComponent(String(jobId))}/attachments${queryParams ? `?${queryParams}` : ''}`);
+  },
   addJobAttachment: (jobId: string, data: FormData) =>
     requestJson(`/admin/jobs/${encodeURIComponent(jobId)}/attachments`, {
       method: 'POST',

@@ -147,7 +147,8 @@ def test_chat_endpoint_large_data_image_accepted_by_size_and_flagged_by_image_va
 
 @pytest.mark.unit
 def test_chat_endpoint_rejects_oversized_image_by_default(monkeypatch):
-    monkeypatch.delenv("CHAT_ENFORCE_BASE64_IMAGE_LIMIT", raising=False)
+    # Make enforcement deterministic regardless of config defaults
+    monkeypatch.setenv("CHAT_ENFORCE_BASE64_IMAGE_LIMIT", "1")
     monkeypatch.setenv("CHAT_IMAGE_MAX_MB", "1")
 
     with tempfile.NamedTemporaryFile(suffix=".db", delete=False) as tmp:

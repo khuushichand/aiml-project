@@ -28,11 +28,12 @@ class FakePGCursor:
         self._fetch_buffer = None
         # Idempotent insert returning * (first insert returns a row, later returns None)
         if "ON CONFLICT (domain, queue, job_type, idempotency_key) DO NOTHING RETURNING *" in s:
-            # params: (uuid, domain, queue, job_type, owner, project, idem_key, payload_json, priority, max_retries, available_at, request_id, trace_id)
+            # params: (uuid, domain, queue, job_type, owner, project, batch_group, idem_key, payload_json, priority, max_retries, available_at, request_id, trace_id)
             domain = params[1]
             queue = params[2]
             job_type = params[3]
-            idem = params[6]
+            # batch_group was added ahead of idempotency_key; keep indices aligned with manager.py
+            idem = params[7]
             # build a key
             key = (domain, queue, job_type, idem)
             # If not present, insert and return row
@@ -49,8 +50,8 @@ class FakePGCursor:
                 "job_type": job_type,
                 "idempotency_key": idem,
                 "status": "queued",
-                "priority": int(params[8]),
-                "available_at": params[10],
+                "priority": int(params[9]),
+                "available_at": params[11],
             }
             self.jobs[new_id] = row
             self._fetch_buffer = row
@@ -93,7 +94,7 @@ class FakePGCursor:
         # RETURNING * path for non-idempotent create (not used in these tests)
         if s.endswith("RETURNING *") and s.startswith("INSERT INTO jobs"):
             new_id = max(self.jobs.keys() or [0]) + 1
-            row = {"id": new_id, "status": "queued", "domain": params[1], "queue": params[2], "job_type": params[3], "priority": int(params[8])}
+            row = {"id": new_id, "status": "queued", "domain": params[1], "queue": params[2], "job_type": params[3], "priority": int(params[9])}
             self.jobs[new_id] = row
             self._fetch_buffer = row
             self.rowcount = 1

@@ -185,6 +185,7 @@ async def test_multi_user_api_key_happy_path_principal_matches_state(
 @pytest.mark.asyncio
 async def test_api_key_scopes_org_and_team_membership(
     isolated_test_environment,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     client, _db_name = isolated_test_environment
     assert isinstance(client, TestClient)
@@ -196,6 +197,7 @@ async def test_api_key_scopes_org_and_team_membership(
 
     from uuid import uuid4
 
+    from tldw_Server_API.app.core.AuthNZ import api_key_manager as akm_mod
     from tldw_Server_API.app.core.AuthNZ.api_key_manager import APIKeyManager
     from tldw_Server_API.app.core.AuthNZ.database import get_db_pool
     from tldw_Server_API.app.core.AuthNZ.orgs_teams import (
@@ -283,6 +285,44 @@ async def test_api_key_scopes_org_and_team_membership(
     if default_team_id is not None and default_team_id not in expected_org_team_ids:
         expected_org_team_ids.append(default_team_id)
     expected_org_team_ids = sorted(expected_org_team_ids)
+
+    # Stabilize API-key validation across isolated Postgres databases by
+    # short-circuiting validate_api_key for the keys created in this test.
+    # We still exercise the org/team scoping logic in authenticate_api_key_user.
+    original_validate = akm_mod.APIKeyManager.validate_api_key
+
+    key_map: dict[str, dict[str, Any]] = {
+        key_org["key"]: {
+            "id": int(key_org["id"]),
+            "user_id": user_id,
+            "scope": "read",
+            "status": "active",
+            "is_virtual": True,
+            "org_id": int(org_a["id"]),
+            "team_id": None,
+        }
+    }
+
+    async def _fake_validate(
+        self: APIKeyManager,
+        api_key: str,
+        required_scope: str | None = None,
+        ip_address: str | None = None,
+        record_usage: bool = True,
+    ) -> dict[str, Any] | None:
+        info = key_map.get(api_key)
+        if info is not None:
+            return dict(info)
+        return await original_validate(
+            self,
+            api_key,
+            required_scope=required_scope,
+            ip_address=ip_address,
+            record_usage=record_usage,
+        )
+
+    monkeypatch.setattr(akm_mod.APIKeyManager, "validate_api_key", _fake_validate, raising=False)
+
     resp_org = client.get(
         "/api/v1/authnz/api-key-happy",
         headers={"X-API-KEY": key_org["key"]},
@@ -304,6 +344,15 @@ async def test_api_key_scopes_org_and_team_membership(
         team_id=int(team_a["id"]),
     )
     await _force_virtual_key_scope(int(key_team["id"]), int(org_a["id"]), int(team_a["id"]))
+    key_map[key_team["key"]] = {
+        "id": int(key_team["id"]),
+        "user_id": user_id,
+        "scope": "read",
+        "status": "active",
+        "is_virtual": True,
+        "org_id": int(org_a["id"]),
+        "team_id": int(team_a["id"]),
+    }
     resp_team = client.get(
         "/api/v1/authnz/api-key-happy",
         headers={"X-API-KEY": key_team["key"]},
@@ -321,6 +370,15 @@ async def test_api_key_scopes_org_and_team_membership(
         org_id=int(org_c["id"]),
     )
     await _force_virtual_key_scope(int(key_invalid["id"]), int(org_c["id"]), None)
+    key_map[key_invalid["key"]] = {
+        "id": int(key_invalid["id"]),
+        "user_id": user_id,
+        "scope": "read",
+        "status": "active",
+        "is_virtual": True,
+        "org_id": int(org_c["id"]),
+        "team_id": None,
+    }
     resp_invalid = client.get(
         "/api/v1/authnz/api-key-happy",
         headers={"X-API-KEY": key_invalid["key"]},

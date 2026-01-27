@@ -21,7 +21,7 @@ from typing import Any, Dict, List, Optional, Annotated, Literal
 import numpy as np
 from loguru import logger
 from pydantic import BaseModel, Field
-from prometheus_client import Counter, Gauge  # Assuming these are defined elsewhere or used directly
+from prometheus_client import Counter, Gauge, REGISTRY  # Assuming these are defined elsewhere or used directly
 # NOTE: Avoid importing heavy deps (torch, transformers) at module import time.
 # Import them lazily inside functions/methods when needed to keep app import light.
 
@@ -389,14 +389,48 @@ def _release_model_in_use(model_id: str) -> None:
         else:
             model_in_use_counts[model_id] = current - 1
 
+def _get_or_create_metric(metric_cls, name: str, documentation: str, labelnames: tuple[str, ...]):
+    """Return an existing Prometheus collector when available, else create one.
+
+    This makes metric registration idempotent across module re-imports in tests.
+    """
+    try:
+        existing = REGISTRY._names_to_collectors.get(name)  # type: ignore[attr-defined]
+        if existing is not None:
+            existing_labels = tuple(getattr(existing, "_labelnames", ()))
+            if existing_labels == labelnames:
+                return existing
+            try:
+                REGISTRY.unregister(existing)
+            except Exception:
+                # If unregister fails, fall through and let metric creation raise with context.
+                pass
+    except Exception:
+        # Accessing registry internals is best-effort; metric creation will validate again.
+        pass
+    return metric_cls(name, documentation, labelnames=labelnames)
+
+
 # Prometheus Metrics (Ensure these are correctly defined and registered in your application)
-ACTIVE_EMBEDDERS = Gauge("active_embedder_instances", "Number of active embedder instances",
-                         labelnames=("provider", "model_id"))
+ACTIVE_EMBEDDERS = _get_or_create_metric(
+    Gauge,
+    "active_embedder_instances",
+    "Number of active embedder instances",
+    ("provider", "model_id"),
+)
 # Use a distinct metric name to avoid collisions with API-level embedding_requests_total.
-EMBEDDINGS_REQUESTS = Counter("embedding_backend_requests_total", "Total number of backend embedding requests",
-                              labelnames=("provider", "model_id"))
-MODEL_CACHE_HITS = Counter("embedding_model_cache_hits_total", "Total number of model cache hits",
-                           labelnames=("model_id",))
+EMBEDDINGS_REQUESTS = _get_or_create_metric(
+    Counter,
+    "embedding_backend_requests_total",
+    "Total number of backend embedding requests",
+    ("provider", "model_id"),
+)
+MODEL_CACHE_HITS = _get_or_create_metric(
+    Counter,
+    "embedding_model_cache_hits_total",
+    "Total number of model cache hits",
+    ("model_id",),
+)
 
 
 # Add other metrics from your previous version or as needed, e.g., for load times, creation times

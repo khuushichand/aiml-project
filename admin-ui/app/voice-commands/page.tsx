@@ -20,6 +20,7 @@ import { Form, FormInput, FormSelect, FormTextarea } from '@/components/ui/form'
 import { Eye, Mic, MicOff, Search, Plus, Trash2, BarChart2 } from 'lucide-react';
 import { AccessibleIconButton } from '@/components/ui/accessible-icon-button';
 import { api } from '@/lib/api-client';
+import { parseVoiceCommandInputs } from '@/lib/voice-commands';
 import type { VoiceCommand, VoiceActionType, VoiceAnalyticsSummary } from '@/types';
 import { Skeleton, TableSkeleton } from '@/components/ui/skeleton';
 import { useUrlState, useUrlPagination } from '@/lib/use-url-state';
@@ -162,28 +163,17 @@ function VoiceCommandsPageContent() {
     try {
       setCreating(true);
 
-      // Parse phrases (comma or newline separated)
-      const phrases = data.phrases
-        .split(/[,\n]/)
-        .map((p) => p.trim())
-        .filter((p) => p.length > 0);
-
-      // Parse action config as JSON
-      let actionConfig = {};
-      if (data.action_config) {
-        try {
-          actionConfig = JSON.parse(data.action_config);
-        } catch {
-          setCreateError('Invalid JSON in action config');
-          return;
-        }
+      const parsedInputs = parseVoiceCommandInputs(data.phrases, data.action_config);
+      if (!parsedInputs.ok) {
+        setCreateError(parsedInputs.error);
+        return;
       }
 
       await api.createVoiceCommand({
         name: data.name,
-        phrases,
+        phrases: parsedInputs.phrases,
         action_type: data.action_type,
-        action_config: actionConfig,
+        action_config: parsedInputs.actionConfig,
         description: data.description || undefined,
         priority: data.priority,
         requires_confirmation: data.requires_confirmation,

@@ -225,25 +225,55 @@ def test_reading_digest_job_includes_suggestions(client_with_user):
     client = client_with_user
     digest_a = client.post(
         "/api/v1/reading/save",
-        json={"url": "https://example.com/a", "title": "Digest A", "tags": ["ai"], "status": "saved"},
+        json={
+            "url": "https://example.com/a",
+            "title": "Digest A",
+            "tags": ["ai"],
+            "status": "saved",
+            "content": "Digest A body",
+        },
     ).json()
     digest_b = client.post(
         "/api/v1/reading/save",
-        json={"url": "https://example.com/b", "title": "Digest B", "tags": ["ai"], "status": "saved"},
+        json={
+            "url": "https://example.com/b",
+            "title": "Digest B",
+            "tags": ["ai"],
+            "status": "saved",
+            "content": "Digest B body",
+        },
     ).json()
     assert digest_a["id"] != digest_b["id"]
 
     suggestion_a = client.post(
         "/api/v1/reading/save",
-        json={"url": "https://example.com/c", "title": "Suggestion A", "tags": ["ai"], "status": "reading"},
+        json={
+            "url": "https://example.com/c",
+            "title": "Suggestion A",
+            "tags": ["ai"],
+            "status": "reading",
+            "content": "Suggestion A body",
+        },
     ).json()
     suggestion_b = client.post(
         "/api/v1/reading/save",
-        json={"url": "https://example.com/d", "title": "Suggestion B", "tags": ["ai"], "status": "reading"},
+        json={
+            "url": "https://example.com/d",
+            "title": "Suggestion B",
+            "tags": ["ai"],
+            "status": "reading",
+            "content": "Suggestion B body",
+        },
     ).json()
     suggestion_c = client.post(
         "/api/v1/reading/save",
-        json={"url": "https://example.com/e", "title": "Suggestion C", "tags": ["misc"], "status": "reading"},
+        json={
+            "url": "https://example.com/e",
+            "title": "Suggestion C",
+            "tags": ["misc"],
+            "status": "reading",
+            "content": "Suggestion C body",
+        },
     ).json()
 
     db = CollectionsDatabase.for_user(user_id=222)

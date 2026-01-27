@@ -8,6 +8,7 @@ import os
 import threading
 import time
 import uuid
+from pathlib import Path
 from typing import Any, Dict, List, Optional, Union
 from uuid import UUID
 
@@ -87,19 +88,25 @@ def _file_artifacts_http_exception(exc: FileArtifactsError) -> HTTPException:
 
 
 def get_job_manager() -> JobManager:
-    """Return a cached JobManager instance keyed by JOBS_DB_URL."""
-    cache_key = (os.getenv("JOBS_DB_URL", "default") or "default").strip() or "default"
+    """Return a cached JobManager instance keyed by JOBS_DB_URL or JOBS_DB_PATH."""
+    db_url = (os.getenv("JOBS_DB_URL") or "").strip()
+    db_path = (os.getenv("JOBS_DB_PATH") or "").strip()
+    if db_url:
+        cache_key = f"url:{db_url}"
+    else:
+        cache_key = f"path:{db_path or 'default'}"
     with _job_manager_lock:
         cached = _job_manager_cache.get(cache_key)
         if cached is not None:
             return cached
 
-        db_url = (os.getenv("JOBS_DB_URL") or "").strip()
-        if not db_url:
-            job_manager = JobManager()
-        else:
+        if db_url:
             backend = "postgres" if db_url.startswith("postgres") else None
             job_manager = JobManager(backend=backend, db_url=db_url)
+        elif db_path:
+            job_manager = JobManager(db_path=Path(db_path))
+        else:
+            job_manager = JobManager()
 
         _job_manager_cache[cache_key] = job_manager
         return job_manager
@@ -426,6 +433,7 @@ async def generate_data_table(
         )
         table_id = int(table_row.get("id"))
         table_uuid = str(table_row.get("uuid"))
+        table_owner_client_id = str(table_row.get("client_id") or "").strip() or None
 
         sources_db_payload: List[Dict[str, Any]] = []
         job_sources: List[Dict[str, Any]] = []
@@ -461,6 +469,8 @@ async def generate_data_table(
             "model": req.model,
             "max_rows": req.max_rows,
         }
+        if table_owner_client_id:
+            payload["user_id"] = table_owner_client_id
 
         job = jm.create_job(
             domain="data_tables",
@@ -981,6 +991,7 @@ async def regenerate_data_table(
         raise HTTPException(status_code=404, detail="data_table_not_found")
 
     table_id = int(table_row.get("id"))
+    table_owner_client_id = str(table_row.get("client_id") or "").strip() or None
     sources_rows = db.list_data_table_sources(table_id, owner_user_id=owner_user_id)
     job_sources = [
         {
@@ -1009,6 +1020,8 @@ async def regenerate_data_table(
         "max_rows": req.max_rows,
         "regenerate": True,
     }
+    if table_owner_client_id:
+        payload["user_id"] = table_owner_client_id
 
     job = jm.create_job(
         domain="data_tables",

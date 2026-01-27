@@ -57,6 +57,18 @@ class _DummyServer:
         self.last_metadata = metadata or {}
         return MCPResponse(result={"ok": True}, id=getattr(request, "id", None))
 
+    async def handle_http_batch(
+        self,
+        requests,
+        client_id: Optional[str] = None,
+        user_id: Optional[str] = None,
+        metadata: Optional[Dict[str, Any]] = None,
+    ):
+        from tldw_Server_API.app.core.MCP_unified.protocol import MCPResponse
+
+        self.last_metadata = metadata or {}
+        return [MCPResponse(result={"ok": True}, id=getattr(req, "id", None)) for req in requests]
+
 
 def _install_dummy_server(monkeypatch) -> _DummyServer:
 

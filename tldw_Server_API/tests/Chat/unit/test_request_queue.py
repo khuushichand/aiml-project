@@ -51,6 +51,8 @@ class _CountingAsyncIterator:
 @pytest.mark.asyncio
 async def test_request_queue_stream_cancel_stops_async_iterator():
     queue = RequestQueue(max_queue_size=10, max_concurrent=1)
+    # _process_request checks the running flag; set it explicitly for this unit test
+    queue._running = True
     stream_channel: asyncio.Queue = asyncio.Queue(maxsize=10)
     async_iter = _CountingAsyncIterator()
 

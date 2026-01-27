@@ -72,6 +72,49 @@ def test_media_postgres_migration_adds_safe_metadata(pg_database_config: Databas
 
 
 @pytest.mark.integration
+def test_media_postgres_migration_reaches_v19_and_restores_workspace_tag(
+    pg_database_config: DatabaseConfig,
+) -> None:
+    """Downgrade schema to v9 and ensure v10–v19 migrations repair late additions."""
+
+    backend = DatabaseBackendFactory.create_backend(pg_database_config)
+    db = MediaDatabase(db_path=":memory:", client_id="pg-migration-v19", backend=backend)
+
+    try:
+        with backend.transaction() as conn:
+            backend.execute(
+                "DROP INDEX IF EXISTS idx_data_tables_workspace_tag",
+                connection=conn,
+            )
+            backend.execute(
+                "ALTER TABLE data_tables DROP COLUMN IF EXISTS workspace_tag",
+                connection=conn,
+            )
+            backend.execute(
+                "DROP TABLE IF EXISTS claims_monitoring_events",
+                connection=conn,
+            )
+            backend.execute(
+                "UPDATE schema_version SET version = %s",
+                (9,),
+                connection=conn,
+            )
+
+        db._initialize_schema()
+
+        with backend.transaction() as conn:
+            assert _column_exists(backend, conn, "data_tables", "workspace_tag")
+            assert backend.table_exists("claims_monitoring_events", connection=conn)
+            version = backend.execute(
+                "SELECT version FROM schema_version LIMIT 1",
+                connection=conn,
+            ).scalar
+            assert int(version) == db._CURRENT_SCHEMA_VERSION
+    finally:
+        db.close_connection()
+
+
+@pytest.mark.integration
 def test_media_postgres_sequence_sync(pg_database_config: DatabaseConfig) -> None:
     """Sequences are advanced to match table maxima after initialization."""
 

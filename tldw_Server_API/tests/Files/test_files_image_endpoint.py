@@ -1,3 +1,4 @@
+import asyncio
 import base64
 import shutil
 from dataclasses import replace
@@ -81,17 +82,29 @@ def client_with_user(monkeypatch):
 
     monkeypatch.setenv("MINIMAL_TEST_APP", "0")
     monkeypatch.setenv("ULTRA_MINIMAL_APP", "0")
+    monkeypatch.setenv("AUTH_MODE", "single_user")
+    monkeypatch.setenv("SINGLE_USER_FIXED_ID", "321")
 
     base_dir = Path.cwd() / "Databases" / "test_user_dbs_files_image"
     shutil.rmtree(base_dir, ignore_errors=True)
     base_dir.mkdir(parents=True, exist_ok=True)
+    users_db_path = base_dir / "users.db"
     prev_base_dir = settings.get("USER_DB_BASE_DIR")
     settings.USER_DB_BASE_DIR = str(base_dir)
     monkeypatch.setenv("USER_DB_BASE_DIR", str(base_dir))
+    monkeypatch.setenv("DATABASE_URL", f"sqlite:///{users_db_path}")
 
     app = None
     try:
         from importlib import import_module, reload
+        from tldw_Server_API.app.core.AuthNZ.database import reset_db_pool
+        from tldw_Server_API.app.core.AuthNZ.initialize import ensure_single_user_rbac_seed_if_needed
+        from tldw_Server_API.app.core.DB_Management.Users_DB import reset_users_db
+
+        # Ensure settings/pools pick up the test database and seed the single-user row at id=321.
+        asyncio.run(reset_db_pool())
+        asyncio.run(reset_users_db())
+        asyncio.run(ensure_single_user_rbac_seed_if_needed())
 
         mod = import_module("tldw_Server_API.app.main")
         mod = reload(mod)

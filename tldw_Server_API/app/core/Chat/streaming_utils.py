@@ -769,6 +769,33 @@ class StreamingResponseHandler:
         except Exception as e:
             # Unexpected error
             logger.error(f"Unexpected error in stream for {self.conversation_id}: {e}", exc_info=True)
+            # Best-effort: flush any buffered tail before emitting the error frame.
+            # This preserves earlier valid chunks when the upstream fails mid-stream.
+            if self.text_transform:
+                flush_fn = getattr(self.text_transform, "flush", None)
+                if callable(flush_fn):
+                    try:
+                        flush_text = flush_fn()
+                    except Exception as flush_err:
+                        logger.debug(f"text_transform flush on error ignored: {flush_err}")
+                        flush_text = None
+                    if flush_text:
+                        try:
+                            flush_text = str(flush_text)
+                        except Exception:
+                            flush_text = ""
+                        if flush_text:
+                            if append_content(flush_text):
+                                content_payload = {"choices": [{"delta": {"content": flush_text}}]}
+                                self._attach_stream_metadata(content_payload)
+                                yield f"data: {json.dumps(content_payload)}\n\n"
+                                self.update_activity()
+                            else:
+                                size_err = {"error": {"message": "Response size limit exceeded"}}
+                                self._attach_stream_metadata(size_err)
+                                self.error_occurred = True
+                                yield f"data: {json.dumps(size_err)}\n\n"
+                                return
             self.error_occurred = True
             err_payload = {"error": {"message": f"Stream error: {str(e)}"}}
             self._attach_stream_metadata(err_payload)

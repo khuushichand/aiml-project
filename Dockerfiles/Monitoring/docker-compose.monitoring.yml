@@ -17,10 +17,11 @@ services:
       - alertmanager
 
   alertmanager:
-    image: prom/alertmanager:latest
+    image: prom/alertmanager:v0.30.1
     container_name: tldw_alertmanager
     volumes:
       - ../../Docs/Operations/monitoring/alertmanager_email_webhook.yml:/etc/alertmanager/alertmanager.yml:ro
+      - ./secrets/smtp_password:/etc/alertmanager/secrets/smtp_password:ro
     command:
       - '--config.file=/etc/alertmanager/alertmanager.yml'
     ports:

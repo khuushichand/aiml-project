@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import type { ReactNode } from 'react';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
@@ -110,9 +110,56 @@ const NotificationsPanelForm = ({
   onTest,
 }: NotificationsPanelFormProps) => {
   const [editSettings, setEditSettings] = useState<NotificationSettings>(settings);
+  const [isDirty, setIsDirty] = useState(false);
   const [showAddChannel, setShowAddChannel] = useState(false);
   const [newChannelType, setNewChannelType] = useState<NotificationChannel['type']>('email');
   const [newChannelConfig, setNewChannelConfig] = useState('');
+  const settingsId = settings.id ?? 'notification-settings';
+  const previousSettingsIdRef = useRef<string | null>(null);
+  const previousSettingsRef = useRef(settings);
+  const settingsChangedWhileSavingRef = useRef(false);
+  const wasSavingRef = useRef(saving);
+
+  useEffect(() => {
+    if (previousSettingsRef.current !== settings && saving) {
+      settingsChangedWhileSavingRef.current = true;
+    }
+    previousSettingsRef.current = settings;
+  }, [settings, saving]);
+
+  useEffect(() => {
+    const hasNewSettingsId = previousSettingsIdRef.current !== settingsId;
+    previousSettingsIdRef.current = settingsId;
+
+    if (hasNewSettingsId) {
+      setEditSettings(settings);
+      setIsDirty(false);
+      return;
+    }
+
+    if (!isDirty) {
+      setEditSettings(settings);
+    }
+  }, [settings, settingsId, isDirty]);
+
+  useEffect(() => {
+    const justFinishedSaving = wasSavingRef.current && !saving;
+    wasSavingRef.current = saving;
+
+    if (justFinishedSaving && settingsChangedWhileSavingRef.current) {
+      settingsChangedWhileSavingRef.current = false;
+      previousSettingsIdRef.current = settingsId;
+      setEditSettings(settings);
+      setIsDirty(false);
+    }
+  }, [saving, settings, settingsId]);
+
+  const updateEditSettings = (
+    next: NotificationSettings | ((prev: NotificationSettings) => NotificationSettings),
+  ) => {
+    setIsDirty(true);
+    setEditSettings(next);
+  };
 
   const handleAddChannel = () => {
     if (!newChannelConfig.trim()) return;
@@ -125,25 +172,27 @@ const NotificationsPanelForm = ({
       },
     };
 
-    setEditSettings({
-      ...editSettings,
-      channels: [...editSettings.channels, newChannel],
-    });
+    updateEditSettings((prev) => ({
+      ...prev,
+      channels: [...prev.channels, newChannel],
+    }));
     setShowAddChannel(false);
     setNewChannelConfig('');
   };
 
   const handleRemoveChannel = (index: number) => {
-    setEditSettings({
-      ...editSettings,
-      channels: editSettings.channels.filter((_, i) => i !== index),
-    });
+    updateEditSettings((prev) => ({
+      ...prev,
+      channels: prev.channels.filter((_, i) => i !== index),
+    }));
   };
 
   const handleToggleChannel = (index: number) => {
-    const channels = [...editSettings.channels];
-    channels[index] = { ...channels[index], enabled: !channels[index].enabled };
-    setEditSettings({ ...editSettings, channels });
+    updateEditSettings((prev) => {
+      const channels = [...prev.channels];
+      channels[index] = { ...channels[index], enabled: !channels[index].enabled };
+      return { ...prev, channels };
+    });
   };
 
   const handleSave = () => {
@@ -243,6 +292,7 @@ const NotificationsPanelForm = ({
                           variant="ghost"
                           size="sm"
                           onClick={() => handleToggleChannel(index)}
+                          aria-label={channel.enabled ? 'Disable channel' : 'Enable channel'}
                           title={channel.enabled ? 'Disable' : 'Enable'}
                         >
                           {channel.enabled ? <ToggleRight className="h-4 w-4" /> : <ToggleLeft className="h-4 w-4" />}
@@ -251,6 +301,7 @@ const NotificationsPanelForm = ({
                           variant="ghost"
                           size="sm"
                           onClick={() => handleRemoveChannel(index)}
+                          aria-label="Remove channel"
                           title="Remove"
                         >
                           <X className="h-4 w-4 text-red-500" />
@@ -270,10 +321,10 @@ const NotificationsPanelForm = ({
                   id="alert-threshold"
                   value={editSettings.alert_threshold}
                   onChange={(e) =>
-                    setEditSettings({
-                      ...editSettings,
+                    updateEditSettings((prev) => ({
+                      ...prev,
                       alert_threshold: e.target.value as NotificationSettings['alert_threshold'],
-                    })
+                    }))
                   }
                 >
                   {ALERT_THRESHOLDS.map((threshold) => (
@@ -289,10 +340,10 @@ const NotificationsPanelForm = ({
                   id="digest-frequency"
                   value={editSettings.digest_frequency}
                   onChange={(e) =>
-                    setEditSettings({
-                      ...editSettings,
+                    updateEditSettings((prev) => ({
+                      ...prev,
                       digest_frequency: e.target.value as NotificationSettings['digest_frequency'],
-                    })
+                    }))
                   }
                   disabled={!editSettings.digest_enabled}
                 >
@@ -309,7 +360,7 @@ const NotificationsPanelForm = ({
                     id="digest-enabled"
                     checked={editSettings.digest_enabled}
                     onCheckedChange={(checked) =>
-                      setEditSettings({ ...editSettings, digest_enabled: checked })
+                      updateEditSettings((prev) => ({ ...prev, digest_enabled: checked }))
                     }
                   />
                   <Label htmlFor="digest-enabled">Enable Digest</Label>
@@ -394,11 +445,8 @@ export default function NotificationsPanel({
     );
   }
 
-  const settingsKey = JSON.stringify(settings);
-
   return (
     <NotificationsPanelForm
-      key={settingsKey}
       settings={settings}
       recentNotifications={recentNotifications}
       loading={loading}

@@ -75,6 +75,7 @@ curl -i -sS -X POST http://127.0.0.1:8000/api/v1/audio/speech \
 - Look for `X-Download-Path` and `X-Generated-File-Id` in the response headers.
 - The download path will look like `/api/v1/storage/files/{id}/download`.
 - `return_download_link` only works with `stream: false`.
+- When `return_download_link: true`, the response still includes the audio bytes in the body; the headers provide a storage reference for later retrieval.
 
 Troubleshooting
 - 401/403: ensure `OPENAI_API_KEY` is set and valid, and you’re passing `X-API-KEY` (single-user) or Bearer token (multi-user).

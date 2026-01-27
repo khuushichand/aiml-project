@@ -252,8 +252,9 @@ export default function ByokDashboardPage() {
       const message = err instanceof Error ? err.message : 'Failed to load shared keys.';
       setSharedKeysError(message);
     } finally {
-      if (sharedKeysRequestIdRef.current !== requestId) return;
-      setSharedKeysLoading(false);
+      if (sharedKeysRequestIdRef.current === requestId) {
+        setSharedKeysLoading(false);
+      }
     }
   }, [selectedOrg?.id]);
 

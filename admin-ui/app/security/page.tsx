@@ -100,8 +100,10 @@ export default function SecurityPage() {
     loadData();
   }, [loadData]);
 
-  const riskLevel = getRiskLevelLabel(securityHealth?.risk_score ?? 0);
-  const riskColor = getRiskLevelColor(securityHealth?.risk_score ?? 0);
+  const riskScore = securityHealth?.risk_score ?? 0;
+  const riskScoreClamped = Math.min(Math.max(riskScore, 0), 100);
+  const riskLevel = getRiskLevelLabel(riskScore);
+  const riskColor = getRiskLevelColor(riskScore);
 
   return (
     <PermissionGuard variant="route" requireAuth role="admin">
@@ -133,7 +135,7 @@ export default function SecurityPage() {
           <Card className="mb-6">
             <CardHeader>
               <CardTitle className="flex items-center gap-2">
-                {(securityHealth?.risk_score ?? 0) < 40 ? (
+                {riskScore < 40 ? (
                   <ShieldCheck className="h-5 w-5 text-green-500" />
                 ) : (
                   <ShieldAlert className="h-5 w-5 text-yellow-500" />
@@ -146,7 +148,7 @@ export default function SecurityPage() {
               <div className="flex items-center gap-8">
                 <div>
                   <div className={`text-6xl font-bold ${riskColor}`}>
-                    {securityHealth?.risk_score ?? 0}
+                    {riskScore}
                   </div>
                   <Badge variant={riskLevel.variant} className="mt-2">
                     {riskLevel.label}
@@ -156,13 +158,13 @@ export default function SecurityPage() {
                   <div className="h-4 bg-muted rounded-full overflow-hidden">
                     <div
                       className={`h-full transition-all ${
-                        (securityHealth?.risk_score ?? 0) >= 70
+                        riskScore >= 70
                           ? 'bg-red-500'
-                          : (securityHealth?.risk_score ?? 0) >= 40
+                          : riskScore >= 40
                             ? 'bg-yellow-500'
                             : 'bg-green-500'
                       }`}
-                      style={{ width: `${securityHealth?.risk_score ?? 0}%` }}
+                      style={{ width: `${riskScoreClamped}%` }}
                     />
                   </div>
                   <p className="text-sm text-muted-foreground mt-2">

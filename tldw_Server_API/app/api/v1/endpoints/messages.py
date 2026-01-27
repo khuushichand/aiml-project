@@ -29,6 +29,7 @@ from tldw_Server_API.app.core.LLM_Calls.anthropic_messages import (
     openai_stream_to_anthropic,
 )
 from tldw_Server_API.app.core.LLM_Calls.provider_metadata import provider_requires_api_key
+from tldw_Server_API.app.core.http_client import create_client as http_client_factory
 from tldw_Server_API.app.core.http_client import create_async_client as async_http_client_factory
 from tldw_Server_API.app.core.config import loaded_config_data
 from tldw_Server_API.app.api.v1.API_Deps.auth_deps import check_rate_limit

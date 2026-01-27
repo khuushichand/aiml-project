@@ -87,6 +87,27 @@ class GoogleAdapter(ChatProvider):
     def _apply_config_defaults(self, request: Dict[str, Any]) -> Dict[str, Any]:
         merged = dict(request)
         cfg = (merged.get("app_config") or {}).get("google_api", {})
+
+        def _annotate_gemini_native_tools(tools_value: Any) -> Any:
+            """Add a benign type marker so provider-agnostic validation can pass."""
+            if not isinstance(tools_value, list):
+                return tools_value
+            annotated: List[Any] = []
+            for tool in tools_value:
+                if not isinstance(tool, dict):
+                    annotated.append(tool)
+                    continue
+                has_native_keys = any(
+                    key in tool for key in ("function_declarations", "functionDeclarations")
+                )
+                tool_type = tool.get("type")
+                if (not isinstance(tool_type, str) or not tool_type.strip()) and has_native_keys:
+                    tool_copy = dict(tool)
+                    tool_copy["type"] = "gemini_native"
+                    annotated.append(tool_copy)
+                else:
+                    annotated.append(tool)
+            return annotated
         if merged.get("api_key") is None and cfg.get("api_key") is not None:
             merged["api_key"] = cfg.get("api_key")
         if merged.get("model") is None:
@@ -107,6 +128,8 @@ class GoogleAdapter(ChatProvider):
             merged["response_format"] = cfg.get("response_format")
         if merged.get("tools") is None and cfg.get("tools") is not None:
             merged["tools"] = cfg.get("tools")
+        # Ensure Gemini-native tools (without a type) can pass validation.
+        merged["tools"] = _annotate_gemini_native_tools(merged.get("tools"))
         return merged
 
     def _base_url(self, request: Optional[Dict[str, Any]] = None) -> str:
@@ -370,7 +393,9 @@ class GoogleAdapter(ChatProvider):
             return data
 
     @staticmethod
-    def _stream_event_deltas(event: Any, state: Dict[str, int]) -> Iterable[str]:
+    def _stream_event_deltas(event: Any, state: Optional[Dict[str, int]] = None) -> Iterable[str]:
+        if state is None:
+            state = {}
         if isinstance(event, list):
             for item in event:
                 yield from GoogleAdapter._stream_event_deltas(item, state)
