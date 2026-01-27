@@ -51,6 +51,7 @@ from tldw_Server_API.app.core.AuthNZ.exceptions import (
     UserNotFoundError,
     StorageError,
 )
+from tldw_Server_API.app.core.AuthNZ.repos.generated_files_repo import FILE_CATEGORY_VOICE_CLONE
 from tldw_Server_API.app.core.DB_Management.db_path_utils import DatabasePaths
 from tldw_Server_API.app.services.storage_quota_service import get_storage_service
 
@@ -95,6 +96,13 @@ def _to_generated_file(record: dict) -> GeneratedFile:
         updated_at=_parse_datetime(record.get("updated_at")) or datetime.now(timezone.utc),
         accessed_at=_parse_datetime(record.get("accessed_at")),
     )
+
+
+def _resolve_storage_base_dir(user_id: int, record: dict) -> PathlibPath:
+    """Resolve the base directory for a stored file based on category."""
+    if record.get("file_category") == FILE_CATEGORY_VOICE_CLONE:
+        return DatabasePaths.get_user_voices_dir(user_id)
+    return DatabasePaths.get_user_outputs_dir(user_id)
 
 
 def _parse_datetime(value) -> Optional[datetime]:
@@ -214,13 +222,13 @@ async def download_file(
 
     # Resolve file path
     storage_path = file_record.get("storage_path", "")
-    user_outputs_dir = DatabasePaths.get_user_outputs_dir(user.id)
-    full_path = user_outputs_dir / storage_path
+    base_dir = _resolve_storage_base_dir(user.id, file_record)
+    full_path = base_dir / storage_path
 
     # Path traversal protection: ensure resolved path is within user's directory
     try:
         resolved_path = full_path.resolve()
-        if not resolved_path.is_relative_to(user_outputs_dir.resolve()):
+        if not resolved_path.is_relative_to(base_dir.resolve()):
             raise HTTPException(status_code=403, detail="Invalid file path")
         full_path = resolved_path
     except ValueError:

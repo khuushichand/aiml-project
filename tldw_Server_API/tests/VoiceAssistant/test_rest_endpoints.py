@@ -489,6 +489,8 @@ class TestVoiceSessionDeleteEndpoint:
             state=VoiceSessionState.IDLE,
         )
         save_voice_session(db, session)
+        # Ensure the request thread sees the committed row.
+        db.close_all_connections()
 
         response = client.delete(f"/api/v1/voice/sessions/{session.session_id}")
 

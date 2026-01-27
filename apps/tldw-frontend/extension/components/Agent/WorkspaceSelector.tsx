@@ -86,12 +86,18 @@ export const WorkspaceSelector: FC<WorkspaceSelectorProps> = ({
   const selectedWorkspace = workspaces?.find(w => w.id === resolvedSelectedId) || null
 
   const callbackRef = useRef(onWorkspaceChange)
+  const lastNotifiedWorkspaceId = useRef<string | null>(null)
   useEffect(() => {
     callbackRef.current = onWorkspaceChange
   }, [onWorkspaceChange])
 
   // Notify parent of workspace change
   useEffect(() => {
+    const nextId = selectedWorkspace?.id ?? null
+    if (lastNotifiedWorkspaceId.current === nextId) {
+      return
+    }
+    lastNotifiedWorkspaceId.current = nextId
     callbackRef.current?.(selectedWorkspace)
   }, [selectedWorkspace])
 

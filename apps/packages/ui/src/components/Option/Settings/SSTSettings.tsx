@@ -5,8 +5,6 @@ import { useTranslation } from "react-i18next"
 import { tldwClient } from "@/services/tldw/TldwApiClient"
 import { SUPPORTED_LANGUAGES } from "~/utils/supported-languages"
 
-const { Panel } = Collapse
-
 export const SSTSettings = ({ hideBorder }: { hideBorder?: boolean }) => {
   const { t } = useTranslation("settings")
   const [speechToTextLanguage, setSpeechToTextLanguage] = useStorage(
@@ -23,6 +21,8 @@ export const SSTSettings = ({ hideBorder }: { hideBorder?: boolean }) => {
     "autoStopTimeout",
     2000
   )
+  const resolvedAutoStopTimeout =
+    typeof autoStopTimeout === "number" ? autoStopTimeout : 2000
 
   const [sttModel, setSttModel] = useStorage("sttModel", "whisper-1")
   const [sttUseSegmentation, setSttUseSegmentation] = useStorage(
@@ -128,204 +128,188 @@ export const SSTSettings = ({ hideBorder }: { hideBorder?: boolean }) => {
     }
   }
 
-  return (
-    <div>
-      <div className="mb-5">
-        <h2
-          className={`${
-            !hideBorder ? "text-base font-semibold leading-7" : "text-md"
-          } text-text`}>
-          {t("generalSettings.stt.heading")}
-        </h2>
-        {!hideBorder && (
-          <div className="border-b border-border mt-3"></div>
-        )}
-        <p className="mt-2 text-xs text-text-muted">
-          {t(
-            "generalSettings.stt.usedByChat",
-            "These Speech-to-Text defaults are used by the chat dictation button in the Playground and Sidebar."
-          )}
-        </p>
-      </div>
-      <Collapse defaultActiveKey={['basic']} className="bg-transparent border-0">
-        <Panel
-          header={t("generalSettings.stt.basicSettings", "Basic Settings")}
-          key="basic"
-          className="!border-0"
-        >
-          <div className="space-y-4">
-            <div className="flex flex-row justify-between">
-              <span className="text-text">
-                {t("generalSettings.settings.speechRecognitionLang.label")}
-              </span>
+  const collapseItems = [
+    {
+      key: "basic",
+      label: t("generalSettings.stt.basicSettings", "Basic Settings"),
+      className: "!border-0",
+      children: (
+        <div className="space-y-4">
+          <div className="flex flex-row justify-between">
+            <span className="text-text">
+              {t("generalSettings.settings.speechRecognitionLang.label")}
+            </span>
+            <Select
+              placeholder={t(
+                "generalSettings.settings.speechRecognitionLang.placeholder"
+              )}
+              allowClear
+              showSearch
+              options={SUPPORTED_LANGUAGES}
+              value={speechToTextLanguage}
+              filterOption={(input, option) =>
+                option!.label.toLowerCase().indexOf(input.toLowerCase()) >= 0 ||
+                option!.value.toLowerCase().indexOf(input.toLowerCase()) >= 0
+              }
+              onChange={(value) => {
+                setSpeechToTextLanguage(value)
+              }}
+              className={hideBorder ? "w-full" : "!min-w-[200px]"}
+            />
+          </div>
+
+          <div className="flex flex-row justify-between">
+            <span className="text-text">
+              {t("generalSettings.stt.model.label")}
+            </span>
+            <div
+              className={
+                hideBorder
+                  ? "w-full flex flex-col items-end"
+                  : "!min-w-[200px] flex flex-col items-end"
+              }>
               <Select
-                placeholder={t(
-                  "generalSettings.settings.speechRecognitionLang.placeholder"
-                )}
-                allowClear
+                className="w-full"
                 showSearch
-                options={SUPPORTED_LANGUAGES}
-                value={speechToTextLanguage}
-                filterOption={(input, option) =>
-                  option!.label.toLowerCase().indexOf(input.toLowerCase()) >= 0 ||
-                  option!.value.toLowerCase().indexOf(input.toLowerCase()) >= 0
+                placeholder="whisper-1, parakeet, canary..."
+                loading={serverModelsLoading}
+                value={sttModel}
+                onChange={(value) => setSttModel(value)}
+                options={
+                  serverModels.length > 0
+                    ? serverModels.map((model) => ({
+                        label: model,
+                        value: model
+                      }))
+                    : sttModel
+                      ? [
+                          {
+                            label: sttModel,
+                            value: sttModel
+                          }
+                        ]
+                      : []
                 }
-                onChange={(value) => {
-                  setSpeechToTextLanguage(value)
-                }}
-                className={hideBorder ? "w-full" : "!min-w-[200px]"}
+                allowClear
+                onClear={() => setSttModel("")}
+                popupMatchSelectWidth
               />
-            </div>
-
-            <div className="flex flex-row justify-between">
-              <span className="text-text">
-                {t("generalSettings.stt.model.label")}
-              </span>
-              <div
-                className={
-                  hideBorder
-                    ? "w-full flex flex-col items-end"
-                    : "!min-w-[200px] flex flex-col items-end"
-                }>
-                <Select
-                  className="w-full"
-                  showSearch
-                  placeholder="whisper-1, parakeet, canary..."
-                  loading={serverModelsLoading}
-                  value={sttModel}
-                  onChange={(value) => setSttModel(value)}
-                  options={
-                    serverModels.length > 0
-                      ? serverModels.map((model) => ({
-                          label: model,
-                          value: model
-                        }))
-                      : sttModel
-                        ? [
-                            {
-                              label: sttModel,
-                              value: sttModel
-                            }
-                          ]
-                        : []
-                  }
-                  allowClear
-                  onClear={() => setSttModel("")}
-                  dropdownMatchSelectWidth
-                />
-                {serverModels.length > 0 && (
-                  <span className="mt-1 text-[11px] text-text-subtle self-start">
-                    {t(
-                      "generalSettings.stt.model.helpFromServer",
-                      "Models provided by your tldw server ({{count}} total).",
-                      { count: serverModels.length }
-                    )}
-                  </span>
-                )}
-                <Tooltip
-                  title={
-                    !sttModel
-                      ? t(
-                          "generalSettings.stt.model.healthCheckSelectFirst",
-                          "Select a model first"
-                        )
-                      : ""
-                  }
+              {serverModels.length > 0 && (
+                <span className="mt-1 text-[11px] text-text-subtle self-start">
+                  {t(
+                    "generalSettings.stt.model.helpFromServer",
+                    "Models provided by your tldw server ({{count}} total).",
+                    { count: serverModels.length }
+                  )}
+                </span>
+              )}
+              <Tooltip
+                title={
+                  !sttModel
+                    ? t(
+                        "generalSettings.stt.model.healthCheckSelectFirst",
+                        "Select a model first"
+                      )
+                    : ""
+                }
+              >
+                <Button
+                  type="default"
+                  size="small"
+                  className="mt-1 self-start"
+                  onClick={handleCheckModelHealth}
+                  loading={modelHealth === "checking"}
+                  disabled={!sttModel}
                 >
-                  <Button
-                    type="default"
-                    size="small"
-                    className="mt-1 self-start"
-                    onClick={handleCheckModelHealth}
-                    loading={modelHealth === "checking"}
-                    disabled={!sttModel}
-                  >
-                    {modelHealth === "checking"
+                  {modelHealth === "checking"
+                    ? t(
+                        "generalSettings.stt.model.healthChecking",
+                        "Checking model health…"
+                      )
+                    : modelHealth === "ok"
                       ? t(
-                          "generalSettings.stt.model.healthChecking",
-                          "Checking model health…"
+                          "generalSettings.stt.model.healthOk",
+                          "Model appears healthy"
                         )
-                      : modelHealth === "ok"
+                      : modelHealth === "error"
                         ? t(
-                            "generalSettings.stt.model.healthOk",
-                            "Model appears healthy"
+                            "generalSettings.stt.model.healthError",
+                            "Health check failed"
                           )
-                        : modelHealth === "error"
-                          ? t(
-                              "generalSettings.stt.model.healthError",
-                              "Health check failed"
-                            )
-                          : t(
-                              "generalSettings.stt.model.healthCheck",
-                              "Check model health"
-                            )}
-                  </Button>
-                </Tooltip>
-              </div>
-            </div>
-
-            <div className="flex flex-row justify-between">
-              <span className="text-text">
-                {t("generalSettings.stt.task.label")}
-              </span>
-              <Select
-                className={hideBorder ? "w-full" : "!min-w-[200px]"}
-                value={sttTask}
-                onChange={(value) => setSttTask(value)}
-                options={[
-                  {
-                    value: "transcribe",
-                    label: t(
-                      "generalSettings.stt.task.transcribe",
-                      "Transcribe (same language)"
-                    )
-                  },
-                  {
-                    value: "translate",
-                    label: t(
-                      "generalSettings.stt.task.translate",
-                      "Translate to English"
-                    )
-                  }
-                ]}
-              />
-            </div>
-
-            <div className="flex flex-row justify-between">
-              <span className="text-text">
-                {t("generalSettings.stt.autoSubmitVoiceMessage.label")}
-              </span>
-              <Switch
-                checked={autoSubmitVoiceMessage}
-                onChange={(checked) => {
-                  setAutoSubmitVoiceMessage(checked)
-                }}
-              />
-            </div>
-
-            <div className="flex flex-row justify-between">
-              <span className="text-text">
-                {t("generalSettings.stt.autoStopTimeout.label")}
-              </span>
-              <InputNumber
-                className={hideBorder ? "w-full" : "!min-w-[200px]"}
-                type="number"
-                placeholder={t("generalSettings.stt.autoStopTimeout.placeholder")}
-                value={autoStopTimeout}
-                addonAfter="ms"
-                onChange={(e) => {
-                  setAutoStopTimeout(e)
-                }}
-              />
+                        : t(
+                            "generalSettings.stt.model.healthCheck",
+                            "Check model health"
+                          )}
+                </Button>
+              </Tooltip>
             </div>
           </div>
-        </Panel>
 
-        <Panel
-          header={t("generalSettings.stt.advancedSettings", "Advanced Settings")}
-          key="advanced"
-          className="!border-0"
-        >
+          <div className="flex flex-row justify-between">
+            <span className="text-text">
+              {t("generalSettings.stt.task.label")}
+            </span>
+            <Select
+              className={hideBorder ? "w-full" : "!min-w-[200px]"}
+              value={sttTask}
+              onChange={(value) => setSttTask(value)}
+              options={[
+                {
+                  value: "transcribe",
+                  label: t(
+                    "generalSettings.stt.task.transcribe",
+                    "Transcribe (same language)"
+                  )
+                },
+                {
+                  value: "translate",
+                  label: t(
+                    "generalSettings.stt.task.translate",
+                    "Translate to English"
+                  )
+                }
+              ]}
+            />
+          </div>
+
+          <div className="flex flex-row justify-between">
+            <span className="text-text">
+              {t("generalSettings.stt.autoSubmitVoiceMessage.label")}
+            </span>
+            <Switch
+              checked={autoSubmitVoiceMessage}
+              onChange={(checked) => {
+                setAutoSubmitVoiceMessage(checked)
+              }}
+            />
+          </div>
+
+          <div className="flex flex-row justify-between">
+            <span className="text-text">
+              {t("generalSettings.stt.autoStopTimeout.label")}
+            </span>
+            <InputNumber
+              className={hideBorder ? "w-full" : "!min-w-[200px]"}
+              type="number"
+              placeholder={t("generalSettings.stt.autoStopTimeout.placeholder")}
+              value={resolvedAutoStopTimeout}
+              suffix="ms"
+              onChange={(e) => {
+                setAutoStopTimeout(
+                  typeof e === "number" ? e : resolvedAutoStopTimeout
+                )
+              }}
+            />
+          </div>
+        </div>
+      )
+    },
+    {
+      key: "advanced",
+      label: t("generalSettings.stt.advancedSettings", "Advanced Settings"),
+      className: "!border-0",
+      children: (
+        <>
           <p className="text-xs text-text-subtle mb-4">
             {t("generalSettings.stt.advancedSettingsHelp", "These settings are for advanced users. Most users can leave these at their default values.")}
           </p>
@@ -526,8 +510,35 @@ export const SSTSettings = ({ hideBorder }: { hideBorder?: boolean }) => {
               />
             </div>
           </div>
-        </Panel>
-      </Collapse>
+        </>
+      )
+    }
+  ]
+
+  return (
+    <div>
+      <div className="mb-5">
+        <h2
+          className={`${
+            !hideBorder ? "text-base font-semibold leading-7" : "text-md"
+          } text-text`}>
+          {t("generalSettings.stt.heading")}
+        </h2>
+        {!hideBorder && (
+          <div className="border-b border-border mt-3"></div>
+        )}
+        <p className="mt-2 text-xs text-text-muted">
+          {t(
+            "generalSettings.stt.usedByChat",
+            "These Speech-to-Text defaults are used by the chat dictation button in the Playground and Sidebar."
+          )}
+        </p>
+      </div>
+      <Collapse
+        defaultActiveKey={["basic"]}
+        className="bg-transparent border-0"
+        items={collapseItems}
+      />
     </div>
   )
 }

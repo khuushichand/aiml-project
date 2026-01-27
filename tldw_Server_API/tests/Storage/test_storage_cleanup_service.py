@@ -73,3 +73,31 @@ class TestExpiredCleanup:
         assert deleted == 1
         storage_service.unregister_generated_file.assert_awaited_once_with(2, hard_delete=True)
         assert outside_path.exists()
+
+    @pytest.mark.unit
+    @pytest.mark.asyncio
+    async def test_cleanup_expired_skips_unlink_when_unregister_fails(self, tmp_path, monkeypatch):
+        """If unregister fails, the on-disk file should remain."""
+        file_path = tmp_path / "tts_audio" / "file.txt"
+        file_path.parent.mkdir(parents=True, exist_ok=True)
+        file_path.write_text("data")
+
+        files_repo = AsyncMock()
+        files_repo.get_expired_files = AsyncMock(return_value=[
+            {"id": 3, "user_id": 1, "storage_path": "tts_audio/file.txt"},
+        ])
+
+        storage_service = AsyncMock()
+        storage_service.unregister_generated_file = AsyncMock(return_value=False)
+
+        monkeypatch.setattr(
+            cleanup.DatabasePaths,
+            "get_user_outputs_dir",
+            lambda user_id: Path(tmp_path),
+        )
+
+        deleted = await cleanup.cleanup_expired_files(storage_service, files_repo, batch_size=10)
+
+        assert deleted == 0
+        storage_service.unregister_generated_file.assert_awaited_once_with(3, hard_delete=True)
+        assert file_path.exists()

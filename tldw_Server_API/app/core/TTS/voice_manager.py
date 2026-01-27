@@ -23,6 +23,13 @@ from tldw_Server_API.app.core.DB_Management.db_path_utils import (
     DatabasePaths,
     _normalize_user_db_base_dir,
 )
+from tldw_Server_API.app.core.AuthNZ.exceptions import QuotaExceededError, StorageError
+from tldw_Server_API.app.core.AuthNZ.repos.generated_files_repo import (
+    FILE_CATEGORY_VOICE_CLONE,
+    SOURCE_FEATURE_VOICE_STUDIO,
+)
+from tldw_Server_API.app.core.Storage.generated_file_helpers import AUDIO_MIME_TYPES
+from tldw_Server_API.app.services.storage_quota_service import get_storage_service
 from tldw_Server_API.app.core.config import settings
 from tldw_Server_API.app.core.testing import is_test_mode
 from tldw_Server_API.app.core.Utils.pydantic_compat import model_dump_compat
@@ -630,6 +637,32 @@ class VoiceManager:
                 request.provider
             )
 
+            # Register voice clone with storage tracking (quota + generated files)
+            try:
+                storage_service = await get_storage_service()
+                storage_path = str(processed_path.relative_to(voices_path))
+                mime_type = AUDIO_MIME_TYPES.get(processed_path.suffix.lstrip(".").lower(), "application/octet-stream")
+                tags = [f"voice:{request.name}"]
+                if request.provider:
+                    tags.append(f"provider:{request.provider}")
+                await storage_service.register_generated_file(
+                    user_id=user_id,
+                    filename=processed_path.name,
+                    storage_path=storage_path,
+                    file_category=FILE_CATEGORY_VOICE_CLONE,
+                    source_feature=SOURCE_FEATURE_VOICE_STUDIO,
+                    file_size_bytes=processed_path.stat().st_size,
+                    original_filename=filename,
+                    mime_type=mime_type,
+                    source_ref=f"provider:{request.provider}" if request.provider else None,
+                    tags=tags,
+                    check_quota=True,
+                )
+            except QuotaExceededError as exc:
+                raise VoiceQuotaExceededError(str(exc)) from exc
+            except StorageError as exc:
+                raise VoiceProcessingError(f"Failed to register voice with storage: {exc}") from exc
+
             # Create voice info
             voice_info = VoiceInfo(
                 voice_id=voice_id,
@@ -687,11 +720,15 @@ class VoiceManager:
             # distinguish between validation and generic failures.
             if upload_path.exists():
                 upload_path.unlink()
+            if "processed_path" in locals() and processed_path.exists():
+                processed_path.unlink()
             raise
         except Exception as e:
             # Clean up on error
             if upload_path.exists():
                 upload_path.unlink()
+            if "processed_path" in locals() and processed_path.exists():
+                processed_path.unlink()
             logger.error(f"Failed to upload voice: {e}")
             raise VoiceProcessingError(f"Failed to process voice upload: {str(e)}")
 

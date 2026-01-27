@@ -12,6 +12,9 @@ Tests cover:
 import pytest
 from unittest.mock import AsyncMock, MagicMock, patch
 from datetime import datetime, timezone
+from tldw_Server_API.app.services.storage_quota_service import StorageQuotaService
+from tldw_Server_API.app.services import storage_quota_service as storage_service_module
+from tldw_Server_API.app.core.AuthNZ.repos.generated_files_repo import FILE_CATEGORY_VOICE_CLONE
 
 
 class TestCheckQuota:
@@ -220,6 +223,76 @@ class TestFileSizeValidation:
 
         is_valid = file_size_bytes <= MAX_FILE_SIZE_BYTES
         assert is_valid is True
+
+
+class TestUnregisterGeneratedFile:
+    """Tests for unregistering generated files and usage updates."""
+
+    @pytest.mark.unit
+    @pytest.mark.asyncio
+    async def test_hard_delete_skips_usage_if_already_deleted(self):
+        """Hard delete should not decrement usage when file already soft-deleted."""
+        service = StorageQuotaService(db_pool=MagicMock())
+        service._initialized = True
+
+        file_record = {
+            "id": 1,
+            "user_id": 1,
+            "is_deleted": True,
+            "file_size_bytes": 1024,
+        }
+        mock_repo = AsyncMock()
+        mock_repo.get_file_by_id = AsyncMock(return_value=file_record)
+        mock_repo.hard_delete_file = AsyncMock(return_value=True)
+        service.get_generated_files_repo = AsyncMock(return_value=mock_repo)
+        service.update_usage = AsyncMock()
+        service.update_org_usage = AsyncMock()
+        service.update_team_usage = AsyncMock()
+
+        result = await service.unregister_generated_file(1, hard_delete=True)
+
+        assert result is True
+        service.update_usage.assert_not_called()
+
+    @pytest.mark.unit
+    @pytest.mark.asyncio
+    async def test_hard_delete_voice_clone_unlinks_file(self, tmp_path, monkeypatch):
+        """Hard delete should remove a voice clone file from disk."""
+        service = StorageQuotaService(db_pool=MagicMock())
+        service._initialized = True
+
+        voices_dir = tmp_path / "voices"
+        file_rel = "processed/voice.wav"
+        file_path = voices_dir / file_rel
+        file_path.parent.mkdir(parents=True, exist_ok=True)
+        file_path.write_bytes(b"voice-data")
+
+        monkeypatch.setattr(
+            storage_service_module.DatabasePaths,
+            "get_user_voices_dir",
+            lambda user_id: voices_dir,
+        )
+
+        file_record = {
+            "id": 2,
+            "user_id": 1,
+            "is_deleted": False,
+            "file_size_bytes": 1024,
+            "file_category": FILE_CATEGORY_VOICE_CLONE,
+            "storage_path": file_rel,
+        }
+        mock_repo = AsyncMock()
+        mock_repo.get_file_by_id = AsyncMock(return_value=file_record)
+        mock_repo.hard_delete_file = AsyncMock(return_value=True)
+        service.get_generated_files_repo = AsyncMock(return_value=mock_repo)
+        service.update_usage = AsyncMock()
+        service.update_org_usage = AsyncMock()
+        service.update_team_usage = AsyncMock()
+
+        result = await service.unregister_generated_file(2, hard_delete=True)
+
+        assert result is True
+        assert not file_path.exists()
 
 
 class TestGetAllUsersStorage:

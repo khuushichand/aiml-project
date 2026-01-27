@@ -11,6 +11,7 @@ Tests cover:
 """
 import pytest
 from fastapi import HTTPException
+from fastapi.testclient import TestClient
 from unittest.mock import AsyncMock
 from datetime import datetime, timezone
 
@@ -111,6 +112,155 @@ class TestDownloadFileEndpoint:
             await storage_endpoint.download_file(1, user=mock_user)
 
         assert exc.value.status_code == 403
+
+
+class TestDownloadFileEndpointIntegration:
+    """Integration-style tests for download endpoint behavior."""
+
+    @pytest.mark.unit
+    def test_download_file_success_returns_bytes(
+        self,
+        temp_user_outputs_dir,
+        mock_storage_service,
+        mock_user,
+        mock_files_repo,
+        monkeypatch,
+    ):
+        """Successful download returns file bytes."""
+        from tldw_Server_API.app.main import app
+        from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import get_request_user
+        from tldw_Server_API.app.api.v1.endpoints import storage as storage_endpoint
+
+        rel_path = "tts_audio/test.mp3"
+        file_path = temp_user_outputs_dir / rel_path
+        file_path.parent.mkdir(parents=True, exist_ok=True)
+        file_path.write_bytes(b"test-bytes")
+
+        file_record = {
+            "id": 1,
+            "user_id": mock_user.id,
+            "storage_path": rel_path,
+            "file_category": "tts_audio",
+            "is_deleted": False,
+        }
+
+        mock_files_repo.get_file_by_id = AsyncMock(return_value=file_record)
+        mock_storage_service.get_generated_files_repo = AsyncMock(return_value=mock_files_repo)
+
+        monkeypatch.setattr(
+            storage_endpoint,
+            "_get_service",
+            AsyncMock(return_value=mock_storage_service),
+        )
+        monkeypatch.setattr(
+            storage_endpoint.DatabasePaths,
+            "get_user_outputs_dir",
+            lambda user_id: temp_user_outputs_dir,
+        )
+
+        app.dependency_overrides[get_request_user] = lambda: mock_user
+        try:
+            with TestClient(app) as client:
+                resp = client.get("/api/v1/storage/files/1/download")
+                assert resp.status_code == 200
+                assert resp.content == b"test-bytes"
+        finally:
+            app.dependency_overrides.clear()
+
+    @pytest.mark.unit
+    def test_download_file_blocks_path_traversal(
+        self,
+        temp_user_outputs_dir,
+        mock_storage_service,
+        mock_user,
+        mock_files_repo,
+        monkeypatch,
+    ):
+        """Path traversal storage paths are rejected."""
+        from tldw_Server_API.app.main import app
+        from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import get_request_user
+        from tldw_Server_API.app.api.v1.endpoints import storage as storage_endpoint
+
+        file_record = {
+            "id": 2,
+            "user_id": mock_user.id,
+            "storage_path": "../outside.txt",
+            "file_category": "tts_audio",
+            "is_deleted": False,
+        }
+
+        mock_files_repo.get_file_by_id = AsyncMock(return_value=file_record)
+        mock_storage_service.get_generated_files_repo = AsyncMock(return_value=mock_files_repo)
+
+        monkeypatch.setattr(
+            storage_endpoint,
+            "_get_service",
+            AsyncMock(return_value=mock_storage_service),
+        )
+        monkeypatch.setattr(
+            storage_endpoint.DatabasePaths,
+            "get_user_outputs_dir",
+            lambda user_id: temp_user_outputs_dir,
+        )
+
+        app.dependency_overrides[get_request_user] = lambda: mock_user
+        try:
+            with TestClient(app) as client:
+                resp = client.get("/api/v1/storage/files/2/download")
+                assert resp.status_code == 403
+        finally:
+            app.dependency_overrides.clear()
+
+    @pytest.mark.unit
+    def test_download_file_uses_voices_dir_for_voice_clones(
+        self,
+        temp_storage_dir,
+        mock_storage_service,
+        mock_user,
+        mock_files_repo,
+        monkeypatch,
+    ):
+        """Voice clone downloads resolve against the voices directory."""
+        from tldw_Server_API.app.main import app
+        from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import get_request_user
+        from tldw_Server_API.app.api.v1.endpoints import storage as storage_endpoint
+
+        voices_dir = temp_storage_dir / "1" / "voices"
+        file_rel = "processed/voice.wav"
+        file_path = voices_dir / file_rel
+        file_path.parent.mkdir(parents=True, exist_ok=True)
+        file_path.write_bytes(b"voice-bytes")
+
+        file_record = {
+            "id": 3,
+            "user_id": mock_user.id,
+            "storage_path": file_rel,
+            "file_category": "voice_clone",
+            "is_deleted": False,
+        }
+
+        mock_files_repo.get_file_by_id = AsyncMock(return_value=file_record)
+        mock_storage_service.get_generated_files_repo = AsyncMock(return_value=mock_files_repo)
+
+        monkeypatch.setattr(
+            storage_endpoint,
+            "_get_service",
+            AsyncMock(return_value=mock_storage_service),
+        )
+        monkeypatch.setattr(
+            storage_endpoint.DatabasePaths,
+            "get_user_voices_dir",
+            lambda user_id: voices_dir,
+        )
+
+        app.dependency_overrides[get_request_user] = lambda: mock_user
+        try:
+            with TestClient(app) as client:
+                resp = client.get("/api/v1/storage/files/3/download")
+                assert resp.status_code == 200
+                assert resp.content == b"voice-bytes"
+        finally:
+            app.dependency_overrides.clear()
 
     @pytest.mark.unit
     def test_path_traversal_blocked_encoded(self, temp_user_outputs_dir):

@@ -31,6 +31,11 @@ from tldw_Server_API.app.core.Jobs.worker_utils import jobs_manager_from_env
 from tldw_Server_API.app.core.Metrics import get_metrics_registry
 from tldw_Server_API.app.core.config import get_config_value
 from tldw_Server_API.app.core.exceptions import FileArtifactsError, FileArtifactsValidationError
+from tldw_Server_API.app.core.AuthNZ.exceptions import QuotaExceededError, StorageError
+from tldw_Server_API.app.core.Storage.generated_file_helpers import (
+    save_and_register_image,
+    save_and_register_spreadsheet,
+)
 
 
 DEFAULT_MAX_BYTES = 10 * 1024 * 1024
@@ -348,6 +353,13 @@ class FileArtifactsService:
                 export_expires_at=None,
                 export_consumed_at=consumed_at,
             )
+        # Register generated files for storage/quota tracking (image + spreadsheet exports).
+        await self._register_generated_file_export(
+            file_id=file_id,
+            file_type=file_type,
+            export_format=export_req.format,
+            content=export_result.content,
+        )
         return FileExportInfo(
             status="ready" if export_req.mode == "url" or not inline_ready else "none",
             format=export_req.format,
@@ -358,6 +370,39 @@ class FileArtifactsService:
             content_b64=content_b64,
             expires_at=expires_at,
         )
+
+    async def _register_generated_file_export(
+        self,
+        *,
+        file_id: int,
+        file_type: str,
+        export_format: str,
+        content: bytes,
+    ) -> None:
+        """Persist export outputs into generated files storage for quota tracking."""
+        try:
+            if file_type == "image":
+                await save_and_register_image(
+                    user_id=self._user_id_int,
+                    image_bytes=content,
+                    image_format=export_format,
+                    source_prompt=None,
+                    model_name=None,
+                    check_quota=True,
+                )
+            elif file_type == "data_table" and export_format in {"xlsx", "csv", "xls"}:
+                await save_and_register_spreadsheet(
+                    user_id=self._user_id_int,
+                    spreadsheet_bytes=content,
+                    spreadsheet_format=export_format,
+                    original_filename=f"file_{file_id}.{export_format}",
+                    source_ref=f"file_artifact:{file_id}",
+                    check_quota=True,
+                )
+        except QuotaExceededError as exc:
+            raise FileArtifactsError("storage_quota_exceeded", detail=str(exc)) from exc
+        except StorageError as exc:
+            raise FileArtifactsError("storage_persist_failed", detail=str(exc)) from exc
 
     async def _write_export_file(self, file_id: int, export_format: str, content: bytes) -> Tuple[str, int]:
         filename = f"file_{file_id}.{export_format}"

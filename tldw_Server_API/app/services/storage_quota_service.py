@@ -34,6 +34,7 @@ from tldw_Server_API.app.core.AuthNZ.repos.generated_files_repo import (
     FILE_CATEGORY_MINDMAP,
     FILE_CATEGORY_SPREADSHEET,
 )
+from tldw_Server_API.app.core.DB_Management.db_path_utils import DatabasePaths
 
 #######################################################################################################################
 #
@@ -884,17 +885,20 @@ class StorageQuotaService:
         if not file_record:
             return False
 
+        was_deleted = bool(file_record.get("is_deleted"))
         user_id = file_record.get("user_id")
         org_id = file_record.get("org_id")
         team_id = file_record.get("team_id")
         file_size_bytes = file_record.get("file_size_bytes", 0)
+        file_category = file_record.get("file_category")
+        storage_path = str(file_record.get("storage_path") or "")
 
         if hard_delete:
             success = await files_repo.hard_delete_file(file_id)
         else:
             success = await files_repo.soft_delete_file(file_id)
 
-        if success and file_size_bytes > 0:
+        if success and file_size_bytes > 0 and not was_deleted:
             # Update usage counters (subtract)
             await self.update_usage(user_id, file_size_bytes, operation="remove")
 
@@ -903,6 +907,16 @@ class StorageQuotaService:
 
             if team_id:
                 await self.update_team_usage(team_id, -file_size_bytes)
+
+        # On hard delete, attempt to remove the voice clone from disk.
+        if success and hard_delete and file_category == FILE_CATEGORY_VOICE_CLONE and user_id and storage_path:
+            try:
+                base_dir = DatabasePaths.get_user_voices_dir(user_id)
+                resolved_path = (base_dir / storage_path).resolve()
+                if resolved_path.is_relative_to(base_dir.resolve()) and resolved_path.exists():
+                    resolved_path.unlink()
+            except Exception as exc:
+                logger.debug(f"Failed to remove voice clone file {file_id} from disk: {exc}")
 
         return success
 

@@ -22,33 +22,37 @@ type NavigateOptions = {
   state?: unknown
 }
 
-export const Link: React.FC<LinkProps> = ({ to, href, ...rest }) => {
-  const resolvedHref = typeof href === "string" ? href : to || "#"
-  return <NextLink href={resolvedHref} {...rest} />
-}
+export const Link = React.forwardRef<HTMLAnchorElement, LinkProps>(
+  function Link({ to, href, ...rest }, ref) {
+    const resolvedHref = href ?? to ?? "#"
+    return <NextLink ref={ref} href={resolvedHref} {...rest} />
+  }
+)
+Link.displayName = "Link"
 
-export const NavLink: React.FC<NavLinkProps> = ({
-  to,
-  href,
-  className,
-  ...rest
-}) => {
-  const router = useRouter()
-  const resolvedHref = typeof href === "string" ? href : to || "#"
-  const currentPath = router.asPath.split("?")[0]
-  const targetPath = resolvedHref.split("?")[0]
-  const isActive = currentPath === targetPath
-  const resolvedClassName =
-    typeof className === "function" ? className({ isActive }) : className
+export const NavLink = React.forwardRef<HTMLAnchorElement, NavLinkProps>(
+  function NavLink({ to, href, className, ...rest }, ref) {
+    const router = useRouter()
+    const resolvedHref = href ?? to ?? "#"
+    const targetPathSource =
+      typeof resolvedHref === "string" ? resolvedHref : resolvedHref?.pathname ?? "#"
+    const currentPath = router.asPath.split("?")[0]
+    const targetPath = targetPathSource.split("?")[0]
+    const isActive = currentPath === targetPath
+    const resolvedClassName =
+      typeof className === "function" ? className({ isActive }) : className
 
-  return (
-    <NextLink
-      href={resolvedHref}
-      className={resolvedClassName}
-      {...rest}
-    />
-  )
-}
+    return (
+      <NextLink
+        ref={ref}
+        href={resolvedHref}
+        className={resolvedClassName}
+        {...rest}
+      />
+    )
+  }
+)
+NavLink.displayName = "NavLink"
 
 export const useNavigate = () => {
   const router = useRouter()

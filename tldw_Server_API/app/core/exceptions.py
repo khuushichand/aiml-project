@@ -159,6 +159,8 @@ FILE_ARTIFACTS_ERROR_STATUS: dict[str, int] = {
     "unsupported_file_type": status.HTTP_400_BAD_REQUEST,
     "persist_required": status.HTTP_400_BAD_REQUEST,
     "image_backend_unavailable": status.HTTP_400_BAD_REQUEST,
+    "storage_quota_exceeded": status.HTTP_507_INSUFFICIENT_STORAGE,
+    "storage_persist_failed": status.HTTP_500_INTERNAL_SERVER_ERROR,
     "unsupported_export_format": status.HTTP_422_UNPROCESSABLE_ENTITY,
     "invalid_export_mode": status.HTTP_422_UNPROCESSABLE_ENTITY,
     "invalid_async_mode": status.HTTP_422_UNPROCESSABLE_ENTITY,

@@ -58,10 +58,12 @@ from tldw_Server_API.app.api.v1.schemas.audio_schemas import (
 )
 from tldw_Server_API.app.api.v1.schemas.chat_request_schemas import get_api_keys, DEFAULT_LLM_PROVIDER
 from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import get_request_user, User
+from tldw_Server_API.app.core.AuthNZ.exceptions import QuotaExceededError, StorageError
 from tldw_Server_API.app.core.AuthNZ.byok_runtime import (
     record_byok_missing_credentials,
     resolve_byok_credentials,
 )
+from tldw_Server_API.app.core.Storage.generated_file_helpers import save_and_register_tts_audio
 from tldw_Server_API.app.core.TTS.tts_config import get_tts_config_manager
 from tldw_Server_API.app.core.TTS.realtime_session import RealtimeSessionConfig
 from tldw_Server_API.app.core.config import AUTH_BEARER_PREFIX
@@ -1040,6 +1042,11 @@ async def create_speech(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail=f"Unsupported response_format: {request_data.response_format}. Supported formats are: {', '.join(content_type_map.keys())}",
         )
+    if request_data.stream and request_data.return_download_link:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="return_download_link requires stream=false",
+        )
 
     try:
         speech_iter = tts_service.generate_speech(
@@ -1155,6 +1162,32 @@ async def create_speech(
             headers["X-TTS-Alignment-Format"] = "json+base64"
         except Exception as exc:
             logger.debug(f"Failed to encode alignment metadata header: {exc}")
+
+    if request_data.return_download_link:
+        try:
+            file_record = await save_and_register_tts_audio(
+                user_id=user_id_int,
+                audio_bytes=all_audio_bytes,
+                audio_format=request_data.response_format,
+                original_text=request_data.input,
+                voice_name=request_data.voice,
+                model_name=request_data.model,
+                check_quota=True,
+            )
+            file_id = file_record.get("id")
+            if file_id:
+                headers["X-Download-Path"] = f"/api/v1/storage/files/{file_id}/download"
+                headers["X-Generated-File-Id"] = str(file_id)
+        except QuotaExceededError as exc:
+            raise HTTPException(
+                status_code=status.HTTP_507_INSUFFICIENT_STORAGE,
+                detail=str(exc),
+            ) from exc
+        except StorageError as exc:
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail=str(exc),
+            ) from exc
 
     return Response(
         content=all_audio_bytes,

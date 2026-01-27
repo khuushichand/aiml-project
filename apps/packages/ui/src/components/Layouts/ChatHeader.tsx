@@ -51,7 +51,10 @@ export function ChatHeader({
   onToggleShortcuts,
   commandKeyLabel
 }: ChatHeaderProps) {
-  const logoSrc = logoImage
+  const logoSrc =
+    typeof logoImage === "string"
+      ? logoImage
+      : (logoImage as { src?: string })?.src ?? ""
   const showSidebarToggle = Boolean(onToggleSidebar)
   const sidebarLabel = sidebarCollapsed
     ? t("common:chatSidebar.expand", "Expand sidebar")

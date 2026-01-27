@@ -15,7 +15,10 @@ from typing import Optional
 
 from loguru import logger
 
-from tldw_Server_API.app.core.AuthNZ.repos.generated_files_repo import AuthnzGeneratedFilesRepo
+from tldw_Server_API.app.core.AuthNZ.repos.generated_files_repo import (
+    AuthnzGeneratedFilesRepo,
+    FILE_CATEGORY_VOICE_CLONE,
+)
 from tldw_Server_API.app.core.DB_Management.db_path_utils import DatabasePaths
 from tldw_Server_API.app.services.storage_quota_service import get_storage_service
 
@@ -26,16 +29,23 @@ DEFAULT_TRASH_RETENTION_DAYS = 30
 DEFAULT_BATCH_SIZE = 100
 
 
-def _safe_resolve_user_path(user_id: Optional[int], storage_path: str) -> Optional[Path]:
-    """Resolve a stored path and ensure it stays within the user's outputs directory."""
+def _safe_resolve_user_path(
+    user_id: Optional[int],
+    storage_path: str,
+    file_category: Optional[str] = None,
+) -> Optional[Path]:
+    """Resolve a stored path and ensure it stays within the user's allowed directory."""
     if not user_id or not storage_path:
         return None
 
-    user_outputs_dir = DatabasePaths.get_user_outputs_dir(user_id)
-    full_path = user_outputs_dir / storage_path
+    if file_category == FILE_CATEGORY_VOICE_CLONE:
+        base_dir = DatabasePaths.get_user_voices_dir(user_id)
+    else:
+        base_dir = DatabasePaths.get_user_outputs_dir(user_id)
+    full_path = base_dir / storage_path
     try:
         resolved_path = full_path.resolve()
-        if resolved_path.is_relative_to(user_outputs_dir.resolve()):
+        if resolved_path.is_relative_to(base_dir.resolve()):
             return resolved_path
     except ValueError:
         return None
@@ -66,16 +76,19 @@ async def cleanup_expired_files(
             file_id = file_record.get("id")
             user_id = file_record.get("user_id")
             storage_path = file_record.get("storage_path", "")
+            file_category = file_record.get("file_category")
 
             try:
                 # Update usage counters and hard-delete record first
+                deleted = False
                 if file_id:
-                    if await storage_service.unregister_generated_file(file_id, hard_delete=True):
+                    deleted = await storage_service.unregister_generated_file(file_id, hard_delete=True)
+                    if deleted:
                         total_deleted += 1
 
                 # Delete physical file if it exists (with path validation)
-                resolved_path = _safe_resolve_user_path(user_id, storage_path)
-                if resolved_path and resolved_path.exists():
+                resolved_path = _safe_resolve_user_path(user_id, storage_path, file_category=file_category)
+                if deleted and resolved_path and resolved_path.exists():
                     resolved_path.unlink()
                     logger.debug(f"Deleted expired file: {resolved_path}")
 
@@ -116,10 +129,11 @@ async def purge_old_trashed_files(
             file_id = file_record.get("id")
             user_id = file_record.get("user_id")
             storage_path = file_record.get("storage_path", "")
+            file_category = file_record.get("file_category")
 
             try:
                 # Delete physical file if it exists (with path validation)
-                resolved_path = _safe_resolve_user_path(user_id, storage_path)
+                resolved_path = _safe_resolve_user_path(user_id, storage_path, file_category=file_category)
                 if resolved_path and resolved_path.exists():
                     resolved_path.unlink()
                     logger.debug(f"Purged trashed file: {resolved_path}")
