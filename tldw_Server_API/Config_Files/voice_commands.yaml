@@ -1,0 +1,269 @@
+# voice_commands.yaml
+# Default voice command definitions for the Voice Assistant
+#
+# Each command has:
+#   - id: Unique identifier
+#   - name: Human-readable name
+#   - phrases: List of trigger phrases (matched as prefixes)
+#   - action_type: One of mcp_tool, workflow, custom, llm_chat
+#   - action_config: Configuration for the action
+#   - priority: Higher = matched first when multiple commands match (default: 0)
+#   - enabled: Whether the command is active (default: true)
+#   - requires_confirmation: Ask user to confirm before executing (default: false)
+#   - description: Human-readable description
+#
+# Action types:
+#   - mcp_tool: Execute an MCP tool
+#   - workflow: Execute a workflow
+#   - custom: Execute a built-in handler
+#   - llm_chat: Send to LLM for general conversation
+#
+#######################################################################################################################
+
+commands:
+  # Search Commands
+  - id: builtin-search-media
+    name: Search Media
+    phrases:
+      - "search for"
+      - "find"
+      - "look up"
+      - "search"
+      - "look for"
+    action_type: mcp_tool
+    action_config:
+      tool_name: media.search
+      extract_query: true
+    priority: 10
+    description: Search through ingested media content
+
+  - id: builtin-search-notes
+    name: Search Notes
+    phrases:
+      - "search my notes"
+      - "find in my notes"
+      - "search notes for"
+    action_type: mcp_tool
+    action_config:
+      tool_name: notes.search
+      extract_query: true
+    priority: 15
+    description: Search through your notes
+
+  # Note Commands
+  - id: builtin-create-note
+    name: Create Note
+    phrases:
+      - "create a note"
+      - "make a note"
+      - "take a note"
+      - "note that"
+      - "remember that"
+      - "save a note"
+    action_type: mcp_tool
+    action_config:
+      tool_name: notes.create
+      extract_content: true
+    priority: 10
+    description: Create a new note
+
+  - id: builtin-read-notes
+    name: Read Notes
+    phrases:
+      - "read my notes"
+      - "show my notes"
+      - "list my notes"
+      - "what notes do I have"
+    action_type: mcp_tool
+    action_config:
+      tool_name: notes.list
+      limit: 5
+    priority: 10
+    description: List recent notes
+
+  # Control Commands (high priority)
+  - id: builtin-stop
+    name: Stop
+    phrases:
+      - "stop"
+      - "cancel"
+      - "never mind"
+      - "abort"
+      - "quit"
+    action_type: custom
+    action_config:
+      action: stop
+    priority: 100
+    description: Stop current operation
+
+  - id: builtin-help
+    name: Help
+    phrases:
+      - "help"
+      - "what can you do"
+      - "show commands"
+      - "list commands"
+      - "what commands"
+    action_type: custom
+    action_config:
+      action: help
+    priority: 50
+    description: List available voice commands
+
+  - id: builtin-repeat
+    name: Repeat
+    phrases:
+      - "repeat that"
+      - "say that again"
+      - "repeat"
+      - "what did you say"
+      - "come again"
+    action_type: custom
+    action_config:
+      action: repeat
+    priority: 50
+    description: Repeat the last response
+
+  # Information Commands
+  - id: builtin-what-time
+    name: What Time
+    phrases:
+      - "what time is it"
+      - "what's the time"
+      - "current time"
+    action_type: custom
+    action_config:
+      action: time
+    priority: 20
+    description: Tell the current time
+
+  - id: builtin-what-date
+    name: What Date
+    phrases:
+      - "what day is it"
+      - "what's the date"
+      - "what date is it"
+      - "current date"
+    action_type: custom
+    action_config:
+      action: date
+    priority: 20
+    description: Tell the current date
+
+  # Chat Commands
+  - id: builtin-start-chat
+    name: Start Chat
+    phrases:
+      - "let's chat"
+      - "I want to talk"
+      - "start a conversation"
+    action_type: llm_chat
+    action_config:
+      system_prompt: "You are a helpful voice assistant. Be conversational and friendly."
+    priority: 5
+    description: Start a general conversation
+
+  # Summary Commands
+  - id: builtin-summarize
+    name: Summarize
+    phrases:
+      - "summarize"
+      - "give me a summary"
+      - "what's the summary"
+    action_type: mcp_tool
+    action_config:
+      tool_name: media.summarize
+      extract_query: true
+    priority: 10
+    description: Summarize content
+
+  # Research Commands
+  - id: builtin-web-search
+    name: Web Search
+    phrases:
+      - "search the web for"
+      - "look up online"
+      - "web search"
+      - "google"
+    action_type: mcp_tool
+    action_config:
+      tool_name: research.websearch
+      extract_query: true
+    priority: 8
+    requires_confirmation: false
+    description: Search the web
+
+  # Workflow Commands
+  - id: builtin-workflow-search-summarize
+    name: Search and Summarize
+    phrases:
+      - "search and summarize"
+      - "find and summarize"
+      - "search then summarize"
+      - "look up and explain"
+    action_type: workflow
+    action_config:
+      workflow_template: search_and_summarize
+      extract_query: true
+    priority: 12
+    description: Search documents and provide a summarized response
+
+  - id: builtin-workflow-analyze
+    name: Analyze Topic
+    phrases:
+      - "analyze"
+      - "tell me about"
+      - "explain"
+      - "what do you know about"
+      - "give me an analysis of"
+    action_type: workflow
+    action_config:
+      workflow_template: analyze_topic
+      extract_query: true
+    priority: 8
+    description: Analyze a topic from ingested content
+
+  - id: builtin-workflow-briefing
+    name: Daily Briefing
+    phrases:
+      - "give me my briefing"
+      - "daily briefing"
+      - "what's new"
+      - "morning briefing"
+      - "give me an update"
+      - "what's happening"
+    action_type: workflow
+    action_config:
+      workflow_template: daily_briefing
+    priority: 15
+    description: Generate a briefing from recent content
+
+  - id: builtin-workflow-status
+    name: Workflow Status
+    phrases:
+      - "workflow status"
+      - "how's the workflow"
+      - "is it done yet"
+      - "check on that"
+    action_type: custom
+    action_config:
+      action: workflow_status
+    priority: 25
+    description: Check status of running workflow
+
+  - id: builtin-workflow-cancel
+    name: Cancel Workflow
+    phrases:
+      - "cancel the workflow"
+      - "stop the workflow"
+      - "cancel that task"
+      - "abort workflow"
+    action_type: custom
+    action_config:
+      action: workflow_cancel
+    priority: 90
+    description: Cancel a running workflow
+
+#
+# End of voice_commands.yaml
+#######################################################################################################################

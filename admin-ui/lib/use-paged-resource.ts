@@ -72,7 +72,7 @@ export const usePagedResource = <T>({
     const controller = new AbortController();
     void runLoad(controller.signal);
     return () => controller.abort();
-  }, [enabled, runLoad, ...deps]);
+  }, [enabled, runLoad, deps]);
 
   const reload = useCallback(async () => {
     await runLoad();

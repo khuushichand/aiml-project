@@ -81,7 +81,7 @@ export default function RoleDetailPage() {
   const [editDescription, setEditDescription] = useState('');
 
   // Rate Limits
-  const [rateLimits, setRateLimits] = useState<RateLimits>({});
+  const [rateLimits, setRateLimits] = useState<RateLimits | null>(null);
   const [editRpm, setEditRpm] = useState('');
   const [editRph, setEditRph] = useState('');
   const [editRpd, setEditRpd] = useState('');
@@ -91,6 +91,13 @@ export default function RoleDetailPage() {
   const [toolPermissions, setToolPermissions] = useState<ToolPermission[]>([]);
   const [toolPermissionsLoading, setToolPermissionsLoading] = useState(false);
   const [newToolPrefix, setNewToolPrefix] = useState('');
+
+  const hasRateLimits = Boolean(
+    rateLimits
+    && (rateLimits.requests_per_minute != null
+      || rateLimits.requests_per_hour != null
+      || rateLimits.requests_per_day != null)
+  );
 
   useEffect(() => {
     if (!success) {
@@ -133,6 +140,11 @@ export default function RoleDetailPage() {
           setEditRpm(roleValue.rate_limits.requests_per_minute?.toString() || '');
           setEditRph(roleValue.rate_limits.requests_per_hour?.toString() || '');
           setEditRpd(roleValue.rate_limits.requests_per_day?.toString() || '');
+        } else {
+          setRateLimits(null);
+          setEditRpm('');
+          setEditRph('');
+          setEditRpd('');
         }
       }
 
@@ -303,7 +315,7 @@ export default function RoleDetailPage() {
       setRateLimitsSaving(true);
       setError('');
       await api.clearRoleRateLimits(roleId);
-      setRateLimits({});
+      setRateLimits(null);
       setEditRpm('');
       setEditRph('');
       setEditRpd('');
@@ -674,7 +686,7 @@ export default function RoleDetailPage() {
                       >
                         {rateLimitsSaving ? 'Saving...' : 'Save Rate Limits'}
                       </Button>
-                      {(rateLimits.requests_per_minute != null || rateLimits.requests_per_hour != null || rateLimits.requests_per_day != null) && (
+                      {hasRateLimits && (
                         <Button
                           variant="outline"
                           onClick={handleClearRateLimits}
@@ -684,14 +696,14 @@ export default function RoleDetailPage() {
                         </Button>
                       )}
                     </div>
-                    {(rateLimits.requests_per_minute != null || rateLimits.requests_per_hour != null || rateLimits.requests_per_day != null) && (
+                    {hasRateLimits && (
                       <div className="text-sm text-muted-foreground mt-2">
                         Current limits:{' '}
-                        {rateLimits.requests_per_minute != null && `${rateLimits.requests_per_minute}/min`}
-                        {rateLimits.requests_per_minute != null && rateLimits.requests_per_hour != null && ', '}
-                        {rateLimits.requests_per_hour != null && `${rateLimits.requests_per_hour}/hr`}
-                        {(rateLimits.requests_per_minute != null || rateLimits.requests_per_hour != null) && rateLimits.requests_per_day != null && ', '}
-                        {rateLimits.requests_per_day != null && `${rateLimits.requests_per_day}/day`}
+                        {rateLimits?.requests_per_minute != null && `${rateLimits.requests_per_minute}/min`}
+                        {rateLimits?.requests_per_minute != null && rateLimits?.requests_per_hour != null && ', '}
+                        {rateLimits?.requests_per_hour != null && `${rateLimits.requests_per_hour}/hr`}
+                        {(rateLimits?.requests_per_minute != null || rateLimits?.requests_per_hour != null) && rateLimits?.requests_per_day != null && ', '}
+                        {rateLimits?.requests_per_day != null && `${rateLimits.requests_per_day}/day`}
                       </div>
                     )}
                   </CardContent>

@@ -40,7 +40,7 @@ export function MaintenanceSection({ refreshSignal }: MaintenanceSectionProps) {
   const [editAutoCleanup, setEditAutoCleanup] = useState(false);
 
   // Notes Title Settings
-  const [notesSettings, setNotesSettings] = useState<NotesTitleSettings | null>(null);
+  const [, setNotesSettings] = useState<NotesTitleSettings | null>(null);
   const [notesLoading, setNotesLoading] = useState(false);
   const [notesSaving, setNotesSaving] = useState(false);
   const [editAutoTitles, setEditAutoTitles] = useState(false);
@@ -211,10 +211,11 @@ export function MaintenanceSection({ refreshSignal }: MaintenanceSectionProps) {
               <>
                 <div className="flex items-center justify-between">
                   <div>
-                    <Label>Auto Cleanup</Label>
+                    <Label htmlFor="auto-cleanup-checkbox">Auto Cleanup</Label>
                     <p className="text-xs text-muted-foreground">Automatically delete old data</p>
                   </div>
                   <input
+                    id="auto-cleanup-checkbox"
                     type="checkbox"
                     checked={editAutoCleanup}
                     onChange={(e) => setEditAutoCleanup(e.target.checked)}

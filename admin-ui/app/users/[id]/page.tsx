@@ -29,6 +29,14 @@ type UserRateLimits = {
   requests_per_day?: number | null;
 };
 
+type RateLimitUpsertPayload = {
+  resource: string;
+  limit_per_min: number | null;
+  burst: number | null;
+};
+
+const DEFAULT_RATE_LIMIT_RESOURCE = 'api.default';
+
 type PermissionOverride = {
   id: number;
   permission_id: number;
@@ -76,16 +84,50 @@ type UserSession = {
   expires_at?: string | null;
 };
 
+type RateLimitRecord = {
+  resource?: string;
+  limit_per_min?: number | null;
+  burst?: number | null;
+  requests_per_minute?: number | null;
+  requests_per_hour?: number | null;
+  requests_per_day?: number | null;
+};
+
+const toOptionalNumber = (input: unknown): number | null => {
+  if (typeof input !== 'number' || !Number.isFinite(input)) return null;
+  return input > 0 ? input : null;
+};
+
+const selectRateLimitRecord = (items: RateLimitRecord[]): RateLimitRecord | null => {
+  if (!items.length) return null;
+  return items.find((item) => item.resource === DEFAULT_RATE_LIMIT_RESOURCE) ?? items[0];
+};
+
 const normalizeRateLimits = (value: unknown): UserRateLimits | null => {
-  if (!value || typeof value !== 'object') return null;
-  const candidate = value as UserRateLimits & { rate_limits?: UserRateLimits };
-  const source = candidate.rate_limits ?? candidate;
-  const toNumber = (input: unknown): number | null =>
-    typeof input === 'number' && Number.isFinite(input) ? input : null;
+  if (!value) return null;
+  if (Array.isArray(value)) {
+    const record = selectRateLimitRecord(value as RateLimitRecord[]);
+    return record ? normalizeRateLimits(record) : null;
+  }
+  if (typeof value !== 'object') return null;
+
+  const container = value as RateLimitRecord & { rate_limits?: unknown; items?: unknown };
+  if (container.rate_limits) {
+    return normalizeRateLimits(container.rate_limits);
+  }
+  if (container.items) {
+    return normalizeRateLimits(container.items);
+  }
+
+  const rpm = toOptionalNumber(container.requests_per_minute ?? container.limit_per_min);
+  const rph = toOptionalNumber(container.requests_per_hour ?? container.burst);
+  const rpd = toOptionalNumber(container.requests_per_day);
+
+  if (rpm === null && rph === null && rpd === null) return null;
   return {
-    requests_per_minute: toNumber(source.requests_per_minute),
-    requests_per_hour: toNumber(source.requests_per_hour),
-    requests_per_day: toNumber(source.requests_per_day),
+    requests_per_minute: rpm,
+    requests_per_hour: rph,
+    requests_per_day: rpd,
   };
 };
 
@@ -217,7 +259,7 @@ export default function UserDetailPage() {
     } finally {
       setLoading(false);
     }
-  }, [userId]);
+  }, [applyRateLimits, userId]);
 
   const loadSecurity = useCallback(async () => {
     if (!userId) return;
@@ -402,6 +444,28 @@ export default function UserDetailPage() {
     }
   };
 
+  const normalizeRateLimitValue = (value: number | null): number | null => {
+    if (value === null) return null;
+    return value > 0 ? value : null;
+  };
+
+  const buildRateLimitPayload = (
+    rpm: number | null,
+    rph: number | null,
+    rpd: number | null
+  ): RateLimitUpsertPayload => {
+    const limitPerMin = rpm
+      ?? (rph !== null ? Math.ceil(rph / 60) : null)
+      ?? (rpd !== null ? Math.ceil(rpd / 1440) : null);
+    const burst = rph ?? rpd;
+
+    return {
+      resource: DEFAULT_RATE_LIMIT_RESOURCE,
+      limit_per_min: normalizeRateLimitValue(limitPerMin),
+      burst: normalizeRateLimitValue(burst),
+    };
+  };
+
   const handleSaveRateLimits = async () => {
     try {
       setRateLimitsSaving(true);
@@ -410,11 +474,15 @@ export default function UserDetailPage() {
       const rpm = parseOptionalInt(editRpm);
       const rph = parseOptionalInt(editRph);
       const rpd = parseOptionalInt(editRpd);
-      if (rpm !== null) data.requests_per_minute = rpm;
-      if (rph !== null) data.requests_per_hour = rph;
-      if (rpd !== null) data.requests_per_day = rpd;
+      const normalizedRpm = normalizeRateLimitValue(rpm);
+      const normalizedRph = normalizeRateLimitValue(rph);
+      const normalizedRpd = normalizeRateLimitValue(rpd);
+      if (normalizedRpm !== null) data.requests_per_minute = normalizedRpm;
+      if (normalizedRph !== null) data.requests_per_hour = normalizedRph;
+      if (normalizedRpd !== null) data.requests_per_day = normalizedRpd;
 
-      await api.setUserRateLimits(userId, data);
+      const payload = buildRateLimitPayload(rpm, rph, rpd);
+      await api.setUserRateLimits(userId, payload);
       applyRateLimits(data);
       toastSuccess('Rate limits updated', 'User rate limits have been saved.');
     } catch (err: unknown) {
@@ -438,9 +506,9 @@ export default function UserDetailPage() {
     try {
       setRateLimitsSaving(true);
       await api.setUserRateLimits(userId, {
-        requests_per_minute: undefined,
-        requests_per_hour: undefined,
-        requests_per_day: undefined,
+        resource: DEFAULT_RATE_LIMIT_RESOURCE,
+        limit_per_min: null,
+        burst: null,
       });
       setRateLimits({});
       setEditRpm('');

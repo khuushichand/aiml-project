@@ -1076,6 +1076,142 @@ def migration_049_add_llm_usage_log_key_ts_index(conn: sqlite3.Connection) -> No
     logger.info("Migration 049: Added llm_usage_log key_id + ts index")
 
 
+def migration_050_create_generated_files_table(conn: sqlite3.Connection) -> None:
+    """Create generated_files table for tracking user-generated content files.
+
+    Tracks: TTS audio, images, voice clones, mindmaps, spreadsheets.
+    Supports virtual folders via tags and soft delete with retention policies.
+    """
+    logger.info("Migration 050: START generated_files table")
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS generated_files (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            uuid TEXT UNIQUE NOT NULL,
+
+            -- Ownership
+            user_id INTEGER NOT NULL,
+            org_id INTEGER,
+            team_id INTEGER,
+
+            -- File metadata
+            filename TEXT NOT NULL,
+            original_filename TEXT,
+            storage_path TEXT NOT NULL,
+            mime_type TEXT,
+            file_size_bytes INTEGER NOT NULL DEFAULT 0,
+            checksum TEXT,
+
+            -- Classification
+            file_category TEXT NOT NULL,
+            source_feature TEXT NOT NULL,
+            source_ref TEXT,
+
+            -- Organization (virtual folders via tags)
+            folder_tag TEXT,
+            tags TEXT,
+
+            -- Lifecycle
+            is_transient INTEGER DEFAULT 0,
+            expires_at TIMESTAMP,
+            retention_policy TEXT DEFAULT 'user_default',
+
+            -- Soft delete
+            is_deleted INTEGER DEFAULT 0,
+            deleted_at TIMESTAMP,
+
+            -- Timestamps
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            accessed_at TIMESTAMP,
+
+            FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
+            FOREIGN KEY (org_id) REFERENCES organizations(id) ON DELETE SET NULL,
+            FOREIGN KEY (team_id) REFERENCES teams(id) ON DELETE SET NULL
+        )
+        """
+    )
+
+    # Indexes for common query patterns
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_generated_files_user_id ON generated_files(user_id)")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_generated_files_org_id ON generated_files(org_id)")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_generated_files_team_id ON generated_files(team_id)")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_generated_files_uuid ON generated_files(uuid)")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_generated_files_category ON generated_files(file_category)")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_generated_files_source_feature ON generated_files(source_feature)")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_generated_files_folder_tag ON generated_files(folder_tag)")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_generated_files_is_deleted ON generated_files(is_deleted)")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_generated_files_expires_at ON generated_files(expires_at)")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_generated_files_created_at ON generated_files(created_at)")
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_generated_files_user_category "
+        "ON generated_files(user_id, file_category, is_deleted)"
+    )
+
+    conn.commit()
+    logger.info("Migration 050: Created generated_files table with indexes")
+
+
+def rollback_050_drop_generated_files_table(conn: sqlite3.Connection) -> None:
+    """Rollback migration 050 by dropping generated_files table."""
+    conn.execute("DROP TABLE IF EXISTS generated_files")
+    conn.commit()
+    logger.info("Rollback 050: Dropped generated_files table")
+
+
+def migration_051_create_storage_quotas_table(conn: sqlite3.Connection) -> None:
+    """Create storage_quotas table for team/org-level quota management.
+
+    Provides shared pool quotas for teams and organizations.
+    User quotas are stored on the users table (storage_quota_mb, storage_used_mb).
+    """
+    logger.info("Migration 051: START storage_quotas table")
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS storage_quotas (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            org_id INTEGER,
+            team_id INTEGER,
+            quota_mb INTEGER NOT NULL DEFAULT 10240,
+            used_mb REAL DEFAULT 0,
+            soft_limit_pct INTEGER DEFAULT 80,
+            hard_limit_pct INTEGER DEFAULT 100,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+
+            FOREIGN KEY (org_id) REFERENCES organizations(id) ON DELETE CASCADE,
+            FOREIGN KEY (team_id) REFERENCES teams(id) ON DELETE CASCADE,
+
+            CHECK ((org_id IS NOT NULL AND team_id IS NULL) OR
+                   (org_id IS NULL AND team_id IS NOT NULL) OR
+                   (org_id IS NULL AND team_id IS NULL))
+        )
+        """
+    )
+
+    # Indexes
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_storage_quotas_org_id ON storage_quotas(org_id)")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_storage_quotas_team_id ON storage_quotas(team_id)")
+    conn.execute(
+        "CREATE UNIQUE INDEX IF NOT EXISTS idx_storage_quotas_org_unique "
+        "ON storage_quotas(org_id) WHERE org_id IS NOT NULL"
+    )
+    conn.execute(
+        "CREATE UNIQUE INDEX IF NOT EXISTS idx_storage_quotas_team_unique "
+        "ON storage_quotas(team_id) WHERE team_id IS NOT NULL"
+    )
+
+    conn.commit()
+    logger.info("Migration 051: Created storage_quotas table with indexes")
+
+
+def rollback_051_drop_storage_quotas_table(conn: sqlite3.Connection) -> None:
+    """Rollback migration 051 by dropping storage_quotas table."""
+    conn.execute("DROP TABLE IF EXISTS storage_quotas")
+    conn.commit()
+    logger.info("Rollback 051: Dropped storage_quotas table")
+
+
 def migration_022_create_tool_catalogs(conn: sqlite3.Connection) -> None:
     """Create tables for MCP tool catalogs (SQLite)."""
     # tool_catalogs: scoped by (org_id, team_id) with name unique per scope
@@ -2465,6 +2601,18 @@ def get_authnz_migrations() -> List[Migration]:
             49,
             "Add llm_usage_log key_id + ts index",
             migration_049_add_llm_usage_log_key_ts_index,
+        ),
+        Migration(
+            50,
+            "Create generated_files table",
+            migration_050_create_generated_files_table,
+            rollback_050_drop_generated_files_table,
+        ),
+        Migration(
+            51,
+            "Create storage_quotas table",
+            migration_051_create_storage_quotas_table,
+            rollback_051_drop_storage_quotas_table,
         ),
     ]
 

@@ -21,6 +21,19 @@ from tldw_Server_API.app.core.AuthNZ.exceptions import (
     UserNotFoundError
 )
 from tldw_Server_API.app.core.Metrics import get_metrics_registry
+from tldw_Server_API.app.core.AuthNZ.repos.storage_quotas_repo import (
+    AuthnzStorageQuotasRepo,
+    DEFAULT_ORG_QUOTA_MB,
+    DEFAULT_TEAM_QUOTA_MB,
+)
+from tldw_Server_API.app.core.AuthNZ.repos.generated_files_repo import (
+    AuthnzGeneratedFilesRepo,
+    FILE_CATEGORY_TTS_AUDIO,
+    FILE_CATEGORY_IMAGE,
+    FILE_CATEGORY_VOICE_CLONE,
+    FILE_CATEGORY_MINDMAP,
+    FILE_CATEGORY_SPREADSHEET,
+)
 
 #######################################################################################################################
 #
@@ -449,22 +462,39 @@ class StorageQuotaService:
         """List storage usage for all active users, sorted by usage desc."""
         if not self._initialized:
             await self.initialize()
-        users = await self.db_pool.fetchall(
-            """
-            SELECT id, username, storage_used_mb, storage_quota_mb
-            FROM users
-            WHERE is_active = ?
-            ORDER BY storage_used_mb DESC
-            """,
-            True
-        )
+
+        async with self.db_pool.acquire() as conn:
+            if hasattr(conn, 'fetch'):
+                # PostgreSQL
+                users = await conn.fetch(
+                    """
+                    SELECT id, username, storage_used_mb, storage_quota_mb
+                    FROM users
+                    WHERE is_active = TRUE
+                    ORDER BY storage_used_mb DESC
+                    """
+                )
+            else:
+                # SQLite
+                cursor = await conn.execute(
+                    """
+                    SELECT id, username, storage_used_mb, storage_quota_mb
+                    FROM users
+                    WHERE is_active = 1
+                    ORDER BY storage_used_mb DESC
+                    """
+                )
+                rows = await cursor.fetchall()
+                cols = [desc[0] for desc in cursor.description] if cursor.description else []
+                users = [dict(zip(cols, row)) for row in rows]
+
         result = []
         for user in users:
-            used = float(user['storage_used_mb'])
-            quota = user['storage_quota_mb']
+            used = float(user.get('storage_used_mb', 0) or 0)
+            quota = user.get('storage_quota_mb', 0) or 0
             result.append({
-                "user_id": user['id'],
-                "username": user['username'],
+                "user_id": user.get('id'),
+                "username": user.get('username'),
                 "storage_used_mb": round(used, 2),
                 "storage_quota_mb": quota,
                 "available_mb": round(max(0, quota - used), 2),
@@ -484,7 +514,7 @@ class StorageQuotaService:
             temp_dirs = list(base_path.glob("*/temp"))
         loop = asyncio.get_event_loop()
         stats = await loop.run_in_executor(
-            self.executor,
+            None,  # Use default executor (self.executor was undefined)
             self._cleanup_temp_directories,
             temp_dirs,
             cutoff_time
@@ -529,6 +559,474 @@ class StorageQuotaService:
     async def shutdown(self):
         """Shutdown hook retained for compatibility."""
         logger.info("StorageQuotaService shutdown complete (no dedicated executor)")
+
+    # =========================================================================
+    # Team/Org Quota Management (using storage_quotas table)
+    # =========================================================================
+
+    async def get_storage_quotas_repo(self) -> AuthnzStorageQuotasRepo:
+        """Get the storage quotas repository."""
+        if not self._initialized:
+            await self.initialize()
+        return AuthnzStorageQuotasRepo(db_pool=self.db_pool)
+
+    async def get_generated_files_repo(self) -> AuthnzGeneratedFilesRepo:
+        """Get the generated files repository."""
+        if not self._initialized:
+            await self.initialize()
+        return AuthnzGeneratedFilesRepo(db_pool=self.db_pool)
+
+    async def get_org_quota(self, org_id: int) -> Dict[str, Any]:
+        """Get storage quota status for an organization."""
+        repo = await self.get_storage_quotas_repo()
+        status = await repo.check_quota_status(org_id=org_id)
+        status["org_id"] = org_id
+        return status
+
+    async def get_team_quota(self, team_id: int) -> Dict[str, Any]:
+        """Get storage quota status for a team."""
+        repo = await self.get_storage_quotas_repo()
+        status = await repo.check_quota_status(team_id=team_id)
+        status["team_id"] = team_id
+        return status
+
+    async def set_org_quota(
+        self,
+        org_id: int,
+        quota_mb: int,
+        soft_limit_pct: int = 80,
+        hard_limit_pct: int = 100,
+    ) -> Dict[str, Any]:
+        """Set storage quota for an organization."""
+        if not self._initialized:
+            await self.initialize()
+
+        if quota_mb < 100:
+            quota_mb = 100
+
+        repo = await self.get_storage_quotas_repo()
+        result = await repo.upsert_org_quota(
+            org_id,
+            quota_mb=quota_mb,
+            soft_limit_pct=soft_limit_pct,
+            hard_limit_pct=hard_limit_pct,
+        )
+        logger.info(f"Set org {org_id} quota: {quota_mb}MB")
+        return result
+
+    async def set_team_quota(
+        self,
+        team_id: int,
+        quota_mb: int,
+        soft_limit_pct: int = 80,
+        hard_limit_pct: int = 100,
+    ) -> Dict[str, Any]:
+        """Set storage quota for a team."""
+        if not self._initialized:
+            await self.initialize()
+
+        if quota_mb < 100:
+            quota_mb = 100
+
+        repo = await self.get_storage_quotas_repo()
+        result = await repo.upsert_team_quota(
+            team_id,
+            quota_mb=quota_mb,
+            soft_limit_pct=soft_limit_pct,
+            hard_limit_pct=hard_limit_pct,
+        )
+        logger.info(f"Set team {team_id} quota: {quota_mb}MB")
+        return result
+
+    async def check_combined_quota(
+        self,
+        user_id: int,
+        new_bytes: int,
+        org_id: Optional[int] = None,
+        team_id: Optional[int] = None,
+        raise_on_exceed: bool = False,
+    ) -> Tuple[bool, Dict[str, Any]]:
+        """
+        Check combined quota across user, team, and org levels.
+
+        The quota model is a shared pool:
+        - User has their own quota (from users table)
+        - Team/org has a shared pool quota (from storage_quotas table)
+        - All levels must have sufficient space
+
+        Returns:
+            Tuple of (has_quota, quota_info)
+        """
+        if not self._initialized:
+            await self.initialize()
+
+        # Check user quota
+        has_user_quota, user_info = await self.check_quota(
+            user_id, new_bytes, raise_on_exceed=False
+        )
+
+        # Check team quota if applicable
+        team_info = None
+        has_team_quota = True
+        if team_id:
+            repo = await self.get_storage_quotas_repo()
+            can_allocate, reason = await repo.can_allocate(
+                new_bytes, team_id=team_id
+            )
+            has_team_quota = can_allocate
+            team_info = await repo.check_quota_status(team_id=team_id)
+            team_info["reason"] = reason
+
+        # Check org quota if applicable
+        org_info = None
+        has_org_quota = True
+        if org_id:
+            repo = await self.get_storage_quotas_repo()
+            can_allocate, reason = await repo.can_allocate(
+                new_bytes, org_id=org_id
+            )
+            has_org_quota = can_allocate
+            org_info = await repo.check_quota_status(org_id=org_id)
+            org_info["reason"] = reason
+
+        # Combined check
+        has_quota = has_user_quota and has_team_quota and has_org_quota
+
+        combined_info = {
+            "user_id": user_id,
+            "has_quota": has_quota,
+            "new_size_bytes": new_bytes,
+            "new_size_mb": round(new_bytes / (1024 * 1024), 2),
+            "user": user_info,
+            "team": team_info,
+            "org": org_info,
+            "blocking_level": None,
+        }
+
+        if not has_quota:
+            if not has_user_quota:
+                combined_info["blocking_level"] = "user"
+            elif not has_team_quota:
+                combined_info["blocking_level"] = "team"
+            elif not has_org_quota:
+                combined_info["blocking_level"] = "org"
+
+            if raise_on_exceed:
+                blocking = combined_info["blocking_level"]
+                raise QuotaExceededError(
+                    new_bytes / (1024 * 1024),
+                    user_info.get("quota_mb", 0),
+                    f"Quota exceeded at {blocking} level"
+                )
+
+        return has_quota, combined_info
+
+    async def update_org_usage(self, org_id: int, bytes_delta: int) -> Dict[str, Any]:
+        """Update storage usage for an organization."""
+        if not self._initialized:
+            await self.initialize()
+
+        mb_delta = bytes_delta / (1024 * 1024)
+        repo = await self.get_storage_quotas_repo()
+        new_used = await repo.increment_org_used_mb(org_id, mb_delta)
+        status = await repo.check_quota_status(org_id=org_id)
+
+        logger.debug(f"Updated org {org_id} usage: +{mb_delta:.2f}MB (total: {new_used:.2f}MB)")
+        return status
+
+    async def update_team_usage(self, team_id: int, bytes_delta: int) -> Dict[str, Any]:
+        """Update storage usage for a team."""
+        if not self._initialized:
+            await self.initialize()
+
+        mb_delta = bytes_delta / (1024 * 1024)
+        repo = await self.get_storage_quotas_repo()
+        new_used = await repo.increment_team_used_mb(team_id, mb_delta)
+        status = await repo.check_quota_status(team_id=team_id)
+
+        logger.debug(f"Updated team {team_id} usage: +{mb_delta:.2f}MB (total: {new_used:.2f}MB)")
+        return status
+
+    # =========================================================================
+    # Generated Files Integration
+    # =========================================================================
+
+    async def register_generated_file(
+        self,
+        *,
+        user_id: int,
+        filename: str,
+        storage_path: str,
+        file_category: str,
+        source_feature: str,
+        file_size_bytes: int,
+        org_id: Optional[int] = None,
+        team_id: Optional[int] = None,
+        original_filename: Optional[str] = None,
+        mime_type: Optional[str] = None,
+        checksum: Optional[str] = None,
+        source_ref: Optional[str] = None,
+        folder_tag: Optional[str] = None,
+        tags: Optional[List[str]] = None,
+        is_transient: bool = False,
+        expires_at: Optional[datetime] = None,
+        retention_policy: str = "user_default",
+        check_quota: bool = True,
+    ) -> Dict[str, Any]:
+        """
+        Register a generated file and update storage usage.
+
+        This is the main entry point for tracking generated files.
+        It checks quota, creates the file record, and updates usage counters.
+
+        Args:
+            user_id: Owner user ID
+            filename: Stored filename
+            storage_path: Relative path to file
+            file_category: Category (tts_audio, image, voice_clone, etc.)
+            source_feature: Feature that generated the file
+            file_size_bytes: Size in bytes
+            org_id: Optional organization ID
+            team_id: Optional team ID
+            original_filename: Original filename
+            mime_type: MIME type
+            checksum: SHA-256 checksum
+            source_ref: Reference to source entity
+            folder_tag: Virtual folder tag
+            tags: Additional tags
+            is_transient: Whether file is temporary
+            expires_at: Expiration timestamp
+            retention_policy: Retention policy
+            check_quota: Whether to check quota before registering
+
+        Returns:
+            Created file record with quota info
+        """
+        if not self._initialized:
+            await self.initialize()
+
+        # Validate file size upper limit (10 GB max per file)
+        MAX_FILE_SIZE_BYTES = 10 * 1024 * 1024 * 1024  # 10 GB
+        if file_size_bytes > MAX_FILE_SIZE_BYTES:
+            raise StorageError(
+                f"File size {file_size_bytes / (1024*1024*1024):.2f} GB exceeds "
+                f"maximum allowed size of {MAX_FILE_SIZE_BYTES / (1024*1024*1024):.0f} GB"
+            )
+
+        # Check quota if requested
+        if check_quota:
+            has_quota, quota_info = await self.check_combined_quota(
+                user_id, file_size_bytes,
+                org_id=org_id, team_id=team_id,
+                raise_on_exceed=True
+            )
+
+        # Create file record
+        files_repo = await self.get_generated_files_repo()
+        file_record = await files_repo.create_file(
+            user_id=user_id,
+            filename=filename,
+            storage_path=storage_path,
+            file_category=file_category,
+            source_feature=source_feature,
+            file_size_bytes=file_size_bytes,
+            org_id=org_id,
+            team_id=team_id,
+            original_filename=original_filename,
+            mime_type=mime_type,
+            checksum=checksum,
+            source_ref=source_ref,
+            folder_tag=folder_tag,
+            tags=tags,
+            is_transient=is_transient,
+            expires_at=expires_at,
+            retention_policy=retention_policy,
+        )
+
+        # Update usage counters
+        await self.update_usage(user_id, file_size_bytes, operation="add")
+
+        if org_id:
+            await self.update_org_usage(org_id, file_size_bytes)
+
+        if team_id:
+            await self.update_team_usage(team_id, file_size_bytes)
+
+        logger.info(
+            f"Registered generated file: {file_category}/{filename} "
+            f"({file_size_bytes} bytes) for user {user_id}"
+        )
+
+        return file_record
+
+    async def unregister_generated_file(
+        self,
+        file_id: int,
+        hard_delete: bool = False,
+    ) -> bool:
+        """
+        Unregister a generated file and update storage usage.
+
+        Args:
+            file_id: File ID to unregister
+            hard_delete: If True, permanently delete; otherwise soft delete
+
+        Returns:
+            True if successful
+        """
+        if not self._initialized:
+            await self.initialize()
+
+        files_repo = await self.get_generated_files_repo()
+
+        # Get file info first
+        file_record = await files_repo.get_file_by_id(file_id)
+        if not file_record:
+            return False
+
+        user_id = file_record.get("user_id")
+        org_id = file_record.get("org_id")
+        team_id = file_record.get("team_id")
+        file_size_bytes = file_record.get("file_size_bytes", 0)
+
+        if hard_delete:
+            success = await files_repo.hard_delete_file(file_id)
+        else:
+            success = await files_repo.soft_delete_file(file_id)
+
+        if success and file_size_bytes > 0:
+            # Update usage counters (subtract)
+            await self.update_usage(user_id, file_size_bytes, operation="remove")
+
+            if org_id:
+                await self.update_org_usage(org_id, -file_size_bytes)
+
+            if team_id:
+                await self.update_team_usage(team_id, -file_size_bytes)
+
+        return success
+
+    async def get_user_generated_files_usage(self, user_id: int) -> Dict[str, Any]:
+        """Get detailed usage breakdown for user's generated files."""
+        if not self._initialized:
+            await self.initialize()
+
+        files_repo = await self.get_generated_files_repo()
+        usage = await files_repo.get_user_storage_usage(user_id)
+
+        # Get user quota info
+        user_info = await self._get_user_storage_info(user_id)
+        if user_info:
+            usage["quota_mb"] = user_info.get("storage_quota_mb", 0)
+            usage["quota_used_mb"] = user_info.get("storage_used_mb", 0)
+
+        return usage
+
+    async def list_user_generated_files(
+        self,
+        user_id: int,
+        *,
+        offset: int = 0,
+        limit: int = 50,
+        file_category: Optional[str] = None,
+        folder_tag: Optional[str] = None,
+        search: Optional[str] = None,
+        include_deleted: bool = False,
+    ) -> Tuple[List[Dict[str, Any]], int]:
+        """List generated files for a user."""
+        if not self._initialized:
+            await self.initialize()
+
+        files_repo = await self.get_generated_files_repo()
+        return await files_repo.list_files(
+            user_id=user_id,
+            offset=offset,
+            limit=limit,
+            file_category=file_category,
+            folder_tag=folder_tag,
+            search=search,
+            include_deleted=include_deleted,
+        )
+
+    async def get_user_folders(self, user_id: int) -> List[Dict[str, Any]]:
+        """List virtual folders for a user."""
+        if not self._initialized:
+            await self.initialize()
+
+        files_repo = await self.get_generated_files_repo()
+        return await files_repo.list_folders(user_id)
+
+    async def recalculate_org_usage(self, org_id: int) -> Dict[str, Any]:
+        """Recalculate and update org storage usage from generated files."""
+        if not self._initialized:
+            await self.initialize()
+
+        # Sum all non-deleted files for users in the org
+        async with self.db_pool.acquire() as conn:
+            if hasattr(conn, "fetchval"):
+                total_bytes = await conn.fetchval(
+                    """
+                    SELECT COALESCE(SUM(file_size_bytes), 0)
+                    FROM generated_files
+                    WHERE org_id = $1 AND is_deleted = FALSE
+                    """,
+                    org_id,
+                )
+            else:
+                cursor = await conn.execute(
+                    """
+                    SELECT COALESCE(SUM(file_size_bytes), 0)
+                    FROM generated_files
+                    WHERE org_id = ? AND is_deleted = 0
+                    """,
+                    (org_id,),
+                )
+                row = await cursor.fetchone()
+                total_bytes = row[0] if row else 0
+
+        total_mb = total_bytes / (1024 * 1024)
+        repo = await self.get_storage_quotas_repo()
+        await repo.update_org_used_mb(org_id, total_mb)
+
+        status = await repo.check_quota_status(org_id=org_id)
+        logger.info(f"Recalculated org {org_id} usage: {total_mb:.2f}MB")
+        return status
+
+    async def recalculate_team_usage(self, team_id: int) -> Dict[str, Any]:
+        """Recalculate and update team storage usage from generated files."""
+        if not self._initialized:
+            await self.initialize()
+
+        # Sum all non-deleted files for users in the team
+        async with self.db_pool.acquire() as conn:
+            if hasattr(conn, "fetchval"):
+                total_bytes = await conn.fetchval(
+                    """
+                    SELECT COALESCE(SUM(file_size_bytes), 0)
+                    FROM generated_files
+                    WHERE team_id = $1 AND is_deleted = FALSE
+                    """,
+                    team_id,
+                )
+            else:
+                cursor = await conn.execute(
+                    """
+                    SELECT COALESCE(SUM(file_size_bytes), 0)
+                    FROM generated_files
+                    WHERE team_id = ? AND is_deleted = 0
+                    """,
+                    (team_id,),
+                )
+                row = await cursor.fetchone()
+                total_bytes = row[0] if row else 0
+
+        total_mb = total_bytes / (1024 * 1024)
+        repo = await self.get_storage_quotas_repo()
+        await repo.update_team_used_mb(team_id, total_mb)
+
+        status = await repo.check_quota_status(team_id=team_id)
+        logger.info(f"Recalculated team {team_id} usage: {total_mb:.2f}MB")
+        return status
 
 
 # Singleton accessor

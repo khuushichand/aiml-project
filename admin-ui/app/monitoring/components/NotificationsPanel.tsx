@@ -1,11 +1,13 @@
-import { useEffect, useState } from 'react';
+import { useState } from 'react';
+import type { ReactNode } from 'react';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Select } from '@/components/ui/select';
+import { Checkbox } from '@/components/ui/checkbox';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
-import { Bell, Mail, Webhook, Send, Check, X, AlertCircle, MessageSquare } from 'lucide-react';
+import { Bell, Mail, Webhook, Send, X, AlertCircle, MessageSquare, ToggleLeft, ToggleRight } from 'lucide-react';
 import type { NotificationSettings, NotificationChannel, RecentNotification } from '../types';
 
 type NotificationsPanelProps = {
@@ -37,6 +39,50 @@ const DIGEST_FREQUENCIES = [
   { value: 'weekly', label: 'Weekly' },
 ] as const;
 
+type NotificationsPanelShellProps = {
+  children: ReactNode;
+  enabledChannels: number;
+  loading: boolean;
+  saving: boolean;
+  onTest: () => void;
+};
+
+const NotificationsPanelShell = ({
+  children,
+  enabledChannels,
+  loading,
+  saving,
+  onTest,
+}: NotificationsPanelShellProps) => (
+  <Card>
+    <CardHeader>
+      <div className="flex items-center justify-between">
+        <div>
+          <CardTitle className="flex items-center gap-2">
+            <Bell className="h-5 w-5" />
+            Notifications
+          </CardTitle>
+          <CardDescription>
+            Configure alert notification channels
+          </CardDescription>
+        </div>
+        <Button
+          variant="outline"
+          size="sm"
+          onClick={onTest}
+          disabled={loading || saving || enabledChannels === 0}
+        >
+          <Send className="mr-2 h-4 w-4" />
+          Test
+        </Button>
+      </div>
+    </CardHeader>
+    <CardContent className="space-y-6">
+      {children}
+    </CardContent>
+  </Card>
+);
+
 const formatTimestamp = (timestamp?: string) => {
   if (!timestamp) return '-';
   return new Date(timestamp).toLocaleString();
@@ -51,27 +97,25 @@ const getChannelIcon = (type: string) => {
   return <Bell className="h-4 w-4" />;
 };
 
-export default function NotificationsPanel({
+type NotificationsPanelFormProps = Omit<NotificationsPanelProps, 'settings'> & {
+  settings: NotificationSettings;
+};
+
+const NotificationsPanelForm = ({
   settings,
   recentNotifications,
   loading,
   saving,
   onSave,
   onTest,
-}: NotificationsPanelProps) {
-  const [editSettings, setEditSettings] = useState<NotificationSettings | null>(settings);
+}: NotificationsPanelFormProps) => {
+  const [editSettings, setEditSettings] = useState<NotificationSettings>(settings);
   const [showAddChannel, setShowAddChannel] = useState(false);
   const [newChannelType, setNewChannelType] = useState<NotificationChannel['type']>('email');
   const [newChannelConfig, setNewChannelConfig] = useState('');
 
-  useEffect(() => {
-    if (settings) {
-      setEditSettings(settings);
-    }
-  }, [settings]);
-
   const handleAddChannel = () => {
-    if (!editSettings || !newChannelConfig.trim()) return;
+    if (!newChannelConfig.trim()) return;
 
     const newChannel: NotificationChannel = {
       type: newChannelType,
@@ -90,7 +134,6 @@ export default function NotificationsPanel({
   };
 
   const handleRemoveChannel = (index: number) => {
-    if (!editSettings) return;
     setEditSettings({
       ...editSettings,
       channels: editSettings.channels.filter((_, i) => i !== index),
@@ -98,54 +141,25 @@ export default function NotificationsPanel({
   };
 
   const handleToggleChannel = (index: number) => {
-    if (!editSettings) return;
     const channels = [...editSettings.channels];
     channels[index] = { ...channels[index], enabled: !channels[index].enabled };
     setEditSettings({ ...editSettings, channels });
   };
 
   const handleSave = () => {
-    if (editSettings) {
-      onSave(editSettings);
-    }
+    onSave(editSettings);
   };
 
-  const enabledChannels = editSettings?.channels.filter((c) => c.enabled).length ?? 0;
+  const enabledChannels = editSettings.channels.filter((c) => c.enabled).length;
 
   return (
-    <Card>
-      <CardHeader>
-        <div className="flex items-center justify-between">
-          <div>
-            <CardTitle className="flex items-center gap-2">
-              <Bell className="h-5 w-5" />
-              Notifications
-            </CardTitle>
-            <CardDescription>
-              Configure alert notification channels
-            </CardDescription>
-          </div>
-          <Button
-            variant="outline"
-            size="sm"
-            onClick={onTest}
-            disabled={loading || saving || enabledChannels === 0}
-          >
-            <Send className="mr-2 h-4 w-4" />
-            Test
-          </Button>
-        </div>
-      </CardHeader>
-      <CardContent className="space-y-6">
-        {loading ? (
-          <div className="text-center text-muted-foreground py-8">Loading...</div>
-        ) : !editSettings ? (
-          <div className="text-center text-muted-foreground py-8">
-            <AlertCircle className="h-12 w-12 mx-auto mb-2" />
-            <p>Failed to load notification settings</p>
-          </div>
-        ) : (
-          <>
+    <NotificationsPanelShell
+      enabledChannels={enabledChannels}
+      loading={loading}
+      saving={saving}
+      onTest={onTest}
+    >
+      <>
             {/* Channels List */}
             <div className="space-y-3">
               <div className="flex items-center justify-between">
@@ -231,7 +245,7 @@ export default function NotificationsPanel({
                           onClick={() => handleToggleChannel(index)}
                           title={channel.enabled ? 'Disable' : 'Enable'}
                         >
-                          {channel.enabled ? <Check className="h-4 w-4" /> : <X className="h-4 w-4" />}
+                          {channel.enabled ? <ToggleRight className="h-4 w-4" /> : <ToggleLeft className="h-4 w-4" />}
                         </Button>
                         <Button
                           variant="ghost"
@@ -291,14 +305,12 @@ export default function NotificationsPanel({
               </div>
               <div className="flex items-end">
                 <div className="flex items-center gap-2">
-                  <input
-                    type="checkbox"
+                  <Checkbox
                     id="digest-enabled"
                     checked={editSettings.digest_enabled}
-                    onChange={(e) =>
-                      setEditSettings({ ...editSettings, digest_enabled: e.target.checked })
+                    onCheckedChange={(checked) =>
+                      setEditSettings({ ...editSettings, digest_enabled: checked })
                     }
-                    className="h-4 w-4"
                   />
                   <Label htmlFor="digest-enabled">Enable Digest</Label>
                 </div>
@@ -350,9 +362,49 @@ export default function NotificationsPanel({
                 </div>
               </div>
             )}
-          </>
-        )}
-      </CardContent>
-    </Card>
+      </>
+    </NotificationsPanelShell>
+  );
+};
+
+export default function NotificationsPanel({
+  settings,
+  recentNotifications,
+  loading,
+  saving,
+  onSave,
+  onTest,
+}: NotificationsPanelProps) {
+  if (loading) {
+    return (
+      <NotificationsPanelShell enabledChannels={0} loading={loading} saving={saving} onTest={onTest}>
+        <div className="text-center text-muted-foreground py-8">Loading...</div>
+      </NotificationsPanelShell>
+    );
+  }
+
+  if (!settings) {
+    return (
+      <NotificationsPanelShell enabledChannels={0} loading={loading} saving={saving} onTest={onTest}>
+        <div className="text-center text-muted-foreground py-8">
+          <AlertCircle className="h-12 w-12 mx-auto mb-2" />
+          <p>Failed to load notification settings</p>
+        </div>
+      </NotificationsPanelShell>
+    );
+  }
+
+  const settingsKey = JSON.stringify(settings);
+
+  return (
+    <NotificationsPanelForm
+      key={settingsKey}
+      settings={settings}
+      recentNotifications={recentNotifications}
+      loading={loading}
+      saving={saving}
+      onSave={onSave}
+      onTest={onTest}
+    />
   );
 }

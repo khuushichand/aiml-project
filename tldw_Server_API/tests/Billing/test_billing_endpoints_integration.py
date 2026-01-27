@@ -684,6 +684,379 @@ class TestBillingCheckoutAndPortal:
     not _has_postgres_dependencies(),
     reason="Postgres dependencies missing (install psycopg[binary])",
 )
+class TestBillingRoleEnforcement:
+    """Role enforcement tests for billing endpoints."""
+
+    @pytest_asyncio.fixture(autouse=True)
+    async def setup_test_org(self, isolated_test_environment, monkeypatch):
+        """Setup org with owner/admin/member and enable billing."""
+        client, db_name = isolated_test_environment
+
+        conn = await asyncpg.connect(
+            host=TEST_DB_HOST,
+            port=TEST_DB_PORT,
+            user=TEST_DB_USER,
+            password=TEST_DB_PASSWORD,
+            database=db_name,
+        )
+
+        try:
+            password_service = PasswordService()
+
+            owner_uuid = str(uuid_lib.uuid4())
+            admin_uuid = str(uuid_lib.uuid4())
+            member_uuid = str(uuid_lib.uuid4())
+
+            owner_password = "Owner@Pass#2024!"
+            admin_password = "Admin@Pass#2024!"
+            member_password = "Member@Pass#2024!"
+
+            owner_hash = password_service.hash_password(owner_password)
+            admin_hash = password_service.hash_password(admin_password)
+            member_hash = password_service.hash_password(member_password)
+
+            owner_id = await conn.fetchval(
+                """
+                INSERT INTO users (
+                    uuid, username, email, password_hash, role,
+                    is_active, is_verified, storage_quota_mb, storage_used_mb
+                )
+                VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+                RETURNING id
+                """,
+                owner_uuid,
+                "billingowner2",
+                "billing-owner2@example.com",
+                owner_hash,
+                "user",
+                True,
+                True,
+                5120,
+                0.0,
+            )
+
+            admin_id = await conn.fetchval(
+                """
+                INSERT INTO users (
+                    uuid, username, email, password_hash, role,
+                    is_active, is_verified, storage_quota_mb, storage_used_mb
+                )
+                VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+                RETURNING id
+                """,
+                admin_uuid,
+                "billingadmin",
+                "billing-admin@example.com",
+                admin_hash,
+                "user",
+                True,
+                True,
+                5120,
+                0.0,
+            )
+
+            member_id = await conn.fetchval(
+                """
+                INSERT INTO users (
+                    uuid, username, email, password_hash, role,
+                    is_active, is_verified, storage_quota_mb, storage_used_mb
+                )
+                VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+                RETURNING id
+                """,
+                member_uuid,
+                "billingmember",
+                "billing-member@example.com",
+                member_hash,
+                "user",
+                True,
+                True,
+                5120,
+                0.0,
+            )
+
+            org_id = await conn.fetchval(
+                """
+                INSERT INTO organizations (name, slug, owner_user_id)
+                VALUES ($1, $2, $3)
+                RETURNING id
+                """,
+                "Billing Roles Org",
+                "billing-roles-org",
+                owner_id,
+            )
+
+            await conn.execute(
+                """
+                INSERT INTO org_members (org_id, user_id, role)
+                VALUES ($1, $2, $3)
+                """,
+                org_id,
+                owner_id,
+                "owner",
+            )
+            await conn.execute(
+                """
+                INSERT INTO org_members (org_id, user_id, role)
+                VALUES ($1, $2, $3)
+                """,
+                org_id,
+                admin_id,
+                "admin",
+            )
+            await conn.execute(
+                """
+                INSERT INTO org_members (org_id, user_id, role)
+                VALUES ($1, $2, $3)
+                """,
+                org_id,
+                member_id,
+                "member",
+            )
+
+            plan_id = await conn.fetchval(
+                "SELECT id FROM subscription_plans WHERE name = $1",
+                "pro",
+            )
+            if not plan_id:
+                plan_id = await conn.fetchval(
+                    """
+                    INSERT INTO subscription_plans
+                    (name, display_name, description, price_usd_monthly, price_usd_yearly, limits_json, is_active, is_public, sort_order)
+                    VALUES ($1, $2, $3, $4, $5, $6::jsonb, TRUE, TRUE, 5)
+                    RETURNING id
+                    """,
+                    "pro",
+                    "Pro",
+                    "Pro plan for billing role tests",
+                    29,
+                    290,
+                    json.dumps({"api_calls_day": 1000}),
+                )
+
+            await conn.execute(
+                """
+                INSERT INTO org_subscriptions
+                (org_id, plan_id, stripe_customer_id, billing_cycle, status, cancel_at_period_end)
+                VALUES ($1, $2, $3, $4, $5, $6)
+                ON CONFLICT (org_id) DO NOTHING
+                """,
+                org_id,
+                plan_id,
+                "cus_role_123",
+                "monthly",
+                "active",
+                False,
+            )
+
+            await conn.execute(
+                """
+                INSERT INTO payment_history
+                (org_id, stripe_invoice_id, amount_cents, currency, status, description, invoice_pdf_url)
+                VALUES ($1, $2, $3, $4, $5, $6, $7)
+                """,
+                org_id,
+                "in_role_123",
+                12345,
+                "usd",
+                "succeeded",
+                "Role enforcement invoice",
+                "https://example.com/invoice.pdf",
+            )
+
+            self.client = client
+            self.org_id = org_id
+            self.owner_username = "billingowner2"
+            self.owner_password = owner_password
+            self.admin_username = "billingadmin"
+            self.admin_password = admin_password
+            self.member_username = "billingmember"
+            self.member_password = member_password
+
+        finally:
+            await conn.close()
+
+        monkeypatch.setenv("BILLING_ENABLED", "true")
+        monkeypatch.setattr(
+            "tldw_Server_API.app.core.Billing.subscription_service.is_billing_enabled",
+            lambda: True,
+            raising=False,
+        )
+
+        class _FakeStripeClient:
+            def __init__(self) -> None:
+                self.is_available = True
+
+            def get_price_id(self, plan_name: str, billing_cycle: str = "monthly") -> str | None:
+                return "price_role_123"
+
+            async def create_checkout_session(
+                self,
+                *,
+                customer_id: str,
+                price_id: str,
+                success_url: str,
+                cancel_url: str,
+                metadata: dict[str, str] | None = None,
+            ):
+                from tldw_Server_API.app.core.Billing.stripe_client import CheckoutSession
+
+                return CheckoutSession(id="sess_role_123", url="https://example.com/checkout")
+
+            async def create_portal_session(
+                self,
+                *,
+                customer_id: str,
+                return_url: str,
+            ):
+                from tldw_Server_API.app.core.Billing.stripe_client import PortalSession
+
+                return PortalSession(id="ps_role_123", url="https://example.com/portal")
+
+        monkeypatch.setattr(
+            stripe_client_module,
+            "get_stripe_client",
+            lambda: _FakeStripeClient(),
+            raising=False,
+        )
+        monkeypatch.setattr(
+            "tldw_Server_API.app.core.Billing.subscription_service.get_stripe_client",
+            lambda: _FakeStripeClient(),
+            raising=False,
+        )
+        monkeypatch.setattr(
+            stripe_client_module,
+            "STRIPE_AVAILABLE",
+            True,
+            raising=False,
+        )
+
+        yield
+
+    def _get_token_for(self, username: str, password: str):
+        response = self.client.post(
+            "/api/v1/auth/login",
+            data={"username": username, "password": password},
+        )
+        if response.status_code == 200:
+            return response.json()["access_token"]
+        return None
+
+    def test_checkout_requires_owner_or_admin(self):
+        owner_token = self._get_token_for(self.owner_username, self.owner_password)
+        admin_token = self._get_token_for(self.admin_username, self.admin_password)
+        member_token = self._get_token_for(self.member_username, self.member_password)
+        if not owner_token or not admin_token or not member_token:
+            pytest.skip("Could not get auth tokens")
+
+        for token, expected in (
+            (owner_token, 200),
+            (admin_token, 200),
+            (member_token, 403),
+        ):
+            response = self.client.post(
+                f"/api/v1/billing/checkout?org_id={self.org_id}",
+                headers={"Authorization": f"Bearer {token}"},
+                json={
+                    "plan_name": "pro",
+                    "billing_cycle": "monthly",
+                    "success_url": "https://example.com/success",
+                    "cancel_url": "https://example.com/cancel",
+                },
+            )
+            if response.status_code == 404:
+                pytest.skip("Billing routes not available in test environment")
+            assert response.status_code == expected
+
+    def test_portal_requires_owner_or_admin(self):
+        owner_token = self._get_token_for(self.owner_username, self.owner_password)
+        admin_token = self._get_token_for(self.admin_username, self.admin_password)
+        member_token = self._get_token_for(self.member_username, self.member_password)
+        if not owner_token or not admin_token or not member_token:
+            pytest.skip("Could not get auth tokens")
+
+        for token, expected in (
+            (owner_token, 200),
+            (admin_token, 200),
+            (member_token, 403),
+        ):
+            response = self.client.post(
+                f"/api/v1/billing/portal?org_id={self.org_id}",
+                headers={"Authorization": f"Bearer {token}"},
+                json={"return_url": "https://example.com/account"},
+            )
+            if response.status_code == 404:
+                pytest.skip("Billing routes not available in test environment")
+            assert response.status_code == expected
+
+    def test_invoices_requires_owner_or_admin(self):
+        owner_token = self._get_token_for(self.owner_username, self.owner_password)
+        admin_token = self._get_token_for(self.admin_username, self.admin_password)
+        member_token = self._get_token_for(self.member_username, self.member_password)
+        if not owner_token or not admin_token or not member_token:
+            pytest.skip("Could not get auth tokens")
+
+        for token, expected in (
+            (owner_token, 200),
+            (admin_token, 200),
+            (member_token, 403),
+        ):
+            response = self.client.get(
+                f"/api/v1/billing/invoices?org_id={self.org_id}",
+                headers={"Authorization": f"Bearer {token}"},
+            )
+            if response.status_code == 404:
+                pytest.skip("Billing routes not available in test environment")
+            assert response.status_code == expected
+            if expected == 200:
+                data = response.json()
+                assert "items" in data
+
+    def test_cancel_requires_owner(self):
+        owner_token = self._get_token_for(self.owner_username, self.owner_password)
+        admin_token = self._get_token_for(self.admin_username, self.admin_password)
+        member_token = self._get_token_for(self.member_username, self.member_password)
+        if not owner_token or not admin_token or not member_token:
+            pytest.skip("Could not get auth tokens")
+
+        for token, expected in (
+            (owner_token, 200),
+            (admin_token, 403),
+            (member_token, 403),
+        ):
+            response = self.client.post(
+                f"/api/v1/billing/subscription/cancel?org_id={self.org_id}",
+                headers={"Authorization": f"Bearer {token}"},
+                json={"at_period_end": True},
+            )
+            if response.status_code == 404:
+                pytest.skip("Billing routes not available in test environment")
+            assert response.status_code == expected
+
+    def test_resume_requires_owner(self):
+        owner_token = self._get_token_for(self.owner_username, self.owner_password)
+        admin_token = self._get_token_for(self.admin_username, self.admin_password)
+        member_token = self._get_token_for(self.member_username, self.member_password)
+        if not owner_token or not admin_token or not member_token:
+            pytest.skip("Could not get auth tokens")
+
+        for token, expected in (
+            (owner_token, 200),
+            (admin_token, 403),
+            (member_token, 403),
+        ):
+            response = self.client.post(
+                f"/api/v1/billing/subscription/resume?org_id={self.org_id}",
+                headers={"Authorization": f"Bearer {token}"},
+            )
+            if response.status_code == 404:
+                pytest.skip("Billing routes not available in test environment")
+            assert response.status_code == expected
+
+@pytest.mark.skipif(
+    not _has_postgres_dependencies(),
+    reason="Postgres dependencies missing (install psycopg[binary])",
+)
 class TestOrgInviteEndpoints:
     """Tests for organization invite endpoints."""
 

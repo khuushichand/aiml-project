@@ -44,8 +44,7 @@ export const PAGES: PageEntry[] = [
   { path: "/media", name: "Media", category: "media" },
   { path: "/media-multi", name: "Media Multi", category: "media" },
   { path: "/media-trash", name: "Media Trash", category: "media" },
-  // Dynamic route - skip for now as it requires a valid ID
-  // { path: "/media/[id]/view", name: "Media View", category: "media", skip: "Requires valid media ID" },
+  { path: "/media/123/view", name: "Media View (Redirect)", category: "media" },
 
   // ═══════════════════════════════════════════════════════════════════════════
   // Settings (20+ pages)
@@ -134,13 +133,18 @@ export const PAGES: PageEntry[] = [
   // Other / Core Pages
   // ═══════════════════════════════════════════════════════════════════════════
   { path: "/", name: "Home", category: "other" },
-  { path: "/login", name: "Login", category: "other", skip: "Redirects to settings/tldw when config exists" },
+  { path: "/login", name: "Login", category: "other" },
   { path: "/config", name: "Config", category: "other" },
   { path: "/documentation", name: "Documentation", category: "other" },
   { path: "/profile", name: "Profile", category: "other" },
   { path: "/privileges", name: "Privileges", category: "other" },
   { path: "/quick-chat-popout", name: "Quick Chat Popout", category: "other" },
-  { path: "/onboarding-test", name: "Onboarding Test", category: "other" }
+  { path: "/onboarding-test", name: "Onboarding Test", category: "other" },
+  { path: "/for/journalists", name: "For Journalists", category: "other" },
+  { path: "/for/osint", name: "For OSINT", category: "other" },
+  { path: "/for/researchers", name: "For Researchers", category: "other" },
+  { path: "/__debug__/authz.spec", name: "Debug Authz Redirect", category: "other" },
+  { path: "/__debug__/sidepanel-error-boundary", name: "Debug Error Boundary", category: "other" }
 ]
 
 /**

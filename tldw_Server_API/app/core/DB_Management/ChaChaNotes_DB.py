@@ -375,7 +375,7 @@ class CharactersRAGDB:
         is_memory_db (bool): True if the database is in-memory.
         db_path_str (str): String representation of the database path for SQLite connection.
     """
-    _CURRENT_SCHEMA_VERSION = 17  # Schema v17 adds workspace_tag to quizzes
+    _CURRENT_SCHEMA_VERSION = 19  # Schema v19 adds voice assistant analytics tables
     _SCHEMA_NAME = "rag_char_chat_schema"  # Used for the db_schema_version table
     _ALLOWED_CONVERSATION_STATES: Tuple[str, ...] = ("in-progress", "resolved", "backlog", "non-viable")
     _DEFAULT_CONVERSATION_STATE = "in-progress"
@@ -436,6 +436,7 @@ class CharactersRAGDB:
         ("quiz_attempts", "id"),
         ("writing_templates", "id"),
         ("writing_themes", "id"),
+        ("voice_command_events", "id"),
     )
 
     _FULL_SCHEMA_SQL_V4 = """
@@ -2158,13 +2159,154 @@ UPDATE db_schema_version
 ───────────────────────────────────────────────────────────────*/
 PRAGMA foreign_keys = ON;
 
-ALTER TABLE quizzes ADD COLUMN workspace_tag TEXT;
+ALTER TABLE quizzes ADD COLUMN IF NOT EXISTS workspace_tag TEXT;
 CREATE INDEX IF NOT EXISTS idx_quizzes_workspace_tag ON quizzes(workspace_tag);
 
 UPDATE db_schema_version
    SET version = 17
  WHERE schema_name = 'rag_char_chat_schema'
    AND version < 17;
+"""
+
+    _MIGRATION_SQL_V17_TO_V18 = """
+/*───────────────────────────────────────────────────────────────
+  Migration to Version 18 - Voice Assistant Tables (2026-01-26)
+───────────────────────────────────────────────────────────────*/
+PRAGMA foreign_keys = ON;
+
+-- Voice Commands: User-defined voice command triggers
+CREATE TABLE IF NOT EXISTS voice_commands (
+    id TEXT PRIMARY KEY,
+    user_id INTEGER NOT NULL,
+    name TEXT NOT NULL,
+    phrases TEXT NOT NULL,        -- JSON array of trigger phrases
+    action_type TEXT NOT NULL,    -- mcp_tool|workflow|custom|llm_chat
+    action_config TEXT NOT NULL,  -- JSON configuration
+    priority INTEGER DEFAULT 0,
+    enabled INTEGER DEFAULT 1,
+    requires_confirmation INTEGER DEFAULT 0,
+    description TEXT,
+    created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    deleted INTEGER DEFAULT 0
+);
+
+CREATE INDEX IF NOT EXISTS idx_voice_commands_user_id ON voice_commands(user_id);
+CREATE INDEX IF NOT EXISTS idx_voice_commands_enabled ON voice_commands(enabled, deleted);
+
+-- Voice Sessions: Track voice assistant session state
+CREATE TABLE IF NOT EXISTS voice_sessions (
+    session_id TEXT PRIMARY KEY,
+    user_id INTEGER NOT NULL,
+    conversation_id TEXT REFERENCES conversations(id) ON DELETE SET NULL,
+    state TEXT NOT NULL DEFAULT 'idle',  -- idle|listening|processing|speaking|awaiting_confirmation|error
+    context TEXT,                 -- JSON session context
+    conversation_history TEXT,    -- JSON array of turns
+    pending_intent TEXT,          -- JSON pending intent awaiting confirmation
+    last_action_result TEXT,      -- JSON last action result
+    created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    last_activity DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE INDEX IF NOT EXISTS idx_voice_sessions_user_id ON voice_sessions(user_id);
+CREATE INDEX IF NOT EXISTS idx_voice_sessions_last_activity ON voice_sessions(last_activity);
+
+-- Sync log triggers for voice_commands
+DROP TRIGGER IF EXISTS voice_commands_insert_sync;
+DROP TRIGGER IF EXISTS voice_commands_update_sync;
+
+CREATE TRIGGER IF NOT EXISTS voice_commands_insert_sync
+AFTER INSERT ON voice_commands
+BEGIN
+    INSERT INTO sync_log(entity,entity_id,operation,timestamp,client_id,version,payload)
+    VALUES(
+        'voice_commands',
+        NEW.id,
+        'create',
+        NEW.created_at,
+        'system',
+        1,
+        json_object(
+            'id',NEW.id,
+            'user_id',NEW.user_id,
+            'name',NEW.name,
+            'phrases',NEW.phrases,
+            'action_type',NEW.action_type,
+            'action_config',NEW.action_config,
+            'priority',NEW.priority,
+            'enabled',NEW.enabled,
+            'requires_confirmation',NEW.requires_confirmation,
+            'description',NEW.description,
+            'created_at',NEW.created_at,
+            'updated_at',NEW.updated_at,
+            'deleted',NEW.deleted
+        )
+    );
+END;
+
+CREATE TRIGGER IF NOT EXISTS voice_commands_update_sync
+AFTER UPDATE ON voice_commands
+BEGIN
+    INSERT INTO sync_log(entity,entity_id,operation,timestamp,client_id,version,payload)
+    VALUES(
+        'voice_commands',
+        NEW.id,
+        'update',
+        NEW.updated_at,
+        'system',
+        1,
+        json_object(
+            'id',NEW.id,
+            'user_id',NEW.user_id,
+            'name',NEW.name,
+            'phrases',NEW.phrases,
+            'action_type',NEW.action_type,
+            'action_config',NEW.action_config,
+            'priority',NEW.priority,
+            'enabled',NEW.enabled,
+            'requires_confirmation',NEW.requires_confirmation,
+            'description',NEW.description,
+            'created_at',NEW.created_at,
+            'updated_at',NEW.updated_at,
+            'deleted',NEW.deleted
+        )
+    );
+END;
+
+UPDATE db_schema_version
+   SET version = 18
+ WHERE schema_name = 'rag_char_chat_schema'
+   AND version < 18;
+"""
+
+    _MIGRATION_SQL_V18_TO_V19 = """
+/*───────────────────────────────────────────────────────────────
+  Migration to Version 19 - Voice Assistant Analytics (2026-01-27)
+───────────────────────────────────────────────────────────────*/
+PRAGMA foreign_keys = ON;
+
+-- Voice Command Events: Track usage for analytics
+CREATE TABLE IF NOT EXISTS voice_command_events (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    command_id TEXT,
+    command_name TEXT,
+    user_id INTEGER NOT NULL,
+    action_type TEXT NOT NULL,
+    success INTEGER DEFAULT 1,
+    response_time_ms REAL,
+    session_id TEXT,
+    created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE INDEX IF NOT EXISTS idx_voice_command_events_user_time
+    ON voice_command_events(user_id, created_at);
+CREATE INDEX IF NOT EXISTS idx_voice_command_events_command_time
+    ON voice_command_events(command_id, created_at);
+
+UPDATE db_schema_version
+   SET version = 19
+ WHERE schema_name = 'rag_char_chat_schema'
+   AND version < 19;
 """
 
     _MIGRATION_SQL_V10_TO_V11_POSTGRES = """
@@ -3265,7 +3407,26 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
         """Migrates schema from V16 to V17 (Workspace tag for quizzes)."""
         logger.info(f"Migrating '{self._SCHEMA_NAME}' schema from V16 to V17 for DB: {self.db_path_str}...")
         try:
-            conn.executescript(self._MIGRATION_SQL_V16_TO_V17)
+            # quizzes.workspace_tag already exists in earlier schema versions.
+            # Add column only if missing to keep migration idempotent.
+            try:
+                cursor = conn.execute("PRAGMA table_info(quizzes)")
+                columns = {row[1] for row in cursor.fetchall()}
+            except sqlite3.Error:
+                columns = set()
+
+            if "workspace_tag" not in columns:
+                conn.execute("ALTER TABLE quizzes ADD COLUMN workspace_tag TEXT")
+
+            conn.execute("CREATE INDEX IF NOT EXISTS idx_quizzes_workspace_tag ON quizzes(workspace_tag)")
+            conn.execute(
+                """
+                UPDATE db_schema_version
+                   SET version = 17
+                 WHERE schema_name = 'rag_char_chat_schema'
+                   AND version < 17;
+                """
+            )
             final_version = self._get_db_version(conn)
             if final_version != 17:
                 raise SchemaError(
@@ -3280,6 +3441,46 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
         except Exception as e:
             logger.error(f"[{self._SCHEMA_NAME}] Unexpected error during migration V16->V17: {e}", exc_info=True)
             raise SchemaError(f"Unexpected error migrating to V17 for '{self._SCHEMA_NAME}': {e}") from e
+
+    def _migrate_from_v17_to_v18(self, conn: sqlite3.Connection):
+        """Migrates schema from V17 to V18 (Voice Assistant tables)."""
+        logger.info(f"Migrating '{self._SCHEMA_NAME}' schema from V17 to V18 for DB: {self.db_path_str}...")
+        try:
+            conn.executescript(self._MIGRATION_SQL_V17_TO_V18)
+            final_version = self._get_db_version(conn)
+            if final_version != 18:
+                raise SchemaError(
+                    f"[{self._SCHEMA_NAME}] Migration V17->V18 failed version check. Expected 18, got: {final_version}"
+                )
+            logger.info(f"[{self._SCHEMA_NAME}] Migration to V18 completed.")
+        except sqlite3.Error as e:
+            logger.error(f"[{self._SCHEMA_NAME}] Migration V17->V18 failed: {e}", exc_info=True)
+            raise SchemaError(f"Migration V17->V18 failed for '{self._SCHEMA_NAME}': {e}") from e
+        except SchemaError:
+            raise
+        except Exception as e:
+            logger.error(f"[{self._SCHEMA_NAME}] Unexpected error during migration V17->V18: {e}", exc_info=True)
+            raise SchemaError(f"Unexpected error migrating to V18 for '{self._SCHEMA_NAME}': {e}") from e
+
+    def _migrate_from_v18_to_v19(self, conn: sqlite3.Connection):
+        """Migrates schema from V18 to V19 (Voice Assistant analytics)."""
+        logger.info(f"Migrating '{self._SCHEMA_NAME}' schema from V18 to V19 for DB: {self.db_path_str}...")
+        try:
+            conn.executescript(self._MIGRATION_SQL_V18_TO_V19)
+            final_version = self._get_db_version(conn)
+            if final_version != 19:
+                raise SchemaError(
+                    f"[{self._SCHEMA_NAME}] Migration V18->V19 failed version check. Expected 19, got: {final_version}"
+                )
+            logger.info(f"[{self._SCHEMA_NAME}] Migration to V19 completed.")
+        except sqlite3.Error as e:
+            logger.error(f"[{self._SCHEMA_NAME}] Migration V18->V19 failed: {e}", exc_info=True)
+            raise SchemaError(f"Migration V18->V19 failed for '{self._SCHEMA_NAME}': {e}") from e
+        except SchemaError:
+            raise
+        except Exception as e:
+            logger.error(f"[{self._SCHEMA_NAME}] Unexpected error during migration V18->V19: {e}", exc_info=True)
+            raise SchemaError(f"Unexpected error migrating to V19 for '{self._SCHEMA_NAME}': {e}") from e
 
     def _initialize_schema(self):
         if self.backend_type == BackendType.SQLITE:
@@ -3462,6 +3663,12 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
                     if target_version >= 17 and current_db_version == 16:
                         self._migrate_from_v16_to_v17(conn)
                         current_db_version = self._get_db_version(conn)
+                    if target_version >= 18 and current_db_version == 17:
+                        self._migrate_from_v17_to_v18(conn)
+                        current_db_version = self._get_db_version(conn)
+                    if target_version >= 19 and current_db_version == 18:
+                        self._migrate_from_v18_to_v19(conn)
+                        current_db_version = self._get_db_version(conn)
                 # Ensure helpful indexes that may have been introduced post-creation
                 try:
                     conn.execute("CREATE INDEX IF NOT EXISTS idx_flashcards_created_at ON flashcards(created_at)")
@@ -3621,6 +3828,9 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
                     elif current_initial_version == 16 and target_version >= 17:
                         self._migrate_from_v16_to_v17(conn)
                         current_db_version = self._get_db_version(conn)
+                    elif current_initial_version == 17 and target_version >= 18:
+                        self._migrate_from_v17_to_v18(conn)
+                        current_db_version = self._get_db_version(conn)
                     else:
                         raise SchemaError(
                             f"Migration path undefined for '{self._SCHEMA_NAME}' from version {current_initial_version} to {target_version}. "
@@ -3645,6 +3855,12 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
                     current_db_version = self._get_db_version(conn)
                 if target_version >= 17 and current_db_version == 16:
                     self._migrate_from_v16_to_v17(conn)
+                    current_db_version = self._get_db_version(conn)
+                if target_version >= 18 and current_db_version == 17:
+                    self._migrate_from_v17_to_v18(conn)
+                    current_db_version = self._get_db_version(conn)
+                if target_version >= 19 and current_db_version == 18:
+                    self._migrate_from_v18_to_v19(conn)
                     current_db_version = self._get_db_version(conn)
 
                 final_version_check = self._get_db_version(conn)
@@ -3751,6 +3967,12 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
             if current_version < 17:
                 self._apply_postgres_migration_script(self._MIGRATION_SQL_V16_TO_V17, conn, expected_version=17)
                 current_version = 17
+            if current_version < 18:
+                self._apply_postgres_migration_script(self._MIGRATION_SQL_V17_TO_V18, conn, expected_version=18)
+                current_version = 18
+            if current_version < 19:
+                self._apply_postgres_migration_script(self._MIGRATION_SQL_V18_TO_V19, conn, expected_version=19)
+                current_version = 19
 
             if current_version > target_version:
                 raise SchemaError(

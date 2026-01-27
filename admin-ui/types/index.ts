@@ -197,4 +197,65 @@ export interface AuthContextType {
   isAuthenticated: boolean;
 }
 
+// Voice Commands
+export type VoiceActionType = 'mcp_tool' | 'workflow' | 'custom' | 'llm_chat';
+
+export interface VoiceCommand {
+  id: string;
+  user_id: number;
+  name: string;
+  phrases: string[];
+  action_type: VoiceActionType;
+  action_config: Record<string, unknown>;
+  priority: number;
+  enabled: boolean;
+  requires_confirmation: boolean;
+  description?: string;
+  created_at?: string;
+  updated_at?: string;
+}
+
+export interface VoiceSession {
+  session_id: string;
+  user_id: number;
+  state: string;
+  created_at: string;
+  last_activity: string;
+  turn_count: number;
+}
+
+export interface VoiceCommandUsage {
+  command_id: string;
+  command_name: string;
+  total_invocations: number;
+  success_count: number;
+  error_count: number;
+  avg_response_time_ms: number;
+  last_used?: string;
+}
+
+export interface VoiceAnalytics {
+  date: string;
+  total_commands: number;
+  unique_users: number;
+  success_rate: number;
+  avg_response_time_ms: number;
+  top_commands: Array<{
+    command_id: string;
+    command_name: string;
+    count: number;
+  }>;
+}
+
+export interface VoiceAnalyticsSummary {
+  total_commands_processed: number;
+  active_sessions: number;
+  total_voice_commands: number;
+  enabled_commands: number;
+  success_rate: number;
+  avg_response_time_ms: number;
+  top_commands: VoiceCommandUsage[];
+  usage_by_day: VoiceAnalytics[];
+}
+
 export type { IncidentEvent, IncidentItem, IncidentsResponse } from './incidents';

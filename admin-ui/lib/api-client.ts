@@ -8,7 +8,6 @@ import type {
   IncidentsResponse,
   RegistrationCode,
   RetentionPoliciesResponse,
-  User,
   UserWithKeyCount,
 } from '@/types';
 export { ApiError };
@@ -523,7 +522,7 @@ export const api = {
     }),
   getUserRateLimits: (userId: string) =>
     requestJson(`/admin/users/${encodeURIComponent(userId)}/rate-limits`),
-  setUserRateLimits: (userId: string, data: Record<string, unknown>) =>
+  setUserRateLimits: (userId: string, data: { resource: string; limit_per_min?: number | null; burst?: number | null }) =>
     requestJson(`/admin/users/${encodeURIComponent(userId)}/rate-limits`, {
       method: 'POST',
       body: JSON.stringify(data),
@@ -699,6 +698,69 @@ export const api = {
     requestJson('/authnz/debug/budget-summary', {
       headers: { 'X-API-KEY': apiKey },
     }),
+
+  // ============================================
+  // Voice Commands & Assistant
+  // ============================================
+  getVoiceCommands: async (params?: Record<string, string>) => {
+    const queryParams = params ? new URLSearchParams(params).toString() : '';
+    return requestJson(`/voice/commands${queryParams ? `?${queryParams}` : ''}`);
+  },
+  getVoiceCommand: (commandId: string) =>
+    requestJson(`/voice/commands/${encodeURIComponent(commandId)}`),
+  createVoiceCommand: (data: Record<string, unknown>) =>
+    requestJson('/voice/commands', {
+      method: 'POST',
+      body: JSON.stringify(data),
+    }),
+  updateVoiceCommand: (commandId: string, data: Record<string, unknown>) =>
+    requestJson(`/voice/commands/${encodeURIComponent(commandId)}`, {
+      method: 'PUT',
+      body: JSON.stringify(data),
+    }),
+  deleteVoiceCommand: (commandId: string) =>
+    requestJson(`/voice/commands/${encodeURIComponent(commandId)}`, {
+      method: 'DELETE',
+    }),
+  toggleVoiceCommand: (commandId: string, enabled: boolean) =>
+    requestJson(`/voice/commands/${encodeURIComponent(commandId)}/toggle`, {
+      method: 'POST',
+      body: JSON.stringify({ enabled }),
+    }),
+
+  // Voice Sessions
+  getVoiceSessions: (params?: Record<string, string>) => {
+    const queryParams = params ? new URLSearchParams(params).toString() : '';
+    return requestJson(`/voice/sessions${queryParams ? `?${queryParams}` : ''}`);
+  },
+  getVoiceSession: (sessionId: string) =>
+    requestJson(`/voice/sessions/${encodeURIComponent(sessionId)}`),
+  deleteVoiceSession: (sessionId: string) =>
+    requestJson(`/voice/sessions/${encodeURIComponent(sessionId)}`, {
+      method: 'DELETE',
+    }),
+
+  // Voice Analytics
+  getVoiceAnalytics: (params?: { days?: number; user_id?: number }) => {
+    const queryParams = params ? new URLSearchParams(
+      Object.entries(params)
+        .filter(([, v]) => v !== undefined)
+        .map(([k, v]) => [k, String(v)])
+    ).toString() : '';
+    return requestJson(`/voice/analytics${queryParams ? `?${queryParams}` : ''}`);
+  },
+  getVoiceCommandUsage: (commandId: string, params?: { days?: number }) => {
+    const queryParams = params ? new URLSearchParams(
+      Object.entries(params)
+        .filter(([, v]) => v !== undefined)
+        .map(([k, v]) => [k, String(v)])
+    ).toString() : '';
+    return requestJson(`/voice/commands/${encodeURIComponent(commandId)}/usage${queryParams ? `?${queryParams}` : ''}`);
+  },
+
+  // Voice Workflow Templates
+  getVoiceWorkflowTemplates: () =>
+    requestJson('/voice/workflows/templates'),
 };
 
 export default api;

@@ -2033,6 +2033,24 @@ async def lifespan(app: FastAPI):
     except Exception as e:
         logger.warning(f"Failed to start chatbooks cleanup worker: {e}")
 
+    # Storage cleanup worker (expired files, trash purge)
+    storage_cleanup_service = None
+    try:
+        import os as _os
+        from tldw_Server_API.app.services.storage_cleanup_service import get_cleanup_service as _get_storage_cleanup
+
+        _storage_cleanup_enabled = _os.getenv("STORAGE_CLEANUP_ENABLED", "true").lower() in {
+            "true", "1", "yes", "y", "on"
+        }
+        if _storage_cleanup_enabled:
+            storage_cleanup_service = _get_storage_cleanup()
+            await storage_cleanup_service.start()
+            logger.info("Storage cleanup worker started")
+        else:
+            logger.info("Storage cleanup worker disabled by settings")
+    except Exception as e:
+        logger.warning(f"Failed to start storage cleanup worker: {e}")
+
     # Core Jobs worker (Chatbooks, if backend=core)
     try:
         import os as _os
@@ -2885,6 +2903,13 @@ async def lifespan(app: FastAPI):
             chatbooks_cleanup_stop_event.set()
         if "chatbooks_cleanup_task" in locals() and chatbooks_cleanup_task:
             chatbooks_cleanup_task.cancel()
+        # Storage cleanup service shutdown
+        if "storage_cleanup_service" in locals() and storage_cleanup_service:
+            try:
+                await storage_cleanup_service.stop()
+                logger.info("Storage cleanup worker stopped")
+            except Exception:
+                pass
         if "core_jobs_task" in locals() and core_jobs_task:
             # Prefer graceful stop via explicit stop_event
             if "core_jobs_stop_event" in locals() and core_jobs_stop_event:
@@ -4866,6 +4891,12 @@ elif _MINIMAL_TEST_APP:
     except ImportError as _files_min_err:
         logger.debug(f"Skipping files router in minimal test app: {_files_min_err}")
     try:
+        from tldw_Server_API.app.api.v1.endpoints.storage import router as storage_router
+
+        app.include_router(storage_router, prefix=f"{API_V1_PREFIX}", tags=["storage"])
+    except ImportError as _storage_min_err:
+        logger.debug(f"Skipping storage router in minimal test app: {_storage_min_err}")
+    try:
         from tldw_Server_API.app.api.v1.endpoints.data_tables import router as data_tables_router
 
         app.include_router(data_tables_router, prefix=f"{API_V1_PREFIX}", tags=["data-tables"])
@@ -5249,6 +5280,24 @@ else:
         _include_if_enabled(
             "audio-websocket", audio_ws_router, prefix=f"{API_V1_PREFIX}/audio", tags=["audio-websocket"]
         )
+    # Voice Assistant endpoints (REST + WebSocket)
+    try:
+        from tldw_Server_API.app.api.v1.endpoints.voice_assistant import (
+            router as voice_assistant_router,
+            ws_router as voice_assistant_ws_router,
+        )
+
+        _include_if_enabled(
+            "voice-assistant", voice_assistant_router, prefix=f"{API_V1_PREFIX}/voice", tags=["voice-assistant"]
+        )
+        _include_if_enabled(
+            "voice-assistant-ws",
+            voice_assistant_ws_router,
+            prefix=f"{API_V1_PREFIX}/voice",
+            tags=["voice-assistant-ws"],
+        )
+    except ImportError as _voice_err:
+        logger.debug(f"Voice assistant endpoints not available: {_voice_err}")
     # Guard optional routers that may not be imported in ULTRA_MINIMAL_APP
     if "chat_router" in locals():
         _include_if_enabled("chat", chat_router, prefix=f"{API_V1_PREFIX}/chat")

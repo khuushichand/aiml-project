@@ -153,6 +153,9 @@ export const TldwSettings = () => {
   const [showDefaultKeyWarning, setShowDefaultKeyWarning] = useState(false)
   const [billingLoading, setBillingLoading] = useState(false)
   const [billingError, setBillingError] = useState<string | null>(null)
+  const [billingPlansError, setBillingPlansError] = useState<string | null>(null)
+  const [billingStatusError, setBillingStatusError] = useState<string | null>(null)
+  const [billingUsageError, setBillingUsageError] = useState<string | null>(null)
   const [billingPlans, setBillingPlans] = useState<BillingPlan[]>([])
   const [billingStatus, setBillingStatus] = useState<BillingSubscription | null>(null)
   const [billingUsage, setBillingUsage] = useState<BillingUsage | null>(null)
@@ -501,6 +504,9 @@ export const TldwSettings = () => {
     if (authMode !== 'multi-user' || !isLoggedIn) return
     setBillingLoading(true)
     setBillingError(null)
+    setBillingPlansError(null)
+    setBillingStatusError(null)
+    setBillingUsageError(null)
     try {
       const [plansResp, subResp, usageResp] = await Promise.all([
         apiSend<{ plans?: BillingPlan[] }>({
@@ -524,13 +530,32 @@ export const TldwSettings = () => {
       setBillingStatus(subscription)
       setBillingUsage(usage)
 
-      if (!plansResp?.ok || !subResp?.ok || !usageResp?.ok) {
-        const errorMsg =
-          plansResp?.error ||
-          subResp?.error ||
-          usageResp?.error ||
-          'Failed to load billing details'
-        setBillingError(errorMsg)
+      const plansError = !plansResp?.ok
+        ? plansResp?.error || 'Failed to load plans'
+        : null
+      const statusError = !subResp?.ok
+        ? subResp?.error || 'Failed to load subscription'
+        : null
+      const usageError = !usageResp?.ok
+        ? usageResp?.error || 'Failed to load usage'
+        : null
+
+      setBillingPlansError(plansError)
+      setBillingStatusError(statusError)
+      setBillingUsageError(usageError)
+
+      if (plansError || statusError) {
+        setBillingError(plansError || statusError || 'Failed to load billing details')
+      }
+      if (plansError) {
+        setBillingPlans([])
+        setSelectedPlan(null)
+      }
+      if (statusError) {
+        setBillingStatus(null)
+      }
+      if (usageError) {
+        setBillingUsage(null)
       }
 
       if (!selectedPlan) {
@@ -544,7 +569,15 @@ export const TldwSettings = () => {
         setBillingCycle(subscription.billing_cycle === 'yearly' ? 'yearly' : 'monthly')
       }
     } catch (err: any) {
-      setBillingError(err?.message || 'Failed to load billing details')
+      const errorMsg = err?.message || 'Failed to load billing details'
+      setBillingError(errorMsg)
+      setBillingPlansError(errorMsg)
+      setBillingStatusError(errorMsg)
+      setBillingUsageError(errorMsg)
+      setBillingPlans([])
+      setBillingStatus(null)
+      setBillingUsage(null)
+      setSelectedPlan(null)
     } finally {
       setBillingLoading(false)
     }
@@ -561,14 +594,16 @@ export const TldwSettings = () => {
       })
       if (!resp.ok) {
         setBillingInvoicesError(resp.error || 'Failed to load invoices')
-        setBillingInvoices(resp.data?.items || [])
-        setBillingInvoicesTotal(resp.data?.total || 0)
+        setBillingInvoices([])
+        setBillingInvoicesTotal(0)
         return
       }
       setBillingInvoices(resp.data?.items || [])
       setBillingInvoicesTotal(resp.data?.total || 0)
     } catch (err: any) {
       setBillingInvoicesError(err?.message || 'Failed to load invoices')
+      setBillingInvoices([])
+      setBillingInvoicesTotal(0)
     } finally {
       setBillingInvoicesLoading(false)
     }
@@ -1661,290 +1696,327 @@ export const TldwSettings = () => {
               />
             )}
 
-            {!billingError && (
-              <div className="mt-4 space-y-4">
-                {billingStatus && (
-                  <div className="rounded border border-border bg-surface p-3">
-                    <div className="flex flex-wrap items-center gap-2 text-sm">
-                      <span className="font-medium">
-                        {t('settings:tldw.billing.currentPlan', 'Current plan')}
-                      </span>
-                      <Tag color={billingStatusColor(billingStatus.status)}>
-                        {billingStatusLabel(billingStatus.status)}
+            <div className="mt-4 space-y-4">
+              {billingStatusError ? (
+                <Alert
+                  type="error"
+                  showIcon
+                  message={t('settings:tldw.billing.subscriptionError', 'Unable to load subscription')}
+                  description={billingStatusError}
+                />
+              ) : billingStatus ? (
+                <div className="rounded border border-border bg-surface p-3">
+                  <div className="flex flex-wrap items-center gap-2 text-sm">
+                    <span className="font-medium">
+                      {t('settings:tldw.billing.currentPlan', 'Current plan')}
+                    </span>
+                    <Tag color={billingStatusColor(billingStatus.status)}>
+                      {billingStatusLabel(billingStatus.status)}
+                    </Tag>
+                    <span className="text-text">
+                      {billingStatus.plan_display_name || billingStatus.plan_name}
+                    </span>
+                    {billingStatus.billing_cycle && (
+                      <Tag>
+                        {billingStatus.billing_cycle === 'yearly'
+                          ? t('settings:tldw.billing.cycle.yearly', 'Yearly')
+                          : t('settings:tldw.billing.cycle.monthly', 'Monthly')}
                       </Tag>
-                      <span className="text-text">
-                        {billingStatus.plan_display_name || billingStatus.plan_name}
-                      </span>
-                      {billingStatus.billing_cycle && (
-                        <Tag>
-                          {billingStatus.billing_cycle === 'yearly'
-                            ? t('settings:tldw.billing.cycle.yearly', 'Yearly')
-                            : t('settings:tldw.billing.cycle.monthly', 'Monthly')}
-                        </Tag>
-                      )}
-                    </div>
-                    <div className="mt-2 text-xs text-text-muted flex flex-wrap gap-4">
+                    )}
+                  </div>
+                  <div className="mt-2 text-xs text-text-muted flex flex-wrap gap-4">
+                    <span>
+                      {t('settings:tldw.billing.renewal', 'Renews')}:{" "}
+                      {formatDate(billingStatus.current_period_end)}
+                    </span>
+                    {billingStatus.trial_end && (
                       <span>
-                        {t('settings:tldw.billing.renewal', 'Renews')}:{" "}
-                        {formatDate(billingStatus.current_period_end)}
+                        {t('settings:tldw.billing.trialEnds', 'Trial ends')}:{" "}
+                        {formatDate(billingStatus.trial_end)}
                       </span>
-                      {billingStatus.trial_end && (
-                        <span>
-                          {t('settings:tldw.billing.trialEnds', 'Trial ends')}:{" "}
-                          {formatDate(billingStatus.trial_end)}
-                        </span>
-                      )}
-                    </div>
-                    {billingStatus.cancel_at_period_end && (
-                      <Alert
-                        type="warning"
-                        showIcon
-                        className="mt-3"
-                        message={t(
-                          'settings:tldw.billing.cancelAtPeriodEnd',
-                          'Subscription will cancel at period end.'
-                        )}
-                      />
                     )}
-                    <div className="mt-3 flex flex-wrap gap-2">
-                      {!billingStatus.cancel_at_period_end &&
-                        billingStatus.status !== 'canceled' && (
-                          <Button
-                            danger
-                            onClick={confirmCancelSubscription}
-                            loading={billingActionLoading}
-                          >
-                            {t(
-                              'settings:tldw.billing.cancelAction',
-                              'Cancel at period end'
-                            )}
-                          </Button>
-                        )}
-                      {billingStatus.cancel_at_period_end &&
-                        billingStatus.status !== 'canceled' && (
-                          <Button
-                            onClick={confirmResumeSubscription}
-                            loading={billingActionLoading}
-                          >
-                            {t(
-                              'settings:tldw.billing.resumeAction',
-                              'Resume subscription'
-                            )}
-                          </Button>
-                        )}
-                    </div>
                   </div>
-                )}
-
-                {billingUsage?.has_exceeded && (
-                  <Alert
-                    type="error"
-                    showIcon
-                    message={t(
-                      'settings:tldw.billing.limitExceeded',
-                      'Usage has exceeded one or more plan limits.'
-                    )}
-                  />
-                )}
-                {!billingUsage?.has_exceeded && billingUsage?.has_warnings && (
-                  <Alert
-                    type="warning"
-                    showIcon
-                    message={t(
-                      'settings:tldw.billing.limitWarning',
-                      'Approaching plan limits for some resources.'
-                    )}
-                  />
-                )}
-
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                  <div className="rounded border border-border bg-surface p-3">
-                    <div className="text-sm font-medium mb-2">
-                      {t('settings:tldw.billing.selectPlan', 'Select a plan')}
-                    </div>
-                    <Select
-                      className="w-full"
-                      placeholder={t('settings:tldw.billing.choosePlan', 'Choose a plan')}
-                      options={planOptions}
-                      value={selectedPlan || undefined}
-                      onChange={(value) => setSelectedPlan(value)}
-                      disabled={billingPlans.length === 0}
+                  {billingStatus.cancel_at_period_end && (
+                    <Alert
+                      type="warning"
+                      showIcon
+                      className="mt-3"
+                      message={t(
+                        'settings:tldw.billing.cancelAtPeriodEnd',
+                        'Subscription will cancel at period end.'
+                      )}
                     />
-                    <div className="mt-3">
-                      <span className="text-xs text-text-muted">
-                        {t('settings:tldw.billing.billingCycle', 'Billing cycle')}
-                      </span>
-                      <div className="mt-2">
-                        <Segmented
-                          options={[
-                            { label: t('settings:tldw.billing.cycle.monthly', 'Monthly'), value: 'monthly' },
-                            { label: t('settings:tldw.billing.cycle.yearly', 'Yearly'), value: 'yearly' }
-                          ]}
-                          value={billingCycle}
-                          onChange={(value) => {
-                            if (value === 'monthly' || value === 'yearly') {
-                              setBillingCycle(value)
-                            }
-                          }}
-                        />
-                      </div>
-                    </div>
-                    {selectedPlanDetails && (
-                      <div className="mt-3 text-xs text-text-muted space-y-1">
-                        <div className="font-medium text-text">
-                          {selectedPlanDetails.display_name}
-                        </div>
-                        {selectedPlanDetails.description && (
-                          <div>{selectedPlanDetails.description}</div>
-                        )}
-                        <div>
-                          {t('settings:tldw.billing.price', 'Price')}:{" "}
-                          {formatPlanPrice(selectedPlanDetails, billingCycle)}
-                        </div>
-                      </div>
-                    )}
-                    <div className="mt-4 flex flex-wrap gap-2">
-                      <Button
-                        type="primary"
-                        onClick={handleCheckout}
-                        loading={billingLoading}
-                        disabled={!selectedPlan || (isSamePlan && isSameCycle)}
-                      >
-                        {isSamePlan && isSameCycle
-                          ? t('settings:tldw.billing.currentPlanCta', 'Current plan')
-                          : t('settings:tldw.billing.checkout', 'Continue to checkout')}
-                      </Button>
-                      {billingPlans.length === 0 && !billingLoading && (
-                        <span className="text-xs text-text-subtle">
-                          {t('settings:tldw.billing.noPlans', 'No plans available yet.')}
-                        </span>
+                  )}
+                  <div className="mt-3 flex flex-wrap gap-2">
+                    {!billingStatus.cancel_at_period_end &&
+                      billingStatus.status !== 'canceled' && (
+                        <Button
+                          danger
+                          onClick={confirmCancelSubscription}
+                          loading={billingActionLoading}
+                        >
+                          {t(
+                            'settings:tldw.billing.cancelAction',
+                            'Cancel at period end'
+                          )}
+                        </Button>
                       )}
-                    </div>
+                    {billingStatus.cancel_at_period_end &&
+                      billingStatus.status !== 'canceled' && (
+                        <Button
+                          onClick={confirmResumeSubscription}
+                          loading={billingActionLoading}
+                        >
+                          {t(
+                            'settings:tldw.billing.resumeAction',
+                            'Resume subscription'
+                          )}
+                        </Button>
+                      )}
                   </div>
-
-                  <div className="rounded border border-border bg-surface p-3">
-                    <div className="text-sm font-medium mb-2">
-                      {t('settings:tldw.billing.usageTitle', 'Usage')}
-                    </div>
-                    {sortedUsageEntries.length === 0 && (
-                      <span className="text-xs text-text-muted">
-                        {t('settings:tldw.billing.usageEmpty', 'Usage data will appear after activity.')}
-                      </span>
-                    )}
-                    {sortedUsageEntries.length > 0 && (
-                      <div className="space-y-2">
-                        {sortedUsageEntries.map(([key, value]) => {
-                          const check = usageChecks[key] || {}
-                          const limit = typeof check.limit !== 'undefined'
-                            ? check.limit
-                            : billingUsage?.limits?.[key]
-                          const statusColor = check.exceeded
-                            ? 'red'
-                            : check.warning
-                              ? 'orange'
-                              : 'green'
-                          return (
-                            <div key={key} className="flex flex-wrap items-center justify-between gap-2 text-xs">
-                              <span className="text-text">{formatUsageLabel(key)}</span>
-                              <div className="flex items-center gap-2">
-                                <span className="text-text-muted">
-                                  {formatNumber(value)} / {formatLimitValue(limit, check.unlimited)}
-                                </span>
-                                {typeof check.percent_used === 'number' && !check.unlimited && (
-                                  <Tag color={statusColor}>
-                                    {Math.round(check.percent_used)}%
-                                  </Tag>
-                                )}
-                              </div>
-                            </div>
-                          )
-                        })}
-                      </div>
+                </div>
+              ) : !billingLoading ? (
+                <div className="rounded border border-border bg-surface p-3">
+                  <div className="text-sm font-medium mb-1">
+                    {t('settings:tldw.billing.currentPlan', 'Current plan')}
+                  </div>
+                  <div className="text-xs text-text-muted">
+                    {t(
+                      'settings:tldw.billing.subscriptionEmpty',
+                      'No active subscription yet. Choose a plan to get started.'
                     )}
                   </div>
                 </div>
+              ) : null}
 
-                <div className="rounded border border-border bg-surface p-3">
-                  <div className="flex flex-wrap items-center justify-between gap-2">
-                    <div className="text-sm font-medium">
-                      {t('settings:tldw.billing.invoices.title', 'Invoice history')}
-                    </div>
-                    {billingInvoicesTotal > 0 && (
-                      <span className="text-xs text-text-muted">
-                        {t(
-                          'settings:tldw.billing.invoices.total',
-                          'Total: {{count}}',
-                          { count: billingInvoicesTotal }
-                        )}
-                      </span>
-                    )}
-                  </div>
-                  {billingInvoicesLoading && (
-                    <div className="mt-2 text-xs text-text-muted">
-                      {t('settings:tldw.billing.invoices.loading', 'Loading invoices…')}
-                    </div>
+              {billingUsage?.has_exceeded && (
+                <Alert
+                  type="error"
+                  showIcon
+                  message={t(
+                    'settings:tldw.billing.limitExceeded',
+                    'Usage has exceeded one or more plan limits.'
                   )}
-                  {billingInvoicesError && (
+                />
+              )}
+              {!billingUsage?.has_exceeded && billingUsage?.has_warnings && (
+                <Alert
+                  type="warning"
+                  showIcon
+                  message={t(
+                    'settings:tldw.billing.limitWarning',
+                    'Approaching plan limits for some resources.'
+                  )}
+                />
+              )}
+
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                <div className="rounded border border-border bg-surface p-3">
+                  <div className="text-sm font-medium mb-2">
+                    {t('settings:tldw.billing.selectPlan', 'Select a plan')}
+                  </div>
+                  {billingPlansError && (
                     <Alert
                       type="error"
                       showIcon
-                      className="mt-3"
-                      message={t('settings:tldw.billing.invoices.error', 'Unable to load invoices')}
-                      description={billingInvoicesError}
+                      message={t('settings:tldw.billing.plansError', 'Unable to load plans')}
+                      description={billingPlansError}
                     />
                   )}
-                  {!billingInvoicesLoading && !billingInvoicesError && billingInvoices.length === 0 && (
-                    <div className="mt-2 text-xs text-text-muted">
-                      {t('settings:tldw.billing.invoices.empty', 'No invoices yet.')}
-                    </div>
-                  )}
-                  {!billingInvoicesError && billingInvoices.length > 0 && (
-                    <div className="mt-3 space-y-2">
-                      {billingInvoices.map((invoice) => (
-                        <div
-                          key={invoice.id}
-                          className="flex flex-wrap items-center justify-between gap-2 border-b border-border/50 pb-2 text-xs"
-                        >
-                          <div className="space-y-1">
-                            <div className="font-medium text-text">
-                              {formatInvoiceAmount(invoice)}
-                            </div>
-                            <div className="text-text-muted">
-                              {formatDate(invoice.created_at)}{" "}
-                              {invoice.description ? `· ${invoice.description}` : `· #${invoice.id}`}
-                            </div>
-                          </div>
-                          <div className="flex items-center gap-2">
-                            <Tag color={invoiceStatusColor(invoice.status)}>
-                              {invoiceStatusLabel(invoice.status)}
-                            </Tag>
-                            {invoice.invoice_pdf_url && (
-                              <a
-                                href={invoice.invoice_pdf_url}
-                                target="_blank"
-                                rel="noreferrer"
-                                className="text-primary hover:text-primaryStrong underline"
-                              >
-                                {t('settings:tldw.billing.invoices.pdf', 'PDF')}
-                              </a>
-                            )}
-                          </div>
+                  {!billingPlansError && (
+                    <>
+                      <Select
+                        className="w-full"
+                        placeholder={t('settings:tldw.billing.choosePlan', 'Choose a plan')}
+                        options={planOptions}
+                        value={selectedPlan || undefined}
+                        onChange={(value) => setSelectedPlan(value)}
+                        disabled={billingPlans.length === 0}
+                      />
+                      <div className="mt-3">
+                        <span className="text-xs text-text-muted">
+                          {t('settings:tldw.billing.billingCycle', 'Billing cycle')}
+                        </span>
+                        <div className="mt-2">
+                          <Segmented
+                            options={[
+                              { label: t('settings:tldw.billing.cycle.monthly', 'Monthly'), value: 'monthly' },
+                              { label: t('settings:tldw.billing.cycle.yearly', 'Yearly'), value: 'yearly' }
+                            ]}
+                            value={billingCycle}
+                            onChange={(value) => {
+                              if (value === 'monthly' || value === 'yearly') {
+                                setBillingCycle(value)
+                              }
+                            }}
+                          />
                         </div>
-                      ))}
-                      {billingInvoicesTotal > billingInvoices.length && (
-                        <div className="text-xs text-text-muted">
-                          {t(
-                            'settings:tldw.billing.invoices.showing',
-                            'Showing {{count}} of {{total}}',
-                            { count: billingInvoices.length, total: billingInvoicesTotal }
+                      </div>
+                      {selectedPlanDetails && (
+                        <div className="mt-3 text-xs text-text-muted space-y-1">
+                          <div className="font-medium text-text">
+                            {selectedPlanDetails.display_name}
+                          </div>
+                          {selectedPlanDetails.description && (
+                            <div>{selectedPlanDetails.description}</div>
                           )}
+                          <div>
+                            {t('settings:tldw.billing.price', 'Price')}:{" "}
+                            {formatPlanPrice(selectedPlanDetails, billingCycle)}
+                          </div>
                         </div>
                       )}
+                      <div className="mt-4 flex flex-wrap gap-2">
+                        <Button
+                          type="primary"
+                          onClick={handleCheckout}
+                          loading={billingLoading}
+                          disabled={!selectedPlan || (isSamePlan && isSameCycle)}
+                        >
+                          {isSamePlan && isSameCycle
+                            ? t('settings:tldw.billing.currentPlanCta', 'Current plan')
+                            : t('settings:tldw.billing.checkout', 'Continue to checkout')}
+                        </Button>
+                        {billingPlans.length === 0 && !billingLoading && (
+                          <span className="text-xs text-text-subtle">
+                            {t('settings:tldw.billing.noPlans', 'No plans available yet.')}
+                          </span>
+                        )}
+                      </div>
+                    </>
+                  )}
+                </div>
+
+                <div className="rounded border border-border bg-surface p-3">
+                  <div className="text-sm font-medium mb-2">
+                    {t('settings:tldw.billing.usageTitle', 'Usage')}
+                  </div>
+                  {billingUsageError && (
+                    <Alert
+                      type="error"
+                      showIcon
+                      message={t('settings:tldw.billing.usageError', 'Unable to load usage data')}
+                      description={billingUsageError}
+                    />
+                  )}
+                  {!billingUsageError && !billingLoading && sortedUsageEntries.length === 0 && (
+                    <span className="text-xs text-text-muted">
+                      {t('settings:tldw.billing.usageEmpty', 'Usage data will appear after activity.')}
+                    </span>
+                  )}
+                  {!billingUsageError && sortedUsageEntries.length > 0 && (
+                    <div className="space-y-2">
+                      {sortedUsageEntries.map(([key, value]) => {
+                        const check = usageChecks[key] || {}
+                        const limit = typeof check.limit !== 'undefined'
+                          ? check.limit
+                          : billingUsage?.limits?.[key]
+                        const statusColor = check.exceeded
+                          ? 'red'
+                          : check.warning
+                            ? 'orange'
+                            : 'green'
+                        return (
+                          <div key={key} className="flex flex-wrap items-center justify-between gap-2 text-xs">
+                            <span className="text-text">{formatUsageLabel(key)}</span>
+                            <div className="flex items-center gap-2">
+                              <span className="text-text-muted">
+                                {formatNumber(value)} / {formatLimitValue(limit, check.unlimited)}
+                              </span>
+                              {typeof check.percent_used === 'number' && !check.unlimited && (
+                                <Tag color={statusColor}>
+                                  {Math.round(check.percent_used)}%
+                                </Tag>
+                              )}
+                            </div>
+                          </div>
+                        )
+                      })}
                     </div>
                   )}
                 </div>
               </div>
-            )}
+
+              <div className="rounded border border-border bg-surface p-3">
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <div className="text-sm font-medium">
+                    {t('settings:tldw.billing.invoices.title', 'Invoice history')}
+                  </div>
+                  {billingInvoicesTotal > 0 && (
+                    <span className="text-xs text-text-muted">
+                      {t(
+                        'settings:tldw.billing.invoices.total',
+                        'Total: {{count}}',
+                        { count: billingInvoicesTotal }
+                      )}
+                    </span>
+                  )}
+                </div>
+                {billingInvoicesLoading && (
+                  <div className="mt-2 text-xs text-text-muted">
+                    {t('settings:tldw.billing.invoices.loading', 'Loading invoices…')}
+                  </div>
+                )}
+                {billingInvoicesError && (
+                  <Alert
+                    type="error"
+                    showIcon
+                    className="mt-3"
+                    message={t('settings:tldw.billing.invoices.error', 'Unable to load invoices')}
+                    description={billingInvoicesError}
+                  />
+                )}
+                {!billingInvoicesLoading && !billingInvoicesError && billingInvoices.length === 0 && (
+                  <div className="mt-2 text-xs text-text-muted">
+                    {t('settings:tldw.billing.invoices.empty', 'No invoices yet.')}
+                  </div>
+                )}
+                {!billingInvoicesError && billingInvoices.length > 0 && (
+                  <div className="mt-3 space-y-2">
+                    {billingInvoices.map((invoice) => (
+                      <div
+                        key={invoice.id}
+                        className="flex flex-wrap items-center justify-between gap-2 border-b border-border/50 pb-2 text-xs"
+                      >
+                        <div className="space-y-1">
+                          <div className="font-medium text-text">
+                            {formatInvoiceAmount(invoice)}
+                          </div>
+                          <div className="text-text-muted">
+                            {formatDate(invoice.created_at)}{" "}
+                            {invoice.description ? `· ${invoice.description}` : `· #${invoice.id}`}
+                          </div>
+                        </div>
+                        <div className="flex items-center gap-2">
+                          <Tag color={invoiceStatusColor(invoice.status)}>
+                            {invoiceStatusLabel(invoice.status)}
+                          </Tag>
+                          {invoice.invoice_pdf_url && (
+                            <a
+                              href={invoice.invoice_pdf_url}
+                              target="_blank"
+                              rel="noreferrer"
+                              className="text-primary hover:text-primaryStrong underline"
+                            >
+                              {t('settings:tldw.billing.invoices.pdf', 'PDF')}
+                            </a>
+                          )}
+                        </div>
+                      </div>
+                    ))}
+                    {billingInvoicesTotal > billingInvoices.length && (
+                      <div className="text-xs text-text-muted">
+                        {t(
+                          'settings:tldw.billing.invoices.showing',
+                          'Showing {{count}} of {{total}}',
+                          { count: billingInvoices.length, total: billingInvoicesTotal }
+                        )}
+                      </div>
+                    )}
+                  </div>
+                )}
+              </div>
+            </div>
           </div>
         )}
       </div>

@@ -10,6 +10,7 @@ import {
   Flag,
   Gauge,
   AlertTriangle,
+  Mic,
   ScrollText,
   Key,
   KeyRound,
@@ -56,6 +57,7 @@ const navigationItems = {
   logs: { name: 'Logs', href: '/logs', icon: ScrollText, role: ['admin', 'super_admin', 'owner'] },
   flags: { name: 'Flags', href: '/flags', icon: Flag, role: ['admin', 'super_admin', 'owner'] },
   incidents: { name: 'Incidents', href: '/incidents', icon: AlertTriangle, role: ['admin', 'super_admin', 'owner'] },
+  voiceCommands: { name: 'Voice Commands', href: '/voice-commands', icon: Mic, role: ['admin', 'super_admin', 'owner'] },
   debug: { name: 'Debug', href: '/debug', icon: Bug, role: ['super_admin', 'owner'] },
   configuration: { name: 'Configuration', href: '/config', icon: Settings, role: ['super_admin', 'owner'] },
 } satisfies Record<string, NavigationItem>;
@@ -90,6 +92,7 @@ export const navigationSections: NavigationSection[] = [
     items: [
       navigationItems.monitoring,
       navigationItems.jobs,
+      navigationItems.voiceCommands,
       navigationItems.auditLogs,
       navigationItems.logs,
       navigationItems.incidents,

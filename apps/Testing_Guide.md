@@ -54,6 +54,18 @@ Notes:
 - The extension Playwright config uses a global setup that builds the extension.
 - Host permission is automatically handled by the driver, but Chrome may still prompt in some environments.
 
+### Extension page review (full route sweep)
+Runs a separate Playwright test per route (options + sidepanel), with offline mode seeded.
+
+```bash
+cd extension
+bun run test:e2e -- tests/e2e/page-review.spec.ts
+```
+
+Optional flags:
+- `TLDW_PAGE_REVIEW_CAPTURE=1` to save screenshots to `playwright-mcp-artifacts/extension-page-review`.
+- `TLDW_PAGE_REVIEW_STRICT=1` to fail on console errors.
+
 ## Webapp tests
 - Playwright config: `tldw-frontend/playwright.config.ts`
 - Test dir: `tldw-frontend/e2e`
@@ -68,6 +80,14 @@ Run only smoke tests:
 ```bash
 cd tldw-frontend
 npx playwright test e2e/smoke
+```
+
+### Webapp page review (full route sweep)
+Runs a separate Playwright test per Next.js page (from `e2e/smoke/page-inventory.ts`).
+
+```bash
+cd tldw-frontend
+bun run e2e:smoke -- --workers=1
 ```
 
 ### Workflow E2E Tests
@@ -202,3 +222,22 @@ bun test --config vitest.extension.config.ts
 | Login tests | 2 | `e2e/login.spec.ts` |
 
 Total: **~200 E2E tests** for the webapp.
+
+
+
+### Page Review
+  Interactive Review:
+```md
+  cd apps/tldw-frontend
+  npm run review:interactive           # Full review
+  npm run review:session -- 3          # Start at session 3
+  npm run review:resume                # Resume previous session
+
+```
+
+Automated Parallel Testing:
+```md
+  npm run review:parallel              # All pages
+  npm run review:parallel:session      # By session
+  npm run e2e:pw -- --grep "Session 1" # Specific session
+```

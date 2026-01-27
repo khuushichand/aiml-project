@@ -1,21 +1,36 @@
 import React from "react"
 import {
   Alert,
+  Badge,
   Button,
   Card,
   Checkbox,
   Divider,
   Input,
+  Modal,
   Select,
   Segmented,
+  Skeleton,
   Space,
   Switch,
   Table,
   Tabs,
   Tag,
+  Tooltip,
   Typography,
   message
 } from "antd"
+import type { InputRef } from "antd"
+import {
+  CheckCircleOutlined,
+  CloseCircleOutlined,
+  ExclamationCircleOutlined,
+  InfoCircleOutlined,
+  QuestionCircleOutlined,
+  ReloadOutlined,
+  SearchOutlined,
+  WarningOutlined
+} from "@ant-design/icons"
 import type { ColumnsType } from "antd/es/table"
 import { useTranslation } from "react-i18next"
 import { useQuery } from "@tanstack/react-query"
@@ -50,16 +65,16 @@ const { TextArea } = Input
 
 const HERO_STYLE: React.CSSProperties = {
   background:
-    "linear-gradient(180deg, var(--moderation-hero-start) 0%, var(--moderation-hero-end) 100%)",
-  border: "1px solid var(--moderation-hero-border)",
-  boxShadow: "0 24px 70px var(--moderation-hero-shadow)"
+    "linear-gradient(180deg, var(--moderation-hero-start, #fdf7ec) 0%, var(--moderation-hero-end, #f6efdf) 100%)",
+  border: "1px solid var(--moderation-hero-border, #e8dcc8)",
+  boxShadow: "0 24px 70px var(--moderation-hero-shadow, rgba(110, 86, 48, 0.18))"
 }
 
 const HERO_GRID_STYLE: React.CSSProperties = {
   backgroundImage:
-    "linear-gradient(var(--moderation-hero-grid-1) 1px, transparent 1px), linear-gradient(90deg, var(--moderation-hero-grid-2) 1px, transparent 1px)",
+    "linear-gradient(var(--moderation-hero-grid-1, rgba(73, 55, 36, 0.08)) 1px, transparent 1px), linear-gradient(90deg, var(--moderation-hero-grid-2, rgba(73, 55, 36, 0.06)) 1px, transparent 1px)",
   backgroundSize: "28px 28px",
-  opacity: "var(--moderation-hero-grid-opacity)"
+  opacity: "var(--moderation-hero-grid-opacity, 0.35)"
 }
 
 const normalizeCategories = (value: unknown): string[] => {
@@ -136,6 +151,49 @@ const presetProfiles: Record<
   }
 }
 
+// Common category suggestions for dropdowns
+const CATEGORY_SUGGESTIONS = [
+  { value: "pii", label: "PII (Personal Info)" },
+  { value: "pii_email", label: "Email Addresses" },
+  { value: "pii_phone", label: "Phone Numbers" },
+  { value: "pii_address", label: "Physical Addresses" },
+  { value: "confidential", label: "Confidential" },
+  { value: "profanity", label: "Profanity" },
+  { value: "custom", label: "Custom Rules" }
+]
+
+// Action options with descriptions
+const ACTION_OPTIONS = [
+  { value: "block", label: "Block", description: "Reject the message entirely" },
+  { value: "redact", label: "Redact", description: "Replace flagged content with [REDACTED]" },
+  { value: "warn", label: "Warn", description: "Allow but record in logs" }
+]
+
+const ONBOARDING_KEY = "moderation-playground-onboarded"
+
+const stableSort = (items: string[]) => [...items].sort((a, b) => a.localeCompare(b))
+
+const normalizeSettingsDraft = (draft: {
+  piiEnabled: boolean
+  categoriesEnabled: string[]
+  persist: boolean
+}) => ({
+  piiEnabled: Boolean(draft.piiEnabled),
+  categoriesEnabled: stableSort(normalizeCategories(draft.categoriesEnabled)),
+  persist: Boolean(draft.persist)
+})
+
+const normalizeOverrideForCompare = (draft: ModerationUserOverride) => {
+  const payload = buildOverridePayload(draft)
+  if (payload.categories_enabled !== undefined) {
+    payload.categories_enabled = stableSort(normalizeCategories(payload.categories_enabled))
+  }
+  return payload
+}
+
+const isEqualJson = (left: unknown, right: unknown) =>
+  JSON.stringify(left) === JSON.stringify(right)
+
 export const ModerationPlayground: React.FC = () => {
   const { t } = useTranslation(["option", "common"])
   const online = useServerOnline()
@@ -151,10 +209,18 @@ export const ModerationPlayground: React.FC = () => {
     categoriesEnabled: [] as string[],
     persist: false
   })
+  const [settingsBaseline, setSettingsBaseline] = React.useState<{
+    piiEnabled: boolean
+    categoriesEnabled: string[]
+    persist: boolean
+  } | null>(null)
 
   const [overrideDraft, setOverrideDraft] = React.useState<ModerationUserOverride>({})
   const [overrideLoaded, setOverrideLoaded] = React.useState(false)
   const [overrideLoading, setOverrideLoading] = React.useState(false)
+  const [overrideBaseline, setOverrideBaseline] = React.useState<ModerationUserOverride | null>(
+    null
+  )
 
   const [blocklistText, setBlocklistText] = React.useState("")
   const [blocklistLint, setBlocklistLint] = React.useState<BlocklistLintResponse | null>(null)
@@ -170,6 +236,18 @@ export const ModerationPlayground: React.FC = () => {
   const [testText, setTestText] = React.useState("")
   const [testUserId, setTestUserId] = React.useState("")
   const [testResult, setTestResult] = React.useState<ModerationTestResponse | null>(null)
+
+  // UX improvement states
+  const [showOnboarding, setShowOnboarding] = React.useState(() => {
+    if (typeof window === "undefined") return false
+    return !localStorage.getItem(ONBOARDING_KEY)
+  })
+  const [overrideSearchFilter, setOverrideSearchFilter] = React.useState("")
+  const [userIdError, setUserIdError] = React.useState<string | null>(null)
+  const [selectedOverrideIds, setSelectedOverrideIds] = React.useState<React.Key[]>([])
+
+  // Refs
+  const userIdInputRef = React.useRef<InputRef>(null)
 
   const settingsQuery = useQuery<ModerationSettingsResponse>({
     queryKey: ["moderation-settings"],
@@ -203,6 +281,11 @@ export const ModerationPlayground: React.FC = () => {
       piiEnabled,
       categoriesEnabled: categories || []
     }))
+    setSettingsBaseline((prev) => ({
+      piiEnabled,
+      categoriesEnabled: categories || [],
+      persist: prev?.persist ?? false
+    }))
   }, [settingsQuery.data])
 
   React.useEffect(() => {
@@ -221,11 +304,14 @@ export const ModerationPlayground: React.FC = () => {
     if (!activeUserId) {
       setOverrideDraft({})
       setOverrideLoaded(false)
+      setUserIdError(null)
+      setOverrideBaseline({})
       return
     }
     let cancelled = false
     const loadOverride = async () => {
       setOverrideLoading(true)
+      setUserIdError(null)
       try {
         const data = await getUserOverride(activeUserId)
         if (cancelled) return
@@ -244,11 +330,16 @@ export const ModerationPlayground: React.FC = () => {
         }
         setOverrideDraft(normalized)
         setOverrideLoaded(true)
+        setOverrideBaseline(normalized)
       } catch (err: any) {
         if (cancelled) return
         if (err?.status === 404) {
+          // User has no existing override - this is OK, they can create one
           setOverrideDraft({})
           setOverrideLoaded(false)
+          // Show informational message instead of error
+          setUserIdError(`No override found for "${activeUserId}". You can create a new one.`)
+          setOverrideBaseline({})
         } else {
           messageApi.error("Failed to load user override")
         }
@@ -268,6 +359,42 @@ export const ModerationPlayground: React.FC = () => {
     }
   }, [activeUserId, testUserId])
 
+  // Keyboard shortcut: Ctrl+S to save
+  React.useEffect(() => {
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if ((event.ctrlKey || event.metaKey) && event.key === "s") {
+        event.preventDefault()
+        if (scope === "user" && activeUserId) {
+          void handleSaveOverride()
+        } else if (scope === "server") {
+          void handleSaveSettings()
+        }
+      }
+    }
+    window.addEventListener("keydown", handleKeyDown)
+    return () => window.removeEventListener("keydown", handleKeyDown)
+  }, [scope, activeUserId, overrideDraft, settingsDraft])
+
+  const normalizedSettingsDraft = normalizeSettingsDraft(settingsDraft)
+  const normalizedSettingsBaseline = normalizeSettingsDraft(settingsBaseline ?? settingsDraft)
+  const settingsDirty =
+    settingsBaseline !== null && !isEqualJson(normalizedSettingsDraft, normalizedSettingsBaseline)
+  const normalizedOverrideDraft = normalizeOverrideForCompare(overrideDraft)
+  const normalizedOverrideBaseline = normalizeOverrideForCompare(overrideBaseline ?? {})
+  const overrideDirty =
+    Boolean(activeUserId) && !isEqualJson(normalizedOverrideDraft, normalizedOverrideBaseline)
+  const hasUnsavedChanges = settingsDirty || overrideDirty
+
+  React.useEffect(() => {
+    if (!hasUnsavedChanges) return
+    const handleBeforeUnload = (event: BeforeUnloadEvent) => {
+      event.preventDefault()
+      event.returnValue = ""
+    }
+    window.addEventListener("beforeunload", handleBeforeUnload)
+    return () => window.removeEventListener("beforeunload", handleBeforeUnload)
+  }, [hasUnsavedChanges])
+
   const handleLoadUser = () => {
     if (!userIdDraft.trim()) {
       messageApi.warning("Enter a user id to load overrides")
@@ -285,6 +412,7 @@ export const ModerationPlayground: React.FC = () => {
       }
       await updateModerationSettings(payload)
       messageApi.success("Moderation settings updated")
+      setSettingsBaseline(normalizedSettingsDraft)
       await settingsQuery.refetch()
       await policyQuery.refetch()
     } catch (err: any) {
@@ -322,6 +450,7 @@ export const ModerationPlayground: React.FC = () => {
       await setUserOverride(activeUserId, payload)
       messageApi.success("User override saved")
       setOverrideLoaded(true)
+      setOverrideBaseline(normalizedOverrideDraft)
       await policyQuery.refetch()
       if (showAdvanced) {
         await overridesQuery.refetch()
@@ -329,6 +458,27 @@ export const ModerationPlayground: React.FC = () => {
     } catch (err: any) {
       messageApi.error(err?.message || "Failed to save override")
     }
+  }
+
+  const handleResetSettings = () => {
+    if (!settingsBaseline) return
+    setSettingsDraft({
+      piiEnabled: settingsBaseline.piiEnabled,
+      categoriesEnabled: [...settingsBaseline.categoriesEnabled],
+      persist: settingsBaseline.persist
+    })
+  }
+
+  const handleResetOverride = () => {
+    const baseline = overrideBaseline ?? {}
+    const normalized: ModerationUserOverride = {
+      ...baseline,
+      categories_enabled:
+        baseline.categories_enabled !== undefined
+          ? normalizeCategories(baseline.categories_enabled)
+          : undefined
+    }
+    setOverrideDraft(normalized)
   }
 
   const handleDeleteOverride = async (userId?: string | null) => {
@@ -340,6 +490,8 @@ export const ModerationPlayground: React.FC = () => {
       if (targetId === activeUserId) {
         setOverrideDraft({})
         setOverrideLoaded(false)
+        setUserIdError(null)
+        setOverrideBaseline({})
         await policyQuery.refetch()
       }
       if (showAdvanced) {
@@ -347,6 +499,103 @@ export const ModerationPlayground: React.FC = () => {
       }
     } catch (err: any) {
       messageApi.error(err?.message || "Failed to delete override")
+    }
+  }
+
+  const confirmDeleteOverride = (userId?: string | null) => {
+    const targetId = userId || activeUserId
+    if (!targetId) return
+    Modal.confirm({
+      title: "Delete User Override?",
+      icon: <ExclamationCircleOutlined />,
+      content: `This will remove all custom safety settings for "${targetId}". The user will fall back to server defaults. This action cannot be undone.`,
+      okText: "Delete",
+      okType: "danger",
+      cancelText: "Cancel",
+      onOk: () => handleDeleteOverride(targetId)
+    })
+  }
+
+  const confirmDeleteManagedItem = (itemId: number, line: string) => {
+    Modal.confirm({
+      title: "Delete Blocklist Rule?",
+      icon: <ExclamationCircleOutlined />,
+      content: (
+        <div>
+          <p>Remove this rule from the blocklist?</p>
+          <code className="block mt-2 p-2 bg-gray-100 rounded text-sm">{line}</code>
+        </div>
+      ),
+      okText: "Delete",
+      okType: "danger",
+      cancelText: "Cancel",
+      onOk: () => handleDeleteManaged(itemId)
+    })
+  }
+
+  const handleBulkDeleteOverrides = async (userIds: string[]) => {
+    if (!userIds.length) return
+    const failed: string[] = []
+    for (const userId of userIds) {
+      try {
+        await deleteUserOverride(userId)
+      } catch {
+        failed.push(userId)
+      }
+    }
+    const successCount = userIds.length - failed.length
+    if (successCount) {
+      messageApi.success(`Deleted ${successCount} overrides`)
+    }
+    if (failed.length) {
+      messageApi.error(`Failed to delete: ${failed.join(", ")}`)
+    }
+    if (activeUserId && userIds.includes(activeUserId)) {
+      setOverrideDraft({})
+      setOverrideLoaded(false)
+      setUserIdError(null)
+      setOverrideBaseline({})
+      await policyQuery.refetch()
+    }
+    if (showAdvanced) {
+      await overridesQuery.refetch()
+    }
+    setSelectedOverrideIds([])
+  }
+
+  const confirmBulkDeleteOverrides = () => {
+    const targetIds = selectedOverrideIds.map((id) => String(id))
+    if (!targetIds.length) return
+    Modal.confirm({
+      title: "Delete Selected Overrides?",
+      icon: <ExclamationCircleOutlined />,
+      content: `This will remove ${targetIds.length} user overrides and revert them to server defaults. This action cannot be undone.`,
+      okText: "Delete",
+      okType: "danger",
+      cancelText: "Cancel",
+      onOk: () => handleBulkDeleteOverrides(targetIds)
+    })
+  }
+
+  const handlePersistChange = (checked: boolean) => {
+    if (checked) {
+      Modal.confirm({
+        title: "Save Settings to Disk?",
+        icon: <WarningOutlined style={{ color: "#faad14" }} />,
+        content: "This will permanently save your moderation settings to disk. Changes will persist after server restarts. Are you sure?",
+        okText: "Yes, persist settings",
+        cancelText: "Cancel",
+        onOk: () => setSettingsDraft((prev) => ({ ...prev, persist: true }))
+      })
+    } else {
+      setSettingsDraft((prev) => ({ ...prev, persist: false }))
+    }
+  }
+
+  const dismissOnboarding = () => {
+    setShowOnboarding(false)
+    if (typeof window !== "undefined") {
+      localStorage.setItem(ONBOARDING_KEY, "true")
     }
   }
 
@@ -489,49 +738,102 @@ export const ModerationPlayground: React.FC = () => {
     }
   }
 
-  const lintColumns: ColumnsType<BlocklistLintItem> = [
-    { title: "Line", dataIndex: "line", key: "line", ellipsis: true },
-    {
-      title: "OK",
-      dataIndex: "ok",
-      key: "ok",
-      width: 70,
-      render: (ok: boolean) => (ok ? <Tag color="green">OK</Tag> : <Tag color="red">Fail</Tag>)
-    },
-    { title: "Action", dataIndex: "action", key: "action", width: 110 },
-    { title: "Categories", dataIndex: "categories", key: "categories", width: 160,
-      render: (cats: string[]) => (cats && cats.length ? cats.join(", ") : "-") },
-    { title: "Error", dataIndex: "error", key: "error", ellipsis: true }
-  ]
+  const buildLintColumns = (showStatus: boolean): ColumnsType<BlocklistLintItem> => {
+    const columns: ColumnsType<BlocklistLintItem> = [
+      { title: "Rule", dataIndex: "line", key: "line", ellipsis: true },
+      {
+        title: "Action",
+        dataIndex: "action",
+        key: "action",
+        width: 110,
+        render: (action: string) => {
+          const colors: Record<string, string> = { block: "red", redact: "orange", warn: "blue" }
+          return action ? <Tag color={colors[action] || "default"}>{action}</Tag> : "-"
+        }
+      },
+      {
+        title: "Categories",
+        dataIndex: "categories",
+        key: "categories",
+        width: 160,
+        render: (cats: string[]) => (
+          cats && cats.length ? (
+            <Space wrap size={4}>
+              {cats.map((cat) => <Tag key={cat} className="text-xs">{cat}</Tag>)}
+            </Space>
+          ) : "-"
+        )
+      }
+    ]
+
+    if (showStatus) {
+      columns.splice(1, 0, {
+        title: "Status",
+        dataIndex: "ok",
+        key: "ok",
+        width: 90,
+        render: (ok: boolean) => (
+          ok ? (
+            <Tag color="green" icon={<CheckCircleOutlined />}>Valid</Tag>
+          ) : (
+            <Tag color="red" icon={<CloseCircleOutlined />}>Invalid</Tag>
+          )
+        )
+      })
+      columns.push({
+        title: "Issue",
+        dataIndex: "error",
+        key: "error",
+        ellipsis: true,
+        render: (error: string) => error ? <Text type="danger">{error}</Text> : "-"
+      })
+    }
+
+    return columns
+  }
 
   const overrideColumns: ColumnsType<{ user_id: string; override: Record<string, any> }> = [
-    { title: "User", dataIndex: "user_id", key: "user_id", width: 160 },
+    { title: "User ID", dataIndex: "user_id", key: "user_id", width: 160 },
     {
-      title: "Override",
+      title: "Settings",
       dataIndex: "override",
       key: "override",
-      render: (override: Record<string, any>) => (
-        <Text code className="whitespace-pre-wrap">
-          {formatJson(override)}
-        </Text>
-      )
+      render: (override: Record<string, any>) => {
+        // Show a summary instead of full JSON
+        const enabled = override.enabled !== false
+        const inputAction = override.input_action || "default"
+        const outputAction = override.output_action || "default"
+        return (
+          <Space wrap>
+            <Tag color={enabled ? "green" : "red"} icon={enabled ? <CheckCircleOutlined /> : <CloseCircleOutlined />}>
+              {enabled ? "Active" : "Disabled"}
+            </Tag>
+            {override.input_action && <Tag>Input: {inputAction}</Tag>}
+            {override.output_action && <Tag>Output: {outputAction}</Tag>}
+          </Space>
+        )
+      }
     },
     {
       title: "Actions",
       key: "actions",
-      width: 140,
+      width: 160,
       render: (_value, record) => (
         <Space>
-          <Button size="small" onClick={() => {
-            setScope("user")
-            setUserIdDraft(record.user_id)
-            setActiveUserId(record.user_id)
-          }}>
-            Load
-          </Button>
-          <Button size="small" danger onClick={() => handleDeleteOverride(record.user_id)}>
-            Delete
-          </Button>
+          <Tooltip title="Edit this user's settings">
+            <Button size="small" onClick={() => {
+              setScope("user")
+              setUserIdDraft(record.user_id)
+              setActiveUserId(record.user_id)
+            }} aria-label={`Edit settings for ${record.user_id}`}>
+              Edit
+            </Button>
+          </Tooltip>
+          <Tooltip title="Remove override (user will use server defaults)">
+            <Button size="small" danger onClick={() => confirmDeleteOverride(record.user_id)} aria-label={`Delete override for ${record.user_id}`}>
+              Delete
+            </Button>
+          </Tooltip>
         </Space>
       )
     }
@@ -540,10 +842,46 @@ export const ModerationPlayground: React.FC = () => {
   const policySnapshot = policyQuery.data || {}
   const policyCategories = normalizeCategories(policySnapshot.categories_enabled)
   const blocklistCount = policySnapshot.blocklist_count ?? 0
+  const overridesData = Object.entries(overridesQuery.data?.overrides || {})
+    .map(([user_id, override]) => ({ user_id, override }))
+    .filter((item) =>
+      !overrideSearchFilter ||
+      item.user_id.toLowerCase().includes(overrideSearchFilter.toLowerCase())
+    )
+  const overrideRowSelection = {
+    selectedRowKeys: selectedOverrideIds,
+    onChange: (keys: React.Key[]) => setSelectedOverrideIds(keys)
+  }
 
   return (
     <div className="space-y-6">
       {contextHolder}
+
+      {/* Onboarding Banner */}
+      {showOnboarding && (
+        <Alert
+          type="info"
+          showIcon
+          icon={<InfoCircleOutlined />}
+          closable
+          onClose={dismissOnboarding}
+          message="Welcome to Moderation Playground"
+          description={
+            <div className="mt-2">
+              <Text>Configure content safety rules to protect your users. Here's how to get started:</Text>
+              <ol className="mt-2 ml-4 list-decimal space-y-1">
+                <li><strong>Choose scope:</strong> Server-wide rules apply to everyone, or select User for individual settings</li>
+                <li><strong>Set safety level:</strong> Use a quick preset or customize filters manually</li>
+                <li><strong>Test your rules:</strong> Try sample content to verify behavior before deploying</li>
+              </ol>
+              <Button type="link" className="p-0 mt-2" onClick={dismissOnboarding}>
+                Got it, let's start
+              </Button>
+            </div>
+          }
+        />
+      )}
+
       <div
         className="relative overflow-hidden rounded-[28px] p-6 sm:p-8 text-text"
         style={HERO_STYLE}
@@ -562,46 +900,78 @@ export const ModerationPlayground: React.FC = () => {
                 )}
               </Text>
               <div className="mt-3 flex flex-wrap gap-2">
-                <Tag color="gold">Admin only</Tag>
-                <Tag color={online ? "green" : "red"}>
+                <Tag color={online ? "green" : "red"} icon={online ? <CheckCircleOutlined /> : <CloseCircleOutlined />}>
                   {online ? "Server online" : "Server offline"}
                 </Tag>
-                <Tag color="blue">Moderation API</Tag>
               </div>
             </div>
             <Space align="center" wrap>
-              <Text className="text-text-muted">Advanced</Text>
-              <Switch checked={showAdvanced} onChange={setShowAdvanced} />
-              <Button onClick={handleReload}>Reload config</Button>
+              <Tooltip title="Enable Blocklist Studio and Per-user Overrides table">
+                <Space>
+                  <Text className="text-text-muted">Advanced</Text>
+                  <Switch checked={showAdvanced} onChange={setShowAdvanced} />
+                </Space>
+              </Tooltip>
+              <Tooltip title="Reload moderation rules from server config files">
+                <Button icon={<ReloadOutlined />} onClick={handleReload} aria-label="Reload moderation configuration">Reload config</Button>
+              </Tooltip>
             </Space>
           </div>
 
           <Divider className="!my-4" />
 
           <div className="flex flex-wrap items-center gap-3">
-            <Segmented
-              value={scope}
-              onChange={(value) => setScope(value as "server" | "user")}
-              options={[
-                { label: "Server", value: "server" },
-                { label: "User", value: "user" }
-              ]}
-            />
+            <Tooltip title="Server-wide rules apply to all users. User scope allows individual overrides.">
+              <Segmented
+                value={scope}
+                onChange={(value) => {
+                  const nextScope = value as "server" | "user"
+                  setScope(nextScope)
+                  if (nextScope === "user") {
+                    const trimmed = userIdDraft.trim()
+                    if (trimmed && trimmed !== activeUserId) {
+                      setActiveUserId(trimmed)
+                    }
+                  }
+                }}
+                options={[
+                  { label: "Server (Global)", value: "server" },
+                  { label: "User (Individual)", value: "user" }
+                ]}
+              />
+            </Tooltip>
             <Input
-              placeholder="User ID"
+              ref={userIdInputRef}
+              placeholder="Enter User ID"
               value={userIdDraft}
-              onChange={(event) => setUserIdDraft(event.target.value)}
+              onChange={(event) => {
+                setUserIdDraft(event.target.value)
+                setUserIdError(null)
+              }}
               onPressEnter={handleLoadUser}
               disabled={scope !== "user"}
               style={{ width: 220 }}
+              status={userIdError ? "warning" : undefined}
+              suffix={scope === "user" && userIdDraft && <SearchOutlined className="text-text-muted" />}
             />
-            <Button disabled={scope !== "user"} onClick={handleLoadUser}>
+            <Button disabled={scope !== "user"} onClick={handleLoadUser} loading={overrideLoading}>
               Load user
             </Button>
             {activeUserId && (
-              <Tag color="geekblue">Active user: {activeUserId}</Tag>
+              <Tag color="geekblue" className="text-sm font-medium py-1 px-3">
+                Configuring: {activeUserId}
+              </Tag>
             )}
           </div>
+          {userIdError && (
+            <Alert
+              type="info"
+              showIcon
+              icon={<InfoCircleOutlined />}
+              message={userIdError}
+              className="mt-3"
+            />
+          )}
         </div>
       </div>
 
@@ -613,18 +983,53 @@ export const ModerationPlayground: React.FC = () => {
         />
       )}
 
+      {/* Advanced features hint when advanced mode is off */}
+      {!showAdvanced && (
+        <Alert
+          type="info"
+          showIcon
+          icon={<QuestionCircleOutlined />}
+          message={
+            <span>
+              Looking for blocklist rules or user overrides?{" "}
+              <Button type="link" className="p-0" onClick={() => setShowAdvanced(true)}>
+                Enable Advanced mode
+              </Button>
+            </span>
+          }
+          className="!py-2"
+        />
+      )}
+
       <div className="grid gap-4 lg:grid-cols-2">
         <Card
-          title="Runtime Settings"
-          className="shadow-sm"
-          extra={<Text className="text-text-muted">Server-wide</Text>}
+          title={
+            <Space>
+              <span>Global Server Rules</span>
+              <Tooltip title="These settings apply to all users unless overridden">
+                <QuestionCircleOutlined className="text-text-muted" />
+              </Tooltip>
+            </Space>
+          }
+          className="shadow-sm order-2 lg:order-2"
+          extra={
+            <Space size="small">
+              <Tag color="blue">Server-wide</Tag>
+              {settingsDirty && <Tag color="orange">Unsaved changes</Tag>}
+            </Space>
+          }
         >
           <Space direction="vertical" size="middle" className="w-full">
             <div className="flex items-center justify-between gap-3">
               <div>
-                <Text strong>PII Rule Pack</Text>
+                <Space>
+                  <Text strong>Personal Data Protection</Text>
+                  <Tooltip title="Automatically detects and handles personal information like emails, phone numbers, and addresses">
+                    <QuestionCircleOutlined className="text-text-muted" />
+                  </Tooltip>
+                </Space>
                 <div className="text-text-muted text-xs">
-                  Toggle built-in PII redaction rules.
+                  Enable built-in rules to detect and redact personal information.
                 </div>
               </div>
               <Switch
@@ -636,14 +1041,19 @@ export const ModerationPlayground: React.FC = () => {
             </div>
 
             <div>
-              <Text strong>Categories Enabled</Text>
-              <div className="text-text-muted text-xs">
-                If set, only rules with matching categories will apply.
+              <Space>
+                <Text strong>Content Categories to Monitor</Text>
+                <Tooltip title="Choose which types of content to monitor. Leave empty to apply all rules.">
+                  <QuestionCircleOutlined className="text-text-muted" />
+                </Tooltip>
+              </Space>
+              <div className="text-text-muted text-xs mb-2">
+                Select categories or type custom ones. Leave empty to monitor all.
               </div>
               <Select
                 mode="tags"
                 style={{ width: "100%" }}
-                placeholder="Add categories (e.g., pii, confidential)"
+                placeholder="Select or type categories..."
                 value={settingsDraft.categoriesEnabled}
                 onChange={(value) =>
                   setSettingsDraft((prev) => ({
@@ -651,28 +1061,41 @@ export const ModerationPlayground: React.FC = () => {
                     categoriesEnabled: value as string[]
                   }))
                 }
+                options={CATEGORY_SUGGESTIONS}
               />
             </div>
 
-            <Checkbox
-              checked={settingsDraft.persist}
-              onChange={(event) =>
-                setSettingsDraft((prev) => ({
-                  ...prev,
-                  persist: event.target.checked
-                }))
-              }
-            >
-              Persist runtime overrides to file
-            </Checkbox>
+            <div className="p-3 bg-warning-bg border border-warning-border rounded-lg">
+              <Checkbox
+                checked={settingsDraft.persist}
+                onChange={(event) => handlePersistChange(event.target.checked)}
+              >
+                <Space>
+                  <span>Save settings to disk</span>
+                  <Tooltip title="When enabled, changes persist after server restart. Use with caution.">
+                    <WarningOutlined className="text-warning" />
+                  </Tooltip>
+                </Space>
+              </Checkbox>
+            </div>
 
-            <Button
-              type="primary"
-              onClick={handleSaveSettings}
-              loading={settingsQuery.isFetching}
-            >
-              Save runtime settings
-            </Button>
+            <Space wrap>
+              <Tooltip title="Keyboard shortcut: Ctrl+S (when in Server scope)">
+                <Button
+                  type="primary"
+                  onClick={handleSaveSettings}
+                  loading={settingsQuery.isFetching}
+                  aria-label="Save server runtime settings"
+                >
+                  Save runtime settings
+                </Button>
+              </Tooltip>
+              <Tooltip title="Revert unsaved changes">
+                <Button onClick={handleResetSettings} disabled={!settingsDirty}>
+                  Reset changes
+                </Button>
+              </Tooltip>
+            </Space>
 
             {settingsQuery.data && (
               <Alert
@@ -680,7 +1103,7 @@ export const ModerationPlayground: React.FC = () => {
                 showIcon
                 message={
                   <span>
-                    Effective categories: {normalizeCategories(settingsQuery.data.effective?.categories_enabled).join(", ") || "all"}
+                    Active categories: {normalizeCategories(settingsQuery.data.effective?.categories_enabled).join(", ") || "all categories"}
                   </span>
                 }
               />
@@ -689,29 +1112,61 @@ export const ModerationPlayground: React.FC = () => {
         </Card>
 
         <Card
-          title="Family Safety Profile"
-          className="shadow-sm"
-          extra={<Text className="text-text-muted">User overrides</Text>}
+          title={
+            <Space>
+              <span>Per-User Safety Rules</span>
+              <Tooltip title="Override server rules for specific users">
+                <QuestionCircleOutlined className="text-text-muted" />
+              </Tooltip>
+            </Space>
+          }
+          className="shadow-sm order-1 lg:order-1"
+          extra={
+            <Space size="small">
+              <Tag color="purple">User overrides</Tag>
+              {overrideDirty && <Tag color="orange">Unsaved changes</Tag>}
+            </Space>
+          }
         >
           {scope !== "user" ? (
-            <Alert
-              type="info"
-              showIcon
-              message="Switch to User scope to configure family rules."
-            />
+            <div className="space-y-4">
+              <Alert
+                type="info"
+                showIcon
+                message="Switch to User scope to configure individual safety rules."
+                description="User-specific rules override server defaults for that user only."
+              />
+              {/* Show disabled preview of controls */}
+              <div className="opacity-50 pointer-events-none">
+                <Text strong className="block mb-2">Quick Presets (Preview)</Text>
+                <div className="flex flex-wrap gap-2">
+                  {Object.entries(presetProfiles).map(([key, preset]) => (
+                    <Tooltip key={key} title={preset.description}>
+                      <Button disabled>{preset.label}</Button>
+                    </Tooltip>
+                  ))}
+                </div>
+              </div>
+            </div>
           ) : (
             <Space direction="vertical" size="middle" className="w-full">
               <div>
-                <Text strong>Quick presets</Text>
-                <div className="mt-2 flex flex-wrap gap-2">
+                <Text strong>Quick Presets</Text>
+                <div className="text-text-muted text-xs mb-2">
+                  Apply a pre-configured safety profile with one click.
+                </div>
+                <div className="grid gap-2 sm:grid-cols-3">
                   {Object.entries(presetProfiles).map(([key, preset]) => (
-                    <Button
+                    <Card
                       key={key}
-                      onClick={() => handleApplyPreset(key)}
-                      disabled={overrideLoading || !activeUserId}
+                      size="small"
+                      hoverable
+                      onClick={() => !overrideLoading && activeUserId && handleApplyPreset(key)}
+                      className={`cursor-pointer transition-all ${(!activeUserId || overrideLoading) ? "opacity-50 cursor-not-allowed" : "hover:border-primary"}`}
                     >
-                      {preset.label}
-                    </Button>
+                      <Text strong>{preset.label}</Text>
+                      <div className="text-xs text-text-muted mt-1">{preset.description}</div>
+                    </Card>
                   ))}
                 </div>
               </div>
@@ -720,7 +1175,9 @@ export const ModerationPlayground: React.FC = () => {
 
               <div className="grid gap-3 sm:grid-cols-2">
                 <div className="flex items-center justify-between">
-                  <Text>Enabled</Text>
+                  <Tooltip title="Enable or disable all moderation for this user">
+                    <Text>Moderation Enabled</Text>
+                  </Tooltip>
                   <Switch
                     checked={Boolean(overrideDraft.enabled)}
                     onChange={(value) =>
@@ -729,7 +1186,9 @@ export const ModerationPlayground: React.FC = () => {
                   />
                 </div>
                 <div className="flex items-center justify-between">
-                  <Text>Input filter</Text>
+                  <Tooltip title="Filter content when this user sends messages">
+                    <Text>Filter what user sends</Text>
+                  </Tooltip>
                   <Switch
                     checked={Boolean(overrideDraft.input_enabled)}
                     onChange={(value) =>
@@ -737,8 +1196,10 @@ export const ModerationPlayground: React.FC = () => {
                     }
                   />
                 </div>
-                <div className="flex items-center justify-between">
-                  <Text>Output filter</Text>
+                <div className="flex items-center justify-between col-span-full sm:col-span-1">
+                  <Tooltip title="Filter AI responses shown to this user">
+                    <Text>Filter AI responses</Text>
+                  </Tooltip>
                   <Switch
                     checked={Boolean(overrideDraft.output_enabled)}
                     onChange={(value) =>
@@ -750,39 +1211,55 @@ export const ModerationPlayground: React.FC = () => {
 
               <div className="grid gap-3 sm:grid-cols-2">
                 <div>
-                  <Text>Input action</Text>
+                  <Tooltip title="What happens when user's message matches a safety rule">
+                    <Text>When user sends flagged content</Text>
+                  </Tooltip>
                   <Select
                     value={overrideDraft.input_action}
                     onChange={(value) =>
                       setOverrideDraft((prev) => ({ ...prev, input_action: value }))
                     }
-                    options={[
-                      { value: "block", label: "Block" },
-                      { value: "redact", label: "Redact" },
-                      { value: "warn", label: "Warn" }
-                    ]}
                     style={{ width: "100%" }}
+                    optionRender={(option) => {
+                      const actionInfo = ACTION_OPTIONS.find((a) => a.value === option.value)
+                      return (
+                        <div>
+                          <div>{option.label}</div>
+                          {actionInfo && <div className="text-xs text-text-muted">{actionInfo.description}</div>}
+                        </div>
+                      )
+                    }}
+                    options={ACTION_OPTIONS.map((a) => ({ value: a.value, label: a.label }))}
                   />
                 </div>
                 <div>
-                  <Text>Output action</Text>
+                  <Tooltip title="What happens when AI response contains flagged content">
+                    <Text>When AI response is flagged</Text>
+                  </Tooltip>
                   <Select
                     value={overrideDraft.output_action}
                     onChange={(value) =>
                       setOverrideDraft((prev) => ({ ...prev, output_action: value }))
                     }
-                    options={[
-                      { value: "block", label: "Block" },
-                      { value: "redact", label: "Redact" },
-                      { value: "warn", label: "Warn" }
-                    ]}
                     style={{ width: "100%" }}
+                    optionRender={(option) => {
+                      const actionInfo = ACTION_OPTIONS.find((a) => a.value === option.value)
+                      return (
+                        <div>
+                          <div>{option.label}</div>
+                          {actionInfo && <div className="text-xs text-text-muted">{actionInfo.description}</div>}
+                        </div>
+                      )
+                    }}
+                    options={ACTION_OPTIONS.map((a) => ({ value: a.value, label: a.label }))}
                   />
                 </div>
               </div>
 
               <div>
-                <Text>Redaction replacement</Text>
+                <Tooltip title="Text shown instead of blocked content when using Redact action">
+                  <Text>Replacement text for redacted content</Text>
+                </Tooltip>
                 <Input
                   placeholder="[REDACTED]"
                   value={overrideDraft.redact_replacement}
@@ -796,11 +1273,16 @@ export const ModerationPlayground: React.FC = () => {
               </div>
 
               <div>
-                <Text>Categories enabled</Text>
+                <Space>
+                  <Text>Content categories to monitor</Text>
+                  <Tooltip title="Limit which content categories are checked for this user">
+                    <QuestionCircleOutlined className="text-text-muted" />
+                  </Tooltip>
+                </Space>
                 <Select
                   mode="tags"
                   style={{ width: "100%" }}
-                  placeholder="Leave empty to allow all"
+                  placeholder="Leave empty to monitor all categories"
                   value={overrideDraft.categories_enabled as string[] | undefined}
                   onChange={(value) =>
                     setOverrideDraft((prev) => ({
@@ -808,14 +1290,22 @@ export const ModerationPlayground: React.FC = () => {
                       categories_enabled: value as string[]
                     }))
                   }
+                  options={CATEGORY_SUGGESTIONS}
                 />
               </div>
 
               <Space>
-                <Button type="primary" onClick={handleSaveOverride} disabled={!activeUserId}>
-                  Save override
-                </Button>
-                <Button danger onClick={() => handleDeleteOverride()} disabled={!overrideLoaded}>
+                <Tooltip title="Keyboard shortcut: Ctrl+S (when user is loaded)">
+                  <Button type="primary" onClick={handleSaveOverride} disabled={!activeUserId} aria-label="Save user override settings">
+                    Save override
+                  </Button>
+                </Tooltip>
+                <Tooltip title="Revert unsaved changes for this user">
+                  <Button onClick={handleResetOverride} disabled={!overrideDirty}>
+                    Reset changes
+                  </Button>
+                </Tooltip>
+                <Button danger onClick={() => confirmDeleteOverride()} disabled={!overrideLoaded} aria-label="Delete user override settings">
                   Delete override
                 </Button>
               </Space>
@@ -825,17 +1315,29 @@ export const ModerationPlayground: React.FC = () => {
       </div>
 
       <div className="grid gap-4 lg:grid-cols-2">
-        <Card title="Moderation Tester" className="shadow-sm">
+        <Card
+          title={
+            <Space>
+              <span>Test Your Rules</span>
+              <Tooltip title="Verify how your moderation rules will handle different content">
+                <QuestionCircleOutlined className="text-text-muted" />
+              </Tooltip>
+            </Space>
+          }
+          className="shadow-sm"
+        >
           <Space direction="vertical" size="middle" className="w-full">
             <div className="flex flex-wrap gap-2">
-              <Segmented
-                value={testPhase}
-                onChange={(value) => setTestPhase(value as "input" | "output")}
-                options={[
-                  { label: "Input", value: "input" },
-                  { label: "Output", value: "output" }
-                ]}
-              />
+              <Tooltip title="Test user input (what they send) or AI output (what they receive)">
+                <Segmented
+                  value={testPhase}
+                  onChange={(value) => setTestPhase(value as "input" | "output")}
+                  options={[
+                    { label: "User message", value: "input" },
+                    { label: "AI response", value: "output" }
+                  ]}
+                />
+              </Tooltip>
               <Input
                 placeholder="User ID (optional)"
                 value={testUserId}
@@ -845,26 +1347,53 @@ export const ModerationPlayground: React.FC = () => {
             </div>
             <TextArea
               rows={5}
-              placeholder="Enter text to test against moderation policy"
+              placeholder="Enter sample text to test against moderation policy..."
               value={testText}
               onChange={(event) => setTestText(event.target.value)}
             />
-            <Button onClick={handleRunTest}>Run test</Button>
+            <Button type="primary" onClick={handleRunTest}>Run test</Button>
             {testResult && (
               <Alert
                 type={testResult.flagged ? "warning" : "success"}
                 showIcon
+                icon={
+                  testResult.action === "pass" ? <CheckCircleOutlined /> :
+                  testResult.action === "block" ? <CloseCircleOutlined /> :
+                  testResult.action === "redact" ? <ExclamationCircleOutlined /> :
+                  <WarningOutlined />
+                }
                 message={
-                  <div>
-                    <div>
-                      Result: <strong>{testResult.action}</strong>
-                      {testResult.category ? ` (category: ${testResult.category})` : ""}
+                  <div className="space-y-2">
+                    <div className="flex items-center gap-2">
+                      <Badge
+                        status={
+                          testResult.action === "pass" ? "success" :
+                          testResult.action === "block" ? "error" : "warning"
+                        }
+                      />
+                      <Text strong>
+                        {testResult.action === "pass" ? "Content Allowed" :
+                         testResult.action === "block" ? "Content Blocked" :
+                         testResult.action === "redact" ? "Content Redacted" : "Warning Logged"}
+                      </Text>
                     </div>
+                    {testResult.category && (
+                      <div>
+                        <Text className="text-text-muted text-sm">Triggered by rule: </Text>
+                        <Tag color="orange">{testResult.category}</Tag>
+                      </div>
+                    )}
                     {testResult.sample && (
-                      <div className="text-xs text-text-muted">Sample: {testResult.sample}</div>
+                      <div>
+                        <Text className="text-text-muted text-sm">Matched pattern: </Text>
+                        <code className="bg-gray-100 px-2 py-1 rounded text-sm">{testResult.sample}</code>
+                      </div>
                     )}
                     {testResult.redacted_text && (
-                      <div className="text-xs text-text-muted">Redacted: {testResult.redacted_text}</div>
+                      <div className="mt-2 p-2 bg-gray-50 rounded border">
+                        <Text className="text-text-muted text-xs block mb-1">Redacted output:</Text>
+                        <Text code className="whitespace-pre-wrap">{testResult.redacted_text}</Text>
+                      </div>
                     )}
                   </div>
                 }
@@ -873,34 +1402,49 @@ export const ModerationPlayground: React.FC = () => {
           </Space>
         </Card>
 
-        <Card title="Effective Policy Snapshot" className="shadow-sm">
+        <Card
+          title={
+            <Space>
+              <span>Current Policy Status</span>
+              <Tooltip title="View the effective moderation policy for the current scope">
+                <QuestionCircleOutlined className="text-text-muted" />
+              </Tooltip>
+            </Space>
+          }
+          className="shadow-sm"
+        >
           <Space direction="vertical" size="middle" className="w-full">
             <div className="flex flex-wrap gap-2">
-              <Tag color={policySnapshot.enabled ? "green" : "red"}>
+              <Tag color={policySnapshot.enabled ? "green" : "red"} icon={policySnapshot.enabled ? <CheckCircleOutlined /> : <CloseCircleOutlined />}>
                 {policySnapshot.enabled ? "Enabled" : "Disabled"}
               </Tag>
               <Tag color={policySnapshot.input_enabled ? "blue" : "default"}>
-                Input: {policySnapshot.input_action || "pass"}
+                User messages: {policySnapshot.input_action || "pass"}
               </Tag>
               <Tag color={policySnapshot.output_enabled ? "purple" : "default"}>
-                Output: {policySnapshot.output_action || "pass"}
+                AI responses: {policySnapshot.output_action || "pass"}
               </Tag>
-              <Tag color="gold">Blocklist: {blocklistCount}</Tag>
+              <Tag color="gold">Blocklist rules: {blocklistCount}</Tag>
             </div>
             <div>
-              <Text className="text-text-muted">Categories</Text>
+              <Text className="text-text-muted">Active Categories</Text>
               <div className="mt-1 flex flex-wrap gap-2">
                 {policyCategories.length ? (
                   policyCategories.map((cat: string) => (
                     <Tag key={cat}>{cat}</Tag>
                   ))
                 ) : (
-                  <Text className="text-text-muted">All categories</Text>
+                  <Text className="text-text-muted">All categories monitored</Text>
                 )}
               </div>
             </div>
             {showAdvanced && (
-              <TextArea rows={10} value={formatJson(policySnapshot)} readOnly />
+              <details className="mt-2">
+                <summary className="cursor-pointer text-text-muted text-sm hover:text-text">
+                  View full policy JSON
+                </summary>
+                <TextArea className="mt-2" rows={10} value={formatJson(policySnapshot)} readOnly />
+              </details>
             )}
           </Space>
         </Card>
@@ -908,37 +1452,57 @@ export const ModerationPlayground: React.FC = () => {
 
       {showAdvanced && (
         <>
-          <Card title="Blocklist Studio" className="shadow-sm">
+          <Card
+            title={
+              <Space>
+                <span>Blocklist Studio</span>
+                <Tooltip title="Create and manage content filtering rules">
+                  <QuestionCircleOutlined className="text-text-muted" />
+                </Tooltip>
+              </Space>
+            }
+            className="shadow-sm"
+          >
             <Tabs
               items={[
                 {
                   key: "managed",
-                  label: "Managed",
+                  label: (
+                    <Tooltip title="Add and remove individual rules with version tracking">
+                      <span>Managed Rules</span>
+                    </Tooltip>
+                  ),
                   children: (
                     <Space direction="vertical" size="middle" className="w-full">
                       <div className="flex flex-wrap items-center gap-2">
                         <Button onClick={handleLoadManaged} loading={managedLoading}>
                           Load managed list
                         </Button>
-                        <Tag color="default">ETag: {managedVersion || "-"}</Tag>
+                        {managedVersion && (
+                          <Tooltip title="Internal version identifier for conflict detection">
+                            <Tag color="default">Version: {managedVersion.substring(0, 8)}...</Tag>
+                          </Tooltip>
+                        )}
                       </div>
                       <div className="flex flex-wrap gap-2">
                         <Input
-                          placeholder="Add a blocklist line"
+                          placeholder="Add a blocklist rule (e.g., /pattern/i:block)"
                           value={managedLine}
                           onChange={(event) => setManagedLine(event.target.value)}
                           style={{ minWidth: 280, flex: 1 }}
                         />
-                        <Button onClick={handleLintManagedLine}>Lint line</Button>
+                        <Tooltip title="Check rule syntax before adding">
+                          <Button onClick={handleLintManagedLine}>Validate</Button>
+                        </Tooltip>
                         <Button type="primary" onClick={handleAppendManaged}>
-                          Append
+                          Add rule
                         </Button>
                       </div>
                       {managedLint && (
                         <Table
                           size="small"
                           rowKey={(record) => `${record.index}-${record.line}`}
-                          columns={lintColumns}
+                          columns={buildLintColumns(Boolean(managedLint?.invalid_count))}
                           dataSource={managedLint.items}
                           pagination={false}
                         />
@@ -947,14 +1511,19 @@ export const ModerationPlayground: React.FC = () => {
                         size="small"
                         rowKey={(record) => record.id}
                         columns={[
-                          { title: "ID", dataIndex: "id", key: "id", width: 80 },
-                          { title: "Line", dataIndex: "line", key: "line" },
+                          { title: "#", dataIndex: "id", key: "id", width: 60 },
+                          { title: "Rule", dataIndex: "line", key: "line" },
                           {
                             title: "Actions",
                             key: "actions",
                             width: 120,
                             render: (_value, record) => (
-                              <Button danger size="small" onClick={() => handleDeleteManaged(record.id)}>
+                              <Button
+                                danger
+                                size="small"
+                                onClick={() => confirmDeleteManagedItem(record.id, record.line)}
+                                aria-label={`Delete rule: ${record.line.substring(0, 30)}${record.line.length > 30 ? "..." : ""}`}
+                              >
                                 Delete
                               </Button>
                             )
@@ -962,21 +1531,39 @@ export const ModerationPlayground: React.FC = () => {
                         ]}
                         dataSource={managedItems}
                         pagination={{ pageSize: 8 }}
+                        locale={{
+                          emptyText: (
+                            <div className="py-4 text-center text-text-muted">
+                              No rules loaded. Click "Load managed list" to view existing rules.
+                            </div>
+                          )
+                        }}
                       />
                     </Space>
                   )
                 },
                 {
                   key: "raw",
-                  label: "Raw file",
+                  label: (
+                    <Tooltip title="Edit the entire blocklist file directly">
+                      <span>Raw File Editor</span>
+                    </Tooltip>
+                  ),
                   children: (
                     <Space direction="vertical" size="middle" className="w-full">
+                      <Alert
+                        type="warning"
+                        showIcon
+                        icon={<WarningOutlined />}
+                        message="Raw file editing replaces all existing rules. Use with caution."
+                        className="!py-2"
+                      />
                       <div className="flex flex-wrap gap-2">
                         <Button onClick={handleLoadBlocklist} loading={blocklistLoading}>
                           Load blocklist
                         </Button>
                         <Button onClick={handleLintBlocklist} loading={blocklistLoading}>
-                          Lint
+                          Validate all
                         </Button>
                         <Button type="primary" onClick={handleSaveBlocklist} loading={blocklistLoading}>
                           Save / Replace
@@ -986,13 +1573,13 @@ export const ModerationPlayground: React.FC = () => {
                         rows={10}
                         value={blocklistText}
                         onChange={(event) => setBlocklistText(event.target.value)}
-                        placeholder="One rule per line"
+                        placeholder="One rule per line. Examples:&#10;badword:block&#10;/regex pattern/i:redact&#10;# Comment line"
                       />
                       {blocklistLint && (
                         <Table
                           size="small"
                           rowKey={(record) => `${record.index}-${record.line}`}
-                          columns={lintColumns}
+                          columns={buildLintColumns(Boolean(blocklistLint?.invalid_count))}
                           dataSource={blocklistLint.items}
                           pagination={{ pageSize: 6 }}
                         />
@@ -1004,17 +1591,82 @@ export const ModerationPlayground: React.FC = () => {
             />
           </Card>
 
-          <Card title="Per-user Overrides" className="shadow-sm">
-            {overridesQuery.isFetching && <Text className="text-text-muted">Loading overrides...</Text>}
-            <Table
-              size="small"
-              rowKey={(record) => record.user_id}
-              columns={overrideColumns}
-              dataSource={Object.entries(overridesQuery.data?.overrides || {}).map(
-                ([user_id, override]) => ({ user_id, override })
+          <Card
+            title={
+              <Space>
+                <span>Per-user Overrides</span>
+                <Tooltip title="View and manage all user-specific moderation settings">
+                  <QuestionCircleOutlined className="text-text-muted" />
+                </Tooltip>
+              </Space>
+            }
+            className="shadow-sm"
+          >
+            <Space direction="vertical" size="middle" className="w-full">
+              <Space wrap align="center">
+                <Input
+                  placeholder="Search by user ID..."
+                  prefix={<SearchOutlined className="text-text-muted" />}
+                  value={overrideSearchFilter}
+                  onChange={(e) => setOverrideSearchFilter(e.target.value)}
+                  style={{ maxWidth: 300 }}
+                  allowClear
+                />
+                <Tooltip title="Delete selected overrides">
+                  <Button
+                    danger
+                    disabled={!selectedOverrideIds.length}
+                    onClick={confirmBulkDeleteOverrides}
+                    aria-label="Delete selected user overrides"
+                  >
+                    Delete selected
+                  </Button>
+                </Tooltip>
+                <Button
+                  disabled={!selectedOverrideIds.length}
+                  onClick={() => setSelectedOverrideIds([])}
+                >
+                  Clear selection
+                </Button>
+              </Space>
+              {overridesQuery.isFetching ? (
+                <Skeleton active paragraph={{ rows: 4 }} />
+              ) : (
+                <Table
+                  size="small"
+                  rowKey={(record) => record.user_id}
+                  columns={overrideColumns}
+                  dataSource={overridesData}
+                  rowSelection={overrideRowSelection}
+                  pagination={{ pageSize: 6 }}
+                  locale={{
+                    emptyText: (
+                      <div className="py-8 text-center">
+                        <Text className="text-text-muted">
+                          {overrideSearchFilter
+                            ? `No users found matching "${overrideSearchFilter}"`
+                            : "No user overrides configured yet."}
+                        </Text>
+                        {!overrideSearchFilter && (
+                          <div className="mt-2">
+                            <Button
+                              type="link"
+                              onClick={() => {
+                                setScope("user")
+                                // Focus on user ID input after state update
+                                setTimeout(() => userIdInputRef.current?.focus(), 0)
+                              }}
+                            >
+                              Configure your first user
+                            </Button>
+                          </div>
+                        )}
+                      </div>
+                    )
+                  }}
+                />
               )}
-              pagination={{ pageSize: 6 }}
-            />
+            </Space>
           </Card>
         </>
       )}
