@@ -2245,10 +2245,18 @@ async def create_translation(
         model=model,
         language=None,  # Allow backend to auto-detect source language
         prompt=prompt,
+        hotwords=None,
         response_format=response_format,
         temperature=temperature,
         task="translate",
         timestamp_granularities="segment",
+        segment=False,
+        seg_K=6,
+        seg_min_segment_size=5,
+        seg_lambda_balance=0.01,
+        seg_utterance_expansion_width=2,
+        seg_embeddings_provider=None,
+        seg_embeddings_model=None,
         current_user=current_user,
     )
 

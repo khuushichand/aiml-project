@@ -455,7 +455,11 @@ class JWTService:
 
     def decode_access_token(self, token: str) -> Dict[str, Any]:
         """
-        Decode and verify an access token
+        Decode and verify an access token (SYNC, NO BLACKLIST CHECK).
+
+        SECURITY NOTE: This uses the sync verify_token() which does NOT check
+        the token blacklist. Use verify_token_async() for authorization decisions
+        where blacklist enforcement is required.
 
         Args:
             token: Access token to decode
@@ -471,7 +475,11 @@ class JWTService:
 
     def decode_refresh_token(self, token: str) -> Dict[str, Any]:
         """
-        Decode and verify a refresh token
+        Decode and verify a refresh token (SYNC, NO BLACKLIST CHECK).
+
+        SECURITY NOTE: This uses the sync verify_token() which does NOT check
+        the token blacklist. For refresh token flows, prefer refresh_access_token_async()
+        or the /auth/refresh endpoint which enforce blacklist checks.
 
         Args:
             token: Refresh token to decode
@@ -487,7 +495,11 @@ class JWTService:
 
     def verify_password_reset_token(self, token: str) -> Dict[str, Any]:
         """
-        Verify and decode a password reset token.
+        Verify and decode a password reset token (SYNC).
+
+        NOTE: Uses sync verify_token() without blacklist check. This is acceptable
+        for password reset tokens because they are single-use tokens with additional
+        database-level validation (token hash lookup, used_at check) that prevents reuse.
 
         Args:
             token: Password reset token to verify
@@ -503,7 +515,11 @@ class JWTService:
 
     def verify_email_verification_token(self, token: str) -> Dict[str, Any]:
         """
-        Verify and decode an email verification token.
+        Verify and decode an email verification token (SYNC).
+
+        NOTE: Uses sync verify_token() without blacklist check. This is acceptable
+        for email verification tokens because they are single-use tokens - the user's
+        is_verified flag is set on first use, making subsequent uses ineffective.
 
         Args:
             token: Email verification token to verify
@@ -519,7 +535,12 @@ class JWTService:
 
     def verify_service_token(self, token: str) -> Dict[str, Any]:
         """
-        Verify and decode a service account token.
+        Verify and decode a service account token (SYNC, NO BLACKLIST CHECK).
+
+        SECURITY NOTE: This uses the sync verify_token() which does NOT check
+        the token blacklist. Service tokens are typically long-lived. If service
+        token revocation is required, use verify_token_async() instead or implement
+        additional validation at the service level.
 
         Args:
             token: Service account token to verify
@@ -679,7 +700,17 @@ class JWTService:
 
     def extract_jti(self, token: str) -> Optional[str]:
         """
-        Extract the JTI (JWT ID) from a token without full verification
+        Extract the JTI (JWT ID) from a token without full verification.
+
+        SECURITY NOTE: This method decodes the token WITHOUT signature verification.
+        It should ONLY be used for:
+        - Logging/debugging purposes
+        - Token revocation operations (where the JTI is needed to blacklist)
+        - Cases where full verification happens separately
+
+        DO NOT use the extracted JTI for authorization decisions without
+        first calling verify_token() or verify_token_async() to validate
+        the token's signature and expiry.
 
         Args:
             token: JWT token
@@ -690,8 +721,16 @@ class JWTService:
         try:
             # Decode without verification to get JTI
             unverified = jwt.get_unverified_claims(token)
-            return unverified.get("jti")
-        except Exception:
+            jti = unverified.get("jti")
+            # Log usage at debug level for security auditing
+            if jti:
+                logger.debug(
+                    "extract_jti called (unverified token decode) - "
+                    "ensure token is verified separately for authorization"
+                )
+            return jti
+        except Exception as e:
+            logger.debug(f"extract_jti failed to decode token: {e}")
             return None
 
 
@@ -1117,7 +1156,19 @@ def create_refresh_token(user_id: int, username: str) -> str:
 
 
 def verify_token(token: str, token_type: Optional[str] = None) -> Dict[str, Any]:
-    """Convenience function to verify a token"""
+    """
+    Convenience function to verify a token (SYNC, NO BLACKLIST CHECK).
+
+    SECURITY NOTE: This calls the sync verify_token() method which does NOT
+    check the token blacklist. Revoked tokens will still pass validation.
+    For security-critical authorization decisions, use verify_token_async()
+    or the async verify methods in auth dependencies instead.
+
+    Appropriate uses:
+    - Token introspection/debugging
+    - Extracting claims for non-authorization purposes (e.g., logout cleanup)
+    - One-time tokens (password_reset, email_verification) with additional validation
+    """
     return get_jwt_service().verify_token(token, token_type)
 
 

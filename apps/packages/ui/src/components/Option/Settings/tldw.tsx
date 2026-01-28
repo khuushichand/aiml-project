@@ -26,6 +26,7 @@ import { useAntdMessage } from "@/hooks/useAntdMessage"
 import { useConnectionStore } from "@/store/connection"
 import { mapMultiUserLoginErrorMessage } from "@/services/auth-errors"
 import { ServerOverviewHint } from "@/components/Common/ServerOverviewHint"
+import { requestOptionalHostPermission } from "@/utils/extension-permissions"
 
 type TimeoutPresetKey = 'balanced' | 'extended'
 type LoginMethod = 'magic-link' | 'password'
@@ -461,33 +462,20 @@ export const TldwSettings = () => {
         config.refreshToken = undefined
       }
 
-      await tldwClient.updateConfig(config)
-
       // Request optional host permission for the configured origin on Chromium-based browsers
-      try {
-        const origin = new URL(values.serverUrl).origin
-        const chromePermissions = (
-          globalThis as {
-            chrome?: {
-              permissions?: {
-                request?: (
-                  options: { origins: string[] },
-                  callback: (granted: boolean) => void
-                ) => void
-              }
-            }
+      requestOptionalHostPermission(
+        values.serverUrl,
+        (granted, origin) => {
+          if (!granted) {
+            console.warn("Permission not granted for origin:", origin)
           }
-        ).chrome?.permissions
-        if (chromePermissions?.request) {
-          chromePermissions.request({ origins: [origin + '/*'] }, (granted) => {
-            if (!granted) {
-              console.warn('Permission not granted for origin:', origin)
-            }
-          })
+        },
+        (error) => {
+          console.warn("Could not request optional host permission:", error)
         }
-      } catch (e) {
-        console.warn('Could not request optional host permission:', e)
-      }
+      )
+
+      await tldwClient.updateConfig(config)
       message.success(t("settings:savedSuccessfully"))
       
       // Test connection after saving
@@ -623,8 +611,9 @@ export const TldwSettings = () => {
     setCoreStatus("checking")
     setRagStatus("unknown")
     
+    let values: any = {}
     try {
-      const values = form.getFieldsValue()
+      values = form.getFieldsValue()
       const errors = await form.validateFields(["serverUrl"]).catch(e => e)
       if (errors?.errorFields?.length) {
         return
@@ -657,6 +646,19 @@ export const TldwSettings = () => {
       setCoreStatus(success ? "connected" : "failed")
 
       if (!success) {
+        if (resp?.status === 0) {
+          requestOptionalHostPermission(values.serverUrl, (granted, origin) => {
+            if (!granted) {
+              message.warning(
+                t(
+                  "settings:siteAccessDenied",
+                  "Permission not granted for {{origin}}",
+                  { origin }
+                )
+              )
+            }
+          })
+        }
         const code = resp?.status
         const detail = resp?.error || ""
 
@@ -727,6 +729,19 @@ export const TldwSettings = () => {
       setConnectionStatus('error')
       setCoreStatus("failed")
       const raw = (error as any)?.message || ''
+      if (raw && /network|timeout|failed to fetch/i.test(raw)) {
+        requestOptionalHostPermission(values.serverUrl, (granted, origin) => {
+          if (!granted) {
+            message.warning(
+              t(
+                "settings:siteAccessDenied",
+                "Permission not granted for {{origin}}",
+                { origin }
+              )
+            )
+          }
+        })
+      }
       const friendly =
         raw && /network|timeout|failed to fetch/i.test(raw)
           ? t(

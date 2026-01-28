@@ -361,6 +361,7 @@ export default function RoleDetailPage() {
       setToolPermissionsLoading(true);
       setError('');
       await api.grantToolPermissionsByPrefix(roleId, prefix);
+      setToolPermissionsError('');
       setSuccess(`Tool permissions granted for prefix "${prefix}"`);
       setNewToolPrefix('');
       // Reload tool permissions
@@ -394,6 +395,7 @@ export default function RoleDetailPage() {
       setToolPermissionsLoading(true);
       setError('');
       await api.revokeToolPermissionsByPrefix(roleId, prefix);
+      setToolPermissionsError('');
       setSuccess(`Tool permissions revoked for prefix "${prefix}"`);
       setNewToolPrefix('');
       // Reload tool permissions

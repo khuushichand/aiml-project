@@ -6,7 +6,8 @@ import uuid
 from fastapi.testclient import TestClient
 
 from tldw_Server_API.app.main import app
-from tldw_Server_API.app.core.AuthNZ.database import get_db_pool
+from tldw_Server_API.app.core.AuthNZ.database import get_db_pool, reset_db_pool
+from tldw_Server_API.app.core.AuthNZ.initialize import ensure_single_user_rbac_seed_if_needed
 from tldw_Server_API.app.core.AuthNZ.orgs_teams import (
     add_org_member,
     add_team_member,
@@ -18,6 +19,7 @@ from tldw_Server_API.app.core.UserProfiles.overrides_repo import (
     TeamProfileOverridesRepo,
 )
 from tldw_Server_API.app.core.UserProfiles.service import UserProfileService
+from tldw_Server_API.app.core.AuthNZ.settings import reset_settings
 
 
 def _run_async(coro):
@@ -46,116 +48,131 @@ def test_select_lowest_id_overrides() -> None:
     assert selected["preferences.ui.density"]["id"] == 1
 
 
-def test_effective_config_layering(auth_headers) -> None:
-    with TestClient(app) as client:
-        user_id = _get_user_id(client, auth_headers)
-        suffix = uuid.uuid4().hex[:8]
+def test_effective_config_layering(auth_headers, tmp_path, monkeypatch) -> None:
+    # Isolate AuthNZ SQLite to avoid cross-test/process locks on Databases/users.db.
+    db_path = tmp_path / f"users_effective_layers_{uuid.uuid4().hex[:8]}.db"
+    monkeypatch.setenv("AUTH_MODE", "single_user")
+    monkeypatch.setenv("DATABASE_URL", f"sqlite:///{db_path}")
 
-        async def _setup_overrides():
-            org = await create_organization(name=f"Config Org {suffix}", owner_user_id=None)
-            await add_org_member(org_id=int(org["id"]), user_id=user_id, role="member")
-            team = await create_team(org_id=int(org["id"]), name=f"Config Team {suffix}")
-            await add_team_member(team_id=int(team["id"]), user_id=user_id, role="member")
+    # Ensure cached settings/pools are rebuilt against the isolated DB.
+    reset_settings()
+    _run_async(reset_db_pool())
+    _run_async(ensure_single_user_rbac_seed_if_needed())
 
-            pool = await get_db_pool()
-            org_repo = OrgProfileOverridesRepo(pool)
-            team_repo = TeamProfileOverridesRepo(pool)
-            await org_repo.ensure_tables()
-            await team_repo.ensure_tables()
+    try:
+        with TestClient(app) as client:
+            user_id = _get_user_id(client, auth_headers)
+            suffix = uuid.uuid4().hex[:8]
 
-            await org_repo.upsert_override(
-                org_id=int(org["id"]),
-                key="preferences.ui.theme",
-                value="org-theme",
-                updated_by=user_id,
+            async def _setup_overrides():
+                org = await create_organization(name=f"Config Org {suffix}", owner_user_id=None)
+                await add_org_member(org_id=int(org["id"]), user_id=user_id, role="member")
+                team = await create_team(org_id=int(org["id"]), name=f"Config Team {suffix}")
+                await add_team_member(team_id=int(team["id"]), user_id=user_id, role="member")
+
+                pool = await get_db_pool()
+                org_repo = OrgProfileOverridesRepo(pool)
+                team_repo = TeamProfileOverridesRepo(pool)
+                await org_repo.ensure_tables()
+                await team_repo.ensure_tables()
+
+                await org_repo.upsert_override(
+                    org_id=int(org["id"]),
+                    key="preferences.ui.theme",
+                    value="org-theme",
+                    updated_by=user_id,
+                )
+                await team_repo.upsert_override(
+                    team_id=int(team["id"]),
+                    key="preferences.ui.theme",
+                    value="team-theme",
+                    updated_by=user_id,
+                )
+                return int(org["id"]), int(team["id"])
+
+            org_id, team_id = _run_async(_setup_overrides())
+
+            resp = client.patch(
+                "/api/v1/users/me/profile",
+                headers=auth_headers,
+                json={
+                    "updates": [{"key": "preferences.ui.theme", "value": "user-theme"}],
+                },
             )
-            await team_repo.upsert_override(
-                team_id=int(team["id"]),
-                key="preferences.ui.theme",
-                value="team-theme",
-                updated_by=user_id,
+            assert resp.status_code == 200
+
+            resp = client.get(
+                "/api/v1/users/me/profile",
+                headers=auth_headers,
+                params={"sections": "effective_config", "include_sources": True},
             )
-            return int(org["id"]), int(team["id"])
+            assert resp.status_code == 200
+            effective = resp.json().get("effective_config", {})
+            assert effective["preferences.ui.theme"]["value"] == "user-theme"
+            assert effective["preferences.ui.theme"]["source"] == "user"
 
-        org_id, team_id = _run_async(_setup_overrides())
-
-        resp = client.patch(
-            "/api/v1/users/me/profile",
-            headers=auth_headers,
-            json={
-                "updates": [{"key": "preferences.ui.theme", "value": "user-theme"}],
-            },
-        )
-        assert resp.status_code == 200
-
-        resp = client.get(
-            "/api/v1/users/me/profile",
-            headers=auth_headers,
-            params={"sections": "effective_config", "include_sources": True},
-        )
-        assert resp.status_code == 200
-        effective = resp.json().get("effective_config", {})
-        assert effective["preferences.ui.theme"]["value"] == "user-theme"
-        assert effective["preferences.ui.theme"]["source"] == "user"
-
-        resp = client.patch(
-            "/api/v1/users/me/profile",
-            headers=auth_headers,
-            json={
-                "updates": [{"key": "preferences.ui.theme", "value": None}],
-            },
-        )
-        assert resp.status_code == 200
-
-        resp = client.get(
-            "/api/v1/users/me/profile",
-            headers=auth_headers,
-            params={"sections": "effective_config", "include_sources": True},
-        )
-        assert resp.status_code == 200
-        effective = resp.json().get("effective_config", {})
-        assert effective["preferences.ui.theme"]["value"] == "team-theme"
-        assert effective["preferences.ui.theme"]["source"] == "team"
-
-        async def _remove_team_override():
-            pool = await get_db_pool()
-            team_repo = TeamProfileOverridesRepo(pool)
-            await team_repo.ensure_tables()
-            await team_repo.delete_override(team_id=team_id, key="preferences.ui.theme")
-
-        _run_async(_remove_team_override())
-
-        resp = client.get(
-            "/api/v1/users/me/profile",
-            headers=auth_headers,
-            params={"sections": "effective_config", "include_sources": True},
-        )
-        assert resp.status_code == 200
-        effective = resp.json().get("effective_config", {})
-        assert effective["preferences.ui.theme"]["value"] == "org-theme"
-        assert effective["preferences.ui.theme"]["source"] == "org"
-
-        async def _add_second_org_override():
-            org = await create_organization(name=f"Config Org 2 {suffix}", owner_user_id=None)
-            await add_org_member(org_id=int(org["id"]), user_id=user_id, role="member")
-            pool = await get_db_pool()
-            org_repo = OrgProfileOverridesRepo(pool)
-            await org_repo.ensure_tables()
-            await org_repo.upsert_override(
-                org_id=int(org["id"]),
-                key="preferences.ui.theme",
-                value="org-theme-2",
-                updated_by=user_id,
+            resp = client.patch(
+                "/api/v1/users/me/profile",
+                headers=auth_headers,
+                json={
+                    "updates": [{"key": "preferences.ui.theme", "value": None}],
+                },
             )
+            assert resp.status_code == 200
 
-        _run_async(_add_second_org_override())
+            resp = client.get(
+                "/api/v1/users/me/profile",
+                headers=auth_headers,
+                params={"sections": "effective_config", "include_sources": True},
+            )
+            assert resp.status_code == 200
+            effective = resp.json().get("effective_config", {})
+            assert effective["preferences.ui.theme"]["value"] == "team-theme"
+            assert effective["preferences.ui.theme"]["source"] == "team"
 
-        resp = client.get(
-            "/api/v1/users/me/profile",
-            headers=auth_headers,
-            params={"sections": "effective_config", "include_sources": True},
-        )
-        assert resp.status_code == 200
-        effective = resp.json().get("effective_config", {})
-        assert effective["preferences.ui.theme"]["value"] == "org-theme"
-        assert effective["preferences.ui.theme"]["source"] == "org"
+            async def _remove_team_override():
+                pool = await get_db_pool()
+                team_repo = TeamProfileOverridesRepo(pool)
+                await team_repo.ensure_tables()
+                await team_repo.delete_override(team_id=team_id, key="preferences.ui.theme")
+
+            _run_async(_remove_team_override())
+
+            resp = client.get(
+                "/api/v1/users/me/profile",
+                headers=auth_headers,
+                params={"sections": "effective_config", "include_sources": True},
+            )
+            assert resp.status_code == 200
+            effective = resp.json().get("effective_config", {})
+            assert effective["preferences.ui.theme"]["value"] == "org-theme"
+            assert effective["preferences.ui.theme"]["source"] == "org"
+
+            async def _add_second_org_override():
+                org = await create_organization(name=f"Config Org 2 {suffix}", owner_user_id=None)
+                await add_org_member(org_id=int(org["id"]), user_id=user_id, role="member")
+                pool = await get_db_pool()
+                org_repo = OrgProfileOverridesRepo(pool)
+                await org_repo.ensure_tables()
+                await org_repo.upsert_override(
+                    org_id=int(org["id"]),
+                    key="preferences.ui.theme",
+                    value="org-theme-2",
+                    updated_by=user_id,
+                )
+
+            _run_async(_add_second_org_override())
+
+            resp = client.get(
+                "/api/v1/users/me/profile",
+                headers=auth_headers,
+                params={"sections": "effective_config", "include_sources": True},
+            )
+            assert resp.status_code == 200
+            effective = resp.json().get("effective_config", {})
+            assert effective["preferences.ui.theme"]["value"] == "org-theme"
+            assert effective["preferences.ui.theme"]["source"] == "org"
+    finally:
+        # Best-effort cleanup so subsequent tests don't inherit this pool.
+        _run_async(reset_db_pool())
+        reset_settings()

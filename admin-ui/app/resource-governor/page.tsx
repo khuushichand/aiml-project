@@ -216,7 +216,12 @@ export default function ResourceGovernorPage() {
 
       if (priority !== null) payload.priority = priority;
       else if (isEditMode) payload.priority = null;
-      if (formDescription.trim()) payload.description = formDescription.trim();
+
+      if (isEditMode) {
+        payload.description = formDescription.trim() || null;
+      } else if (formDescription.trim()) {
+        payload.description = formDescription.trim();
+      }
 
       if (editingPolicy?.id) {
         payload.id = editingPolicy.id;
@@ -454,7 +459,7 @@ export default function ResourceGovernorPage() {
                     <Checkbox
                       id="policy-enabled"
                       checked={formEnabled}
-                      onCheckedChange={(checked) => setFormEnabled(checked)}
+                      onCheckedChange={(checked) => setFormEnabled(checked === true)}
                     />
                     <Label htmlFor="policy-enabled">Enabled</Label>
                   </div>

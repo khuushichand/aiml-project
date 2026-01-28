@@ -1658,6 +1658,35 @@ class KanbanDBRetriever(BaseRetriever):
         documents.sort(key=lambda d: getattr(d, "score", 0.0), reverse=True)
         return documents
 
+    async def get_metadata(self, doc_id: str) -> Dict[str, Any]:
+        """Get metadata for a Kanban card document."""
+        if not doc_id:
+            return {}
+
+        card_id_str = doc_id
+        if doc_id.startswith("kanban_card_"):
+            card_id_str = doc_id.replace("kanban_card_", "", 1)
+
+        try:
+            card_id = int(card_id_str)
+        except (TypeError, ValueError):
+            logger.debug(f"KanbanDBRetriever.get_metadata received non-numeric doc_id: {doc_id}")
+            return {}
+
+        try:
+            db = self._get_db()
+            card = db.get_card_with_details(card_id, include_deleted=False) or db.get_card(
+                card_id, include_deleted=False
+            )
+            if not card:
+                return {}
+            metadata = dict(card)
+            metadata.setdefault("source", "kanban")
+            return metadata
+        except Exception as exc:  # noqa: BLE001
+            logger.debug(f"KanbanDBRetriever metadata lookup failed for {doc_id}: {exc}")
+            return {}
+
     def close(self) -> None:
         if self._owns_db and self.kanban_db is not None:
             try:

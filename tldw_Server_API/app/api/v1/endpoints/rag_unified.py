@@ -50,6 +50,10 @@ from tldw_Server_API.app.core.RAG.rag_service.agentic_chunker import (
 )
 from tldw_Server_API.app.core.RAG.rag_service.generation import generate_streaming_response
 from tldw_Server_API.app.core.RAG.rag_service.types import DataSource, Document
+from tldw_Server_API.app.core.RAG.rag_service.database_retrievers import (
+    MultiDatabaseRetriever,
+    RetrievalConfig,
+)
 
 # Schemas
 from tldw_Server_API.app.api.v1.schemas.rag_schemas_unified import (
@@ -86,6 +90,28 @@ def _build_unified_pipeline_kwargs(
         return payload
     allowed = set(signature.parameters.keys())
     return {k: v for k, v in payload.items() if k in allowed}
+
+
+def _sync_retriever_overrides_to_pipeline() -> None:
+    """
+    Keep endpoint-level retriever monkeypatches effective.
+
+    Several integration tests patch ``rag_unified.MultiDatabaseRetriever``.
+    The streaming and unified endpoints now delegate retrieval to
+    ``unified_rag_pipeline`` which references its own module globals.
+    This hook synchronizes the pipeline's references with the endpoint's.
+    """
+    try:
+        import tldw_Server_API.app.core.RAG.rag_service.unified_pipeline as up
+
+        if getattr(up, "MultiDatabaseRetriever", None) is not MultiDatabaseRetriever:
+            up.MultiDatabaseRetriever = MultiDatabaseRetriever  # type: ignore[assignment]
+
+        # RetrievalConfig should normally already be set, but be defensive.
+        if getattr(up, "RetrievalConfig", None) is None and RetrievalConfig is not None:
+            up.RetrievalConfig = RetrievalConfig  # type: ignore[assignment]
+    except Exception:
+        logger.debug("Failed to sync retriever overrides to unified pipeline", exc_info=True)
 
 
 def _resolve_kanban_db_path(current_user: Optional[User], request_user_id: Optional[str] = None) -> Optional[str]:
@@ -1026,6 +1052,7 @@ async def unified_search_endpoint(
                 chacha_db=chacha_db,
                 current_user=current_user,
             )
+            _sync_retriever_overrides_to_pipeline()
             result = await unified_rag_pipeline(**kwargs)
 
         # Convert to response format
@@ -1342,6 +1369,7 @@ async def unified_search_stream_endpoint(
             docs = []
             try:
                 if db_paths:
+                    _sync_retriever_overrides_to_pipeline()
                     kwargs = _build_unified_pipeline_kwargs(
                         request=request,
                         db_paths={

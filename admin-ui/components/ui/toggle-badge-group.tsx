@@ -103,6 +103,17 @@ const ToggleBadgeGroup = React.forwardRef<HTMLDivElement, ToggleBadgeGroupProps>
       }
     };
 
+    React.useEffect(() => {
+      if (options.length === 0) {
+        setFocusedIndex(-1);
+        return;
+      }
+
+      if (focusedIndex >= options.length) {
+        setFocusedIndex(options.length - 1);
+      }
+    }, [focusedIndex, options.length, setFocusedIndex]);
+
     // Focus the badge when focusedIndex changes
     React.useEffect(() => {
       if (focusedIndex >= 0 && containerRef.current) {

@@ -18,7 +18,10 @@ from tldw_Server_API.app.api.v1.schemas.media_response_models import (
     MediaKeywordsResponse,
 )
 from tldw_Server_API.app.api.v1.utils.cache import generate_etag, is_not_modified
-from tldw_Server_API.app.api.v1.utils.rag_cache import invalidate_rag_caches
+from tldw_Server_API.app.api.v1.utils.rag_cache import (
+    delete_media_vectors,
+    invalidate_rag_caches,
+)
 from tldw_Server_API.app.core.AuthNZ.permissions import MEDIA_DELETE, MEDIA_UPDATE
 from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import User, get_request_user
 from tldw_Server_API.app.core.DB_Management.DB_Manager import get_full_media_details_rich2
@@ -189,6 +192,8 @@ async def delete_media_item(
                 status_code=status.HTTP_409_CONFLICT,
                 detail="Media could not be moved to trash",
             )
+        invalidate_rag_caches(current_user, media_id=media_id)
+        await delete_media_vectors(current_user, media_id=media_id)
         logger.info(
             "User {} moved media {} to trash",
             getattr(current_user, "id", "?"),
@@ -375,6 +380,8 @@ async def permanently_delete_media_item(
                 status_code=status.HTTP_404_NOT_FOUND,
                 detail="Media not found or already deleted",
             )
+        invalidate_rag_caches(current_user, media_id=media_id)
+        await delete_media_vectors(current_user, media_id=media_id)
         logger.warning(
             "User {} permanently deleted media {}",
             getattr(current_user, "id", "?"),

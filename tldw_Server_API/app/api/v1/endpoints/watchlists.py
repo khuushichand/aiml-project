@@ -33,7 +33,6 @@ from tldw_Server_API.app.core.AuthNZ.ip_allowlist import (
     is_single_user_ip_allowed,
     resolve_client_ip,
 )
-from tldw_Server_API.app.core.AuthNZ.jwt_service import verify_token as _verify_jwt_token
 from tldw_Server_API.app.core.AuthNZ.api_key_manager import get_api_key_manager
 from tldw_Server_API.app.core.AuthNZ.settings import get_settings
 from tldw_Server_API.app.api.v1.API_Deps.auth_deps import rbac_rate_limit
@@ -655,11 +654,30 @@ async def _resolve_watchlists_ws_user_id(
         token = None
 
     if token:
-        payload = _verify_jwt_token(token)
-        sub = payload.get("sub")
+        try:
+            from tldw_Server_API.app.core.AuthNZ.jwt_service import get_jwt_service
+            from tldw_Server_API.app.core.AuthNZ.session_manager import get_session_manager
+            from tldw_Server_API.app.core.AuthNZ.exceptions import InvalidTokenError, TokenExpiredError
+
+            jwt_service = get_jwt_service()
+            payload = await jwt_service.verify_token_async(token, token_type="access")
+            session_manager = await get_session_manager()
+            if await session_manager.is_token_blacklisted(token, payload.get("jti")):
+                raise HTTPException(status_code=401, detail="invalid_token")
+        except HTTPException:
+            raise
+        except (InvalidTokenError, TokenExpiredError):
+            raise HTTPException(status_code=401, detail="invalid_token")
+        except Exception:
+            raise HTTPException(status_code=401, detail="invalid_token")
+
+        sub = payload.get("user_id") or payload.get("sub")
         if sub is None:
             raise HTTPException(status_code=401, detail="invalid_token")
-        return int(sub)
+        try:
+            return int(sub)
+        except Exception:
+            raise HTTPException(status_code=401, detail="invalid_token")
 
     if api_key:
         settings = get_settings()

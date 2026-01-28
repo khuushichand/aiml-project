@@ -9,6 +9,7 @@
 import asyncio
 import base64
 import json
+import os
 import time
 import uuid
 from typing import Any, Dict, List, Optional
@@ -109,6 +110,10 @@ def _voice_to_action_type(voice_type: VoiceActionType) -> ActionType:
     return ActionType(voice_type.value)
 
 
+def _looks_like_jwt(token: Optional[str]) -> bool:
+    return isinstance(token, str) and token.count(".") == 2
+
+
 async def _authenticate_websocket(
     websocket: WebSocket,
     token: Optional[str] = None,
@@ -126,23 +131,54 @@ async def _authenticate_websocket(
     if not token:
         return False, None
 
+    if _looks_like_jwt(token):
+        try:
+            from tldw_Server_API.app.core.AuthNZ.jwt_service import get_jwt_service
+            from tldw_Server_API.app.core.AuthNZ.session_manager import get_session_manager
+            from tldw_Server_API.app.core.AuthNZ.exceptions import InvalidTokenError, TokenExpiredError
+
+            jwt_service = get_jwt_service()
+            payload = await jwt_service.verify_token_async(token, token_type="access")
+            session_manager = await get_session_manager()
+            if await session_manager.is_token_blacklisted(token, payload.get("jti")):
+                return False, None
+
+            user_id = payload.get("user_id") or payload.get("sub")
+            if isinstance(user_id, str):
+                try:
+                    user_id = int(user_id)
+                except Exception:
+                    user_id = None
+            if isinstance(user_id, int):
+                return True, user_id
+        except (InvalidTokenError, TokenExpiredError):
+            pass
+        except Exception:
+            pass
+
     try:
-        # Try JWT authentication first
-        from tldw_Server_API.app.core.AuthNZ.auth_user import decode_access_token
+        from tldw_Server_API.app.core.AuthNZ.api_key_manager import get_api_key_manager
+        from tldw_Server_API.app.core.AuthNZ.ip_allowlist import is_single_user_ip_allowed, resolve_client_ip
+        from tldw_Server_API.app.core.AuthNZ.settings import get_settings
 
-        payload = decode_access_token(token)
-        if payload and "user_id" in payload:
-            return True, payload["user_id"]
-    except Exception:
-        pass
+        settings = get_settings()
+        client_ip = resolve_client_ip(websocket, settings)
+        if getattr(settings, "AUTH_MODE", None) == "single_user":
+            allowed_keys: set[str] = set()
+            primary_key = getattr(settings, "SINGLE_USER_API_KEY", None)
+            if primary_key:
+                allowed_keys.add(primary_key)
+            test_key = os.getenv("SINGLE_USER_TEST_API_KEY")
+            if test_key:
+                allowed_keys.add(test_key)
+            if token in allowed_keys and is_single_user_ip_allowed(client_ip, settings):
+                return True, int(getattr(settings, "SINGLE_USER_FIXED_ID", 1))
+            return False, None
 
-    try:
-        # Try API key authentication
-        from tldw_Server_API.app.core.AuthNZ.auth_api_key import validate_api_key
-
-        user = await validate_api_key(token)
-        if user:
-            return True, user.id
+        api_mgr = await get_api_key_manager()
+        info = await api_mgr.validate_api_key(api_key=token, required_scope="read", ip_address=client_ip)
+        if info and info.get("user_id") is not None:
+            return True, int(info["user_id"])
     except Exception:
         pass
 

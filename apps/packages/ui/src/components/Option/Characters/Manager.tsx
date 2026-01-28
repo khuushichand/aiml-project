@@ -10,13 +10,16 @@ import {
   Tooltip,
   Select,
   Alert,
-  Checkbox
+  Checkbox,
+  Segmented
 } from "antd"
 import type { InputRef } from "antd"
 import React from "react"
 import { tldwClient, type ServerChatSummary } from "@/services/tldw/TldwApiClient"
-import { History, Pen, Trash2, UserCircle2, MessageCircle, Copy, ChevronDown, ChevronUp } from "lucide-react"
+import { History, Pen, Trash2, UserCircle2, MessageCircle, Copy, ChevronDown, ChevronUp, LayoutGrid, List } from "lucide-react"
 import { CharacterPreview } from "./CharacterPreview"
+import { CharacterGalleryCard } from "./CharacterGalleryCard"
+import { CharacterPreviewPopup } from "./CharacterPreviewPopup"
 import { AvatarField, extractAvatarValues, createAvatarValue } from "./AvatarField"
 import { validateAndCreateImageDataUrl } from "@/utils/image-utils"
 import { useTranslation } from "react-i18next"
@@ -190,6 +193,14 @@ export const CharactersManager: React.FC<CharactersManagerProps> = ({
   const [showCreatePreview, setShowCreatePreview] = React.useState(false)
   const [showEditPreview, setShowEditPreview] = React.useState(false)
   const autoOpenCreateHandledRef = React.useRef(false)
+  const [viewMode, setViewMode] = React.useState<'table' | 'gallery'>(() => {
+    if (typeof window !== 'undefined') {
+      const saved = localStorage.getItem('characters-view-mode')
+      return saved === 'gallery' ? 'gallery' : 'table'
+    }
+    return 'table'
+  })
+  const [previewCharacter, setPreviewCharacter] = React.useState<any | null>(null)
 
   React.useEffect(() => {
     if (forwardedNewButtonRef && newButtonRef.current) {
@@ -225,6 +236,13 @@ export const CharactersManager: React.FC<CharactersManagerProps> = ({
       }
     }
   }, [searchTerm])
+
+  // Persist view mode preference
+  React.useEffect(() => {
+    if (typeof window !== 'undefined') {
+      localStorage.setItem('characters-view-mode', viewMode)
+    }
+  }, [viewMode])
 
   const hasFilters =
     searchTerm.trim().length > 0 || (filterTags && filterTags.length > 0)
@@ -513,6 +531,138 @@ export const CharactersManager: React.FC<CharactersManagerProps> = ({
       })
   })
 
+  // Extracted action handlers for reuse between table and gallery views
+  const handleChat = React.useCallback((record: any) => {
+    const id = record.id || record.slug || record.name
+    setSelectedCharacter({
+      id,
+      name: record.name || record.title || record.slug,
+      system_prompt:
+        record.system_prompt ||
+        record.systemPrompt ||
+        record.instructions ||
+        "",
+      greeting:
+        record.greeting ||
+        record.first_message ||
+        record.greet ||
+        "",
+      avatar_url:
+        record.avatar_url ||
+        validateAndCreateImageDataUrl(record.image_base64) ||
+        ""
+    })
+    navigate("/")
+    setTimeout(() => {
+      focusComposer()
+    }, 0)
+  }, [setSelectedCharacter, navigate])
+
+  const handleEdit = React.useCallback((record: any, triggerRef?: HTMLButtonElement | null) => {
+    if (triggerRef) {
+      lastEditTriggerRef.current = triggerRef
+    }
+    setEditId(record.id || record.slug || record.name)
+    setEditVersion(record?.version ?? null)
+    const ex = record.extensions
+    const extensionsValue =
+      ex && typeof ex === "object" && !Array.isArray(ex)
+        ? JSON.stringify(ex, null, 2)
+        : typeof ex === "string"
+          ? ex
+          : ""
+    editForm.setFieldsValue({
+      name: record.name,
+      description: record.description,
+      avatar: createAvatarValue(record.avatar_url, record.image_base64),
+      tags: record.tags,
+      greeting:
+        record.greeting ||
+        record.first_message ||
+        record.greet,
+      system_prompt: record.system_prompt,
+      personality: record.personality,
+      scenario: record.scenario,
+      post_history_instructions:
+        record.post_history_instructions,
+      message_example: record.message_example,
+      creator_notes: record.creator_notes,
+      alternate_greetings: normalizeAlternateGreetings(
+        record.alternate_greetings
+      ),
+      creator: record.creator,
+      character_version: record.character_version,
+      extensions: extensionsValue
+    })
+    setShowEditAdvanced(hasAdvancedData(record, extensionsValue))
+    setOpenEdit(true)
+  }, [editForm])
+
+  const handleDuplicate = React.useCallback((record: any) => {
+    const ex = record.extensions
+    const extensionsValue =
+      ex && typeof ex === "object" && !Array.isArray(ex)
+        ? JSON.stringify(ex, null, 2)
+        : typeof ex === "string"
+          ? ex
+          : ""
+    createForm.setFieldsValue({
+      name: `${record.name || ""} (copy)`,
+      description: record.description,
+      avatar: createAvatarValue(record.avatar_url, record.image_base64),
+      tags: record.tags,
+      greeting:
+        record.greeting ||
+        record.first_message ||
+        record.greet,
+      system_prompt: record.system_prompt,
+      personality: record.personality,
+      scenario: record.scenario,
+      post_history_instructions:
+        record.post_history_instructions,
+      message_example: record.message_example,
+      creator_notes: record.creator_notes,
+      alternate_greetings: normalizeAlternateGreetings(
+        record.alternate_greetings
+      ),
+      creator: record.creator,
+      character_version: record.character_version,
+      extensions: extensionsValue
+    })
+    setShowCreateAdvanced(hasAdvancedData(record, extensionsValue))
+    setOpen(true)
+  }, [createForm])
+
+  const handleDelete = React.useCallback(async (record: any) => {
+    const name = record?.name || record?.title || record?.slug || ""
+    const ok = await confirmDanger({
+      title: t("common:confirmTitle", {
+        defaultValue: "Please confirm"
+      }),
+      content: t(
+        "settings:manageCharacters.confirm.delete",
+        {
+          defaultValue:
+            "Are you sure you want to delete this character? This action cannot be undone."
+        }
+      ),
+      okText: t("common:delete", { defaultValue: "Delete" }),
+      cancelText: t("common:cancel", {
+        defaultValue: "Cancel"
+      })
+    })
+    if (ok) {
+      deleteCharacter(record.id || record.slug || record.name)
+    }
+  }, [confirmDanger, t, deleteCharacter])
+
+  const handleViewConversations = React.useCallback((record: any) => {
+    setConversationCharacter(record)
+    setCharacterChats([])
+    setChatsError(null)
+    setConversationsOpen(true)
+  }, [])
+
   return (
     <div className="space-y-4">
       <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
@@ -572,6 +722,29 @@ export const CharactersManager: React.FC<CharactersManagerProps> = ({
                 defaultValue: "Match all tags"
               })}
             </Checkbox>
+            <Segmented
+              value={viewMode}
+              onChange={(v) => setViewMode(v as 'table' | 'gallery')}
+              options={[
+                {
+                  value: 'table',
+                  icon: <List className="w-4 h-4" />,
+                  title: t("settings:manageCharacters.viewMode.table", {
+                    defaultValue: "Table view"
+                  })
+                },
+                {
+                  value: 'gallery',
+                  icon: <LayoutGrid className="w-4 h-4" />,
+                  title: t("settings:manageCharacters.viewMode.gallery", {
+                    defaultValue: "Gallery view"
+                  })
+                }
+              ]}
+              aria-label={t("settings:manageCharacters.viewMode.label", {
+                defaultValue: "View mode"
+              })}
+            />
           </div>
         </div>
       </div>
@@ -686,7 +859,7 @@ export const CharactersManager: React.FC<CharactersManagerProps> = ({
             </div>
           </div>
         )}
-      {status === "success" && Array.isArray(data) && data.length > 0 && (
+      {status === "success" && Array.isArray(data) && data.length > 0 && viewMode === 'table' && (
         <div className="overflow-x-auto">
           <Table
             rowKey={(r: any) => r.id || r.slug || r.name}
@@ -1045,6 +1218,57 @@ export const CharactersManager: React.FC<CharactersManagerProps> = ({
         </div>
       )}
 
+      {/* Gallery View */}
+      {status === "success" && Array.isArray(data) && data.length > 0 && viewMode === 'gallery' && (
+        <div className="grid grid-cols-2 gap-4 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6">
+          {data.map((character: any) => (
+            <CharacterGalleryCard
+              key={character.id || character.slug || character.name}
+              character={character}
+              onClick={() => setPreviewCharacter(character)}
+            />
+          ))}
+        </div>
+      )}
+
+      {/* Character Preview Popup for Gallery View */}
+      <CharacterPreviewPopup
+        character={previewCharacter}
+        open={!!previewCharacter}
+        onClose={() => setPreviewCharacter(null)}
+        onChat={() => {
+          if (previewCharacter) {
+            handleChat(previewCharacter)
+            setPreviewCharacter(null)
+          }
+        }}
+        onEdit={() => {
+          if (previewCharacter) {
+            handleEdit(previewCharacter)
+            setPreviewCharacter(null)
+          }
+        }}
+        onDuplicate={() => {
+          if (previewCharacter) {
+            handleDuplicate(previewCharacter)
+            setPreviewCharacter(null)
+          }
+        }}
+        onDelete={async () => {
+          if (previewCharacter) {
+            await handleDelete(previewCharacter)
+            setPreviewCharacter(null)
+          }
+        }}
+        onViewConversations={() => {
+          if (previewCharacter) {
+            handleViewConversations(previewCharacter)
+            setPreviewCharacter(null)
+          }
+        }}
+        deleting={deleting}
+      />
+
       <Modal
         title={
           conversationCharacter
@@ -1398,11 +1622,22 @@ export const CharactersManager: React.FC<CharactersManagerProps> = ({
             />
           </Form.Item>
           <Form.Item
-            name="avatar"
-            label={t("settings:manageCharacters.avatar.label", {
-              defaultValue: "Avatar (optional)"
-            })}>
-            <AvatarField />
+            noStyle
+            shouldUpdate={(prev, cur) =>
+              prev?.name !== cur?.name || prev?.description !== cur?.description
+            }>
+            {({ getFieldValue }) => (
+              <Form.Item
+                name="avatar"
+                label={t("settings:manageCharacters.avatar.label", {
+                  defaultValue: "Avatar (optional)"
+                })}>
+                <AvatarField
+                  characterName={getFieldValue("name")}
+                  characterDescription={getFieldValue("description")}
+                />
+              </Form.Item>
+            )}
           </Form.Item>
           <Form.Item
             name="tags"
@@ -1780,11 +2015,22 @@ export const CharactersManager: React.FC<CharactersManagerProps> = ({
             />
           </Form.Item>
           <Form.Item
-            name="avatar"
-            label={t("settings:manageCharacters.avatar.label", {
-              defaultValue: "Avatar (optional)"
-            })}>
-            <AvatarField />
+            noStyle
+            shouldUpdate={(prev, cur) =>
+              prev?.name !== cur?.name || prev?.description !== cur?.description
+            }>
+            {({ getFieldValue }) => (
+              <Form.Item
+                name="avatar"
+                label={t("settings:manageCharacters.avatar.label", {
+                  defaultValue: "Avatar (optional)"
+                })}>
+                <AvatarField
+                  characterName={getFieldValue("name")}
+                  characterDescription={getFieldValue("description")}
+                />
+              </Form.Item>
+            )}
           </Form.Item>
           <Form.Item
             name="tags"

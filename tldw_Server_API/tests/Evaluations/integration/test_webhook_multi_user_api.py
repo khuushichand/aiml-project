@@ -20,13 +20,14 @@ pytestmark = [pytest.mark.integration]
 
 def _seed_webhook(db_path: Path, *, user_id: str, url: str) -> None:
     EvaluationsDatabase(str(db_path))
+    stored_user_id = user_id if str(user_id).startswith("user_") else f"user_{user_id}"
     with sqlite3.connect(db_path) as conn:
         conn.execute(
             """
             INSERT INTO webhook_registrations (user_id, url, secret, events, active, retry_count, timeout_seconds)
             VALUES (?, ?, ?, ?, 1, 3, 30)
             """,
-            (user_id, url, "s" * 32, json.dumps(["evaluation.completed"])),
+            (stored_user_id, url, "s" * 32, json.dumps(["evaluation.completed"])),
         )
         conn.commit()
 
@@ -161,13 +162,13 @@ def test_webhook_delete_is_url_based_and_scoped(multi_user_webhook_client):
     with sqlite3.connect(db_path_user_1) as conn:
         active = conn.execute(
             "SELECT active FROM webhook_registrations WHERE user_id = ? AND url = ?",
-            ("1", "https://example.com/u1"),
+            ("user_1", "https://example.com/u1"),
         ).fetchone()[0]
         assert active == 0
 
     with sqlite3.connect(db_path_user_2) as conn:
         active = conn.execute(
             "SELECT active FROM webhook_registrations WHERE user_id = ? AND url = ?",
-            ("2", "https://example.com/u2"),
+            ("user_2", "https://example.com/u2"),
         ).fetchone()[0]
         assert active == 1

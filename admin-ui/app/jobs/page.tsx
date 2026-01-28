@@ -5,6 +5,7 @@ import { PermissionGuard } from '@/components/PermissionGuard';
 import { ResponsiveLayout } from '@/components/ResponsiveLayout';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
+import { Checkbox } from '@/components/ui/checkbox';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Select } from '@/components/ui/select';
@@ -18,6 +19,7 @@ import { RefreshCw, Briefcase, Filter, AlertTriangle, Eye, RotateCcw, XCircle, R
 import { AccessibleIconButton } from '@/components/ui/accessible-icon-button';
 import { api, ApiError } from '@/lib/api-client';
 import { formatDateTime } from '@/lib/format';
+import { formatBytes } from 'admin-ui/lib/format';
 
 interface SlaPolicy {
   id: string;
@@ -270,10 +272,6 @@ export default function JobsPage() {
           Array.isArray(data) ? data as JobAttachment[] : []
         );
       }
-    } catch (err: unknown) {
-      const message = err instanceof Error ? err.message : 'Failed to load job detail';
-      setJobDetailError(message);
-      setJobDetail(null);
     } finally {
       setJobDetailLoading(false);
       setAttachmentsLoading(false);
@@ -321,17 +319,11 @@ export default function JobsPage() {
     }
   };
 
-  const formatBytes = (bytes: number) => {
-    if (!Number.isFinite(bytes) || bytes < 0) return '—';
-    const units = ['B', 'KB', 'MB', 'GB', 'TB'];
-    let size = bytes;
-    let unit = 0;
-    while (size >= 1024 && unit < units.length - 1) {
-      size /= 1024;
-      unit += 1;
-    }
-    const precision = unit === 0 ? 0 : 1;
-    return `${size.toFixed(precision)} ${units[unit]}`;
+  const formatDuration = (seconds: number) => {
+    if (!Number.isFinite(seconds) || seconds < 0) return '—';
+    const mins = Math.floor(seconds / 60);
+    const secs = seconds % 60;
+    return `${mins}m ${secs}s`;
   };
 
   const handleCloseDetail = () => {
@@ -685,12 +677,10 @@ export default function JobsPage() {
                   </div>
                   <div className="flex items-center gap-4">
                     <div className="flex items-center gap-2">
-                      <input
-                        type="checkbox"
+                      <Checkbox
                         id="sla-enabled"
                         checked={slaFormEnabled}
-                        onChange={(e) => setSlaFormEnabled(e.target.checked)}
-                        className="h-4 w-4"
+                        onCheckedChange={setSlaFormEnabled}
                       />
                       <Label htmlFor="sla-enabled">Enabled</Label>
                     </div>
@@ -729,10 +719,10 @@ export default function JobsPage() {
                         <TableCell className="font-medium">{policy.name}</TableCell>
                         <TableCell>{policy.job_type || 'All'}</TableCell>
                         <TableCell className="text-right">
-                          {Math.floor(policy.max_processing_time_seconds / 60)}m {policy.max_processing_time_seconds % 60}s
+                          {formatDuration(policy.max_processing_time_seconds)}
                         </TableCell>
                         <TableCell className="text-right">
-                          {Math.floor(policy.max_wait_time_seconds / 60)}m {policy.max_wait_time_seconds % 60}s
+                          {formatDuration(policy.max_wait_time_seconds)}
                         </TableCell>
                         <TableCell>
                           <Badge variant={policy.enabled ? 'default' : 'secondary'}>
@@ -945,7 +935,12 @@ export default function JobsPage() {
                               <TableRow key={attachment.id}>
                                 <TableCell className="font-medium">{attachment.name}</TableCell>
                                 <TableCell className="text-muted-foreground">{attachment.content_type}</TableCell>
-                                <TableCell className="text-right">{formatBytes(attachment.size_bytes)}</TableCell>
+                                <TableCell className="text-right">
+                                  {formatBytes(attachment.size_bytes, {
+                                    fallback: '—',
+                                    precision: attachment.size_bytes >= 1024 ? 1 : 0,
+                                  })}
+                                </TableCell>
                                 <TableCell className="text-muted-foreground">
                                   {formatJobDateTime(attachment.created_at)}
                                 </TableCell>

@@ -19,6 +19,7 @@ import {
 } from "@/routes/route-registry"
 import { HEADER_SHORTCUTS_EXPANDED_SETTING } from "@/services/settings/ui-settings"
 import { setSetting } from "@/services/settings/registry"
+import OptionLayout from "~/components/Layouts/Layout"
 
 const getRoutesForTarget = (
   routes: RouteDefinition[],
@@ -251,6 +252,14 @@ export const RouteShell = ({ kind }: { kind: RouteKind }) => {
     </Routes>
   )
 
+  // For options routes, wrap in persistent OptionLayout so the header/sidebar
+  // stay mounted across route navigation. Child routes that render their own
+  // OptionLayout will become nested pass-through wrappers that can communicate
+  // overrides (like hideHeader) up to this root shell.
+  const wrappedContent = kind === "options"
+    ? <OptionLayout>{routesContent}</OptionLayout>
+    : routesContent  // sidepanel has its own layout
+
   return (
     <div className={`${mode === "dark" ? "dark" : "light"} arimo`}>
       <React.Suspense
@@ -258,11 +267,11 @@ export const RouteShell = ({ kind }: { kind: RouteKind }) => {
       >
         {kind === "options" ? (
           <OptionsErrorBoundary onReset={handleOptionsReset}>
-            {routesContent}
+            {wrappedContent}
           </OptionsErrorBoundary>
         ) : (
           <SidepanelErrorBoundary onReset={handleSidepanelReset}>
-            {routesContent}
+            {wrappedContent}
           </SidepanelErrorBoundary>
         )}
       </React.Suspense>

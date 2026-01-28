@@ -149,10 +149,12 @@ const NotificationsPanelForm = ({
     if (justFinishedSaving && settingsChangedWhileSavingRef.current) {
       settingsChangedWhileSavingRef.current = false;
       previousSettingsIdRef.current = settingsId;
-      setEditSettings(settings);
-      setIsDirty(false);
+      if (!isDirty) {
+        setEditSettings(settings);
+        setIsDirty(false);
+      }
     }
-  }, [saving, settings, settingsId]);
+  }, [saving, settings, settingsId, isDirty]);
 
   const updateEditSettings = (
     next: NotificationSettings | ((prev: NotificationSettings) => NotificationSettings),

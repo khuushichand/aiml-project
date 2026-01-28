@@ -75,8 +75,16 @@ def test_ws_multi_subscribers_burst_identical_ordering(monkeypatch) -> None:
             assert end1 == 1 and end2 == 1
 
             # Extract seq and ensure identical ordering and strictly increasing
-            seqs1 = [int(f["seq"]) for f in frames1 if isinstance(f.get("seq"), int)]
-            seqs2 = [int(f["seq"]) for f in frames2 if isinstance(f.get("seq"), int)]
+            seqs1 = [
+                int(f["seq"])
+                for f in frames1
+                if isinstance(f.get("seq"), int) and f.get("type") != "heartbeat"
+            ]
+            seqs2 = [
+                int(f["seq"])
+                for f in frames2
+                if isinstance(f.get("seq"), int) and f.get("type") != "heartbeat"
+            ]
             assert seqs1 == sorted(seqs1) and len(seqs1) == len(set(seqs1))
             assert seqs2 == sorted(seqs2) and len(seqs2) == len(set(seqs2))
             assert seqs1 == seqs2

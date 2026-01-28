@@ -363,7 +363,14 @@ class TestMetricsCollection:
         service.metrics = MagicMock()
         service._record_tts_metrics = MagicMock()
 
-        async def fake_try_fallback(request, exclude, from_provider):
+        async def fake_try_fallback(
+            request,
+            exclude,
+            from_provider,
+            *,
+            metadata_only: bool = False,
+            metadata_target=None,
+        ):
             yield b"fallback-audio"
 
         service._handle_provider_fallback = AsyncMock(return_value=None)

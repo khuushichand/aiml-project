@@ -1009,15 +1009,11 @@ async def update_note(
             current_note = _get_current_note()
             current_conversation_id = current_note.get("conversation_id")
             effective_conversation_id = update_data.get("conversation_id") if conversation_supplied else current_conversation_id
-            conversation_changed = (
-                conversation_supplied
-                and _normalize_optional_id(effective_conversation_id) != _normalize_optional_id(current_conversation_id)
-            )
             if message_supplied:
                 effective_message_id = update_data.get("message_id")
-            elif conversation_changed:
-                effective_message_id = None
             else:
+                # Preserve the existing message_id so a conversation change is validated
+                # against the current message linkage rather than silently clearing it.
                 effective_message_id = current_note.get("message_id")
             validated_conversation_id, validated_message_id = _validate_note_links(
                 db,
@@ -1028,8 +1024,6 @@ async def update_note(
                 update_data["conversation_id"] = validated_conversation_id
             if message_supplied:
                 update_data["message_id"] = validated_message_id
-            elif conversation_changed:
-                update_data["message_id"] = None
         data_keys = list(update_data.keys())
         if keywords_supplied:
             data_keys.append("keywords")
@@ -1165,15 +1159,11 @@ async def patch_note(
             current = _get_current_note()
             current_conversation_id = current.get("conversation_id")
             effective_conversation_id = update_data.get("conversation_id") if conversation_supplied else current_conversation_id
-            conversation_changed = (
-                conversation_supplied
-                and _normalize_optional_id(effective_conversation_id) != _normalize_optional_id(current_conversation_id)
-            )
             if message_supplied:
                 effective_message_id = update_data.get("message_id")
-            elif conversation_changed:
-                effective_message_id = None
             else:
+                # Preserve the existing message_id so a conversation change is validated
+                # against the current message linkage rather than silently clearing it.
                 effective_message_id = current.get("message_id")
             validated_conversation_id, validated_message_id = _validate_note_links(
                 db,
@@ -1184,8 +1174,6 @@ async def patch_note(
                 update_data["conversation_id"] = validated_conversation_id
             if message_supplied:
                 update_data["message_id"] = validated_message_id
-            elif conversation_changed:
-                update_data["message_id"] = None
         data_keys = list(update_data.keys())
         if keywords_supplied:
             data_keys.append("keywords")

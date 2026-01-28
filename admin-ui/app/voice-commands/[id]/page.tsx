@@ -12,7 +12,7 @@ import { Label } from '@/components/ui/label';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Alert, AlertDescription } from '@/components/ui/alert';
 import { Badge } from '@/components/ui/badge';
-import { Form, FormInput, FormSelect, FormTextarea } from '@/components/ui/form';
+import { Form, FormCheckbox, FormInput, FormSelect, FormTextarea } from '@/components/ui/form';
 import { ArrowLeft, Save, Trash2, Mic, MicOff, BarChart3 } from 'lucide-react';
 import { api } from '@/lib/api-client';
 import { parseVoiceCommandInputs } from '@/lib/voice-commands';
@@ -54,6 +54,7 @@ export default function VoiceCommandDetailPage({
   const [usage, setUsage] = useState<VoiceCommandUsage | null>(null);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
+  const [isToggling, setIsToggling] = useState(false);
   const [error, setError] = useState('');
   const [saveError, setSaveError] = useState('');
 
@@ -142,8 +143,9 @@ export default function VoiceCommandDetailPage({
   });
 
   const handleToggleEnabled = async () => {
-    if (!command) return;
+    if (!command || isToggling) return;
     try {
+      setIsToggling(true);
       await api.toggleVoiceCommand(commandId, !command.enabled);
       success(
         command.enabled ? 'Command disabled' : 'Command enabled',
@@ -153,6 +155,8 @@ export default function VoiceCommandDetailPage({
     } catch (err: unknown) {
       const message = err instanceof Error ? err.message : 'Failed to toggle command';
       showError('Toggle failed', message);
+    } finally {
+      setIsToggling(false);
     }
   };
 
@@ -239,7 +243,7 @@ export default function VoiceCommandDetailPage({
               </p>
             </div>
             <div className="flex gap-2">
-              <Button variant="outline" onClick={handleToggleEnabled}>
+              <Button variant="outline" onClick={handleToggleEnabled} disabled={isToggling}>
                 {command.enabled ? (
                   <>
                     <MicOff className="mr-2 h-4 w-4" />
@@ -357,16 +361,11 @@ export default function VoiceCommandDetailPage({
 
                       <div className="space-y-2">
                         <Label>Options</Label>
-                        <div className="flex items-center space-x-2 pt-2">
-                          <input
-                            type="checkbox"
-                            id="requires_confirmation"
-                            {...form.register('requires_confirmation')}
-                            className="h-4 w-4"
+                        <div className="pt-2">
+                          <FormCheckbox<EditCommandFormData>
+                            name="requires_confirmation"
+                            label="Requires user confirmation before executing"
                           />
-                          <Label htmlFor="requires_confirmation" className="font-normal">
-                            Requires user confirmation before executing
-                          </Label>
                         </div>
                       </div>
                     </div>

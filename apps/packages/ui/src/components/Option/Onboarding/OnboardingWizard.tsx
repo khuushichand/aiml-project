@@ -18,6 +18,7 @@ import { useDemoMode } from '@/context/demo-mode'
 import { openSidepanelForActiveTab } from '@/utils/sidepanel'
 import { useFeatureFlag, FEATURE_FLAGS } from '@/hooks/useFeatureFlags'
 import { OnboardingConnectForm } from './OnboardingConnectForm'
+import { requestOptionalHostPermission } from '@/utils/extension-permissions'
 
 type Props = {
   onFinish?: () => void
@@ -340,6 +341,17 @@ const LegacyOnboardingWizard: React.FC<Props> = ({ onFinish }) => {
     }
     setLoading(true)
     try {
+      requestOptionalHostPermission(serverUrl, (granted, origin) => {
+        if (!granted) {
+          message.warning(
+            t(
+              "settings:siteAccessDenied",
+              "Permission not granted for {{origin}}",
+              { origin }
+            )
+          )
+        }
+      })
       await useConnectionStore.getState().setConfigPartial({ serverUrl })
     } catch (err) {
       // eslint-disable-next-line no-console

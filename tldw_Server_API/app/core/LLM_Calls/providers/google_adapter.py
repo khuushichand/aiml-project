@@ -329,7 +329,22 @@ class GoogleAdapter(ChatProvider):
                 pass
         elif tools and not openai_tools:
             # Assume tools are already Gemini-native; pass through as-is.
-            payload["tools"] = tools
+            cleaned_tools: Any = tools
+            if isinstance(tools, list):
+                cleaned_list: List[Any] = []
+                for item in tools:
+                    if not isinstance(item, dict):
+                        cleaned_list.append(item)
+                        continue
+                    tool_type = str(item.get("type") or "").strip().lower()
+                    if tool_type in {"gemini_native", "gemini-native", "gemini"}:
+                        item_copy = dict(item)
+                        item_copy.pop("type", None)
+                        cleaned_list.append(item_copy)
+                    else:
+                        cleaned_list.append(item)
+                cleaned_tools = cleaned_list
+            payload["tools"] = cleaned_tools
         return payload
 
     @staticmethod

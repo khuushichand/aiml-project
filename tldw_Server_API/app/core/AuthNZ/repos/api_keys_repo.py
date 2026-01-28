@@ -7,7 +7,7 @@ import json
 
 from loguru import logger
 
-from tldw_Server_API.app.core.AuthNZ.database import DatabasePool
+from tldw_Server_API.app.core.AuthNZ.database import DatabasePool, build_sqlite_in_clause
 
 
 @dataclass
@@ -95,7 +95,9 @@ class AuthnzApiKeysRepo:
                 )
             else:
                 # SQLite path: emulate ANY with an IN (...) clause
-                placeholders = ",".join("?" for _ in hash_candidates)
+                # SECURITY: Using build_sqlite_in_clause helper to safely generate
+                # parameterized placeholders - see database.py for implementation details
+                placeholders, hash_params = build_sqlite_in_clause(hash_candidates)
                 query = f"""
                     SELECT id, user_id, name, scope, status, expires_at,
                            rate_limit, allowed_ips, usage_count, key_hash,
@@ -110,7 +112,7 @@ class AuthnzApiKeysRepo:
                     ORDER BY created_at DESC
                     LIMIT 1
                     """
-                params = (*hash_candidates, "active")
+                params = (*hash_params, "active")
                 row = await self.db_pool.fetchone(query, params)
 
             if not row:

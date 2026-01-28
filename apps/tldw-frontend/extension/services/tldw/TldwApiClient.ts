@@ -187,6 +187,55 @@ type PromptPayload = {
   is_system?: boolean
 }
 
+export type FileArtifactExport = {
+  status?: "none" | "ready" | "pending"
+  format?: "ics" | "md" | "html" | "xlsx" | "csv" | "json" | "png" | "jpg" | "webp"
+  url?: string | null
+  content_type?: string | null
+  bytes?: number | null
+  job_id?: string | null
+  content_b64?: string | null
+  expires_at?: string | null
+}
+
+export type FileArtifact = {
+  file_id: number
+  file_type: string
+  title: string
+  structured?: Record<string, unknown>
+  export?: FileArtifactExport
+  created_at?: string
+  updated_at?: string
+}
+
+export type FileCreateResponse = {
+  artifact: FileArtifact
+}
+
+export type ImageArtifactRequest = {
+  backend: string
+  prompt: string
+  negativePrompt?: string
+  width?: number
+  height?: number
+  steps?: number
+  cfgScale?: number
+  seed?: number
+  sampler?: string
+  model?: string
+  extraParams?: Record<string, unknown>
+  format?: "png" | "jpg" | "webp"
+  title?: string
+  persist?: boolean
+  timeoutMs?: number
+}
+
+export interface ImageBackend {
+  id: string
+  name: string
+  is_configured: boolean
+}
+
 export interface TldwEmbeddingModel {
   provider: string
   model: string
@@ -681,6 +730,71 @@ export class TldwApiClient {
     // tldw_server returns either an array or an object
     // of the form { models: [...], total: N }.
     return await bgRequest<unknown>({ path: '/api/v1/llm/models/metadata', method: 'GET' })
+  }
+
+  async getImageBackends(): Promise<ImageBackend[]> {
+    try {
+      const meta = await this.getModelsMetadata()
+      const list: unknown[] =
+        Array.isArray(meta) && meta.length > 0
+          ? meta
+          : isRecord(meta) && Array.isArray(meta.models)
+            ? meta.models
+            : []
+
+      return list
+        .filter((item) => isRecord(item) && item.type === "image")
+        .map((item) => {
+          const record = isRecord(item) ? item : {}
+          const id = String(record.name || record.id || "").replace(/^image\//, "")
+          return {
+            id,
+            name: String(record.name || record.id || ""),
+            is_configured: Boolean(record.is_configured)
+          }
+        })
+        .filter((backend) => backend.id.length > 0)
+    } catch (e) {
+      if (env.DEV) {
+        console.warn("tldw_server: getImageBackends failed", e)
+      }
+      return []
+    }
+  }
+
+  async generateImage(payload: {
+    backend: string
+    prompt: string
+    negative_prompt?: string
+    width?: number
+    height?: number
+    steps?: number
+    cfg_scale?: number
+    format?: "png" | "jpg" | "webp"
+    persist?: boolean
+    timeoutMs?: number
+  }): Promise<{ content_b64: string; content_type: string }> {
+    const response = await this.createImageArtifact({
+      backend: payload.backend,
+      prompt: payload.prompt,
+      negativePrompt: payload.negative_prompt,
+      width: payload.width,
+      height: payload.height,
+      steps: payload.steps,
+      cfgScale: payload.cfg_scale,
+      format: payload.format,
+      persist: payload.persist,
+      timeoutMs: payload.timeoutMs
+    })
+    const exportInfo = response?.artifact?.export
+    const content_b64 = exportInfo?.content_b64
+    if (!content_b64) {
+      throw new Error("Image generation returned no data.")
+    }
+    const content_type =
+      exportInfo?.content_type ||
+      (exportInfo?.format ? `image/${exportInfo.format}` : "image/png")
+    return { content_b64, content_type }
   }
 
   // Embeddings - Models & Providers
@@ -2576,6 +2690,49 @@ export class TldwApiClient {
     }
 
     return await readBlobResponse(res)
+  }
+
+  // ─────────────────────────────────────────────────────────────────────────────
+  // File Artifacts
+  // ─────────────────────────────────────────────────────────────────────────────
+
+  async createImageArtifact(request: ImageArtifactRequest): Promise<FileCreateResponse> {
+    const payload: Record<string, unknown> = {
+      backend: request.backend,
+      prompt: request.prompt
+    }
+    if (request.negativePrompt) payload.negative_prompt = request.negativePrompt
+    if (typeof request.width === "number") payload.width = request.width
+    if (typeof request.height === "number") payload.height = request.height
+    if (typeof request.steps === "number") payload.steps = request.steps
+    if (typeof request.cfgScale === "number") payload.cfg_scale = request.cfgScale
+    if (typeof request.seed === "number") payload.seed = request.seed
+    if (request.sampler) payload.sampler = request.sampler
+    if (request.model) payload.model = request.model
+    if (request.extraParams) payload.extra_params = request.extraParams
+
+    const body: Record<string, unknown> = {
+      file_type: "image",
+      payload,
+      export: {
+        format: request.format || "png",
+        mode: "inline",
+        async_mode: "sync"
+      },
+      options: {
+        persist: typeof request.persist === "boolean" ? request.persist : true
+      }
+    }
+    if (request.title) {
+      body.title = request.title
+    }
+
+    return await this.request<FileCreateResponse>({
+      path: "/api/v1/files/create",
+      method: "POST",
+      body,
+      timeoutMs: request.timeoutMs
+    })
   }
 
   // ─────────────────────────────────────────────────────────────────────────────

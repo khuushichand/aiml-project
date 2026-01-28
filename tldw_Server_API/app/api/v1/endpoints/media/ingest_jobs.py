@@ -7,6 +7,7 @@ import os
 import shutil
 import threading
 from datetime import datetime
+from pathlib import Path
 
 from cachetools import LRUCache
 from fastapi import APIRouter, Depends, File, HTTPException, UploadFile, status, Request, Query
@@ -46,14 +47,18 @@ _job_manager_lock = threading.Lock()
 
 def get_job_manager() -> JobManager:
     db_url = (os.getenv("JOBS_DB_URL") or "").strip()
-    cache_key = db_url or "default"
+    db_path = (os.getenv("JOBS_DB_PATH") or "").strip()
+    cache_key = f"url:{db_url}" if db_url else f"path:{db_path or 'default'}"
     with _job_manager_lock:
         cached = _job_manager_cache.get(cache_key)
         if cached is not None:
             return cached
 
         if not db_url:
-            job_manager = JobManager()
+            if db_path:
+                job_manager = JobManager(db_path=Path(db_path))
+            else:
+                job_manager = JobManager()
         else:
             backend = "postgres" if db_url.startswith("postgres") else None
             job_manager = JobManager(backend=backend, db_url=db_url)

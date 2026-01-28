@@ -8238,6 +8238,8 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
         search_term = search_term.strip()
         if not search_term:
             raise InputError("Search term cannot be empty.")
+        if '"' in search_term or "'" in search_term:
+            raise InputError("Search term contains unsupported characters.")
         is_simple_token = re.fullmatch(r"[\w-]+", search_term) is not None
         if self.backend_type == BackendType.POSTGRESQL:
             if is_simple_token:

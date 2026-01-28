@@ -56,6 +56,8 @@ async def test_embeddings_rg_enforced_and_commits(monkeypatch):
 async def test_embeddings_shadow_does_not_mutate_legacy_enforcement_state(monkeypatch):
     monkeypatch.setenv("RG_ENABLED", "1")
     monkeypatch.setenv("RG_SHADOW_EMBEDDINGS", "1")
+    # Ensure the legacy shadow check uses request-cost semantics (cost=1).
+    monkeypatch.setenv("EMBEDDINGS_RATE_LIMIT_MODE", "requests")
     fake = _FakeGovernor(allowed=True)
     monkeypatch.setattr(emb_rl, "_rg_embeddings_governor", fake)
     monkeypatch.setattr(emb_rl, "_rg_embeddings_loader", None)

@@ -1017,6 +1017,9 @@ async def logout(
         payload = {}
         if token:
             try:
+                # NOTE: Using sync verify_token() here is acceptable - we're extracting
+                # claims for revocation cleanup, not making authorization decisions.
+                # The user has already been authenticated via the current_user dependency.
                 payload = jwt_service.verify_token(token)
             except Exception:
                 payload = {}
@@ -1626,7 +1629,11 @@ async def reset_password(
             raise
         except Exception:
             pass
-        # Verify token
+        # Verify token cryptographically
+        # NOTE: Using sync verify_token() is acceptable for password_reset tokens because:
+        # 1. These are single-use tokens with additional database validation below
+        # 2. The token hash is verified against password_reset_tokens table
+        # 3. used_at check prevents token reuse even if not blacklisted
         try:
             payload = jwt_service.verify_token(data.token, token_type="password_reset")
         except Exception:
@@ -1776,7 +1783,10 @@ async def verify_email(
     Marks the user's email as verified.
     """
     try:
-        # Verify token
+        # Verify token cryptographically
+        # NOTE: Using sync verify_token() is acceptable for email_verification tokens because:
+        # 1. These are effectively single-use - once is_verified is set, the token is useless
+        # 2. Replaying the token just re-sets is_verified=true, which is idempotent
         try:
             payload = jwt_service.verify_token(token, token_type="email_verification")
         except Exception:

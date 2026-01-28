@@ -212,6 +212,15 @@ export type ImageArtifactRequest = {
   extraParams?: Record<string, unknown>
   format?: "png" | "jpg" | "webp"
   title?: string
+  persist?: boolean
+  timeoutMs?: number
+}
+
+export interface ImageBackend {
+  id: string
+  name: string
+  is_configured: boolean
+  supported_formats?: string[]
 }
 
 export interface TldwEmbeddingModel {
@@ -781,6 +790,68 @@ export class TldwApiClient {
     // tldw_server returns either an array or an object
     // of the form { models: [...], total: N }.
     return await bgRequest<any>({ path: '/api/v1/llm/models/metadata', method: 'GET' })
+  }
+
+  async getImageBackends(): Promise<ImageBackend[]> {
+    try {
+      const meta = await this.getModelsMetadata()
+      const list: any[] =
+        Array.isArray(meta) && meta.length > 0
+          ? meta
+          : meta && typeof meta === "object" && Array.isArray((meta as any).models)
+            ? (meta as any).models
+            : []
+
+      return list
+        .filter((m: any) => m.type === "image")
+        .map((m: any) => ({
+          id: String(m.name || m.id || "").replace(/^image\//, ""),
+          name: String(m.name || m.id || ""),
+          is_configured: Boolean(m.is_configured),
+          supported_formats: Array.isArray(m.supported_formats) ? m.supported_formats : undefined
+        }))
+        .filter((b) => b.id.length > 0)
+    } catch (e) {
+      if (import.meta.env?.DEV) {
+        console.warn("tldw_server: getImageBackends failed", e)
+      }
+      return []
+    }
+  }
+
+  async generateImage(payload: {
+    backend: string
+    prompt: string
+    negative_prompt?: string
+    width?: number
+    height?: number
+    steps?: number
+    cfg_scale?: number
+    format?: "png" | "jpg" | "webp"
+    persist?: boolean
+    timeoutMs?: number
+  }): Promise<{ content_b64: string; content_type: string }> {
+    const response = await this.createImageArtifact({
+      backend: payload.backend,
+      prompt: payload.prompt,
+      negativePrompt: payload.negative_prompt,
+      width: payload.width,
+      height: payload.height,
+      steps: payload.steps,
+      cfgScale: payload.cfg_scale,
+      format: payload.format,
+      persist: payload.persist,
+      timeoutMs: payload.timeoutMs
+    })
+    const exportInfo = response?.artifact?.export
+    const content_b64 = exportInfo?.content_b64
+    if (!content_b64) {
+      throw new Error("Image generation returned no data.")
+    }
+    const content_type =
+      exportInfo?.content_type ||
+      (exportInfo?.format ? `image/${exportInfo.format}` : "image/png")
+    return { content_b64, content_type }
   }
 
   // Embeddings - Models & Providers
@@ -2824,7 +2895,7 @@ export class TldwApiClient {
         async_mode: "sync"
       },
       options: {
-        persist: true
+        persist: typeof request.persist === "boolean" ? request.persist : true
       }
     }
     if (request.title) {
@@ -2834,7 +2905,8 @@ export class TldwApiClient {
     return await this.request<FileCreateResponse>({
       path: "/api/v1/files/create",
       method: "POST",
-      body
+      body,
+      timeoutMs: request.timeoutMs
     })
   }
 

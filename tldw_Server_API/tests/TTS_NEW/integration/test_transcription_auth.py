@@ -203,6 +203,7 @@ def test_transcriptions_parakeet_variant_routes_to_parakeet(monkeypatch, bypass_
             task="transcribe",
             word_timestamps=False,
             prompt=None,
+            hotwords=None,
             base_dir=None,
         ):
             return {
@@ -274,6 +275,7 @@ def test_transcriptions_default_model_uses_config(monkeypatch, bypass_api_limits
             task="transcribe",
             word_timestamps=False,
             prompt=None,
+            hotwords=None,
             base_dir=None,
         ):
             captured["model"] = model
@@ -339,6 +341,7 @@ def test_transcriptions_qwen2audio_variant_routes_to_qwen2audio(monkeypatch, byp
             task="transcribe",
             word_timestamps=False,
             prompt=None,
+            hotwords=None,
             base_dir=None,
         ):
             return {

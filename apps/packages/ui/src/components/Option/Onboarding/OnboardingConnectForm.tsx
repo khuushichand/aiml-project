@@ -38,6 +38,7 @@ import {
 import { useConnectionStore } from "@/store/connection"
 import { useDemoMode } from "@/context/demo-mode"
 import { openSidepanelForActiveTab } from "@/utils/sidepanel"
+import { requestOptionalHostPermission } from "@/utils/extension-permissions"
 import { cn } from "@/libs/utils"
 import { getProviderDisplayName, normalizeProviderKey } from "@/utils/provider-registry"
 import {
@@ -170,6 +171,7 @@ export function OnboardingConnectForm({ onFinish }: Props) {
   const connectionState = useConnectionState()
   const { uxState } = useConnectionUxState()
   const actions = useConnectionActions()
+  const hostPermissionPromptKeyRef = useRef<string | null>(null)
 
   // Form state
   const [serverUrl, setServerUrl] = useState("")
@@ -215,6 +217,12 @@ export function OnboardingConnectForm({ onFinish }: Props) {
     enabled: showSuccess,
     staleTime: 5 * 60 * 1000,
   })
+
+  useEffect(() => {
+    if (isConnecting) {
+      hostPermissionPromptKeyRef.current = null
+    }
+  }, [isConnecting])
 
   const normalizedDefaultProvider = useMemo(() => {
     if (!defaultApiProvider) return ""
@@ -477,6 +485,17 @@ export function OnboardingConnectForm({ onFinish }: Props) {
 
     try {
       // Phase 1: Set server URL and check reachability
+      requestOptionalHostPermission(serverUrl, (granted, origin) => {
+        if (!granted) {
+          message.warning(
+            t(
+              "settings:siteAccessDenied",
+              "Permission not granted for {{origin}}",
+              { origin }
+            )
+          )
+        }
+      })
       await actions.setConfigPartial({ serverUrl })
 
       // Give a moment for the UI to show "checking"
@@ -571,6 +590,19 @@ export function OnboardingConnectForm({ onFinish }: Props) {
       const kind =
         categorizeConnectionError(status, message) ??
         ("refused" as ConnectionErrorKind)
+      if (kind === "refused" || kind === "timeout" || kind === "dns_failed") {
+        requestOptionalHostPermission(serverUrl, (granted, origin) => {
+          if (!granted) {
+            message.warning(
+              t(
+                "settings:siteAccessDenied",
+                "Permission not granted for {{origin}}",
+                { origin }
+              )
+            )
+          }
+        })
+      }
       dispatchUi({
         type: "SET_ERROR",
         errorKind: kind,
@@ -628,6 +660,23 @@ export function OnboardingConnectForm({ onFinish }: Props) {
         state.lastStatusCode,
         state.lastError
       )
+      if (kind === "refused" || kind === "timeout" || kind === "dns_failed") {
+        const promptKey = `${serverUrl}|${state.lastStatusCode ?? ""}|${state.lastError ?? ""}`
+        if (hostPermissionPromptKeyRef.current !== promptKey) {
+          hostPermissionPromptKeyRef.current = promptKey
+          requestOptionalHostPermission(serverUrl, (granted, origin) => {
+            if (!granted) {
+              message.warning(
+                t(
+                  "settings:siteAccessDenied",
+                  "Permission not granted for {{origin}}",
+                  { origin }
+                )
+              )
+            }
+          })
+        }
+      }
       dispatchUi({
         type: "SET_ERROR",
         errorKind: kind,
@@ -656,7 +705,7 @@ export function OnboardingConnectForm({ onFinish }: Props) {
         })
       }
     }
-  }, [hasRunConnectionTest, connectionState, dispatchUi])
+  }, [hasRunConnectionTest, connectionState, dispatchUi, serverUrl, t])
 
   // Handle demo mode
   const handleDemoMode = useCallback(async () => {

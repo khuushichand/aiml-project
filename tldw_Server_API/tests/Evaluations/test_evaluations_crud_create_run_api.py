@@ -38,6 +38,7 @@ def test_create_run_uses_typed_model(evals_crud_client, monkeypatch):
             dataset_override=None,
             webhook_url=None,
             created_by=None,
+            webhook_user_id=None,
         ):
             return {
                 "id": "run_123",

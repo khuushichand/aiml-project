@@ -298,12 +298,21 @@ export default function UserDetailPage() {
     if (!userId) return;
     try {
       setPermissionsLoading(true);
-      const [effectiveResult, overridesResult, allPermsResult, rateLimitsResult] = await Promise.allSettled([
+      const results = await Promise.allSettled([
         api.getUserEffectivePermissions(userId),
         api.getUserPermissionOverrides(userId),
         api.getPermissions(),
         api.getUserRateLimits(userId),
       ]);
+      const [effectiveResult, overridesResult, allPermsResult, rateLimitsResult] = results;
+      const hasRejected = results.some((result) => result.status === 'rejected');
+      if (hasRejected) {
+        setEffectivePermissions([]);
+        setPermissionOverrides([]);
+        setAllPermissions([]);
+        applyRateLimits(normalizeRateLimits({}));
+        return;
+      }
 
       if (effectiveResult.status === 'fulfilled') {
         const data = effectiveResult.value as { permissions?: EffectivePermission[]; items?: EffectivePermission[] };
@@ -477,7 +486,7 @@ export default function UserDetailPage() {
       if (normalizedRph !== null) data.requests_per_hour = normalizedRph;
       if (normalizedRpd !== null) data.requests_per_day = normalizedRpd;
 
-      const payload = buildRateLimitPayload(rpm, rph, rpd);
+      const payload = buildRateLimitPayload(normalizedRpm, normalizedRph, normalizedRpd);
       await api.setUserRateLimits(userId, payload);
       applyRateLimits(data);
       toastSuccess('Rate limits updated', 'User rate limits have been saved.');
@@ -1116,6 +1125,7 @@ export default function UserDetailPage() {
                               size="icon"
                               onClick={() => handleRemovePermissionOverride(override)}
                               disabled={!isAuthorized || permissionsLoading}
+                              aria-label={`Remove override for ${override.permission_name}`}
                             >
                               <Trash2 className="h-4 w-4" />
                             </Button>

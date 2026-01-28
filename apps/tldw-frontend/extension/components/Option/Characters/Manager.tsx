@@ -1441,11 +1441,22 @@ export const CharactersManager: React.FC<CharactersManagerProps> = ({
             />
           </Form.Item>
           <Form.Item
-            name="avatar"
-            label={t("settings:manageCharacters.avatar.label", {
-              defaultValue: "Avatar (optional)"
-            })}>
-            <AvatarField />
+            noStyle
+            shouldUpdate={(prev, cur) =>
+              prev?.name !== cur?.name || prev?.description !== cur?.description
+            }>
+            {({ getFieldValue }) => (
+              <Form.Item
+                name="avatar"
+                label={t("settings:manageCharacters.avatar.label", {
+                  defaultValue: "Avatar (optional)"
+                })}>
+                <AvatarField
+                  characterName={getFieldValue("name")}
+                  characterDescription={getFieldValue("description")}
+                />
+              </Form.Item>
+            )}
           </Form.Item>
           <Form.Item
             name="tags"
@@ -1823,11 +1834,22 @@ export const CharactersManager: React.FC<CharactersManagerProps> = ({
             />
           </Form.Item>
           <Form.Item
-            name="avatar"
-            label={t("settings:manageCharacters.avatar.label", {
-              defaultValue: "Avatar (optional)"
-            })}>
-            <AvatarField />
+            noStyle
+            shouldUpdate={(prev, cur) =>
+              prev?.name !== cur?.name || prev?.description !== cur?.description
+            }>
+            {({ getFieldValue }) => (
+              <Form.Item
+                name="avatar"
+                label={t("settings:manageCharacters.avatar.label", {
+                  defaultValue: "Avatar (optional)"
+                })}>
+                <AvatarField
+                  characterName={getFieldValue("name")}
+                  characterDescription={getFieldValue("description")}
+                />
+              </Form.Item>
+            )}
           </Form.Item>
           <Form.Item
             name="tags"

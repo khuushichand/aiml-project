@@ -28,7 +28,7 @@ type SecurityAlertStatus = {
   }[];
 };
 
-const formatDate = (dateStr?: string) => formatDateTime(dateStr, { fallback: '—' });
+const formatTimestamp = (dateStr?: string) => formatDateTime(dateStr, { fallback: '—' });
 
 const getRiskLevelLabel = (score: number) => {
   if (score >= 70) return { label: 'High Risk', variant: 'destructive' as const };
@@ -49,10 +49,10 @@ export default function SecurityPage() {
   const [alertStatus, setAlertStatus] = useState<SecurityAlertStatus | null>(null);
 
   const loadData = useCallback(async () => {
-    try {
-      setLoading(true);
-      setError(null);
+    setLoading(true);
+    setError(null);
 
+    try {
       const [healthResult, alertsResult] = await Promise.allSettled([
         api.getSecurityHealth(),
         api.getSecurityAlertStatus(),
@@ -88,9 +88,6 @@ export default function SecurityPage() {
       if (healthResult.status === 'rejected' && alertsResult.status === 'rejected') {
         setError('Failed to load security data. Some endpoints may not be available.');
       }
-    } catch (err: unknown) {
-      console.error('Failed to load security data:', err);
-      setError(err instanceof Error ? err.message : 'Failed to load security data');
     } finally {
       setLoading(false);
     }
@@ -155,7 +152,14 @@ export default function SecurityPage() {
                   </Badge>
                 </div>
                 <div className="flex-1">
-                  <div className="h-4 bg-muted rounded-full overflow-hidden">
+                  <div
+                    className="h-4 bg-muted rounded-full overflow-hidden"
+                    role="progressbar"
+                    aria-valuenow={riskScoreClamped}
+                    aria-valuemin={0}
+                    aria-valuemax={100}
+                    aria-label={`Security risk score: ${riskScore}`}
+                  >
                     <div
                       className={`h-full transition-all ${
                         riskScore >= 70
@@ -169,7 +173,7 @@ export default function SecurityPage() {
                   </div>
                   <p className="text-sm text-muted-foreground mt-2">
                     {securityHealth?.last_security_scan
-                      ? `Last scan: ${formatDate(securityHealth.last_security_scan)}`
+                      ? `Last scan: ${formatTimestamp(securityHealth.last_security_scan)}`
                       : 'Risk score based on recent security events and configuration'}
                   </p>
                 </div>
@@ -336,7 +340,7 @@ export default function SecurityPage() {
                             {alert.message}
                           </TableCell>
                           <TableCell className="text-sm text-muted-foreground">
-                            {formatDate(alert.timestamp)}
+                            {formatTimestamp(alert.timestamp)}
                           </TableCell>
                         </TableRow>
                       ))}

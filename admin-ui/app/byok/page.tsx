@@ -148,6 +148,7 @@ export default function ByokDashboardPage() {
   const [newKeyValue, setNewKeyValue] = useState('');
   const [addingKey, setAddingKey] = useState(false);
   const [testingKey, setTestingKey] = useState<string | null>(null);
+  const [deletingKey, setDeletingKey] = useState<string | null>(null);
   const sharedKeysRequestIdRef = useRef(0);
 
   const resetAddKeyForm = useCallback(() => {
@@ -291,6 +292,7 @@ export default function ByokDashboardPage() {
   };
 
   const handleDeleteSharedKey = async (key: SharedProviderKey) => {
+    const keyId = `${key.scope_type}:${key.scope_id}:${key.provider}`;
     const confirmed = await confirm({
       title: 'Delete Shared Key',
       message: `Delete the shared key for "${key.provider}"? Users and orgs will fall back to their own keys.`,
@@ -301,12 +303,15 @@ export default function ByokDashboardPage() {
     if (!confirmed) return;
 
     try {
+      setDeletingKey(keyId);
       await api.deleteSharedProviderKey(key.scope_type, key.scope_id, key.provider);
       toastSuccess('Key deleted', `Shared key for ${key.provider} has been removed.`);
       void loadSharedKeys();
     } catch (err) {
       const message = err instanceof Error ? err.message : 'Failed to delete shared key.';
       showError('Delete failed', message);
+    } finally {
+      setDeletingKey(null);
     }
   };
 
@@ -621,6 +626,7 @@ export default function ByokDashboardPage() {
                           variant="ghost"
                           size="sm"
                           onClick={() => handleDeleteSharedKey(key)}
+                          disabled={deletingKey === keyId}
                           iconClassName="text-red-500"
                         />
                       </div>
