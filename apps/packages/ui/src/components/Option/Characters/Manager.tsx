@@ -11,7 +11,8 @@ import {
   Select,
   Alert,
   Checkbox,
-  Segmented
+  Segmented,
+  Pagination
 } from "antd"
 import type { InputRef } from "antd"
 import React from "react"
@@ -38,6 +39,7 @@ const MAX_NAME_LENGTH = 75
 const MAX_DESCRIPTION_LENGTH = 65
 const MAX_TAG_LENGTH = 20
 const MAX_TAGS_DISPLAYED = 6
+const DEFAULT_PAGE_SIZE = 10
 
 const truncateText = (value?: string, max?: number) => {
   if (!value) return ""
@@ -200,6 +202,7 @@ export const CharactersManager: React.FC<CharactersManagerProps> = ({
     }
     return 'table'
   })
+  const [currentPage, setCurrentPage] = React.useState(1)
   const [previewCharacter, setPreviewCharacter] = React.useState<any | null>(null)
 
   React.useEffect(() => {
@@ -243,6 +246,10 @@ export const CharactersManager: React.FC<CharactersManagerProps> = ({
       localStorage.setItem('characters-view-mode', viewMode)
     }
   }, [viewMode])
+
+  React.useEffect(() => {
+    setCurrentPage(1)
+  }, [debouncedSearchTerm, filterTags, matchAllTags])
 
   const hasFilters =
     searchTerm.trim().length > 0 || (filterTags && filterTags.length > 0)
@@ -363,6 +370,20 @@ export const CharactersManager: React.FC<CharactersManagerProps> = ({
       }
     }
   })
+
+  React.useEffect(() => {
+    if (!Array.isArray(data)) return
+    const maxPage = Math.max(1, Math.ceil(data.length / DEFAULT_PAGE_SIZE))
+    if (currentPage > maxPage) {
+      setCurrentPage(maxPage)
+    }
+  }, [data, currentPage])
+
+  const pagedGalleryData = React.useMemo(() => {
+    if (!Array.isArray(data)) return []
+    const start = (currentPage - 1) * DEFAULT_PAGE_SIZE
+    return data.slice(start, start + DEFAULT_PAGE_SIZE)
+  }, [data, currentPage])
 
   const allTags = React.useMemo(() => {
     const set = new Set<string>()
@@ -864,6 +885,11 @@ export const CharactersManager: React.FC<CharactersManagerProps> = ({
           <Table
             rowKey={(r: any) => r.id || r.slug || r.name}
             dataSource={data}
+            pagination={{
+              current: currentPage,
+              pageSize: DEFAULT_PAGE_SIZE,
+              onChange: (page) => setCurrentPage(page)
+            }}
             columns={[
             {
               title: (
@@ -1220,14 +1246,27 @@ export const CharactersManager: React.FC<CharactersManagerProps> = ({
 
       {/* Gallery View */}
       {status === "success" && Array.isArray(data) && data.length > 0 && viewMode === 'gallery' && (
-        <div className="grid grid-cols-2 gap-4 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6">
-          {data.map((character: any) => (
-            <CharacterGalleryCard
-              key={character.id || character.slug || character.name}
-              character={character}
-              onClick={() => setPreviewCharacter(character)}
-            />
-          ))}
+        <div className="space-y-4">
+          <div className="grid grid-cols-2 gap-4 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6">
+            {pagedGalleryData.map((character: any) => (
+              <CharacterGalleryCard
+                key={character.id || character.slug || character.name}
+                character={character}
+                onClick={() => setPreviewCharacter(character)}
+              />
+            ))}
+          </div>
+          {data.length > DEFAULT_PAGE_SIZE && (
+            <div className="flex justify-end">
+              <Pagination
+                current={currentPage}
+                pageSize={DEFAULT_PAGE_SIZE}
+                total={data.length}
+                onChange={(page) => setCurrentPage(page)}
+                showSizeChanger={false}
+              />
+            </div>
+          )}
         </div>
       )}
 
