@@ -15,7 +15,7 @@ import { Badge } from '@/components/ui/badge';
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle, DialogTrigger } from '@/components/ui/dialog';
 import { useConfirm } from '@/components/ui/confirm-dialog';
 import {
-  ArrowLeft, Building2, Users, UserPlus, Mail, Trash2, Key, Shield, Copy, Plus, Eye, EyeOff, ListChecks
+  ArrowLeft, Building2, Users, UserPlus, Mail, RefreshCw, Trash2, Key, Shield, Copy, Plus, Eye, EyeOff, ListChecks
 } from 'lucide-react';
 import { api } from '@/lib/api-client';
 import { Organization, OrgMember, Team, ProviderSecret, User, WatchlistSettings } from '@/types';
@@ -802,8 +802,14 @@ export default function OrganizationDetailPage() {
                                 size="sm"
                                 onClick={() => handleDeleteByokKey(key.provider)}
                                 disabled={isDeleting}
+                                title={isDeleting ? 'Removing API key' : 'Remove API key'}
+                                aria-label={isDeleting ? 'Removing API key' : 'Remove API key'}
                               >
-                                <Trash2 className="h-4 w-4 text-red-500" />
+                                {isDeleting ? (
+                                  <RefreshCw className="h-4 w-4 text-red-500 animate-spin" />
+                                ) : (
+                                  <Trash2 className="h-4 w-4 text-red-500" />
+                                )}
                               </Button>
                             </TableCell>
                           </TableRow>

@@ -116,8 +116,14 @@ function ByokKeysTable({ keys, onDelete, formatProviderName, deletingProvider }:
                 size="sm"
                 onClick={() => onDelete(key.provider)}
                 disabled={isDeleting}
+                title={isDeleting ? 'Deleting key' : 'Delete key'}
+                aria-label={isDeleting ? 'Deleting key' : 'Delete key'}
               >
-                <Trash2 className="h-4 w-4 text-red-500" />
+                {isDeleting ? (
+                  <RefreshCw className="h-4 w-4 text-red-500 animate-spin" />
+                ) : (
+                  <Trash2 className="h-4 w-4 text-red-500" />
+                )}
               </Button>
             </TableCell>
           </TableRow>
@@ -1117,7 +1123,14 @@ export default function ProvidersPage() {
                     onClick={handleDeleteOverride}
                     disabled={overrideDialog.isDeleting || overrideDialog.isSaving}
                   >
-                    Remove Override
+                    {overrideDialog.isDeleting ? (
+                      <>
+                        <RefreshCw className="h-4 w-4 mr-2 animate-spin" />
+                        Removing...
+                      </>
+                    ) : (
+                      'Remove Override'
+                    )}
                   </Button>
                 )}
               </div>

@@ -18,7 +18,7 @@ import { Pagination } from '@/components/ui/pagination';
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle, DialogTrigger } from '@/components/ui/dialog';
 import { Checkbox } from '@/components/ui/checkbox';
 import { Form, FormCheckbox, FormInput, FormSelect } from '@/components/ui/form';
-import { Eye, Key, Search, Plus, Trash2, UserCheck, UserX, BookmarkPlus, BookmarkX } from 'lucide-react';
+import { Eye, Key, Search, Plus, RefreshCw, Trash2, UserCheck, UserX, BookmarkPlus, BookmarkX } from 'lucide-react';
 import { AccessibleIconButton } from '@/components/ui/accessible-icon-button';
 import { api } from '@/lib/api-client';
 import { User } from '@/types';
@@ -827,13 +827,13 @@ function UsersPageContent() {
                                     onClick={() => handleToggleActive(user)}
                                   />
                                   <AccessibleIconButton
-                                    icon={Trash2}
-                                    label={isCurrentUser ? 'Cannot delete yourself' : 'Delete user'}
+                                    icon={isDeleting ? RefreshCw : Trash2}
+                                    label={isDeleting ? 'Deleting user' : isCurrentUser ? 'Cannot delete yourself' : 'Delete user'}
                                     variant="ghost"
                                     size="sm"
                                     onClick={() => handleDeleteUser(user)}
                                     disabled={isCurrentUser || isDeleting}
-                                    iconClassName="text-destructive"
+                                    iconClassName={isDeleting ? 'animate-spin text-destructive' : 'text-destructive'}
                                   />
                                 </div>
                               </TableCell>

@@ -13,7 +13,7 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/com
 import { Alert, AlertDescription } from '@/components/ui/alert';
 import { Badge } from '@/components/ui/badge';
 import { Form, FormCheckbox, FormInput, FormSelect, FormTextarea } from '@/components/ui/form';
-import { ArrowLeft, Save, Trash2, Mic, MicOff, BarChart3 } from 'lucide-react';
+import { ArrowLeft, Save, RefreshCw, Trash2, Mic, MicOff, BarChart3 } from 'lucide-react';
 import { api } from '@/lib/api-client';
 import { parseVoiceCommandInputs } from '@/lib/voice-commands';
 import type { VoiceCommand, VoiceActionType, VoiceCommandUsage } from '@/types';
@@ -261,8 +261,17 @@ export default function VoiceCommandDetailPage({
                 )}
               </Button>
               <Button variant="destructive" onClick={handleDelete} disabled={isDeleting}>
-                <Trash2 className="mr-2 h-4 w-4" />
-                Delete
+                {isDeleting ? (
+                  <>
+                    <RefreshCw className="mr-2 h-4 w-4 animate-spin" />
+                    Deleting...
+                  </>
+                ) : (
+                  <>
+                    <Trash2 className="mr-2 h-4 w-4" />
+                    Delete
+                  </>
+                )}
               </Button>
             </div>
           </div>

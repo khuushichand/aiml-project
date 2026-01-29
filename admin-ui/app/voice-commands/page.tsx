@@ -17,7 +17,7 @@ import { Badge } from '@/components/ui/badge';
 import { Pagination } from '@/components/ui/pagination';
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle, DialogTrigger } from '@/components/ui/dialog';
 import { Form, FormInput, FormSelect, FormTextarea } from '@/components/ui/form';
-import { Eye, Mic, MicOff, Search, Plus, Trash2, BarChart2 } from 'lucide-react';
+import { Eye, Mic, MicOff, Search, Plus, RefreshCw, Trash2, BarChart2 } from 'lucide-react';
 import { AccessibleIconButton } from '@/components/ui/accessible-icon-button';
 import { api } from '@/lib/api-client';
 import { parseVoiceCommandInputs } from '@/lib/voice-commands';
@@ -536,13 +536,13 @@ function VoiceCommandsPageContent() {
                                 onClick={() => handleToggleEnabled(cmd)}
                               />
                               <AccessibleIconButton
-                                icon={Trash2}
-                                label="Delete command"
+                                icon={isDeleting ? RefreshCw : Trash2}
+                                label={isDeleting ? 'Deleting command' : 'Delete command'}
                                 variant="ghost"
                                 size="sm"
                                 onClick={() => handleDeleteCommand(cmd)}
                                 disabled={isDeleting}
-                                iconClassName="text-destructive"
+                                iconClassName={isDeleting ? 'animate-spin text-destructive' : 'text-destructive'}
                               />
                             </div>
                           </TableCell>

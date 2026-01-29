@@ -596,10 +596,15 @@ export default function ResourceGovernorPage() {
                                 variant="ghost"
                                 size="icon"
                                 onClick={() => handleDeletePolicy(policy)}
-                                title="Delete policy"
+                                title={isDeleting ? 'Deleting policy' : 'Delete policy'}
+                                aria-label={isDeleting ? 'Deleting policy' : 'Delete policy'}
                                 disabled={isDeleting}
                               >
-                                <Trash2 className="h-4 w-4" />
+                                {isDeleting ? (
+                                  <RefreshCw className="h-4 w-4 animate-spin" />
+                                ) : (
+                                  <Trash2 className="h-4 w-4" />
+                                )}
                               </Button>
                             </div>
                           </TableCell>

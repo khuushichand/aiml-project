@@ -11,7 +11,7 @@ import { Alert, AlertDescription } from '@/components/ui/alert';
 import { Badge } from '@/components/ui/badge';
 import { Checkbox } from '@/components/ui/checkbox';
 import { useConfirm } from '@/components/ui/confirm-dialog';
-import { ArrowLeft, Shield, Lock, Save, Users, Trash2, Check, X, Clock, Wrench } from 'lucide-react';
+import { ArrowLeft, Shield, Lock, Save, Users, RefreshCw, Trash2, Check, X, Clock, Wrench } from 'lucide-react';
 import { api } from '@/lib/api-client';
 import { parseOptionalInt } from '@/lib/number';
 import { Role, Permission, User } from '@/types';
@@ -885,8 +885,17 @@ export default function RoleDetailPage() {
                         onClick={handleDeleteRole}
                         disabled={isDeletingRole}
                       >
-                        <Trash2 className="mr-2 h-4 w-4" />
-                        Delete Role
+                        {isDeletingRole ? (
+                          <>
+                            <RefreshCw className="mr-2 h-4 w-4 animate-spin" />
+                            Deleting...
+                          </>
+                        ) : (
+                          <>
+                            <Trash2 className="mr-2 h-4 w-4" />
+                            Delete Role
+                          </>
+                        )}
                       </Button>
                     )}
                   </div>

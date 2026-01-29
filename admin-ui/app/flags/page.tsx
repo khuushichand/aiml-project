@@ -605,9 +605,15 @@ export default function FlagsPage() {
                               variant="ghost"
                               size="icon"
                               onClick={() => handleDeleteFlag(flag)}
+                              title={isDeleting ? 'Deleting flag' : 'Delete flag'}
+                              aria-label={isDeleting ? 'Deleting flag' : 'Delete flag'}
                               disabled={isDeleting}
                             >
-                              <Trash2 className="h-4 w-4" />
+                              {isDeleting ? (
+                                <RefreshCw className="h-4 w-4 animate-spin" />
+                              ) : (
+                                <Trash2 className="h-4 w-4" />
+                              )}
                             </Button>
                           </TableCell>
                         </TableRow>

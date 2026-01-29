@@ -21,7 +21,7 @@ import { ActivitySection } from '@/components/dashboard/ActivitySection';
 import { RecentActivityCard } from '@/components/dashboard/RecentActivityCard';
 import { QuickActionsCard } from '@/components/dashboard/QuickActionsCard';
 import {
-  Building2, Clipboard, Settings, Trash2, UserPlus, ShieldAlert
+  Building2, Clipboard, RefreshCw, Settings, Trash2, UserPlus, ShieldAlert
 } from 'lucide-react';
 import { AccessibleIconButton } from '@/components/ui/accessible-icon-button';
 import { api } from '@/lib/api-client';
@@ -815,11 +815,12 @@ export default function DashboardPage() {
                                 onClick={() => copyToClipboard(code.code, 'Registration code')}
                               />
                               <AccessibleIconButton
-                                icon={Trash2}
-                                label="Delete registration code"
+                                icon={isDeleting ? RefreshCw : Trash2}
+                                label={isDeleting ? 'Deleting registration code' : 'Delete registration code'}
                                 variant="ghost"
                                 onClick={() => handleRegistrationDelete(code)}
                                 disabled={isDeleting}
+                                iconClassName={isDeleting ? 'animate-spin text-destructive' : 'text-destructive'}
                               />
                             </div>
                           </div>

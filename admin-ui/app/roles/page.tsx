@@ -15,7 +15,7 @@ import { useToast } from '@/components/ui/toast';
 import { useConfirm } from '@/components/ui/confirm-dialog';
 import { TableSkeleton } from '@/components/ui/skeleton';
 import { Form, FormInput } from '@/components/ui/form';
-import { Shield, Plus, Trash2, Lock, Settings } from 'lucide-react';
+import { Shield, Plus, RefreshCw, Trash2, Lock, Settings } from 'lucide-react';
 import { api } from '@/lib/api-client';
 import { Role, Permission } from '@/types';
 import Link from 'next/link';
@@ -326,9 +326,19 @@ export default function RolesPage() {
                                   size="sm"
                                   onClick={() => handleDeleteRole(role)}
                                   disabled={role.is_system || isDeleting}
-                                  title={role.is_system ? 'Cannot delete system roles' : 'Delete role'}
+                                  title={
+                                    role.is_system
+                                      ? 'Cannot delete system roles'
+                                      : isDeleting
+                                        ? 'Deleting role'
+                                        : 'Delete role'
+                                  }
                                 >
-                                  <Trash2 className={`h-4 w-4 ${role.is_system ? 'text-muted' : 'text-red-500'}`} />
+                                  {isDeleting ? (
+                                    <RefreshCw className="h-4 w-4 text-red-500 animate-spin" />
+                                  ) : (
+                                    <Trash2 className={`h-4 w-4 ${role.is_system ? 'text-muted' : 'text-red-500'}`} />
+                                  )}
                                 </Button>
                               </div>
                             </TableCell>
@@ -426,10 +436,15 @@ export default function RolesPage() {
                                 variant="ghost"
                                 size="sm"
                                 onClick={() => handleDeletePermission(perm)}
-                                title="Delete permission"
+                                title={isDeleting ? 'Deleting permission' : 'Delete permission'}
+                                aria-label={isDeleting ? 'Deleting permission' : 'Delete permission'}
                                 disabled={isDeleting}
                               >
-                                <Trash2 className="h-4 w-4 text-red-500" />
+                                {isDeleting ? (
+                                  <RefreshCw className="h-4 w-4 text-red-500 animate-spin" />
+                                ) : (
+                                  <Trash2 className="h-4 w-4 text-red-500" />
+                                )}
                               </Button>
                             </TableCell>
                           </TableRow>
