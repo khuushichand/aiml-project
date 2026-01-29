@@ -91,7 +91,6 @@ The ingestion and media processing hub for video, audio, PDF, EPUB, documents (t
 - Tests:
   - Endpoint tests: `tldw_Server_API/tests/Media_Ingestion_Modification/test_media_processing.py:354`, `.../test_add_media_endpoint.py:56` and related.
   - MediaWiki: `tldw_Server_API/tests/test_mediawiki_ephemeral_smoke.py:2`, `tldw_Server_API/tests/test_mediawiki_security.py:2`.
-  - WebUI e2e smoke: `tldw_Server_API/tests/webui_e2e/test_media_upload_*`.
   - Use markers `unit`/`integration`; mock external downloads (yt‑dlp), STT/LLM calls.
 - Local Dev Tips:
   - Install: `pip install -e .[dev]` and optional deps (`pypandoc`, `docling`, `yara`, `python-magic`, `puremagic`). Ensure `ffmpeg`, `yt-dlp`, optional `tesseract` are on PATH.

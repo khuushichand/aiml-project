@@ -1,4 +1,4 @@
-import OptionLayout from "@web/extension/components/Layouts/Layout"
+import OptionLayout from "@web/components/layout/WebLayout"
 import MediaReviewPage from "@/components/Review/MediaReviewPage"
 import React from "react"
 import { useTranslation } from "react-i18next"

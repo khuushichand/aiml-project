@@ -1,0 +1,169 @@
+import { test, expect } from "@playwright/test"
+import path from "path"
+import { launchWithExtension } from "./utils/extension"
+import { requireRealServerConfig } from "./utils/real-server"
+
+test.describe('ServerConnectionCard states', () => {
+  test('missing-config shows Open settings and navigates', async () => {
+    const extPath = path.resolve('build/chrome-mv3')
+    const { context, page } = await launchWithExtension(extPath)
+
+    // Card visible with missing-config state (headline + primary CTA)
+    await expect(
+      page.getByText(/Connect tldw Assistant to your server/i)
+    ).toBeVisible()
+    // Shared server overview block and docs CTA should be present.
+    await expect(
+      page.getByText(/How tldw server fits into this extension/i)
+    ).toBeVisible()
+    await expect(
+      page.getByRole('button', { name: /View server setup guide/i })
+    ).toBeVisible()
+    // Primary CTA should clearly guide users to configure the server
+    await expect(page.getByRole('button', { name: /Set up server/i })).toBeVisible()
+
+    // Navigate to settings
+    await page.getByRole('button', { name: /Set up server/i }).click()
+    await expect(page.getByText(/tldw Server Configuration/i)).toBeVisible()
+
+    await context.close()
+  })
+
+  test("connected state focuses composer on Start chatting", async () => {
+    const { serverUrl, apiKey } = requireRealServerConfig(test)
+
+    const extPath = path.resolve("build/chrome-mv3")
+    const { context, page } = await launchWithExtension(extPath)
+
+    // Seed config directly in extension storage
+    await page.evaluate(
+      (cfg) =>
+        new Promise<void>((resolve) => {
+          // @ts-ignore
+          chrome.storage.local.set({ tldwConfig: cfg }, () => resolve())
+        }),
+      { serverUrl, authMode: "single-user", apiKey }
+    )
+
+    await page.reload()
+
+    // Should show Start chatting and focus the textarea on click
+    await expect(
+      page.getByRole("button", { name: /Start chatting/i })
+    ).toBeVisible()
+    await page.getByRole("button", { name: /Start chatting/i }).click()
+    await expect(page.locator("#textarea-message")).toBeFocused()
+
+    await context.close()
+  })
+
+  test('unreachable state shows Troubleshooting guide', async () => {
+    const extPath = path.resolve('build/chrome-mv3')
+    const { context, page } = await launchWithExtension(extPath)
+
+    // Unreachable URL (ensure any existing config is cleared first)
+    await page.evaluate(async () => {
+      await new Promise<void>((resolve) => {
+        // @ts-ignore
+        chrome.storage.local.clear(() => resolve())
+      })
+    })
+
+    // Unreachable URL
+    await page.evaluate((cfg) => new Promise<void>((resolve) => {
+      // @ts-ignore
+      chrome.storage.local.set({ tldwConfig: cfg }, () => resolve())
+    }), { serverUrl: 'http://127.0.0.1:65535', authMode: 'single-user' })
+
+    await page.reload()
+
+    // Primary CTA now focuses troubleshooting rather than a generic retry.
+    const primaryCta = page.getByRole('button', {
+      name: /Troubleshoot connection|Retry connection/i
+    })
+    await expect(primaryCta).toBeVisible()
+
+    // Advanced troubleshooting options are hidden behind a toggle by default.
+    const advancedToggle = page.getByRole('button', {
+      name: /More troubleshooting options/i
+    })
+    await expect(advancedToggle).toBeVisible()
+    await advancedToggle.click()
+
+    // Advanced panel exposes Quick Ingest paths and docs.
+    await expect(
+      page.getByRole('button', { name: /Open Quick Ingest intro/i })
+    ).toBeVisible()
+    await expect(
+      page.getByRole('button', { name: /Open Quick Ingest/i })
+    ).toBeVisible()
+    await expect(
+      page.getByRole('button', { name: /Help docs/i })
+    ).toBeVisible()
+    await expect(
+      page.getByRole('button', { name: /Health & diagnostics/i })
+    ).toBeVisible()
+
+    // Quick Ingest hint should resolve to a localized string.
+    const hint = page.getByTestId('connection-card-quick-ingest-hint')
+    await expect(hint).toBeVisible()
+
+    await context.close()
+  })
+
+  test('diagnostics link from connection card opens Health & diagnostics in a new tab', async () => {
+    const extPath = path.resolve('build/chrome-mv3')
+    const { context, page } = await launchWithExtension(extPath)
+
+    // First-run: connection card should be visible with diagnostics entry point
+    await expect(
+      page.getByText(/Can.?t reach your tldw server|Connect tldw Assistant to your server/i)
+    ).toBeVisible()
+
+    const [healthPage] = await Promise.all([
+      context.waitForEvent('page'),
+      page
+        .getByRole('button', {
+          name: /Health & diagnostics|Open diagnostics|View diagnostics/i
+        })
+        .click()
+    ])
+
+    await healthPage.waitForLoadState('domcontentloaded')
+    await expect(healthPage).toHaveURL(/options\.html#\/settings\/health/i)
+    await expect(
+      healthPage.getByText(/Health & diagnostics|Health Status/i)
+    ).toBeVisible()
+
+    await context.close()
+  })
+
+  test('header status chips and Diagnostics link navigate to Health & diagnostics', async () => {
+    const extPath = path.resolve('build/chrome-mv3')
+    const { context, page, extensionId } = (await launchWithExtension(extPath)) as any
+    const optionsUrl = `chrome-extension://${extensionId}/options.html`
+
+    // Navigate to a route that always shows the main header
+    await page.goto(`${optionsUrl}#/media`)
+
+    // Header should use plain-language labels for connection status
+    await expect(page.getByText(/Server: /i)).toBeVisible()
+    await expect(page.getByText(/Knowledge: /i)).toBeVisible()
+
+    // Old "Core"/"RAG" labels should not appear in the header
+    await expect(page.getByText(/Core:/i)).toBeHidden()
+    await expect(page.getByText(/RAG/i)).toBeHidden()
+
+    // Server status pill opens Health & diagnostics
+    await page.getByRole('button', { name: /Server:/i }).click()
+    await expect(page).toHaveURL(/options\.html#\/settings\/health/i)
+    await expect(page.getByText(/Health & diagnostics/i)).toBeVisible()
+
+    // Navigate back to a content route and verify Knowledge pill
+    await page.goto(`${optionsUrl}#/media`)
+    await page.getByRole('button', { name: /Knowledge:/i }).click()
+    await expect(page).toHaveURL(/options\.html#\/settings\/health/i)
+
+    await context.close()
+  })
+})

@@ -533,6 +533,16 @@ export const PAGE_MAPPINGS: PageMapping[] = [
     session: 7,
     checklistItems: ["Popout loads", "Chat works"]
   },
+  {
+    name: "Setup",
+    category: "other",
+    webuiPath: "/setup",
+    extensionOptionsPath: "/setup",
+    extensionSidepanelPath: null,
+    sharedComponent: "OptionSetup",
+    session: 7,
+    checklistItems: ["Setup wizard loads", "Can proceed through steps"]
+  },
 
   // ═══════════════════════════════════════════════════════════════════════════
   // Session 6: Admin & Settings Details (WebUI-focused)

@@ -626,7 +626,7 @@ Diagnostics Mapping
 - Prioritize the first stack frame that maps to a workspace file; otherwise show a sandbox path with a “reveal in artifacts” link.
 
 Large Logs
-- IDE truncates long logs locally (e.g., first 100KB per stream) and shows a “View full logs in Web UI” deep link to `/webui/sandbox/runs/{id}`. The server separately enforces a per-run log cap per PRD.
+- IDE truncates long logs locally (e.g., first 100KB per stream) and shows a “View full logs in Web UI” deep link to the sandbox run details in the Next.js WebUI. The server separately enforces a per-run log cap per PRD.
 
 VS Code/JetBrains: initial extension(s) scaffolded with minimal UI, leveraging existing auth from tldw session or API key.
 
@@ -1414,7 +1414,7 @@ WebSocket logs
 - Ordering: all frames (including `heartbeat` and `truncated`) include `seq`; use it for ordering and dedup across reconnects.
 - Heartbeats: expect `{ "type": "heartbeat", "ts": "ISO", "seq": n }` every ~10s; if no frames for >30s, treat as dead and reconnect.
  - Reconnect: exponential backoff with jitter (1s → 2s → 4s … cap 30s). If run is already completed, skip reconnect and poll `GET /runs/{id}` for final status.
- - UI truncation: IDEs may truncate displayed logs (e.g., first 100KB per stream) and show a “View full logs in Web UI” link to `/webui/sandbox/runs/{id}`. Server enforces per-run log caps independently.
+ - UI truncation: IDEs may truncate displayed logs (e.g., first 100KB per stream) and show a “View full logs in Web UI” link to the sandbox run details in the Next.js WebUI. Server enforces per-run log caps independently.
 
 
 

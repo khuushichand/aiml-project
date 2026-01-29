@@ -1,7 +1,7 @@
 import dynamic from "next/dynamic"
 
 const TldwSettings = dynamic(
-  () => import("@web/extension/components/Option/Settings/tldw").then((m) => m.TldwSettings),
+  () => import("@/components/Option/Settings/tldw").then((m) => m.TldwSettings),
   { ssr: false }
 )
 

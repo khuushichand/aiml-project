@@ -1,4 +1,4 @@
-import OptionLayout from "@web/extension/components/Layouts/Layout"
+import OptionLayout from "@web/components/layout/WebLayout"
 import SpeechPlaygroundPage from "@/components/Option/Speech/SpeechPlaygroundPage"
 
 const OptionTts = () => {

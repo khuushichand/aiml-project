@@ -101,12 +101,13 @@ export function ConfigProvider({ children }: { children: React.ReactNode }) {
       // Prefer explicit UI base origin if provided; else use API host; else window origin
       const preferredBase = (process.env.NEXT_PUBLIC_API_BASE_URL || '').toString().trim() || config.apiBaseHost || (typeof window !== 'undefined' ? window.location.origin : '');
       const base = (preferredBase || '').replace(/\/$/, '');
-      const resp = await fetch(`${base}/webui/config.json`, { credentials: 'include' });
+      const resp = await fetch(`${base}/api/v1/config/docs-info`, { credentials: 'include' });
       if (!resp.ok) return;
       const json = await resp.json();
       const host = json?.base_url || json?.api_base_url || config.apiBaseHost;
-      const version = json?.api_version || config.apiVersion || 'v1';
-      const key = json?.x_api_key || config.xApiKey;
+      const version = config.apiVersion || 'v1';
+      const rawKey = json?.api_key || json?.x_api_key || '';
+      const key = rawKey && rawKey !== 'YOUR_API_KEY' ? rawKey : config.xApiKey;
       const bearer = json?.api_bearer || config.apiBearer;
       setConfig((c) => ({ ...c, apiBaseHost: host, apiVersion: version, xApiKey: key, apiBearer: bearer }));
     } catch {

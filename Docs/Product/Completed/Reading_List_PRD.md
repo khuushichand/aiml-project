@@ -117,7 +117,7 @@ Directory and module plan aligning with current repository:
   - `importers/pocket.py`, `importers/instapaper.py`
 - DB Abstractions: integrate via `app/core/DB_Management/Media_DB_v2.py` (per-user Media DB v2)
 - Background Services: reuse `services/` for embedding/summarize queues
-- Next.js WebUI (`apps/tldw-frontend/`) under a new `reading/` feature (list + detail + read view); legacy `tldw_Server_API/WebUI/` is out of scope.
+- Next.js WebUI (`apps/tldw-frontend/`) under a new `reading/` feature (list + detail + read view).
 
 ### 7.1 Data Model (Conceptual)
 

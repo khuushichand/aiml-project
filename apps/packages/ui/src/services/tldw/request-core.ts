@@ -183,10 +183,17 @@ export const tldwRequest = async (
       }
     }
 
+    const resolvedBody =
+      body == null
+        ? undefined
+        : typeof body === "string" || isBinaryBody(body)
+          ? body
+          : JSON.stringify(body)
+
     let resp = await fetchFn(url, {
       method,
       headers: h,
-      body: body ? (typeof body === "string" ? body : JSON.stringify(body)) : undefined,
+      body: resolvedBody,
       signal: controller.signal
     })
     if (timeoutId) {

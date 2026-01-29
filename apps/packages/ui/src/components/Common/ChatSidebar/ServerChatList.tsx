@@ -113,8 +113,7 @@ export function ServerChatList({
   const [bulkFolderPickerOpen, setBulkFolderPickerOpen] = React.useState(false)
   const [bulkTagPickerOpen, setBulkTagPickerOpen] = React.useState(false)
   const [bulkDeleteConfirmOpen, setBulkDeleteConfirmOpen] = React.useState(false)
-  const openSettingsTimeoutRef =
-    React.useRef<ReturnType<typeof setTimeout> | null>(null)
+  const openSettingsTimeoutRef = React.useRef<number | null>(null)
 
   const openExtensionUrl = React.useCallback(
     (path: `/options.html${string}` | `/sidepanel.html${string}`) => {
@@ -528,7 +527,7 @@ export function ServerChatList({
         selectServerChat(chat)
       }
       if (typeof window === "undefined") return
-      if (openSettingsTimeoutRef.current) {
+      if (openSettingsTimeoutRef.current !== null) {
         window.clearTimeout(openSettingsTimeoutRef.current)
       }
       openSettingsTimeoutRef.current = window.setTimeout(() => {
@@ -541,7 +540,7 @@ export function ServerChatList({
 
   React.useEffect(() => {
     return () => {
-      if (openSettingsTimeoutRef.current) {
+      if (openSettingsTimeoutRef.current !== null) {
         window.clearTimeout(openSettingsTimeoutRef.current)
         openSettingsTimeoutRef.current = null
       }
@@ -698,7 +697,7 @@ export function ServerChatList({
         <Modal
           title={t("common:renameChat", { defaultValue: "Rename chat" })}
           open
-          destroyOnClose
+          destroyOnHidden
           onCancel={() => {
             setRenamingChat(null)
             setRenameValue("")
@@ -734,7 +733,7 @@ export function ServerChatList({
             defaultValue: "Topic label (optional)"
           })}
           open
-          destroyOnClose
+          destroyOnHidden
           onCancel={() => {
             setEditingTopicChat(null)
             setTopicValue("")
@@ -894,7 +893,7 @@ export function ServerChatList({
           "sidepanel:multiSelect.deleteConfirmTitle",
           "Move chats to trash?"
         )}
-        destroyOnClose
+        destroyOnHidden
       >
         <p>
           {t(

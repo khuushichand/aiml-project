@@ -10,7 +10,7 @@ Precedence (highest → lowest):
 Note: Secrets should be set via environment or `.env`. `config.txt` is supported for convenience in dev; prefer env in production.
 
 ## Core Server
-- `tldw_production`: Enable production guards (`true|false`). Masks API key in logs, hardens WebUI config, enforces DB/secret checks.
+- `tldw_production`: Enable production guards (`true|false`). Masks API key in logs and enforces DB/secret checks.
 - `ENABLE_OPENAPI`: Show OpenAPI/Swagger UI when `true`. Defaults to hidden in production unless explicitly enabled.
 - `ALLOWED_ORIGINS`: CORS allowlist. Comma-separated or JSON array.
 - `TLDW_CONFIG_PATH`: Absolute path to the primary `config.txt`. When set, the parent directory is treated as the config root for auxiliary assets (e.g., `Synonyms/`).
@@ -261,7 +261,7 @@ Config file support (optional):
 - Section `[AuthNZ]` in `Config_Files/config.txt` can define: `auth_mode`, `database_url`, `jwt_secret_key`, `single_user_api_key`, `enable_registration`, `require_registration_code`, `rate_limit_enabled`, `rate_limit_per_minute`, `rate_limit_burst`, `access_token_expire_minutes`, `refresh_token_expire_days`, `redis_url`, plus security alert keys (`security_alerts_enabled`, `security_alert_min_severity`, `security_alert_file_path`, `security_alert_webhook_url`, `security_alert_webhook_headers`, `security_alert_email_to`, `security_alert_email_from`, `security_alert_email_subject_prefix`, `security_alert_smtp_host`, `security_alert_smtp_port`, `security_alert_smtp_starttls`, `security_alert_smtp_username`, `security_alert_smtp_password`, `security_alert_smtp_timeout`, `security_alert_file_min_severity`, `security_alert_webhook_min_severity`, `security_alert_email_min_severity`).
 - Section `[Image-Generation]` in `Config_Files/config.txt` can define: `default_backend`, `enabled_backends`, `max_width`, `max_height`, `max_pixels`, `max_steps`, `max_prompt_length`, `inline_max_bytes`, `sd_cpp_binary_path`, `sd_cpp_diffusion_model_path`, `sd_cpp_model_path`, `sd_cpp_llm_path`, `sd_cpp_vae_path`, `sd_cpp_lora_paths`, `sd_cpp_allowed_extra_params`, `sd_cpp_default_steps`, `sd_cpp_default_cfg_scale`, `sd_cpp_default_sampler`, `sd_cpp_device`, `sd_cpp_timeout_seconds`.
 
-## Chat / WebUI
+## Chat / UI
 - `CHAT_SAVE_DEFAULT`: Persist new chats by default (`true|false`).
 - `DEFAULT_CHAT_SAVE`: Legacy alias; same as above.
 - `CHAT_STREAM_INCLUDE_METADATA`: Include `tldw_*` IDs in chat SSE streaming chunks (`true|false`, default `true`). Set `false` for strict OpenAI streaming compatibility.
@@ -278,7 +278,7 @@ Runtime overrides (non-persistent) are available via API:
 
 ## Usage Logging & Aggregators
 - `USAGE_LOG_ENABLED`: Enable lightweight HTTP usage logging middleware (`true|false`, default `false`).
-- `USAGE_LOG_EXCLUDE_PREFIXES`: JSON array of path prefixes to skip (default includes `/docs`, `/metrics`, `/static`, `/webui`). Example: `USAGE_LOG_EXCLUDE_PREFIXES='["/docs","/metrics"]'`.
+- `USAGE_LOG_EXCLUDE_PREFIXES`: JSON array of path prefixes to skip (default includes `/docs`, `/metrics`, `/static`). Example: `USAGE_LOG_EXCLUDE_PREFIXES='["/docs","/metrics"]'`.
 - `USAGE_AGGREGATOR_INTERVAL_MINUTES`: Background aggregation cadence for `usage_daily` (default `60`).
 - `USAGE_LOG_RETENTION_DAYS`: Retain `usage_log` rows for this many days; daily job prunes older rows (default `180`).
 - `USAGE_LOG_DISABLE_META`: When `true`, do not store IP/User-Agent in `usage_log.meta` (stores `{}`) regardless of `PII_REDACT_LOGS`.

@@ -10,6 +10,7 @@ export { WizardShell } from "./WizardShell"
 export { WorkflowCard } from "./WorkflowCard"
 export { WorkflowLanding, WorkflowLandingModal } from "./WorkflowLanding"
 export { WorkflowContainer, WorkflowOverlay } from "./WorkflowContainer"
+export { WorkflowIntegrationHost } from "./WorkflowIntegrationHost"
 export {
   ContextualSuggestionCard,
   ContextualSuggestionList,

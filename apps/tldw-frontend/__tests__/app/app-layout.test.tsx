@@ -19,7 +19,7 @@ vi.mock('@web/components/AppProviders', () => ({
   AppProviders: ({ children }: { children: React.ReactNode }) => <>{children}</>
 }))
 
-vi.mock('@web/extension/components/Layouts/Layout', () => ({
+vi.mock('@web/components/layout/WebLayout', () => ({
   default: ({ children }: { children: React.ReactNode }) => (
     <div data-testid="option-layout">{children}</div>
   )

@@ -20,6 +20,12 @@ const formatToMime = (format: string): string => {
       return "audio/aac"
     case "flac":
       return "audio/flac"
+    case "ogg":
+      return "audio/ogg"
+    case "webm":
+      return "audio/webm"
+    case "ulaw":
+      return "audio/basic"
     case "pcm":
       return "audio/L16"
     case "mp3":
@@ -279,6 +285,13 @@ export const useStreamingAudioPlayer = () => {
     setState((prev) => ({ ...prev, playing: true }))
   }, [flushPending])
 
+  const getBufferedBlob = React.useCallback(() => {
+    if (!allChunksRef.current.length) return null
+    const normalizedFormat = formatRef.current || "mp3"
+    const mime = formatToMime(normalizedFormat)
+    return new Blob(allChunksRef.current, { type: mime })
+  }, [])
+
   const stop = React.useCallback(() => {
     cleanup()
   }, [cleanup])
@@ -290,6 +303,7 @@ export const useStreamingAudioPlayer = () => {
     append,
     finish,
     stop,
-    state
+    state,
+    getBufferedBlob
   }
 }

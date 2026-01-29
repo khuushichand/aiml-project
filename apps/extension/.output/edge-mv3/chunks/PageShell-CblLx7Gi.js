@@ -1,0 +1,1 @@
+import{j as l,W as m}from"./react-instance-check-Bz0kNSNK.js";const t=({children:s,maxWidthClassName:a="max-w-5xl",className:x})=>l.jsx("div",{className:m("w-full mx-auto px-4 sm:px-6 lg:px-8",a,x||""),children:s});export{t as P};

@@ -134,6 +134,7 @@ export const PAGES: PageEntry[] = [
   // ═══════════════════════════════════════════════════════════════════════════
   { path: "/", name: "Home", category: "other" },
   { path: "/login", name: "Login", category: "other" },
+  { path: "/setup", name: "Setup", category: "other" },
   { path: "/config", name: "Config", category: "other" },
   { path: "/documentation", name: "Documentation", category: "other" },
   { path: "/profile", name: "Profile", category: "other" },

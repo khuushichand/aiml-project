@@ -36,6 +36,16 @@ export type TtsProviderOverrides = {
   tldwVoice?: string
   tldwResponseFormat?: string
   tldwSpeed?: number
+  tldwLanguage?: string
+  tldwNormalizationOptions?: {
+    normalize?: boolean
+    unit_normalization?: boolean
+    url_normalization?: boolean
+    email_normalization?: boolean
+    phone_normalization?: boolean
+    optional_pluralization_normalization?: boolean
+  }
+  tldwExtraParams?: Record<string, any>
   openAiModel?: string
   openAiVoice?: string
   openAiSpeed?: number
@@ -74,6 +84,12 @@ const formatToMimeType = (format: string): string => {
       return "audio/aac"
     case "flac":
       return "audio/flac"
+    case "ogg":
+      return "audio/ogg"
+    case "webm":
+      return "audio/webm"
+    case "ulaw":
+      return "audio/basic"
     case "pcm":
       return "audio/L16; rate=24000; channels=1"
     case "mp3":
@@ -181,6 +197,9 @@ export const resolveTtsProviderContext = async (
   const model = overrides?.tldwModel || baseModel
   const voice = overrides?.tldwVoice || baseVoice
   let speed = overrides?.tldwSpeed ?? (await getTldwTTSSpeed())
+  const language = overrides?.tldwLanguage
+  const normalizationOptions = overrides?.tldwNormalizationOptions
+  const extraParams = overrides?.tldwExtraParams
   if (inferTldwProviderFromModel(model) === "kokoro" && Number.isFinite(speed)) {
     speed = Math.min(2, Math.max(0.5, speed))
   }
@@ -203,7 +222,11 @@ export const resolveTtsProviderContext = async (
         model,
         voice,
         responseFormat,
-        speed
+        speed,
+        language,
+        normalizationOptions,
+        extraParams,
+        stream: false
       }),
       format: responseFormat,
       mimeType

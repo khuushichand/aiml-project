@@ -49,7 +49,8 @@ export const WorkflowCard: React.FC<WorkflowCardProps> = ({
     <Card
       hoverable={!disabled}
       className={cn(
-        "cursor-pointer transition-all relative",
+        "group cursor-pointer transition-all relative",
+        "border border-border !bg-surface text-text",
         "hover:border-primary hover:shadow-md",
         disabled && "opacity-50 cursor-not-allowed hover:border-border hover:shadow-none",
         isCompleted && "border-success/50"
@@ -68,24 +69,26 @@ export const WorkflowCard: React.FC<WorkflowCardProps> = ({
         </div>
       )}
 
-      <div className="flex flex-col items-center text-center gap-3 py-2">
+      <div className="flex flex-col items-start text-left gap-3">
         {/* Icon */}
         <div
           className={cn(
-            "w-12 h-12 rounded-full flex items-center justify-center",
-            "bg-primary/10 text-primary"
+            "p-3 rounded-lg",
+            "bg-primary/10 text-primary",
+            !disabled &&
+              "group-hover:bg-primary group-hover:text-white transition-colors"
           )}
         >
           <IconComponent className="h-6 w-6" />
         </div>
 
         {/* Title */}
-        <h3 className="font-medium text-text text-sm">
+        <h3 className="text-lg font-semibold text-text">
           {t(workflow.labelToken, workflow.id)}
         </h3>
 
         {/* Description */}
-        <p className="text-xs text-textMuted line-clamp-2">
+        <p className="text-sm text-textMuted line-clamp-2">
           {t(workflow.descriptionToken, "")}
         </p>
       </div>

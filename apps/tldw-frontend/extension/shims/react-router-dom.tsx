@@ -63,10 +63,25 @@ export const useNavigate = () => {
       }
       return
     }
-    if (options?.replace) {
-      void router.replace(to)
-    } else {
-      void router.push(to)
+    const doFallback = () => {
+      if (typeof window === "undefined") return
+      const proto = window.location.protocol
+      if (proto === "chrome-extension:" || proto === "moz-extension:") {
+        window.location.hash = `#${to}`
+        return
+      }
+      window.location.assign(to)
+    }
+
+    try {
+      if (options?.replace) {
+        void router.replace(to)
+      } else {
+        void router.push(to)
+      }
+    } catch (err) {
+      console.error("[useNavigate shim] Navigation failed:", err)
+      doFallback()
     }
   }
 }
@@ -140,3 +155,21 @@ export const HashRouter: React.FC<{ children?: React.ReactNode }> = ({
 export const MemoryRouter: React.FC<{ children?: React.ReactNode }> = ({
   children
 }) => <>{children}</>
+
+type NavigateProps = {
+  to: string
+  replace?: boolean
+  state?: unknown
+}
+
+export const Navigate: React.FC<NavigateProps> = ({ to, replace }) => {
+  const router = useRouter()
+  React.useEffect(() => {
+    if (replace) {
+      void router.replace(to)
+    } else {
+      void router.push(to)
+    }
+  }, [router, to, replace])
+  return null
+}

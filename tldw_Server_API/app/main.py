@@ -1498,7 +1498,7 @@ async def lifespan(app: FastAPI):
                     by_path = dict(route_map.get("by_path") or {})
                     by_tag = dict(route_map.get("by_tag") or {})
                     if by_path or by_tag:
-                        skip_prefixes = ("/docs", "/openapi.json", "/redoc", "/static", "/webui", "/favicon.ico")
+                        skip_prefixes = ("/docs", "/openapi.json", "/redoc", "/static", "/favicon.ico")
                         missing: list[tuple[str, list[str]]] = []
                         seen_paths: set[str] = set()
                         for route in getattr(app, "routes", []):
@@ -2774,8 +2774,9 @@ async def lifespan(app: FastAPI):
                 logger.info("JWT Bearer tokens required for authentication")
             logger.info("=" * 60)
 
-        logger.info(f"📍 API Documentation: http://127.0.0.1:8000/docs")
-        logger.info(f"🌐 WebUI: http://127.0.0.1:8000/webui/")
+        logger.info("📍 API Documentation: http://127.0.0.1:8000/docs")
+        logger.info("🧭 Quickstart: http://127.0.0.1:8000/api/v1/config/quickstart")
+        logger.info("🛠 Setup UI: http://127.0.0.1:8000/setup (if required)")
         logger.info("=" * 60)
     except Exception as e:
         logger.error(f"Failed to display startup info: {e}")
@@ -3793,7 +3794,8 @@ APP_DESCRIPTION = """
     - Notes, prompts, evaluations, MCP Unified server
 
     Helpful paths
-    - Web UI: /webui
+    - Quickstart: /api/v1/config/quickstart
+    - Setup UI: /setup
     - OpenAPI JSON: /openapi.json
     - Metrics: /metrics and /api/v1/metrics
     """.strip()
@@ -4080,10 +4082,11 @@ async def _display_startup_info_and_warm():
         logger.info("📌 API Key for authentication:")
         logger.info(f"   {_mask_key(api_key) if (_is_prod and not _show_key) else api_key}")
         logger.info("🌐 Access URLs:")
-        logger.info("   WebUI:    http://localhost:8000/webui/")
-        logger.info("   API Docs: http://localhost:8000/docs")
-        logger.info("   ReDoc:    http://localhost:8000/redoc")
-        logger.info("💡 The WebUI will automatically use this API key")
+        logger.info("   Quickstart: http://localhost:8000/api/v1/config/quickstart")
+        logger.info("   Setup UI:   http://localhost:8000/setup (if required)")
+        logger.info("   API Docs:   http://localhost:8000/docs")
+        logger.info("   ReDoc:      http://localhost:8000/redoc")
+        logger.info("💡 Use this API key in X-API-KEY for API requests")
         logger.info("=" * 70)
     else:
         logger.info("=" * 70)
@@ -4164,8 +4167,8 @@ app.mount("/static", StaticFiles(directory=BASE_DIR / "static"), name="static")
 
 # Security middleware (headers + request size limit)
 from tldw_Server_API.app.core.Security.middleware import SecurityHeadersMiddleware
-from tldw_Server_API.app.core.Security.webui_csp import WebUICSPMiddleware
-from tldw_Server_API.app.core.Security.webui_access_guard import WebUIAccessGuardMiddleware
+from tldw_Server_API.app.core.Security.setup_csp import SetupCSPMiddleware
+from tldw_Server_API.app.core.Security.setup_access_guard import SetupAccessGuardMiddleware
 from tldw_Server_API.app.core.Security.request_id_middleware import RequestIDMiddleware
 from tldw_Server_API.app.core.Metrics.http_middleware import HTTPMetricsMiddleware
 from tldw_Server_API.app.core.AuthNZ.usage_logging_middleware import UsageLoggingMiddleware
@@ -4180,16 +4183,16 @@ if _TEST_MODE:
     logger.info("TEST_MODE detected: Skipping non-essential middlewares (security headers, metrics, usage logging)")
     # Provide request id + trace headers even in tests for assertions
     app.add_middleware(RequestIDMiddleware)
-    # Apply WebUI CSP nonce injection even in tests to keep behavior consistent
+    # Apply Setup CSP nonce injection even in tests to keep behavior consistent
     try:
-        app.add_middleware(WebUICSPMiddleware)
+        app.add_middleware(SetupCSPMiddleware)
     except Exception as _e:
-        logger.debug(f"Skipping WebUICSPMiddleware in tests: {_e}")
-    # Guard WebUI remote access in tests too (should evaluate loopback as allowed)
+        logger.debug(f"Skipping SetupCSPMiddleware in tests: {_e}")
+    # Guard Setup remote access in tests too (should evaluate loopback as allowed)
     try:
-        app.add_middleware(WebUIAccessGuardMiddleware)
+        app.add_middleware(SetupAccessGuardMiddleware)
     except Exception as _e:
-        logger.debug(f"Skipping WebUIAccessGuardMiddleware in tests: {_e}")
+        logger.debug(f"Skipping SetupAccessGuardMiddleware in tests: {_e}")
 
     # Sandbox artifact traversal guard (pre-routing)
     try:
@@ -4253,16 +4256,16 @@ else:
         if (_prod_flag and _enable_sec_headers_env is None)
         else ((_enable_sec_headers_env or "true").lower() in {"true", "1", "yes", "y", "on"})
     )
-    # Apply WebUI CSP nonce injection before security headers
+    # Apply Setup CSP nonce injection before security headers
     try:
-        app.add_middleware(WebUICSPMiddleware)
+        app.add_middleware(SetupCSPMiddleware)
     except Exception as _e:
-        logger.debug(f"Skipping WebUICSPMiddleware: {_e}")
-    # Enforce WebUI remote access policy
+        logger.debug(f"Skipping SetupCSPMiddleware: {_e}")
+    # Enforce Setup remote access policy
     try:
-        app.add_middleware(WebUIAccessGuardMiddleware)
+        app.add_middleware(SetupAccessGuardMiddleware)
     except Exception as _e:
-        logger.debug(f"Skipping WebUIAccessGuardMiddleware: {_e}")
+        logger.debug(f"Skipping SetupAccessGuardMiddleware: {_e}")
 
     if _enable_sec_headers:
         app.add_middleware(SecurityHeadersMiddleware, enabled=True)
@@ -4347,274 +4350,7 @@ try:
 except Exception as _e:
     logger.debug(f"Skipping LLMBudgetMiddleware: {_e}")
 
-# WebUI serving - Serve the WebUI from the same origin to avoid CORS issues
-WEBUI_DIR = BASE_DIR.parent / "WebUI"
-if WEBUI_DIR.exists():
-    # First, define a dynamic config endpoint for single user mode (registered conditionally below)
-    async def get_webui_config():
-        """Dynamically generate WebUI configuration with API key in single user mode.
-
-        This endpoint also exposes the inferred deployment PROFILE as a UX hint so
-        the WebUI can adjust copy/affordances without affecting auth behavior.
-        """
-        from tldw_Server_API.app.core.AuthNZ.settings import (
-            get_settings,
-            get_profile,
-            is_single_user_mode,
-        )
-        from tldw_Server_API.app.api.v1.endpoints.llm_providers import get_configured_providers_async
-        from fastapi.responses import JSONResponse
-        from tldw_Server_API.app.core.config import load_comprehensive_config, get_config_value
-
-        config = {
-            "apiUrl": "",  # Empty means use same origin
-            "apiKey": "",  # Default empty
-            "_comment": "Auto-generated configuration",
-        }
-
-        # In single user mode, include the API key unless running in production
-        import os as _os
-
-        _is_prod_env = _os.getenv("tldw_production", "false").lower() in {"true", "1", "yes", "y", "on"}
-        webui_base_url = _os.getenv("TLDW_WEBUI_BASE_URL") or get_config_value("Server", "webui_base_url")
-        if isinstance(webui_base_url, str) and webui_base_url.strip():
-            config["webui_base_url"] = webui_base_url.strip()
-        profile_hint = None
-        try:
-            profile_hint = get_profile()
-        except Exception:
-            # Coordination-only; failures here must not impact auth
-            profile_hint = None
-
-        if profile_hint:
-            config["profile"] = profile_hint
-
-        if is_single_user_mode():
-            settings = get_settings()
-            config["mode"] = "single-user"
-            if not _is_prod_env:
-                config["apiKey"] = settings.SINGLE_USER_API_KEY
-                config["_comment"] = "Auto-configured for single user mode"
-            else:
-                # Omit API key in production environment for security
-                config["apiKey"] = ""
-                config["_comment"] = "Single-user mode (production): API key omitted"
-        else:
-            config["mode"] = "multi-user"
-            config["_comment"] = "Multi-user mode - manual authentication required"
-            try:
-                from tldw_Server_API.app.core.AuthNZ.database import is_postgres_backend as _is_pg_backend
-
-                _is_pg = await _is_pg_backend()
-                config.setdefault("auth", {})
-                if _is_pg:
-                    config["auth"]["multiUserSupportsApiKey"] = False
-                    config["auth"]["preferApiKeyInMultiUser"] = False
-                else:
-                    # Expose hint so the WebUI can prefer X-API-KEY in multi-user SQLite setups
-                    config["auth"]["multiUserSupportsApiKey"] = True
-                    config["auth"]["preferApiKeyInMultiUser"] = True
-            except Exception:
-                pass
-
-        # Add LLM providers information
-        try:
-            providers_info = await get_configured_providers_async()
-            config["llm_providers"] = providers_info
-        except Exception as e:
-            logger.warning(f"Failed to get LLM providers for config: {e}")
-            config["llm_providers"] = {"providers": [], "default_provider": "openai", "total_configured": 0}
-
-        # Add Embeddings providers information (lightweight; no secrets)
-        try:
-            from tldw_Server_API.app.core.Embeddings.simplified_config import get_config as _get_emb_cfg
-
-            _emb_cfg = _get_emb_cfg()
-            config["embeddings"] = {
-                "default_provider": getattr(_emb_cfg, "default_provider", None),
-                "default_model": getattr(_emb_cfg, "default_model", None),
-                "providers": [
-                    {
-                        "name": getattr(p, "name", None),
-                        "enabled": bool(getattr(p, "enabled", False)),
-                        # Expose API URL for local/self-hosted providers only; never include keys
-                        "api_url": getattr(p, "api_url", None),
-                        "models": list(getattr(p, "models", []) or []),
-                    }
-                    for p in (getattr(_emb_cfg, "providers", []) or [])
-                ],
-            }
-        except Exception as e:
-            logger.warning(f"Failed to include embeddings providers in WebUI config: {e}")
-
-        # Add chat defaults (e.g., default save_to_db)
-        try:
-            cfg = load_comprehensive_config()
-            chat_cfg = {}
-            if cfg and cfg.has_section("Chat-Module"):
-                chat_cfg = dict(cfg.items("Chat-Module"))
-
-            def _to_bool(val: str) -> bool:
-                return str(val).strip().lower() in {"1", "true", "yes", "y", "on"}
-
-            env_default = _os.getenv("CHAT_SAVE_DEFAULT") or _os.getenv("DEFAULT_CHAT_SAVE")
-            default_save = None
-            if env_default is not None:
-                default_save = _to_bool(env_default)
-            elif chat_cfg.get("chat_save_default") or chat_cfg.get("default_save_to_db"):
-                default_save = _to_bool(chat_cfg.get("chat_save_default") or chat_cfg.get("default_save_to_db"))
-            elif cfg and cfg.has_section("Auto-Save"):
-                try:
-                    auto_val = cfg.get("Auto-Save", "save_character_chats", fallback=None)
-                    if auto_val is not None:
-                        default_save = _to_bool(auto_val)
-                except Exception:
-                    default_save = None
-            if default_save is None:
-                default_save = False
-
-            config["chat"] = {"default_save_to_db": default_save}
-        except Exception as e:
-            logger.warning(f"Failed to compute chat defaults for WebUI config: {e}")
-
-        # Add a compact catalog of commonly used API endpoints for the WebUI
-        try:
-            config["api_endpoints"] = {
-                "llm": {
-                    "health": "/api/v1/llm/health",
-                    "providers": "/api/v1/llm/providers",
-                    "provider": "/api/v1/llm/providers/{provider}",
-                    "models": "/api/v1/llm/models",
-                    "models_metadata": "/api/v1/llm/models/metadata",
-                },
-                "embeddings": {
-                    "models": "/api/v1/embeddings/models",
-                    "providers_config": "/api/v1/embeddings/providers-config",
-                    "warmup": "/api/v1/embeddings/models/warmup",
-                    "download": "/api/v1/embeddings/models/download",
-                },
-                "audio": {
-                    "providers": "/api/v1/audio/providers",
-                    "voices_catalog": "/api/v1/audio/voices/catalog",
-                    "speech": "/api/v1/audio/speech",
-                    "transcriptions": "/api/v1/audio/transcriptions",
-                    "stream_transcribe": "/api/v1/audio/stream/transcribe",
-                    "stream_status": "/api/v1/audio/stream/status",
-                },
-                "ocr": {
-                    "backends": "/api/v1/ocr/backends",
-                    "points_preload": "/api/v1/ocr/points/preload",
-                },
-                "media": {
-                    "add": "/api/v1/media/add",
-                    "search": "/api/v1/media/search",
-                    "ingest_web": "/api/v1/media/ingest-web-content",
-                    "metadata_search": "/api/v1/media/metadata-search",
-                    "list": "/api/v1/media",
-                    "by_id": "/api/v1/media/{media_id}",
-                    "versions": "/api/v1/media/{media_id}/versions",
-                },
-                "rag": {
-                    "search": "/api/v1/rag/search",
-                },
-                "chat": {
-                    "completions": "/api/v1/chat/completions",
-                },
-                "research": {
-                    "websearch": "/api/v1/research/websearch",
-                    "arxiv": "/api/v1/paper-search/arxiv",
-                    "semantic_scholar": "/api/v1/paper-search/semantic-scholar",
-                },
-                "prompts": {
-                    "health": "/api/v1/prompts/health",
-                    "list": "/api/v1/prompts",
-                    "create": "/api/v1/prompts",
-                    "search": "/api/v1/prompts/search",
-                    "get": "/api/v1/prompts/{prompt_identifier}",
-                    "export": "/api/v1/prompts/export",
-                    "update": "/api/v1/prompts/{prompt_identifier}",
-                    "delete": "/api/v1/prompts/{prompt_identifier}",
-                    "keywords": "/api/v1/prompts/keywords/",
-                    "keyword_delete": "/api/v1/prompts/keywords/{keyword}",
-                },
-                "notes": {
-                    "health": "/api/v1/notes/health",
-                    "list": "/api/v1/notes/",
-                    "get": "/api/v1/notes/{note_id}",
-                    "search": "/api/v1/notes/search",
-                    "export": "/api/v1/notes/export",
-                    "create": "/api/v1/notes/",
-                    "keywords": "/api/v1/notes/keywords/",
-                    "keywords_notes": "/api/v1/notes/keywords/{keyword_id}/notes/",
-                },
-                "mcp": {
-                    "health": "/api/v1/mcp/health",
-                    "prompts": "/api/v1/mcp/prompts",
-                    "resources": "/api/v1/mcp/resources",
-                    "auth_token": "/api/v1/mcp/auth/token",
-                },
-                "workflows": {
-                    "config": "/api/v1/workflows/config",
-                    "run": "/api/v1/workflows/run",
-                    "auth_check": "/api/v1/workflows/auth/check",
-                },
-                "health": {
-                    "aggregate": "/api/v1/health",
-                    "live": "/api/v1/health/live",
-                    "ready": "/api/v1/health/ready",
-                },
-                "evaluations": {
-                    "rag_presets": "/api/v1/evaluations/rag/pipeline/presets",
-                    "rag_preset": "/api/v1/evaluations/rag/pipeline/presets/{name}",
-                },
-            }
-        except Exception:
-            # Best-effort: omit if anything goes wrong
-            pass
-
-        return JSONResponse(content=config)
-
-    # Explicit handlers for /webui and /webui/ before static mount to avoid shadowing
-    async def _serve_webui_index():
-        idx = WEBUI_DIR / "index.html"
-        try:
-            if idx.exists():
-                return FileResponse(idx, media_type="text/html")
-        except Exception:
-            pass
-        try:
-            from fastapi.responses import JSONResponse  # local import to avoid top-level churn
-
-            return JSONResponse({"detail": "WebUI index not found"}, status_code=404)
-        except Exception:
-            raise HTTPException(status_code=404, detail="WebUI index not found")
-
-    try:
-        # Redirect bare /webui to /webui/
-        app.add_api_route("/webui", lambda: RedirectResponse(url="/webui/", status_code=307), include_in_schema=False)
-        # Explicitly serve the main index at /webui/
-        app.add_api_route("/webui/", _serve_webui_index, include_in_schema=False)
-    except Exception as _webui_idx_err:
-        logger.debug(f"Could not register explicit /webui handlers: {_webui_idx_err}")
-
-    # Gate WebUI static mount and config endpoint
-    try:
-        if route_enabled("webui"):
-            app.add_api_route("/webui/config.json", get_webui_config, include_in_schema=False)
-            # Mount the WebUI static files (except config.json which is handled above)
-            app.mount("/webui", StaticFiles(directory=str(WEBUI_DIR), html=True), name="webui")
-            logger.info(f"WebUI mounted at /webui from {WEBUI_DIR}")
-        else:
-            logger.info("Route disabled by policy: webui (static + /webui/config.json)")
-    except Exception as _webui_rt_err:
-        logger.warning(f"Route gating error for webui; mounting by default. Error: {_webui_rt_err}")
-        app.add_api_route("/webui/config.json", get_webui_config, include_in_schema=False)
-        app.mount("/webui", StaticFiles(directory=str(WEBUI_DIR), html=True), name="webui")
-        logger.info(f"WebUI mounted at /webui from {WEBUI_DIR}")
-else:
-    logger.warning(f"WebUI directory not found at {WEBUI_DIR}")
-
-# Keep Setup UI HTML outside the /webui static mount to avoid bypassing the
+# Keep Setup UI HTML outside the static mounts to avoid bypassing the
 # /setup gating via direct file access.
 SETUP_PAGE_PATH = BASE_DIR / "Setup_UI" / "setup.html"
 
@@ -4627,10 +4363,10 @@ async def serve_setup_page():
         raise HTTPException(status_code=500, detail="Configuration file missing; cannot render setup UI.")
 
     if not setup_required:
-        return RedirectResponse(url="/webui/", status_code=307)
+        return RedirectResponse(url="/api/v1/config/quickstart", status_code=307)
 
     if not SETUP_PAGE_PATH.exists():
-        raise HTTPException(status_code=404, detail="Setup UI assets missing. Reinstall the WebUI bundle.")
+        raise HTTPException(status_code=404, detail="Setup UI assets missing. Reinstall the setup UI bundle.")
 
     return FileResponse(SETUP_PAGE_PATH)
 
@@ -4649,7 +4385,7 @@ except Exception as _setup_rt_err:
         "/setup", serve_setup_page, methods=["GET"], include_in_schema=False, openapi_extra={"security": []}
     )
 
-# Mount project Docs (read-only) for WebUI links, if present
+# Mount project Docs (read-only) for UI links, if present
 DOCS_DIR = BASE_DIR.parent.parent / "Docs"
 if DOCS_DIR.exists():
     app.mount("/docs-static", StaticFiles(directory=str(DOCS_DIR), html=False), name="docs-static")
@@ -4677,8 +4413,8 @@ async def root():
         logger.warning("config.txt missing while handling root request; serving default message.")
 
     return {
-        "message": "Welcome to the tldw API; If you're seeing this, the server is running!"
-        "Check out /webui , /docs or /metrics to get started!"
+        "message": "Welcome to the tldw API; if you're seeing this, the server is running! "
+        "Check out /api/v1/config/quickstart, /docs, or /metrics to get started."
     }
 
 

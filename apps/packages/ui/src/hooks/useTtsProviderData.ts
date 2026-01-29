@@ -9,6 +9,7 @@ import {
 } from "@/services/tldw/audio-providers"
 import { fetchTldwTtsModels, type TldwTtsModel } from "@/services/tldw/audio-models"
 import { fetchTldwVoiceCatalog } from "@/services/tldw/audio-voices"
+import { toServerTtsProviderKey } from "@/services/tldw/tts-provider-keys"
 
 export const OPENAI_TTS_MODELS = [
   { label: "tts-1", value: "tts-1" },
@@ -70,7 +71,9 @@ export const useTtsProviderData = ({
     queryKey: ["tldw-voice-catalog", inferredProviderKey],
     queryFn: async () => {
       if (!inferredProviderKey) return []
-      const voices = await fetchTldwVoiceCatalog(inferredProviderKey)
+      const voices = await fetchTldwVoiceCatalog(
+        toServerTtsProviderKey(inferredProviderKey)
+      )
       return voices.map((v) => ({
         id: v.voice_id || v.id || v.name,
         name: v.name || v.voice_id || v.id,

@@ -581,14 +581,14 @@ export function OnboardingConnectForm({ onFinish }: Props) {
             p.serverReachable === "checking" ? "error" : p.serverReachable,
         }),
       })
-      const message = (error as Error)?.message || null
+      const errorMessage = (error as Error)?.message || null
       const status =
         (error as any)?.status ??
         (error as any)?.response?.status ??
         (error as any)?.statusCode ??
         null
       const kind =
-        categorizeConnectionError(status, message) ??
+        categorizeConnectionError(status, errorMessage) ??
         ("refused" as ConnectionErrorKind)
       if (kind === "refused" || kind === "timeout" || kind === "dns_failed") {
         requestOptionalHostPermission(serverUrl, (granted, origin) => {
@@ -606,7 +606,7 @@ export function OnboardingConnectForm({ onFinish }: Props) {
       dispatchUi({
         type: "SET_ERROR",
         errorKind: kind,
-        errorMessage: message || "Connection failed",
+        errorMessage: errorMessage || "Connection failed",
       })
     } finally {
       dispatchUi({ type: "FINISH_CONNECT" })

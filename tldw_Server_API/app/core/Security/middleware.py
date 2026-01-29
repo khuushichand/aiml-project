@@ -25,29 +25,7 @@ DEFAULT_CSP = (
     "upgrade-insecure-requests"
 )
 
-# Relaxed CSP for WebUI path (fallback only; authoritative policy comes from WebUICSPMiddleware).
-# - Allows inline handlers while legacy UI is refactored
-# - Does NOT include 'unsafe-eval' by default (devs can enable via WebUICSPMiddleware env controls)
-# - Keeps other directives aligned with DEFAULT_CSP
-RELAXED_CSP_WEBUI = (
-    "default-src 'self'; "
-    # Allow same-origin external scripts and inline for legacy WebUI
-    "script-src 'self' 'unsafe-inline'; "
-    # No script-src-elem/script-src-attr overrides -> script-src applies to both
-    "style-src 'self' 'unsafe-inline'; "
-    # Permit blob: for dynamic image object URLs used in UI
-    "img-src 'self' data: blob: https:; "
-    "font-src 'self' data:; "
-    "media-src 'self' data: blob:; "
-    # Allow HTTP(S) and WebSockets (legacy pages may use localhost vs 127.0.0.1)
-    "connect-src 'self' http: https: ws: wss:; "
-    "frame-ancestors 'none'; "
-    "base-uri 'self'; "
-    "form-action 'self'; "
-    "upgrade-insecure-requests"
-)
-
-# Permissive CSP for Setup UI fallback (only if WebUICSPMiddleware didn't set one)
+# Permissive CSP for Setup UI fallback (only if SetupCSPMiddleware didn't set one)
 RELAXED_CSP_SETUP = (
     "default-src 'self'; "
     "script-src 'self' 'unsafe-inline' 'unsafe-eval'; "
@@ -162,15 +140,12 @@ class SecurityHeadersMiddleware(BaseHTTPMiddleware):
         if self.referrer_policy:
             response.headers.setdefault("Referrer-Policy", self.referrer_policy)
 
-        # Path-scoped CSP: WebUICSPMiddleware is authoritative for /webui and /setup.
+        # Path-scoped CSP: SetupCSPMiddleware is authoritative for /setup.
         # Only provide a fallback CSP here if none has been set.
         path = request.url.path or ""
         if path.startswith("/setup"):
             if "Content-Security-Policy" not in response.headers:
                 response.headers.setdefault("Content-Security-Policy", RELAXED_CSP_SETUP)
-        elif path.startswith("/webui"):
-            if "Content-Security-Policy" not in response.headers:
-                response.headers.setdefault("Content-Security-Policy", RELAXED_CSP_WEBUI)
         elif path.startswith("/docs") or path.startswith("/redoc"):
             # Docs UI often uses inline scripts; allow inline/eval and optional HTTPS CDNs
             if "Content-Security-Policy" not in response.headers:

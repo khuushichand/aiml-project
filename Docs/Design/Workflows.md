@@ -16,7 +16,7 @@ This document captures the current state of the Workflows module, its APIs, data
   - `registry.py`: available step types
 - Persistence: `tldw_Server_API/app/core/DB_Management/Workflows_DB.py` (SQLite and PostgreSQL via `DatabaseBackend`)
 - API: `tldw_Server_API/app/api/v1/endpoints/workflows.py` and `.../schemas/workflows.py`
-- WebUI: `tldw_Server_API/WebUI/tabs/workflows_content.html`
+- WebUI: Next.js client in `apps/tldw-frontend`
 - PRD: `Workflows-PRD-1.md`
 
 ## API Surface
@@ -383,7 +383,7 @@ Ordering is stable with a tie-breaker (`run_id` for runs; `event_id` for events)
 
 ## WebUI
 
-- Basic tab at `tldw_Server_API/WebUI/tabs/workflows_content.html` for definition CRUD, run start (sync/async), run status, event stream, and artifact downloads (server and client-side zip).
+- Next.js UI for definition CRUD, run start (sync/async), run status, event stream, and artifact downloads (server and client-side zip).
 - The Runs list displays status chips including a dedicated `waiting_approval` chip for human-in-the-loop runs awaiting approval.
 - The Events viewer supports cursor pagination when enabled, and client/server-side filtering by event types.
 - Builder UX (MVP)

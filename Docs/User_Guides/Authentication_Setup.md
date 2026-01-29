@@ -119,8 +119,7 @@ Key settings in `.env`:
     ```bash
     docker compose exec app printenv SINGLE_USER_API_KEY
     ```
-- WebUI convenience (dev): `GET /webui/config.json` returns the key in single-user mode so the WebUI can auto-configure. Avoid relying on this in production.
-  - In production (`tldw_production=true`), `/webui/config.json` omits the `apiKey` field for security.
+- Frontend clients: supply the API key via their own config (for the Next.js client, use `NEXT_PUBLIC_X_API_KEY` in `.env.local`).
 - Important: Always set a secure `SINGLE_USER_API_KEY` in production. If unset, the server may use a deterministic test key for convenience during development/testing.
   - When `tldw_production=true`, the server refuses to start if `SINGLE_USER_API_KEY` is missing, a default/test value, or shorter than 24 characters.
 
@@ -161,7 +160,7 @@ Rotation guidance: see `Docs/Operations/JWT_Rotation_Runbook.md`.
 
 ### Security Controls (env)
 
-- `tldw_production`: Set to `true` in production to enable stricter guards (secrets validation, DB checks, masked logs, WebUI config hardening).
+- `tldw_production`: Set to `true` in production to enable stricter guards (secrets validation, DB checks, masked logs).
 - `ENABLE_OPENAPI`: Set `false` to hide docs/Redoc/OpenAPI; defaults to `false` in production when unspecified.
 - `ALLOWED_ORIGINS`: Comma-separated list or JSON array to restrict CORS in production.
 -, `ENABLE_SECURITY_HEADERS`: Enable/disable security headers middleware (defaults to `true` in production).
@@ -198,14 +197,14 @@ python -m tldw_Server_API.app.core.AuthNZ.initialize
 # 3) Start the server
 uvicorn tldw_Server_API.app.main:app --reload
 
-# 4) Open the simple auth page to register/login and get a JWT
-open http://127.0.0.1:8000/webui/auth.html   # macOS
+# 4) Open the Next.js WebUI login page to register/login and get a JWT
+open http://localhost:8080/login   # macOS (run the Next.js client separately)
 # xdg-open on Linux, or just paste the URL in a browser
 ```
 
 Notes
 - This is suitable for development and light testing. For production multi-user, use PostgreSQL for `DATABASE_URL`.
-- The auth page posts to `/api/v1/auth/register` and `/api/v1/auth/login` and shows the access token.
+- The login flow posts to `/api/v1/auth/register` and `/api/v1/auth/login` and shows the access token.
 
 ## Using config.txt for AuthNZ
 

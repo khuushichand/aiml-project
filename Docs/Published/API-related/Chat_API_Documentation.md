@@ -278,8 +278,8 @@ Image metrics now track per-image sizes when multiple images are included in a s
 - Intended for administrators/operations; avoid exposing in multi-tenant environments without RBAC.
 
 ## WebUI
-- Location: `/webui` → Chat Completions tab.
-- Persistence: “Save to DB” checkbox, default pulled from `/webui/config.json` reflecting server config.
+- Location: Next.js WebUI (`apps/tldw-frontend`) → Chat page.
+- Persistence: “Save to DB” checkbox uses server defaults.
 - Providers/models: Dropdowns reflect configured providers and models.
 
 ## Related Documentation

@@ -10,7 +10,7 @@ This file provides concise guidance to coding agents working with the tldw_serve
 The long-term goal is to create something akin to "The Young Lady's Illustrated Primer" from Neal Stephenson's "The Diamond Age" - a personal knowledge assistant that helps users learn and research at their own pace. While acknowledging the inherent difficulties in replicating such a device, this project serves as a practical step toward that vision.
 
 ### Current Status (v0.1.0)
-The project is a FastAPI-first backend with an integrated WebUI, mature AuthNZ (single-user API key and multi-user JWT modes), unified RAG and Evaluation modules, OpenAI-compatible Chat and Audio APIs (including real-time streaming transcription), and a production-grade MCP Unified module. The previous Gradio UI is deprecated.
+The project is a FastAPI-first backend with a Next.js WebUI, mature AuthNZ (single-user API key and multi-user JWT modes), unified RAG and Evaluation modules, OpenAI-compatible Chat and Audio APIs (including real-time streaming transcription), and a production-grade MCP Unified module. The previous Gradio UI is deprecated.
 
 ## Repository Structure
 
@@ -25,7 +25,6 @@ The project is a FastAPI-first backend with an integrated WebUI, mature AuthNZ (
 │   │   ├── core/                 # Core business logic (AuthNZ, RAG, LLM, DB, TTS, MCP, etc.)
 │   │   ├── services/             # Background services
 │   │   └── main.py               # FastAPI entry point
-│   ├── WebUI/                    # Legacy integrated web UI served at /webui
 │   ├── Config_Files/             # config.txt, example YAMLs, migration helpers
 │   ├── Databases/                # Default DBs (runtime data; some are gitignored)
 │   ├── tests/                    # Pytest suite
@@ -39,7 +38,6 @@ The project is a FastAPI-first backend with an integrated WebUI, mature AuthNZ (
 ├── models/                       # Optional model assets (if used)
 ├── pyproject.toml                # Project configuration
 ├── README.md                     # Project README
-├── start-webui.sh                # Convenience script for WebUI + server
 └── Project_Guidelines.md         # Development philosophy
 ```
 
@@ -227,7 +225,8 @@ The project is a FastAPI-first backend with an integrated WebUI, mature AuthNZ (
 ```bash
 python -m uvicorn tldw_Server_API.app.main:app --reload
 # API docs:   http://127.0.0.1:8000/docs
-# Web UI:     http://127.0.0.1:8000/webui/
+# Quickstart: http://127.0.0.1:8000/api/v1/config/quickstart
+# Setup UI:   http://127.0.0.1:8000/setup (if required)
 ```
 
 ### Running Tests

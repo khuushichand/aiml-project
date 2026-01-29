@@ -9,7 +9,7 @@ import React from "react"
 import { AppProviders } from "@web/components/AppProviders"
 
 const OptionLayout = dynamic(
-  () => import("@web/extension/components/Layouts/Layout"),
+  () => import("@web/components/layout/WebLayout"),
   { ssr: false }
 )
 
@@ -21,15 +21,13 @@ export default function App({ Component, pageProps }: AppProps) {
       ? pathname.slice(0, -1)
       : pathname
 
-  const isChatRoute =
-    routePath === "/chat" || routePath.startsWith("/chat/")
   const isLoginRoute = routePath === "/login"
   const isSettingsRoute =
     routePath === "/settings" || routePath.startsWith("/settings/")
 
   return (
     <AppProviders>
-      {isChatRoute || isLoginRoute ? (
+      {isLoginRoute ? (
         <Component {...pageProps} />
       ) : (
         <OptionLayout

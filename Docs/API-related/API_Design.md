@@ -14,7 +14,7 @@ This document outlines the current API design for the TL;DW Server (tldw_server)
 - Local development:
   - OpenAPI docs: `http://127.0.0.1:8000/docs`
   - ReDoc: `http://127.0.0.1:8000/redoc`
-  - Web UI: `http://127.0.0.1:8000/webui/`
+  - Quickstart: `http://127.0.0.1:8000/api/v1/config/quickstart`
 
 ## Auth Modes
 - Single user: header `X-API-KEY: <key>`

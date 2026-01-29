@@ -383,7 +383,7 @@ class Settings(BaseSettings):
     )
     USAGE_LOG_EXCLUDE_PREFIXES: list[str] = Field(
         default_factory=lambda: [
-            "/docs", "/redoc", "/openapi.json", "/metrics", "/static", "/favicon.ico", "/webui"
+            "/docs", "/redoc", "/openapi.json", "/metrics", "/static", "/favicon.ico"
         ],
         description="Request path prefixes to exclude from usage logging"
     )

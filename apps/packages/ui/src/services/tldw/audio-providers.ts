@@ -13,6 +13,8 @@ export type TldwTtsVoiceInfo = {
 export type TldwTtsProviderCapabilities = {
   provider_name?: string
   formats?: string[]
+  default_format?: string
+  languages?: string[]
   supports_streaming?: boolean
   supports_voice_cloning?: boolean
   supports_ssml?: boolean

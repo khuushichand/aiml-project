@@ -1,6 +1,6 @@
 # Installation & Setup Guide
 
-This guide helps you install and run tldw_server locally with the integrated WebUI and API.
+This guide helps you install and run tldw_server locally with the Next.js WebUI and API.
 
 ## Prerequisites
 
@@ -246,13 +246,8 @@ curl -sS -X POST http://127.0.0.1:8000/api/v1/audio/transcriptions \
 ```bash
 python -m uvicorn tldw_Server_API.app.main:app --reload
 # API docs:   http://127.0.0.1:8000/docs
-# Web UI:     http://127.0.0.1:8000/webui/
-```
-
-Tip: You can also use the convenience script from the repo root:
-
-```bash
-./start-webui.sh
+# Quickstart: http://127.0.0.1:8000/api/v1/config/quickstart
+# Setup UI:   http://127.0.0.1:8000/setup (if required)
 ```
 
 Optional: run the API + Jobs workers as separate processes (sidecar mode):

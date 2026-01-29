@@ -25,6 +25,7 @@ import { Header } from "./Header"
 import { QuickIngestModalHost } from "@/components/Layouts/QuickIngestButton"
 import { useMigration } from "../../hooks/useMigration"
 import { useStorageMigrations } from "@/hooks/useStorageMigrations"
+import { useLayoutEffectsOwner } from "@/hooks/useLayoutEffectsOwner"
 import { useChatSidebar } from "@/hooks/useFeatureFlags"
 import { ChatSidebar } from "@/components/Common/ChatSidebar"
 import { EventOnlyHosts } from "@/components/Common/EventHosts"
@@ -60,13 +61,15 @@ const SHORTCUT_LOADING_MIN_MS = 0
 const SHORTCUT_LOADING_MAX_MS = 2500
 
 const OptionLayoutEffects = () => {
-  useStorageMigrations()
+  const isLayoutEffectsOwner = useLayoutEffectsOwner()
+  useStorageMigrations(isLayoutEffectsOwner)
   const location = useLocation()
 
   React.useEffect(() => {
+    if (!isLayoutEffectsOwner) return
     const path = `${location.pathname}${location.search}${location.hash}`
     setSettingsReturnTo(path)
-  }, [location.pathname, location.search, location.hash])
+  }, [isLayoutEffectsOwner, location.pathname, location.search, location.hash])
 
   return null
 }

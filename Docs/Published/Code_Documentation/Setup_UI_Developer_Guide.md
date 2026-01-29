@@ -2,7 +2,7 @@
 
 ## Overview
 
-The first-run setup experience lives in `tldw_Server_API/WebUI/` and is backed by the `app/api/v1/setup.py` API. It provides:
+The first-run setup experience lives in `tldw_Server_API/app/Setup_UI/` with assets under `tldw_Server_API/app/static/setup/`, and is backed by the `app/api/v1/setup.py` API. It provides:
 
 - A guided wizard that selects relevant configuration sections.
 - A configuration explorer that renders every entry in `Config_Files/config.txt` with inline context.
@@ -47,15 +47,15 @@ setup.js assistant UI → show response + deep-link buttons
 - `/status`: gatekeeper for first-run logic (used by the guard script and the wizard).
 - `/config` (GET/POST): fetch and persist the configuration snapshot. POST writes through `update_config()` so comments stay intact.
 - `/assistant` (POST): lightweight Q&A endpoint; no external LLM. Wraps `answer_setup_question()` and translates validation errors into `HTTP_400`.
-- `/install-status` (GET): exposes progress from the background installer (see below). The WebUI polls this endpoint while dependencies/models are being provisioned.
+- `/install-status` (GET): exposes progress from the background installer (see below). The Setup UI polls this endpoint while dependencies/models are being provisioned.
 
 ### `install_manager.py`
 
 - **Dependency bootstrap**: Before downloading models the installer aggregates all required Python packages (per backend) and runs `pip install` with `sys.executable`. A new env flag, `TLDW_SETUP_SKIP_PIP`, skips this phase - steps are marked as `skipped` and model downloads are suppressed to avoid half-configured states. Optional `TLDW_SETUP_PIP_INDEX_URL` rewires pip to a custom/simple index for air-gapped environments.
 - **Model downloads**: Existing logic remains in place. When `TLDW_SETUP_SKIP_DOWNLOADS` is set the steps are recorded as skipped and no network calls occur.
-- **Status reporting**: Every dependency/model action is logged to `Config_Files/setup_install_status.json` (or the override specified by `TLDW_INSTALL_STATE_DIR`). The WebUI renders these steps verbatim in the “Installer Progress” panel.
+- **Status reporting**: Every dependency/model action is logged to `Config_Files/setup_install_status.json` (or the override specified by `TLDW_INSTALL_STATE_DIR`). The Setup UI renders these steps verbatim in the “Installer Progress” panel.
 
-## Frontend Components (`WebUI`)
+## Frontend Components (Setup UI)
 
 ### Entry Point
 

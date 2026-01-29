@@ -303,10 +303,7 @@ from tldw_Server_API.app.services.admin_system_ops_service import (
 )
 from tldw_Server_API.app.core.Logging.system_log_buffer import query_system_logs
 from tldw_Server_API.app.services.admin_service import update_api_key_metadata
-from tldw_Server_API.app.core.Security.webui_access_guard import (
-    webui_remote_access_enabled,
-    setup_remote_access_enabled,
-)
+from tldw_Server_API.app.core.Security.setup_access_guard import setup_remote_access_enabled
 from tldw_Server_API.app.core.config import load_comprehensive_config
 from tldw_Server_API.app.core.Setup import setup_manager
 from tldw_Server_API.app.services.registration_service import reset_registration_service
@@ -7177,7 +7174,7 @@ async def delete_tool_catalog_entry(catalog_id: int, tool_name: str, db=Depends(
         logger.error(f"Failed to delete tool catalog entry: {e}")
         raise HTTPException(status_code=500, detail="Failed to delete tool catalog entry")
 # -------------------------------------------------------------------------------------------------
-# Network diagnostics: resolved client IP, proxy headers, and WebUI/Setup access decisions
+# Network diagnostics: resolved client IP, proxy headers, and Setup access decisions
 
 def _parse_nets(raw: str | None) -> list[ipaddress._BaseNetwork]:
     nets: list[ipaddress._BaseNetwork] = []
@@ -7197,7 +7194,6 @@ def _parse_nets(raw: str | None) -> list[ipaddress._BaseNetwork]:
 
 
 def _load_list(section: str, field: str, env_name: str) -> list[ipaddress._BaseNetwork]:
-    import os
     raw_env = os.getenv(env_name)
     if raw_env:
         return _parse_nets(raw_env)
@@ -7254,15 +7250,13 @@ def _is_loopback(ip_str: str | None) -> bool:
 
 @router.get("/network-info")
 async def network_info(request: Request):
-    """Show resolved client IP, proxy headers, and access decision inputs for WebUI/Setup.
+    """Show resolved client IP, proxy headers, and access decision inputs for Setup.
 
     Returns a JSON payload useful for debugging remote-access policy and proxy header handling.
     """
     import os
     # Load lists and settings
     trusted_proxies = _load_list("Server", "trusted_proxies", "TLDW_TRUSTED_PROXIES")
-    webui_allow = _load_list("Server", "webui_ip_allowlist", "TLDW_WEBUI_ALLOWLIST")
-    webui_deny = _load_list("Server", "webui_ip_denylist", "TLDW_WEBUI_DENYLIST")
     setup_allow = _load_list("Setup", "setup_ip_allowlist", "TLDW_SETUP_ALLOWLIST")
     setup_deny = _load_list("Setup", "setup_ip_denylist", "TLDW_SETUP_DENYLIST")
 
@@ -7274,17 +7268,15 @@ async def network_info(request: Request):
     except Exception:
         ip_obj = None
 
-    def _decide(kind: str):
+    def _decide_setup():
         if loopback:
             return {"decision": "allow", "reason": "loopback"}
-        allowlist = webui_allow if kind == "webui" else setup_allow
-        denylist = webui_deny if kind == "webui" else setup_deny
-        toggle = webui_remote_access_enabled() if kind == "webui" else setup_remote_access_enabled()
+        toggle = setup_remote_access_enabled()
         # denylist precedes
-        if denylist and ip_obj and any(ip_obj in net for net in denylist):
+        if setup_deny and ip_obj and any(ip_obj in net for net in setup_deny):
             return {"decision": "deny", "reason": "denylist"}
-        if allowlist:
-            if ip_obj and any(ip_obj in net for net in allowlist):
+        if setup_allow:
+            if ip_obj and any(ip_obj in net for net in setup_allow):
                 return {"decision": "allow", "reason": "allowlist"}
             return {"decision": "allow" if toggle else "deny", "reason": "toggle" if toggle else "no-allowlist-match"}
         return {"decision": "allow" if toggle else "deny", "reason": "toggle" if toggle else "toggle-off"}
@@ -7298,16 +7290,10 @@ async def network_info(request: Request):
             "x_real_ip": request.headers.get("x-real-ip") or request.headers.get("X-Real-IP"),
         },
         "is_loopback": loopback,
-        "webui": {
-            "remote_toggle": webui_remote_access_enabled(),
-            "allowlist": [str(n) for n in webui_allow],
-            "denylist": [str(n) for n in webui_deny],
-            **_decide("webui"),
-        },
         "setup": {
             "remote_toggle": setup_remote_access_enabled(),
             "allowlist": [str(n) for n in setup_allow],
             "denylist": [str(n) for n in setup_deny],
-            **_decide("setup"),
+            **_decide_setup(),
         },
     }

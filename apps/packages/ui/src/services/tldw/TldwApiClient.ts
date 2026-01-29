@@ -2393,7 +2393,16 @@ export class TldwApiClient {
 
   async synthesizeSpeech(
     text: string,
-    options?: { voice?: string; model?: string; responseFormat?: string; speed?: number }
+    options?: {
+      voice?: string
+      model?: string
+      responseFormat?: string
+      speed?: number
+      language?: string
+      normalizationOptions?: Record<string, any>
+      extraParams?: Record<string, any>
+      stream?: boolean
+    }
   ): Promise<ArrayBuffer> {
     await this.ensureConfigForRequest(true)
     const body: Record<string, any> = { input: text, text }
@@ -2401,6 +2410,12 @@ export class TldwApiClient {
     if (options?.model) body.model = options.model
     if (options?.responseFormat) body.response_format = options.responseFormat
     if (options?.speed != null) body.speed = options.speed
+    if (options?.language) body.lang_code = options.language
+    if (options?.normalizationOptions) {
+      body.normalization_options = options.normalizationOptions
+    }
+    if (options?.extraParams) body.extra_params = options.extraParams
+    if (options?.stream != null) body.stream = options.stream
     const accept = (() => {
       switch ((options?.responseFormat || "").trim().toLowerCase()) {
         case "wav":
@@ -2411,6 +2426,12 @@ export class TldwApiClient {
           return "audio/aac"
         case "flac":
           return "audio/flac"
+        case "ogg":
+          return "audio/ogg"
+        case "webm":
+          return "audio/webm"
+        case "ulaw":
+          return "audio/basic"
         case "pcm":
           return "audio/L16; rate=24000; channels=1"
         case "mp3":

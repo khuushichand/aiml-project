@@ -7,6 +7,7 @@ import { AppShell } from "./AppShell"
 import { RouteShell } from "@/routes/app-route"
 import { platformConfig } from "@/config/platform"
 import { QuickChatHelperButton } from "@/components/Common/QuickChatHelper"
+import { WorkflowIntegrationHost } from "@/components/Common/Workflow"
 
 const KeyboardShortcutsModal = React.lazy(() =>
   import("@/components/Common/KeyboardShortcutsModal").then((m) => ({
@@ -88,6 +89,7 @@ export const SidepanelApp: React.FC = () => {
       extras={extras}
     >
       <RouteShell kind="sidepanel" />
+      <WorkflowIntegrationHost justChatPath="/" autoShow={false} />
     </AppShell>
   )
 }
@@ -120,6 +122,7 @@ export const OptionsApp: React.FC = () => {
       includeAntdApp={platformConfig.features.includeAntdApp}
     >
       <RouteShell kind="options" />
+      <WorkflowIntegrationHost autoShowPaths={["/"]} />
     </AppShell>
   )
 }

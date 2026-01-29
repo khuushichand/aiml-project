@@ -5,8 +5,10 @@ import {
   Button,
   Alert,
   Card,
+  Collapse,
   Dropdown,
   Input,
+  InputNumber,
   List,
   Segmented,
   Select,
@@ -17,26 +19,38 @@ import {
   Typography,
   notification
 } from "antd"
+import type { DefaultOptionType } from "antd/es/select"
 import { ArrowRight, Copy, Download, Lock, Mic, Pause, Save, Trash2, Unlock } from "lucide-react"
 import { useQuery, useQueryClient } from "@tanstack/react-query"
 import { PageShell } from "@/components/Common/PageShell"
 import WaveformCanvas from "@/components/Common/WaveformCanvas"
-import { inferTldwProviderFromModel } from "@/services/tts-provider"
+import { inferTldwProviderFromModel, resolveTtsProviderContext } from "@/services/tts-provider"
 import { getTtsProviderLabel } from "@/services/tts-providers"
 import {
   type TldwTtsProviderCapabilities,
   type TldwTtsVoiceInfo
 } from "@/services/tldw/audio-providers"
 import { useTtsPlayground } from "@/hooks/useTtsPlayground"
+import { useStreamingAudioPlayer } from "@/hooks/useStreamingAudioPlayer"
 import {
   OPENAI_TTS_MODELS,
   OPENAI_TTS_VOICES,
   useTtsProviderData
 } from "@/hooks/useTtsProviderData"
-import { getTTSProvider, getTTSSettings, setTTSSettings } from "@/services/tts"
+import {
+  getTTSProvider,
+  getTTSSettings,
+  setTTSSettings,
+  SUPPORTED_TLDW_TTS_FORMATS
+} from "@/services/tts"
 import { tldwClient } from "@/services/tldw/TldwApiClient"
 import { copyToClipboard } from "@/utils/clipboard"
 import { TtsProviderPanel } from "@/components/Option/TTS/TtsProviderPanel"
+import { splitMessageContent } from "@/utils/tts"
+import { markdownToText } from "@/utils/markdown-to-text"
+import { VoiceCloningManager } from "../TTS/VoiceCloningManager"
+import { listCustomVoices, type TldwCustomVoice } from "@/services/tldw/voice-cloning"
+import { normalizeTtsProviderKey, toServerTtsProviderKey } from "@/services/tldw/tts-provider-keys"
 
 const { Text, Title, Paragraph } = Typography
 
@@ -60,6 +74,7 @@ const SAMPLE_TEXT =
   "Sample: Hi there, this is the speech playground reading a short passage so you can preview voice and speed."
 
 const MAX_HISTORY_ITEMS = 100
+const STREAMING_FORMATS = new Set(["mp3", "opus", "aac", "flac", "wav", "pcm"])
 
 const formatHistoryDate = (value: string) => {
   try {
@@ -67,6 +82,13 @@ const formatHistoryDate = (value: string) => {
   } catch {
     return value
   }
+}
+
+const formatBytes = (value?: number | null) => {
+  if (!value || value <= 0) return "0 B"
+  if (value < 1024) return `${value} B`
+  if (value < 1024 * 1024) return `${(value / 1024).toFixed(1)} KB`
+  return `${(value / (1024 * 1024)).toFixed(1)} MB`
 }
 
 type SpeechPlaygroundPageProps = {
@@ -467,8 +489,31 @@ export const SpeechPlaygroundPage: React.FC<SpeechPlaygroundPageProps> = ({
     segments,
     isGenerating,
     generateSegments,
-    clearSegments
+    clearSegments,
+    setSegments
   } = useTtsPlayground()
+  const {
+    start: streamStart,
+    append: streamAppend,
+    finish: streamFinish,
+    stop: streamStop,
+    state: streamState,
+    getBufferedBlob
+  } = useStreamingAudioPlayer()
+  const wsRef = React.useRef<WebSocket | null>(null)
+  const streamMetaRef = React.useRef<{
+    provider: string
+    model?: string
+    voice?: string
+    format?: string
+  } | null>(null)
+  const [streamStatus, setStreamStatus] = React.useState<
+    "idle" | "connecting" | "streaming" | "complete" | "error"
+  >("idle")
+  const [streamError, setStreamError] = React.useState<string | null>(null)
+  const streamErrorRef = React.useRef<string | null>(null)
+  const [streamChunks, setStreamChunks] = React.useState(0)
+  const [streamBytes, setStreamBytes] = React.useState(0)
   const [activeSegmentIndex, setActiveSegmentIndex] = React.useState<number | null>(null)
   const audioRef = React.useRef<HTMLAudioElement | null>(null)
   const [currentTime, setCurrentTime] = React.useState(0)
@@ -484,6 +529,18 @@ export const SpeechPlaygroundPage: React.FC<SpeechPlaygroundPageProps> = ({
   const [elevenModelId, setElevenModelId] = React.useState<string | undefined>(undefined)
   const [tldwModel, setTldwModel] = React.useState<string | undefined>(undefined)
   const [tldwVoice, setTldwVoice] = React.useState<string | undefined>(undefined)
+  const [tldwFormat, setTldwFormat] = React.useState<string | undefined>(undefined)
+  const [tldwLanguage, setTldwLanguage] = React.useState<string | undefined>(undefined)
+  const [tldwStreaming, setTldwStreaming] = React.useState(false)
+  const [tldwEmotion, setTldwEmotion] = React.useState<string | undefined>(undefined)
+  const [tldwEmotionIntensity, setTldwEmotionIntensity] = React.useState<number>(1)
+  const [tldwNormalize, setTldwNormalize] = React.useState(true)
+  const [tldwNormalizeUnits, setTldwNormalizeUnits] = React.useState(false)
+  const [tldwNormalizeUrls, setTldwNormalizeUrls] = React.useState(true)
+  const [tldwNormalizeEmails, setTldwNormalizeEmails] = React.useState(true)
+  const [tldwNormalizePhones, setTldwNormalizePhones] = React.useState(true)
+  const [tldwNormalizePlurals, setTldwNormalizePlurals] = React.useState(true)
+  const [responseSplitting, setResponseSplitting] = React.useState("punctuation")
   const [openAiModel, setOpenAiModel] = React.useState<string | undefined>(undefined)
   const [openAiVoice, setOpenAiVoice] = React.useState<string | undefined>(undefined)
   const provider = ttsSettings?.ttsProvider || "browser"
@@ -504,12 +561,34 @@ export const SpeechPlaygroundPage: React.FC<SpeechPlaygroundPageProps> = ({
     inferredProviderKey
   })
 
+  const { data: customVoices = [] } = useQuery<TldwCustomVoice[]>({
+    queryKey: ["tts-custom-voices"],
+    queryFn: listCustomVoices,
+    enabled: isTldw && hasAudio
+  })
+
   React.useEffect(() => {
     if (!ttsSettings) return
     setElevenVoiceId(ttsSettings.elevenLabsVoiceId || undefined)
     setElevenModelId(ttsSettings.elevenLabsModel || undefined)
     setTldwModel(ttsSettings.tldwTtsModel || undefined)
     setTldwVoice(ttsSettings.tldwTtsVoice || undefined)
+    setTldwFormat(ttsSettings.tldwTtsResponseFormat || undefined)
+    setTldwLanguage(ttsSettings.tldwTtsLanguage || undefined)
+    setTldwStreaming(Boolean(ttsSettings.tldwTtsStreaming))
+    setTldwEmotion(ttsSettings.tldwTtsEmotion || undefined)
+    setTldwEmotionIntensity(
+      typeof ttsSettings.tldwTtsEmotionIntensity === "number"
+        ? ttsSettings.tldwTtsEmotionIntensity
+        : 1
+    )
+    setTldwNormalize(ttsSettings.tldwTtsNormalize !== false)
+    setTldwNormalizeUnits(Boolean(ttsSettings.tldwTtsNormalizeUnits))
+    setTldwNormalizeUrls(ttsSettings.tldwTtsNormalizeUrls !== false)
+    setTldwNormalizeEmails(ttsSettings.tldwTtsNormalizeEmails !== false)
+    setTldwNormalizePhones(ttsSettings.tldwTtsNormalizePhones !== false)
+    setTldwNormalizePlurals(ttsSettings.tldwTtsNormalizePlurals !== false)
+    setResponseSplitting(ttsSettings.responseSplitting || "punctuation")
     setOpenAiModel(ttsSettings.openAITTSModel || undefined)
     setOpenAiVoice(ttsSettings.openAITTSVoice || undefined)
   }, [ttsSettings])
@@ -528,36 +607,259 @@ export const SpeechPlaygroundPage: React.FC<SpeechPlaygroundPageProps> = ({
   }
 
   const isTtsDisabled = ttsSettings?.ttsEnabled === false
-  const handlePlay = async () => {
-    if (!ttsText.trim() || isTtsDisabled) return
+  const normalizationOptions = React.useMemo(
+    () => ({
+      normalize: tldwNormalize,
+      unit_normalization: tldwNormalizeUnits,
+      url_normalization: tldwNormalizeUrls,
+      email_normalization: tldwNormalizeEmails,
+      phone_normalization: tldwNormalizePhones,
+      optional_pluralization_normalization: tldwNormalizePlurals
+    }),
+    [
+      tldwNormalize,
+      tldwNormalizeUnits,
+      tldwNormalizeUrls,
+      tldwNormalizeEmails,
+      tldwNormalizePhones,
+      tldwNormalizePlurals
+    ]
+  )
+  const extraParams = React.useMemo(() => {
+    const extras: Record<string, any> = {}
+    if (tldwEmotion) extras.emotion = tldwEmotion
+    if (typeof tldwEmotionIntensity === "number") {
+      extras.emotion_intensity = tldwEmotionIntensity
+    }
+    return Object.keys(extras).length > 0 ? extras : undefined
+  }, [tldwEmotion, tldwEmotionIntensity])
+
+  const setStreamErrorSafe = React.useCallback((message: string | null) => {
+    streamErrorRef.current = message
+    setStreamError(message)
+  }, [])
+
+  const stopStreaming = React.useCallback(() => {
+    if (wsRef.current) {
+      try {
+        wsRef.current.close()
+      } catch {}
+      wsRef.current = null
+    }
+    streamMetaRef.current = null
+    streamStop()
+    setStreamStatus("idle")
+    setStreamErrorSafe(null)
+    setStreamChunks(0)
+    setStreamBytes(0)
+  }, [setStreamErrorSafe, streamStop])
+
+  const handleStreamPlay = React.useCallback(async () => {
+    if (!ttsText.trim()) return
+    stopStreaming()
     clearSegments()
     setActiveSegmentIndex(null)
     setCurrentTime(0)
     setDuration(0)
+    setStreamStatus("connecting")
+    setStreamErrorSafe(null)
 
+    const config = await tldwClient.getConfig()
+    const serverUrl = String(config?.serverUrl || "").trim()
+    if (!serverUrl) {
+      setStreamStatus("error")
+      setStreamErrorSafe("tldw server not configured")
+      return
+    }
+    const token =
+      config?.authMode === "multi-user"
+        ? String(config?.accessToken || "").trim()
+        : String(config?.apiKey || "").trim()
+    if (!token) {
+      setStreamStatus("error")
+      setStreamErrorSafe("Missing authentication token")
+      return
+    }
+
+    const base = serverUrl.replace(/^http/i, "ws").replace(/\/$/, "")
+    const wsUrl = `${base}/api/v1/audio/stream/tts?token=${encodeURIComponent(token)}`
+    const ws = new WebSocket(wsUrl)
+    ws.binaryType = "arraybuffer"
+    wsRef.current = ws
+
+    ws.onopen = () => {
+      void (async () => {
+        const requestedFormat = (tldwFormat || ttsSettings?.tldwTtsResponseFormat || "mp3").toLowerCase()
+        const format = STREAMING_FORMATS.has(requestedFormat) ? requestedFormat : "mp3"
+        if (format !== requestedFormat) {
+          notification.warning({
+            message: "Streaming format adjusted",
+            description: `WebSocket streaming supports mp3, opus, aac, flac, wav, or pcm. Falling back to ${format.toUpperCase()}.`
+          })
+        }
+        const model = tldwModel || ttsSettings?.tldwTtsModel || "kokoro"
+        const voice = tldwVoice || ttsSettings?.tldwTtsVoice || "af_heart"
+        const speed = ttsSettings?.tldwTtsSpeed ?? 1
+        const langCode = tldwLanguage || ttsSettings?.tldwTtsLanguage
+        let utterance = markdownToText(ttsText)
+        try {
+          const ctx = await resolveTtsProviderContext(ttsText, {
+            provider: "tldw",
+            tldwModel: model,
+            tldwVoice: voice,
+            tldwResponseFormat: format
+          })
+          utterance = ctx.utterance
+        } catch {
+          // fallback to markdownToText
+        }
+        streamMetaRef.current = {
+          provider: "tldw",
+          model,
+          voice,
+          format
+        }
+        const payload = {
+          type: "prompt",
+          text: utterance,
+          model,
+          voice,
+          format,
+          speed,
+          lang_code: langCode || undefined,
+          extra_params: extraParams
+        }
+        streamStart(format, true)
+        setStreamStatus("streaming")
+        ws.send(JSON.stringify(payload))
+      })()
+    }
+
+    ws.onmessage = (event) => {
+      if (typeof event.data === "string") {
+        try {
+          const payload = JSON.parse(event.data)
+          if (payload?.type === "error") {
+            setStreamStatus("error")
+            setStreamErrorSafe(payload?.message || "Streaming error")
+          }
+        } catch {
+          // ignore non-JSON status frames
+        }
+        return
+      }
+      if (event.data instanceof ArrayBuffer) {
+        streamAppend(event.data)
+        setStreamChunks((prev) => prev + 1)
+        setStreamBytes((prev) => prev + event.data.byteLength)
+      }
+    }
+
+    ws.onerror = () => {
+      setStreamStatus("error")
+      setStreamErrorSafe("Streaming connection error")
+    }
+
+    ws.onclose = () => {
+      streamFinish()
+      setStreamStatus((prev) => (prev === "error" ? prev : "complete"))
+      const blob = getBufferedBlob()
+      if (blob) {
+        const url = URL.createObjectURL(blob)
+        const format =
+          streamMetaRef.current?.format ||
+          (tldwFormat || ttsSettings?.tldwTtsResponseFormat || "mp3").toLowerCase()
+        const segment = {
+          id: `stream-${Date.now()}`,
+          index: 0,
+          text: ttsText,
+          url,
+          blob,
+          format,
+          mimeType: blob.type,
+          source: "generated" as const
+        }
+        setSegments([segment])
+        setActiveSegmentIndex(0)
+      }
+      if (!streamErrorRef.current) {
+        const meta = streamMetaRef.current
+        const nowIso = new Date().toISOString()
+        addHistoryItem({
+          id: `${nowIso}-${Math.random().toString(36).slice(2, 8)}`,
+          createdAt: nowIso,
+          type: "tts",
+          text: ttsText,
+          provider: meta?.provider || "tldw",
+          model: meta?.model,
+          voice: meta?.voice,
+          format: meta?.format
+        })
+      }
+    }
+  }, [
+    clearSegments,
+    extraParams,
+    getBufferedBlob,
+    setSegments,
+    setStreamErrorSafe,
+    stopStreaming,
+    streamAppend,
+    streamFinish,
+    streamStart,
+    tldwFormat,
+    tldwLanguage,
+    tldwModel,
+    tldwVoice,
+    ttsSettings,
+    ttsText
+  ])
+
+  const handlePlay = async () => {
+    if (!ttsText.trim() || isTtsDisabled) return
+    stopStreaming()
     const effectiveProvider = ttsSettings?.ttsProvider || (await getTTSProvider())
-    const created = await generateSegments(ttsText, {
-      provider: effectiveProvider,
-      elevenLabsModel: elevenModelId,
-      elevenLabsVoiceId: elevenVoiceId,
-      tldwModel,
-      tldwVoice,
-      openAiModel,
-      openAiVoice
-    })
-
-    if (created.length > 0) {
-      const nowIso = new Date().toISOString()
-      addHistoryItem({
-        id: `${nowIso}-${Math.random().toString(36).slice(2, 8)}`,
-        createdAt: nowIso,
-        type: "tts",
-        text: ttsText,
+    const shouldStream =
+      effectiveProvider === "tldw" &&
+      tldwStreaming &&
+      Boolean(activeProviderCaps?.caps.supports_streaming) &&
+      streamFormatSupported
+    if (shouldStream) {
+      await handleStreamPlay()
+    } else {
+      clearSegments()
+      setActiveSegmentIndex(null)
+      setCurrentTime(0)
+      setDuration(0)
+      const created = await generateSegments(ttsText, {
         provider: effectiveProvider,
-        model: tldwModel || openAiModel || elevenModelId,
-        voice: tldwVoice || openAiVoice || elevenVoiceId,
-        format: created[0]?.format
+        elevenLabsModel: elevenModelId,
+        elevenLabsVoiceId: elevenVoiceId,
+        tldwModel,
+        tldwVoice,
+        tldwResponseFormat: tldwFormat,
+        tldwSpeed: ttsSettings?.tldwTtsSpeed,
+        tldwLanguage,
+        tldwNormalizationOptions: normalizationOptions,
+        tldwExtraParams: extraParams,
+        splitBy: responseSplitting,
+        openAiModel,
+        openAiVoice
       })
+
+      if (created.length > 0) {
+        const nowIso = new Date().toISOString()
+        addHistoryItem({
+          id: `${nowIso}-${Math.random().toString(36).slice(2, 8)}`,
+          createdAt: nowIso,
+          type: "tts",
+          text: ttsText,
+          provider: effectiveProvider,
+          model: tldwModel || openAiModel || elevenModelId,
+          voice: tldwVoice || openAiVoice || elevenVoiceId,
+          format: created[0]?.format
+        })
+      }
     }
 
     if (ttsSettings) {
@@ -569,7 +871,7 @@ export const SpeechPlaygroundPage: React.FC<SpeechPlaygroundPageProps> = ({
         elevenLabsApiKey: ttsSettings.elevenLabsApiKey,
         elevenLabsVoiceId: elevenVoiceId ?? ttsSettings.elevenLabsVoiceId,
         elevenLabsModel: elevenModelId ?? ttsSettings.elevenLabsModel,
-        responseSplitting: ttsSettings.responseSplitting,
+        responseSplitting,
         removeReasoningTagTTS: ttsSettings.removeReasoningTagTTS,
         openAITTSBaseUrl: ttsSettings.openAITTSBaseUrl,
         openAITTSApiKey: ttsSettings.openAITTSApiKey,
@@ -579,8 +881,21 @@ export const SpeechPlaygroundPage: React.FC<SpeechPlaygroundPageProps> = ({
         playbackSpeed: ttsSettings.playbackSpeed,
         tldwTtsModel: tldwModel ?? ttsSettings.tldwTtsModel,
         tldwTtsVoice: tldwVoice ?? ttsSettings.tldwTtsVoice,
-        tldwTtsResponseFormat: ttsSettings.tldwTtsResponseFormat,
-        tldwTtsSpeed: ttsSettings.tldwTtsSpeed
+        tldwTtsResponseFormat: tldwFormat ?? ttsSettings.tldwTtsResponseFormat,
+        tldwTtsSpeed: ttsSettings.tldwTtsSpeed,
+        tldwTtsLanguage: tldwLanguage ?? ttsSettings.tldwTtsLanguage,
+        tldwTtsStreaming: tldwStreaming,
+        tldwTtsEmotion: tldwEmotion ?? ttsSettings.tldwTtsEmotion,
+        tldwTtsEmotionIntensity:
+          typeof tldwEmotionIntensity === "number"
+            ? tldwEmotionIntensity
+            : ttsSettings.tldwTtsEmotionIntensity,
+        tldwTtsNormalize: tldwNormalize,
+        tldwTtsNormalizeUnits: tldwNormalizeUnits,
+        tldwTtsNormalizeUrls: tldwNormalizeUrls,
+        tldwTtsNormalizeEmails: tldwNormalizeEmails,
+        tldwTtsNormalizePhones: tldwNormalizePhones,
+        tldwTtsNormalizePlurals: tldwNormalizePlurals
       }).then(() => {
         queryClient.invalidateQueries({ queryKey: ["fetchTTSSettings"] })
       })
@@ -590,6 +905,7 @@ export const SpeechPlaygroundPage: React.FC<SpeechPlaygroundPageProps> = ({
   }
 
   const handleStop = () => {
+    stopStreaming()
     const el = audioRef.current
     if (el) {
       el.pause()
@@ -605,7 +921,10 @@ export const SpeechPlaygroundPage: React.FC<SpeechPlaygroundPageProps> = ({
     (): { key: string; caps: TldwTtsProviderCapabilities } | null => {
       if (!providersInfo || !inferredProviderKey) return null
       const entries = Object.entries(providersInfo.providers || {})
-      const match = entries.find(([k]) => k.toLowerCase() === inferredProviderKey.toLowerCase())
+      const target = normalizeTtsProviderKey(inferredProviderKey)
+      const match = entries.find(
+        ([k]) => normalizeTtsProviderKey(k) === target
+      )
       if (!match) return null
       return { key: match[0], caps: match[1] }
     },
@@ -622,8 +941,10 @@ export const SpeechPlaygroundPage: React.FC<SpeechPlaygroundPageProps> = ({
     if (Array.isArray(direct) && direct.length > 0) {
       return direct.slice(0, 4)
     }
-    const fallbackKey = activeProviderCaps.key.toLowerCase()
-    const fallback = allVoices[fallbackKey]
+    const fallbackKey = normalizeTtsProviderKey(activeProviderCaps.key)
+    const fallback = Object.entries(allVoices).find(
+      ([key]) => normalizeTtsProviderKey(key) === fallbackKey
+    )?.[1]
     if (Array.isArray(fallback) && fallback.length > 0) {
       return fallback.slice(0, 4)
     }
@@ -640,13 +961,35 @@ export const SpeechPlaygroundPage: React.FC<SpeechPlaygroundPageProps> = ({
     if (Array.isArray(direct) && direct.length > 0) {
       return direct
     }
-    const fallbackKey = activeProviderCaps.key.toLowerCase()
-    const fallback = allVoices[fallbackKey]
+    const fallbackKey = normalizeTtsProviderKey(activeProviderCaps.key)
+    const fallback = Object.entries(allVoices).find(
+      ([key]) => normalizeTtsProviderKey(key) === fallbackKey
+    )?.[1]
     if (Array.isArray(fallback) && fallback.length > 0) {
       return fallback
     }
     return []
   }, [providersInfo, activeProviderCaps, tldwVoiceCatalog])
+
+  const customVoiceOptions = React.useMemo<DefaultOptionType[]>(() => {
+    if (!customVoices || customVoices.length === 0) return []
+    return customVoices
+      .filter((voice) => Boolean(voice.voice_id))
+      .map((voice) => ({
+        label: `Custom: ${voice.name || voice.voice_id}`,
+        value: `custom:${voice.voice_id}`
+      }))
+  }, [customVoices])
+
+  const tldwVoiceOptions = React.useMemo<DefaultOptionType[]>(() => {
+    const providerPrefix = customVoiceOptions.length > 0 ? "Server: " : ""
+    const providerOptions: DefaultOptionType[] = providerVoices.map((v, idx) => ({
+      label: `${providerPrefix}${v.name || v.id || `Voice ${idx + 1}`}${v.language ? ` (${v.language})` : ""}`,
+      value: v.id || v.name || ""
+    }))
+    if (customVoiceOptions.length === 0) return providerOptions
+    return [...customVoiceOptions, ...providerOptions]
+  }, [providerVoices, customVoiceOptions])
 
   const openAiVoiceOptions = React.useMemo(() => {
     if (!openAiModel) {
@@ -665,15 +1008,95 @@ export const SpeechPlaygroundPage: React.FC<SpeechPlaygroundPageProps> = ({
     return OPENAI_TTS_VOICES[openAiModel] || []
   }, [openAiModel])
 
+  const tldwFormatOptions = React.useMemo(() => {
+    const formats =
+      activeProviderCaps?.caps.formats?.length
+        ? activeProviderCaps.caps.formats
+        : SUPPORTED_TLDW_TTS_FORMATS
+    const unique = Array.from(
+      new Set(formats.map((fmt) => String(fmt).toLowerCase()))
+    )
+    return unique.map((fmt) => ({
+      label: fmt === "pcm" ? "pcm (raw)" : fmt,
+      value: fmt
+    }))
+  }, [activeProviderCaps])
+
+  const tldwLanguageOptions = React.useMemo(() => {
+    const languages = activeProviderCaps?.caps.languages || []
+    if (!languages.length) return []
+    const labelMap: Record<string, string> = {
+      en: "English",
+      es: "Spanish",
+      fr: "French",
+      de: "German",
+      it: "Italian",
+      pt: "Portuguese",
+      ru: "Russian",
+      ja: "Japanese",
+      ko: "Korean",
+      zh: "Chinese",
+      ar: "Arabic",
+      hi: "Hindi",
+      pl: "Polish"
+    }
+    return Array.from(new Set(languages)).map((lang) => ({
+      label: labelMap[String(lang)] ? `${labelMap[String(lang)]} (${lang})` : String(lang),
+      value: String(lang)
+    }))
+  }, [activeProviderCaps])
+
+  const requestedStreamFormat = (tldwFormat || ttsSettings?.tldwTtsResponseFormat || "mp3").toLowerCase()
+  const streamFormatSupported = STREAMING_FORMATS.has(requestedStreamFormat)
+  const canStream = Boolean(isTldw && activeProviderCaps?.caps.supports_streaming)
+
+  const normalizedPreviewText = React.useMemo(
+    () => markdownToText(ttsText),
+    [ttsText]
+  )
+  const previewSegments = React.useMemo(
+    () => splitMessageContent(normalizedPreviewText, responseSplitting),
+    [normalizedPreviewText, responseSplitting]
+  )
+  const previewWordCount = React.useMemo(() => {
+    const parts = normalizedPreviewText.trim().split(/\s+/).filter(Boolean)
+    return parts.length
+  }, [normalizedPreviewText])
+  const [showSegmentsPreview, setShowSegmentsPreview] = React.useState(false)
+
   const playDisabledReason = isTtsDisabled
     ? t("playground:tts.playDisabledTtsOff", "Enable text-to-speech above to play audio.")
     : !ttsText.trim()
       ? t("playground:tts.playDisabledNoText", "Enter text to enable Play.")
       : null
-  const isPlayDisabled = isGenerating || Boolean(playDisabledReason)
-  const canStop = Boolean(segments.length || audioRef.current)
+  const isStreamingActive = streamStatus === "connecting" || streamStatus === "streaming"
+  const isPlayDisabled = isGenerating || isStreamingActive || Boolean(playDisabledReason)
+  const canStop = Boolean(segments.length || audioRef.current || isStreamingActive)
   const stopDisabledReason =
     !canStop && t("playground:tts.stopDisabled", "Stop activates after audio starts.")
+  const activeStreamError = streamError || streamState.error
+  const streamStatusLabel = React.useMemo(() => {
+    switch (streamStatus) {
+      case "connecting":
+        return "Connecting..."
+      case "streaming":
+        return streamState.mode === "stream" ? "Streaming..." : "Buffering..."
+      case "complete":
+        return "Stream complete"
+      case "error":
+        return "Streaming error"
+      default:
+        return "Idle"
+    }
+  }, [streamState.mode, streamStatus])
+  const streamStatusColor =
+    streamStatus === "error"
+      ? "red"
+      : streamStatus === "complete"
+        ? "green"
+        : streamStatus === "streaming"
+          ? "blue"
+          : "default"
 
   const downloadBlob = React.useCallback((blob: Blob, filename: string) => {
     const url = URL.createObjectURL(blob)
@@ -720,6 +1143,69 @@ export const SpeechPlaygroundPage: React.FC<SpeechPlaygroundPageProps> = ({
     segments.forEach((seg, idx) => handleDownloadSegment(idx))
   }, [handleDownloadSegment, segments])
 
+  const handleReplayHistoryItem = React.useCallback(
+    async (item: SpeechHistoryItem) => {
+      if (item.type !== "tts") return
+      const providerToUse = item.provider || ttsSettings?.ttsProvider || "browser"
+      setTtsText(item.text)
+      stopStreaming()
+      clearSegments()
+      setActiveSegmentIndex(null)
+      setCurrentTime(0)
+      setDuration(0)
+
+      if (providerToUse === "tldw") {
+        if (item.model) setTldwModel(item.model)
+        if (item.voice) setTldwVoice(item.voice)
+        if (item.format) setTldwFormat(item.format)
+      } else if (providerToUse === "openai") {
+        if (item.model) setOpenAiModel(item.model)
+        if (item.voice) setOpenAiVoice(item.voice)
+      } else if (providerToUse === "elevenlabs") {
+        if (item.model) setElevenModelId(item.model)
+        if (item.voice) setElevenVoiceId(item.voice)
+      }
+
+      const created = await generateSegments(item.text, {
+        provider: providerToUse,
+        elevenLabsModel: item.model || elevenModelId,
+        elevenLabsVoiceId: item.voice || elevenVoiceId,
+        tldwModel: item.model || tldwModel,
+        tldwVoice: item.voice || tldwVoice,
+        tldwResponseFormat: item.format || tldwFormat,
+        tldwSpeed: ttsSettings?.tldwTtsSpeed,
+        tldwLanguage: tldwLanguage,
+        tldwNormalizationOptions: normalizationOptions,
+        tldwExtraParams: extraParams,
+        splitBy: responseSplitting,
+        openAiModel: item.model || openAiModel,
+        openAiVoice: item.voice || openAiVoice
+      })
+
+      if (created.length > 0) {
+        setActiveSegmentIndex(0)
+      }
+    },
+    [
+      clearSegments,
+      extraParams,
+      generateSegments,
+      elevenModelId,
+      elevenVoiceId,
+      normalizationOptions,
+      openAiModel,
+      openAiVoice,
+      responseSplitting,
+      stopStreaming,
+      tldwFormat,
+      tldwLanguage,
+      tldwModel,
+      tldwVoice,
+      ttsSettings?.ttsProvider,
+      ttsSettings?.tldwTtsSpeed
+    ]
+  )
+
   const downloadMenu = {
     items: [
       {
@@ -745,7 +1231,12 @@ export const SpeechPlaygroundPage: React.FC<SpeechPlaygroundPageProps> = ({
           "playground:speech.downloadDisabledBrowser",
           "Browser TTS does not create downloadable audio."
         )
-      : segments.length === 0
+      : isStreamingActive
+        ? t(
+            "playground:speech.downloadDisabledStreaming",
+            "Downloads unlock after streaming completes."
+          )
+        : segments.length === 0
         ? t(
             "playground:speech.downloadDisabledEmpty",
             "Generate audio to enable downloads."
@@ -1100,7 +1591,7 @@ export const SpeechPlaygroundPage: React.FC<SpeechPlaygroundPageProps> = ({
                   </div>
                 )}
 
-                {isTldw && providerVoices.length > 0 && (
+                {isTldw && (providerVoices.length > 0 || customVoiceOptions.length > 0) && (
                   <div className="flex flex-col gap-2">
                     <Text type="secondary">
                       {t(
@@ -1116,20 +1607,29 @@ export const SpeechPlaygroundPage: React.FC<SpeechPlaygroundPageProps> = ({
                         >
                           Voice
                         </label>
-                        <Select
+                        <Select<string, DefaultOptionType>
                           id="speech-tldw-voice"
                           aria-label="tldw server voice"
                           style={{ minWidth: 200 }}
                           placeholder="Select voice"
                           className="focus-ring"
-                          options={providerVoices.map((v, idx) => ({
-                            label: `${v.name || v.id || `Voice ${idx + 1}`}${
-                              v.language ? ` (${v.language})` : ""
-                            }`,
-                            value: v.id || v.name || ""
-                          }))}
+                          options={tldwVoiceOptions}
                           value={tldwVoice}
-                          onChange={(val) => setTldwVoice(val)}
+                          onChange={(val) => {
+                            setTldwVoice(val)
+                            if (typeof val === "string" && val.startsWith("custom:")) {
+                              const match = customVoices.find(
+                                (voice) => `custom:${voice.voice_id}` === val
+                              )
+                              if (match?.provider) {
+                                setTldwModel((prev) =>
+                                  prev && normalizeTtsProviderKey(prev) === normalizeTtsProviderKey(match.provider)
+                                    ? prev
+                                    : match.provider
+                                )
+                              }
+                            }
+                          }}
                         />
                       </div>
                       <div>
@@ -1227,6 +1727,220 @@ export const SpeechPlaygroundPage: React.FC<SpeechPlaygroundPageProps> = ({
                   </div>
                 )}
 
+                <div className="flex flex-wrap items-end gap-3">
+                  {isTldw && (
+                    <div>
+                      <label className="block text-xs mb-1 text-text">
+                        Output format
+                      </label>
+                      <Select
+                        aria-label="TTS output format"
+                        style={{ minWidth: 160 }}
+                        placeholder="Select format"
+                        className="focus-ring"
+                        options={tldwFormatOptions}
+                        value={tldwFormat || ttsSettings?.tldwTtsResponseFormat}
+                        onChange={(val) => setTldwFormat(val)}
+                      />
+                    </div>
+                  )}
+                  <div>
+                    <label className="block text-xs mb-1 text-text">
+                      Split by
+                    </label>
+                    <Select
+                      aria-label="TTS response splitting"
+                      style={{ minWidth: 160 }}
+                      placeholder="Select"
+                      className="focus-ring"
+                      options={[
+                        { label: "None", value: "none" },
+                        { label: "Punctuation", value: "punctuation" },
+                        { label: "Paragraph", value: "paragraph" }
+                      ]}
+                      value={responseSplitting}
+                      onChange={(val) => setResponseSplitting(val)}
+                    />
+                  </div>
+                  {canStream && (
+                    <Tooltip
+                      title={
+                        streamFormatSupported
+                          ? "Stream audio over WebSocket"
+                          : "Streaming supports mp3, opus, aac, flac, wav, or pcm. Change output format to enable."
+                      }
+                    >
+                      <span className="flex items-center gap-2 pb-1">
+                        <Switch
+                          size="small"
+                          checked={tldwStreaming}
+                          disabled={!streamFormatSupported}
+                          onChange={setTldwStreaming}
+                        />
+                        <Text className="text-xs">Stream</Text>
+                      </span>
+                    </Tooltip>
+                  )}
+                  <Button
+                    size="small"
+                    type="text"
+                    onClick={() => setShowSegmentsPreview((prev) => !prev)}
+                  >
+                    {showSegmentsPreview ? "Hide" : "Preview"} segments ({previewSegments.length})
+                  </Button>
+                </div>
+                <div className="text-xs text-text-subtle">
+                  {previewWordCount} words | {normalizedPreviewText.length} chars |{" "}
+                  {previewSegments.length} segments
+                </div>
+                {showSegmentsPreview && previewSegments.length > 0 && (
+                  <div className="border border-border rounded-md p-3 space-y-2">
+                    {previewSegments.map((segment, idx) => (
+                      <div key={`${idx}-${segment.slice(0, 12)}`} className="flex gap-2 text-xs">
+                        <Tag bordered>{idx + 1}</Tag>
+                        <Text>{segment}</Text>
+                      </div>
+                    ))}
+                  </div>
+                )}
+
+                <Collapse
+                  size="small"
+                  items={[
+                    {
+                      key: "advanced",
+                      label: "Advanced controls",
+                      children: (
+                        <div className="space-y-3">
+                          {isTldw && tldwLanguageOptions.length > 0 && (
+                            <div className="flex flex-wrap items-center justify-between gap-3">
+                              <Text className="text-xs text-text-muted">Language</Text>
+                              <Select
+                                aria-label="TTS language"
+                                style={{ minWidth: 180 }}
+                                placeholder="Auto"
+                                allowClear
+                                options={tldwLanguageOptions}
+                                value={tldwLanguage}
+                                onChange={(val) => setTldwLanguage(val)}
+                              />
+                            </div>
+                          )}
+                          {isTldw && activeProviderCaps?.caps.supports_emotion_control && (
+                            <div className="grid gap-2 sm:grid-cols-2">
+                              <div>
+                                <label className="block text-xs mb-1 text-text-muted">
+                                  Emotion
+                                </label>
+                                <Select
+                                  aria-label="Emotion preset"
+                                  allowClear
+                                  placeholder="Default"
+                                  options={[
+                                    { label: "Neutral", value: "neutral" },
+                                    { label: "Calm", value: "calm" },
+                                    { label: "Energetic", value: "energetic" },
+                                    { label: "Happy", value: "happy" },
+                                    { label: "Sad", value: "sad" },
+                                    { label: "Angry", value: "angry" }
+                                  ]}
+                                  value={tldwEmotion}
+                                  onChange={(val) => setTldwEmotion(val)}
+                                />
+                              </div>
+                              <div>
+                                <label className="block text-xs mb-1 text-text-muted">
+                                  Emotion intensity
+                                </label>
+                                <InputNumber
+                                  min={0.1}
+                                  max={2}
+                                  step={0.1}
+                                  value={tldwEmotionIntensity}
+                                  onChange={(val) => setTldwEmotionIntensity(Number(val || 1))}
+                                />
+                              </div>
+                            </div>
+                          )}
+                          {isTldw && (
+                            <div className="rounded-md border border-border p-3 space-y-2">
+                              <div className="flex items-center justify-between">
+                                <Text className="text-xs text-text-muted">
+                                  Smart normalization
+                                </Text>
+                                <Switch
+                                  size="small"
+                                  checked={tldwNormalize}
+                                  onChange={setTldwNormalize}
+                                />
+                              </div>
+                              {tldwNormalize && (
+                                <div className="grid gap-2 sm:grid-cols-2">
+                                  <div className="flex items-center justify-between">
+                                    <span className="text-xs text-text-subtle">Units</span>
+                                    <Switch
+                                      size="small"
+                                      checked={tldwNormalizeUnits}
+                                      onChange={setTldwNormalizeUnits}
+                                    />
+                                  </div>
+                                  <div className="flex items-center justify-between">
+                                    <span className="text-xs text-text-subtle">URLs</span>
+                                    <Switch
+                                      size="small"
+                                      checked={tldwNormalizeUrls}
+                                      onChange={setTldwNormalizeUrls}
+                                    />
+                                  </div>
+                                  <div className="flex items-center justify-between">
+                                    <span className="text-xs text-text-subtle">Emails</span>
+                                    <Switch
+                                      size="small"
+                                      checked={tldwNormalizeEmails}
+                                      onChange={setTldwNormalizeEmails}
+                                    />
+                                  </div>
+                                  <div className="flex items-center justify-between">
+                                    <span className="text-xs text-text-subtle">Phone</span>
+                                    <Switch
+                                      size="small"
+                                      checked={tldwNormalizePhones}
+                                      onChange={setTldwNormalizePhones}
+                                    />
+                                  </div>
+                                  <div className="flex items-center justify-between">
+                                    <span className="text-xs text-text-subtle">Pluralization</span>
+                                    <Switch
+                                      size="small"
+                                      checked={tldwNormalizePlurals}
+                                      onChange={setTldwNormalizePlurals}
+                                    />
+                                  </div>
+                                </div>
+                              )}
+                            </div>
+                          )}
+                        </div>
+                      )
+                    },
+                    {
+                      key: "voice-clone",
+                      label: "Voice cloning & custom voices",
+                      children: (
+                        <VoiceCloningManager
+                          providersInfo={providersInfo}
+                          onSelectVoice={(value, voiceProvider) => {
+                            setTldwVoice(value)
+                            if (voiceProvider) {
+                              setTldwModel(voiceProvider)
+                            }
+                          }}
+                        />
+                      )
+                    }
+                  ]}
+                />
+
                 <Space>
                   <Button
                     type="primary"
@@ -1262,6 +1976,23 @@ export const SpeechPlaygroundPage: React.FC<SpeechPlaygroundPageProps> = ({
                     t("playground:tts.playHelper", "Play uses your selected provider, voice, and speed.")}
                   {!canStop && stopDisabledReason ? ` ${stopDisabledReason}` : ""}
                 </Text>
+                {canStream && streamStatus !== "idle" && (
+                  <div className="flex flex-wrap items-center gap-2 text-xs">
+                    <Tag color={streamStatusColor} bordered>
+                      {streamStatusLabel}
+                    </Tag>
+                    {streamChunks > 0 && <span>{streamChunks} chunks</span>}
+                    {streamBytes > 0 && <span>{formatBytes(streamBytes)}</span>}
+                  </div>
+                )}
+                {activeStreamError && (
+                  <Alert
+                    type="error"
+                    showIcon
+                    message="Streaming error"
+                    description={activeStreamError}
+                  />
+                )}
 
                 {segments.length > 0 && (
                   <div className="mt-2 space-y-2 w-full">
@@ -1403,6 +2134,17 @@ export const SpeechPlaygroundPage: React.FC<SpeechPlaygroundPageProps> = ({
                       onClick={() => handleSaveToNotes(item)}
                     >
                       {t("playground:stt.saveToNotes", "Save to Notes")}
+                    </Button>
+                  )
+                }
+                if (item.type === "tts") {
+                  actions.push(
+                    <Button
+                      key="replay"
+                      size="small"
+                      onClick={() => handleReplayHistoryItem(item)}
+                    >
+                      {t("playground:tts.replay", "Replay")}
                     </Button>
                   )
                 }

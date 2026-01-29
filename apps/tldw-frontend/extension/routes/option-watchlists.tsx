@@ -1,4 +1,4 @@
-import OptionLayout from "@web/extension/components/Layouts/Layout"
+import OptionLayout from "@web/components/layout/WebLayout"
 import { WatchlistsPlaygroundPage } from "@/components/Option/Watchlists/WatchlistsPlaygroundPage"
 
 const OptionWatchlists = () => {

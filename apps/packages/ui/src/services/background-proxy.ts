@@ -175,6 +175,7 @@ export async function bgRequest<
     if (typeof Blob !== "undefined" && value instanceof Blob) return true
     return false
   }
+  const hasRuntimeMessage = Boolean(browser?.runtime?.sendMessage && browser?.runtime?.id)
 
   // Some binary responses do not survive extension message serialization.
   if (shouldBypassBackground) {
@@ -220,7 +221,7 @@ export async function bgRequest<
 
   // If extension messaging is available, use it (extension context)
   try {
-    if (browser?.runtime?.sendMessage) {
+    if (hasRuntimeMessage) {
       const payload = {
         type: 'tldw:request',
         payload: {
@@ -718,10 +719,69 @@ export interface BgUploadInit<P extends AllowedPath = AllowedPath, M extends All
 export async function bgUpload<T = any, P extends AllowedPath = AllowedPath, M extends AllowedMethodFor<P> = AllowedMethodFor<P>>(
   { path, method = 'POST' as UpperLower<M>, fields = {}, file, fileFieldName }: BgUploadInit<P, M>
 ): Promise<T> {
-  const resp = await browser.runtime.sendMessage({
-    type: 'tldw:upload',
-    payload: { path, method, fields, file, fileFieldName }
-  }) as { ok: boolean; error?: string; status?: number; data: T } | undefined
+  const hasRuntimeMessage = Boolean(browser?.runtime?.sendMessage && browser?.runtime?.id)
+  if (hasRuntimeMessage) {
+    try {
+      const resp = await browser.runtime.sendMessage({
+        type: 'tldw:upload',
+        payload: { path, method, fields, file, fileFieldName }
+      }) as { ok: boolean; error?: string; status?: number; data: T } | undefined
+      if (!resp?.ok) {
+        const msg = formatErrorMessage(
+          resp?.error,
+          `Upload failed: ${resp?.status}`
+        )
+        const error = new Error(msg) as Error & { status?: number; details?: unknown }
+        error.status = resp?.status
+        if (typeof resp?.data !== "undefined") {
+          error.details = sanitizeResponseData(resp.data)
+        }
+        throw error
+      }
+      return resp.data as T
+    } catch {
+      // fall through to direct fetch for web/dev contexts
+    }
+  }
+
+  if (typeof FormData === "undefined") {
+    throw new Error("File upload is not supported in this environment.")
+  }
+  const formData = new FormData()
+  Object.entries(fields || {}).forEach(([key, value]) => {
+    if (value == null) return
+    if (Array.isArray(value)) {
+      value.forEach((entry) => formData.append(key, String(entry)))
+    } else {
+      formData.append(key, String(value))
+    }
+  })
+  if (file) {
+    const name = file.name || "file"
+    const type = file.type || "application/octet-stream"
+    const toBytes = (data: ArrayBuffer | Uint8Array | number[]) => {
+      if (data instanceof Uint8Array) return data
+      if (data instanceof ArrayBuffer) return new Uint8Array(data)
+      return Uint8Array.from(data)
+    }
+    const bytes = toBytes(file.data)
+    if (typeof Blob === "undefined") {
+      throw new Error("File upload is not supported in this environment.")
+    }
+    const buffer = bytes.buffer
+    const slice =
+      buffer instanceof ArrayBuffer
+        ? buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength)
+        : new Uint8Array(bytes).buffer
+    const blob = new Blob([slice], { type })
+    formData.append(fileFieldName || "file", blob, name)
+  }
+
+  const storage = createSafeStorage()
+  const resp = await tldwRequest(
+    { path, method, body: formData },
+    { getConfig: () => storage.get("tldwConfig").catch(() => null) }
+  )
   if (!resp?.ok) {
     const msg = formatErrorMessage(
       resp?.error,

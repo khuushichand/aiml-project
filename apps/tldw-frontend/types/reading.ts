@@ -99,7 +99,16 @@ export interface ReadingSummaryResponse {
   generated_at?: string | null;
 }
 
-export type ReadingTTSFormat = 'mp3' | 'opus' | 'aac' | 'flac' | 'wav' | 'pcm';
+export type ReadingTTSFormat =
+  | 'mp3'
+  | 'opus'
+  | 'aac'
+  | 'flac'
+  | 'wav'
+  | 'pcm'
+  | 'ogg'
+  | 'webm'
+  | 'ulaw';
 export type ReadingTTSTextSource = 'text' | 'summary' | 'notes';
 
 export interface ReadingTTSRequest {

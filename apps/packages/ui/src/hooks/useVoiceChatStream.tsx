@@ -41,6 +41,12 @@ const formatToMime = (format: string): string => {
       return "audio/aac"
     case "flac":
       return "audio/flac"
+    case "ogg":
+      return "audio/ogg"
+    case "webm":
+      return "audio/webm"
+    case "ulaw":
+      return "audio/basic"
     case "pcm":
       return "audio/L16"
     case "mp3":

@@ -317,7 +317,7 @@ Modules
 - Core (Watchlists): `tldw_Server_API/app/core/Watchlists/` (pipeline, fetchers, scheduler, template store)
 - API: `tldw_Server_API/app/api/v1/endpoints/reading.py`, `reading_highlights.py`, `watchlists.py`, `items.py`, `outputs.py`, `outputs_templates.py`
 - Services: `tldw_Server_API/app/services/outputs_service.py`, `outputs_purge_scheduler.py`
-- WebUI (Next.js): `apps/tldw-frontend/pages/items.tsx`, `apps/tldw-frontend/pages/reading.tsx`, `apps/tldw-frontend/pages/watchlists.tsx`, `apps/tldw-frontend/pages/admin/watchlists-items.tsx`, `apps/tldw-frontend/pages/admin/watchlists-runs.tsx` (legacy `tldw_Server_API/WebUI/*` is deprecated).
+- WebUI (Next.js): `apps/tldw-frontend/pages/items.tsx`, `apps/tldw-frontend/pages/reading.tsx`, `apps/tldw-frontend/pages/watchlists.tsx`, `apps/tldw-frontend/pages/admin/watchlists-items.tsx`, `apps/tldw-frontend/pages/admin/watchlists-runs.tsx`.
 
 Key Flows
 - Fetch with per-host delay; use ETag/Last-Modified; safe timeouts/size limits.

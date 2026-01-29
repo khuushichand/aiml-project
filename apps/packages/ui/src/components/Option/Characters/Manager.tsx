@@ -12,7 +12,8 @@ import {
   Alert,
   Checkbox,
   Segmented,
-  Pagination
+  Pagination,
+  Upload
 } from "antd"
 import type { InputRef } from "antd"
 import React from "react"
@@ -203,6 +204,7 @@ export const CharactersManager: React.FC<CharactersManagerProps> = ({
     return 'table'
   })
   const [currentPage, setCurrentPage] = React.useState(1)
+  const [importing, setImporting] = React.useState(false)
   const [previewCharacter, setPreviewCharacter] = React.useState<any | null>(null)
 
   React.useEffect(() => {
@@ -250,6 +252,81 @@ export const CharactersManager: React.FC<CharactersManagerProps> = ({
   React.useEffect(() => {
     setCurrentPage(1)
   }, [debouncedSearchTerm, filterTags, matchAllTags])
+
+  const resolveImportDetail = (error: unknown) => {
+    const details = (error as any)?.details
+    if (details && typeof details === "object") {
+      return (details as any).detail ?? details
+    }
+    return null
+  }
+
+  const importCharacterFile = React.useCallback(
+    async (file: File, allowImageOnly = false) => {
+      setImporting(true)
+      try {
+        const response = await tldwClient.importCharacterFile(file, {
+          allowImageOnly
+        })
+        qc.invalidateQueries({ queryKey: ["tldw:listCharacters"] })
+        const message =
+          response?.message ||
+          t("settings:manageCharacters.import.success", {
+            defaultValue: "Character imported successfully"
+          })
+        notification.success({
+          message: t("settings:manageCharacters.import.title", {
+            defaultValue: "Import complete"
+          }),
+          description: message
+        })
+      } catch (err: any) {
+        const detail = resolveImportDetail(err)
+        if (
+          detail?.code === "missing_character_data" &&
+          detail?.can_import_image_only &&
+          !allowImageOnly
+        ) {
+          Modal.confirm({
+            title: t("settings:manageCharacters.import.imageOnlyTitle", {
+              defaultValue: "No character data detected"
+            }),
+            content: detail?.message || t("settings:manageCharacters.import.imageOnlyDesc", {
+              defaultValue:
+                "No character data detected in the image metadata. Import as an image-only character?"
+            }),
+            okText: t("settings:manageCharacters.import.imageOnlyConfirm", {
+              defaultValue: "Import image only"
+            }),
+            cancelText: t("common:cancel", { defaultValue: "Cancel" }),
+            onOk: () => importCharacterFile(file, true)
+          })
+          return
+        }
+        notification.error({
+          message: t("settings:manageCharacters.import.errorTitle", {
+            defaultValue: "Import failed"
+          }),
+          description:
+            err?.message ||
+            t("settings:manageCharacters.import.errorDesc", {
+              defaultValue: "Unable to import character. Please try again."
+            })
+        })
+      } finally {
+        setImporting(false)
+      }
+    },
+    [notification, qc, t]
+  )
+
+  const handleImportUpload = React.useCallback(
+    async (file: File) => {
+      await importCharacterFile(file)
+      return false
+    },
+    [importCharacterFile]
+  )
 
   const hasFilters =
     searchTerm.trim().length > 0 || (filterTags && filterTags.length > 0)
@@ -687,14 +764,27 @@ export const CharactersManager: React.FC<CharactersManagerProps> = ({
   return (
     <div className="space-y-4">
       <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-        <Button
-          type="primary"
-          ref={newButtonRef}
-          onClick={() => setOpen(true)}>
-          {t("settings:manageCharacters.addBtn", {
-            defaultValue: "New character"
-          })}
-        </Button>
+        <div className="flex flex-wrap items-center gap-2">
+          <Button
+            type="primary"
+            ref={newButtonRef}
+            onClick={() => setOpen(true)}>
+            {t("settings:manageCharacters.addBtn", {
+              defaultValue: "New character"
+            })}
+          </Button>
+          <Upload
+            accept=".png,.webp,.json,.md,.txt"
+            showUploadList={false}
+            beforeUpload={handleImportUpload}
+            disabled={importing}>
+            <Button loading={importing}>
+              {t("settings:manageCharacters.import.button", {
+                defaultValue: "Upload character"
+              })}
+            </Button>
+          </Upload>
+        </div>
         <div className="flex flex-1 flex-col gap-2 sm:flex-row sm:items-center sm:justify-end">
           <Input
             allowClear

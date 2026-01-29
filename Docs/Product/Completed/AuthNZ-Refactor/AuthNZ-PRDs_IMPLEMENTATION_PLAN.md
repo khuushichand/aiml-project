@@ -211,7 +211,7 @@ The following checklist is scoped for a single, reviewable PR that implements th
   - Embeddings tenant quotas use `_should_enforce_tenant_rps` with `EMBEDDINGS_TENANT_RPS_PROFILE_AWARE` to decide when to enforce/disable tenant RPS based on profile and principals explicitly tagged as single-user (subject `"single_user"` via `is_single_user_principal`), rather than raw `AUTH_MODE`.
   - MCP single-user API-key behavior uses `_should_use_single_user_api_key_compat` with `MCP_SINGLE_USER_COMPAT_SHIM` so that single-user admin principals are claim-/flag-driven instead of mode-driven.
 - Remaining uses of `is_single_user_mode()` are classified as coordination/UX or operational/backpressure, not authorization:
-  - `tldw_Server_API/app/main.py`: startup banners, ChaChaNotes warm-up for the fixed single-user id, and `/webui/config.json` hints (including optional API-key injection for local single-user) branch on mode/profile purely for UX; no permissions or guardrails depend on these checks.
+  - `tldw_Server_API/app/main.py`: startup banners and ChaChaNotes warm-up for the fixed single-user id branch on mode/profile purely for UX; no permissions or guardrails depend on these checks.
   - `tldw_Server_API/app/core/PrivilegeMaps/service.py::PrivilegeMapService._build_user_dataset` uses `is_single_user_mode()` only when synthesizing a fallback privilege dataset (empty AuthNZ DB) to pick a default role; this affects reporting/visualization, not access control.
   - `tldw_Server_API/app/core/AuthNZ/User_DB_Handling.py` and `tldw_Server_API/app/core/AuthNZ/auth_principal_resolver.py` branch on `is_single_user_mode()` solely to select between single-user API-key vs multi-user JWT/API-key flows; credentials are still fully verified and authorization decisions are made from `AuthPrincipal`/claims.
   - `tldw_Server_API/app/api/v1/API_Deps/backpressure.py::_is_single_user_mode_runtime` and the embeddings profile helper in `embeddings_v5_production_enhanced.py` use mode/profile checks only to decide whether to enforce tenant-style RPS quotas (ingest/embeddings) in local single-user/dev scenarios; they do not bypass claim-based authorization or change who is allowed to call the endpoints.
@@ -228,7 +228,7 @@ The following checklist is scoped for a single, reviewable PR that implements th
 **Success Criteria**:
 - Configuration:
   - `Settings.PROFILE` / `get_profile()` and the associated feature flags (`ENABLE_REGISTRATION`, `ENABLE_MFA`, `ENABLE_ORGS_TEAMS`, `ENABLE_VIRTUAL_KEYS`, `EMBEDDINGS_TENANT_RPS_PROFILE_AWARE`, `MCP_SINGLE_USER_COMPAT_SHIM`, jobs-domain flags, etc.) are documented as the primary knobs for deployment behavior; `AUTH_MODE` is treated as a compatibility alias.
-  - Startup logs and `/webui/config.json` hints accurately reflect the active profile and key feature flags for both SQLite and Postgres deployments.
+  - Startup logs accurately reflect the active profile and key feature flags for both SQLite and Postgres deployments.
 - Documentation:
   - `Resource_Governor_PRD.md` documents which routes are RG-governed vs legacy-only after Stage 1, with a simple matrix.
   - `User-Auth-Deps-PRD.md` phases/milestones are updated to mark completed phases and clearly list any deferred adoption items.

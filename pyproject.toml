@@ -491,7 +491,6 @@ tldw_Server_API = [
   "Config_Files/*.yaml",
   "Helper_Scripts/**/*",
   "static/**/*",
-  "WebUI/**/*",
   "app/static/**/*",
   "**/*.yaml",
   "**/*.json",

@@ -76,6 +76,7 @@ interface UIState {
 interface LandingActions {
   setShowLanding: (show: boolean) => void
   dismissLanding: () => void
+  markLandingSeen: () => void
   markWorkflowCompleted: (workflowId: WorkflowId) => void
   loadLandingConfig: () => Promise<void>
   saveLandingConfig: () => Promise<void>
@@ -205,6 +206,14 @@ export const useWorkflowsStore = createWithEqualityFn<WorkflowsState>()((set, ge
       dismissedAt: Date.now()
     }
     set({ showLanding: false, landingConfig: config })
+    get().saveLandingConfig()
+  },
+
+  markLandingSeen: () => {
+    const config = get().landingConfig
+    if (config.dismissedAt) return
+    const nextConfig = { ...config, dismissedAt: Date.now() }
+    set({ landingConfig: nextConfig })
     get().saveLandingConfig()
   },
 

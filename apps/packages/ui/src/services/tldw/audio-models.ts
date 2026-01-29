@@ -11,10 +11,19 @@ const FALLBACK_MODELS = [
   "tts-1-hd",
   "kokoro",
   "higgs",
+  "dia",
   "chatterbox",
   "vibevoice",
+  "vibevoice_realtime",
   "neutts",
-  "pockettts"
+  "pocket_tts",
+  "index_tts",
+  "index_tts2",
+  "lux_tts",
+  "qwen3_tts",
+  "supertonic",
+  "supertonic2",
+  "echo_tts"
 ]
 
 const normalizeModelId = (value: unknown): string | null => {

@@ -29,7 +29,7 @@ import {
   ShieldCheck
 } from "lucide-react"
 import { ALL_TARGETS, type PlatformTarget } from "@/config/platform"
-import OptionLayout from "@web/extension/components/Layouts/Layout"
+import OptionLayout from "@web/components/layout/WebLayout"
 import { OnboardingWizard } from "@/components/Option/Onboarding/OnboardingWizard"
 import { createSettingsRoute } from "./settings-route"
 

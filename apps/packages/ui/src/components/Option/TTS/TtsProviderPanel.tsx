@@ -11,6 +11,7 @@ import {
 } from "antd"
 import { useTranslation } from "react-i18next"
 import { TTSModeSettings } from "@/components/Option/Settings/TTSModeSettings"
+import { TtsProviderCatalog } from "@/components/Option/TTS/TtsProviderCatalog"
 import type { getTTSSettings } from "@/services/tts"
 import type {
   TldwTtsProviderCapabilities,
@@ -69,7 +70,7 @@ export const TtsProviderPanel: React.FC<Props> = ({
               <Tooltip
                 title={t(
                   "playground:tts.providerChangeHelper",
-                  "Open the provider selector below to switch between Browser, tldw, OpenAI, or Supersonic."
+                  "Open the provider selector below to switch between Browser, tldw, OpenAI, or ElevenLabs."
                 ) as string}
               >
                 <Button size="small" type="link" onClick={handleFocusProviderSelect}>
@@ -218,6 +219,13 @@ export const TtsProviderPanel: React.FC<Props> = ({
           )}
           <TTSModeSettings hideBorder />
         </div>
+
+        {isTldw && (
+          <>
+            <Divider className="!my-2" />
+            <TtsProviderCatalog providersInfo={providersInfo} withCard={false} />
+          </>
+        )}
       </Space>
   )
 

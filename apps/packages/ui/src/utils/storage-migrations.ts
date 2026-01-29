@@ -7,8 +7,12 @@ export const MODEL_PLAYGROUND_DEBUG_KEY = "modelPlaygroundDebugOpen"
 export const WORKSPACE_LEFT_PANE_KEY = "workspaceLeftPaneOpen"
 export const WORKSPACE_RIGHT_PANE_KEY = "workspaceRightPaneOpen"
 
+// Landing Hub preference key
+export const SKIP_LANDING_HUB_KEY = "tldw_skip_landing_hub"
+
 const LEGACY_SIDEBAR_KEY = "workspaceSidebarOpen"
 const LEGACY_DEBUG_KEY = "workspaceDebugOpen"
+const LEGACY_SKIP_LANDING_HUB_KEY = "skipLandingHub"
 
 const storage = createSafeStorage({ area: "local" })
 
@@ -51,6 +55,28 @@ export const migrateModelPlaygroundPrefs = async (
   }
 }
 
+export const migrateLandingHubPrefs = async (
+  storageInstance = storage
+): Promise<void> => {
+  try {
+    const [newValue, legacyValue] = await Promise.all([
+      storageInstance.get<boolean | null | undefined>(SKIP_LANDING_HUB_KEY),
+      storageInstance.get<boolean | null | undefined>(LEGACY_SKIP_LANDING_HUB_KEY)
+    ])
+
+    if (isUnset(newValue) && !isUnset(legacyValue)) {
+      await storageInstance.set(SKIP_LANDING_HUB_KEY, legacyValue)
+    }
+
+    if (!isUnset(legacyValue)) {
+      await storageInstance.remove(LEGACY_SKIP_LANDING_HUB_KEY)
+    }
+  } catch {
+    // ignore storage failures; defaults still apply
+  }
+}
+
 export const runStorageMigrations = async (): Promise<void> => {
   await migrateModelPlaygroundPrefs()
+  await migrateLandingHubPrefs()
 }

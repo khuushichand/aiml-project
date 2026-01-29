@@ -110,7 +110,7 @@ Version 0.1.13 (beta). Expect bugs and rough edges; please report issues.
 - API changes:
     - Use FastAPI routes; see http://127.0.0.1:8000/docs. OpenAI-compatible endpoints are available (e.g., `/api/v1/chat/completions`).
 - Frontend:
-    - Legacy: /webui
+    - Next.js WebUI: `apps/tldw-frontend/` (run separately)
     - Or integrate directly against the API;
 </details>
 
@@ -120,7 +120,7 @@ Version 0.1.13 (beta). Expect bugs and rough edges; please report issues.
 - Unified RAG + Evaluations modules (hybrid BM25 + vector with re-ranking; unified metrics)
 - Expanded audio stack: multi-provider TTS/STT, streaming, and audio jobs queue
 - MCP Unified module with JWT/RBAC, tool execution APIs, WebSockets, and metrics
-- New WebUI and Admin UI (Next.js; WIP), with legacy WebUI deprecated
+- Next.js WebUI and Admin UI (primary web client)
 - Research & ingestion upgrades: OCR, web search + academic search, connectors, outputs/artifacts, watchlists/workflows
 - Strict OpenAI compatibility mode for local/self-hosted providers
 - PostgreSQL content mode + backup/restore helpers; Prometheus/Grafana monitoring + admin usage reporting
@@ -214,7 +214,8 @@ python -m tldw_Server_API.app.core.AuthNZ.initialize
 python -m uvicorn tldw_Server_API.app.main:app --reload
 ```
 - API docs: http://127.0.0.1:8000/docs
-- Legacy WebUI: http://127.0.0.1:8000/webui/ (deprecated)
+- Quickstart: http://127.0.0.1:8000/api/v1/config/quickstart
+- Setup UI (if required): http://127.0.0.1:8000/setup
 
 ### Sidecar workers (optional)
 
@@ -257,7 +258,7 @@ npm run dev -- -p 8080
 ```
 Open http://localhost:8080
 
-Tip: `./start-webui.sh` launches the API and opens the legacy `/webui/` client.
+Tip: http://127.0.0.1:8000/api/v1/config/quickstart redirects to your configured quickstart target.
 
 ### Docker Compose
 
@@ -298,7 +299,7 @@ docker compose -f Dockerfiles/docker-compose.yml -f Dockerfiles/docker-compose.p
 
 Notes
 - Run compose commands from the repository root. The base compose file at `Dockerfiles/docker-compose.yml` builds with context at the repo root and includes Postgres and Redis services.
-- The legacy WebUI is served at `/webui`; the primary UI is the Next.js WebUI in `apps/tldw-frontend/`.
+- The primary UI is the Next.js WebUI in `apps/tldw-frontend/` (run separately).
   - For unified streaming validation in non-prod, prefer the dev overlay above. You can also export `STREAMS_UNIFIED=1` directly in your environment.
 
 ### Supporting Services via Docker
@@ -522,7 +523,6 @@ Examples
 │   │   ├── static/               # Static assets
 │   │   └── main.py               # FastAPI entry point
 │   ├── cli/                      # CLI entry points
-│   ├── WebUI/                    # Legacy integrated WebUI served at /webui (deprecated)
 │   ├── Config_Files/             # config.txt, example YAMLs, migration helpers
 │   ├── Databases/                # Default DBs (runtime data; some are gitignored)
 │   ├── tests/                    # Pytest suite
@@ -538,13 +538,12 @@ Examples
 ├── models/                       # Optional model assets (if used)
 ├── pyproject.toml                # Project configuration
 ├── README.md                     # Project README (this file)
-├── start-webui.sh                # Convenience script for WebUI + server
 ├── start-sidecars.sh             # Run API + Jobs workers as sidecar processes
 └── Project_Guidelines.md         # Development philosophy
 ```
 
 Notes
-- The FastAPI app serves a legacy UI at `/webui` (deprecated); the Next.js WebUI in `apps/tldw-frontend/` is the primary web client.
+- The primary UI is the Next.js WebUI in `apps/tldw-frontend/` (run separately).
 - SQLite is default for local dev; PostgreSQL supported for AuthNZ and content DBs.
 - `mock_openai_server/` is handy for local OpenAI-compatible API testing.
 
@@ -556,7 +555,6 @@ Notes
 flowchart LR
   subgraph CLIENTS [Clients]
     WebUI[Next.js WebUI (primary web client)]:::client
-    LegacyUI[Legacy WebUI (/webui, deprecated)]:::client
     MCPClients[MCP Clients (IDE/tools)]:::client
     APIClients[CLI/HTTP Clients]:::client
   end
@@ -602,7 +600,6 @@ flowchart LR
 
   %% Client to API
   WebUI -->|HTTP| API
-  LegacyUI -->|HTTP| API
   MCPClients -->|HTTP/WebSocket| API
   APIClients -->|HTTP/WebSocket| API
 

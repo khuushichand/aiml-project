@@ -3,13 +3,17 @@ enable_first_time_setup = false
 setup_completed = true
 # When true, bypasses the local-only guard for setup API requests.
 allow_remote_setup_access = false
+# Optional: restrict which remote clients can access /setup
+# Provide CIDR ranges or individual IPs, comma-separated
+setup_ip_allowlist =
+setup_ip_denylist =
+
+[UI]
+# Optional quickstart URL (absolute or /path). If blank, /api/v1/config/quickstart defaults to /docs.
+quickstart_url =
 
 [Server]
 disable_cors = false
-allow_remote_webui_access = false
-# Optional: restrict which remote clients can access /webui
-# Provide CIDR ranges or individual IPs, comma-separated
-webui_ip_allowlist =
 
 [Files]
 # Max inline export size (bytes) for file artifacts. Default: 262144 (256KB).

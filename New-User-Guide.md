@@ -92,7 +92,8 @@ The command is **interactive**: run it in a terminal and answer the prompts (you
 python -m uvicorn tldw_Server_API.app.main:app --reload
 ```
 - Docs/UI: http://127.0.0.1:8000/docs
-- Legacy Web UI: http://127.0.0.1:8000/webui/
+- Quickstart: http://127.0.0.1:8000/api/v1/config/quickstart
+- Setup UI (if required): http://127.0.0.1:8000/setup
 
 ### 3.5 Smoke-test the API
 Use your API key (`SINGLE_USER_API_KEY`) in the header. Choose one of the two request styles:
@@ -144,7 +145,7 @@ Once the server boots, you’ll likely tailor behaviour, credentials, and model 
 - Location: `tldw_Server_API/Config_Files/config.txt`.
 - Back this file up or keep a copy in `.git/info/exclude` if you don’t want Git noise.
 - Controls everything from file-size limits to chat rate limits. Key sections:
-  - `[Server]`: `disable_cors`, `allow_remote_webui_access`, and `webui_ip_allowlist` for restricting the legacy UI.
+  - `[Server]`: `disable_cors`, `trusted_proxies`, and other server-level settings.
   - `[Media-Processing]`: per-file-size caps/timeouts for video/audio/PDF ingestion.
   - `[Chat-Module]`: streaming defaults, history depth, rate limits.
   - `[Database]`: choose SQLite vs Postgres for content (`pg_*` fields).
@@ -175,14 +176,13 @@ vllm_model = my-hf-model-id
 tabby_api_IP = http://127.0.0.1:5000/v1/chat/completions
 ```
 
-- Use full URLs (protocol + host + port + path). For LAN hosts, whitelist their CIDRs via `[Server] webui_ip_allowlist`.
+- Use full URLs (protocol + host + port + path).
 - Update temperature/top_p/max_tokens per provider if the backend expects different defaults.
 - After editing, restart the API so the provider manager reloads the endpoints.
 
 ### 4.5 Where to adjust user-facing behaviour
 - **Rate limits**: `[Chat-Module] rate_limit_per_minute`, `[Character-Chat]` guards.
 - **Storage paths**: `[Database] sqlite_path`, `backup_path`, and `chroma_db_path`.
-- **Web access**: `[Server] allow_remote_webui_access=true` plus `webui_ip_allowlist=10.0.0.0/24`.
 - **Setup UI**: `[Setup] allow_remote_setup_access=true` if you must run first-time setup remotely (only on trusted networks).
 
 ### 4.6 Set the default LLM provider

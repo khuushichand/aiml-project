@@ -286,7 +286,17 @@ const TtsPlaygroundPage: React.FC = () => {
         tldwTtsModel: tldwModel ?? ttsSettings.tldwTtsModel,
         tldwTtsVoice: tldwVoice ?? ttsSettings.tldwTtsVoice,
         tldwTtsResponseFormat: ttsSettings.tldwTtsResponseFormat,
-        tldwTtsSpeed: ttsSettings.tldwTtsSpeed
+        tldwTtsSpeed: ttsSettings.tldwTtsSpeed,
+        tldwTtsLanguage: ttsSettings.tldwTtsLanguage,
+        tldwTtsStreaming: ttsSettings.tldwTtsStreaming,
+        tldwTtsEmotion: ttsSettings.tldwTtsEmotion,
+        tldwTtsEmotionIntensity: ttsSettings.tldwTtsEmotionIntensity,
+        tldwTtsNormalize: ttsSettings.tldwTtsNormalize,
+        tldwTtsNormalizeUnits: ttsSettings.tldwTtsNormalizeUnits,
+        tldwTtsNormalizeUrls: ttsSettings.tldwTtsNormalizeUrls,
+        tldwTtsNormalizeEmails: ttsSettings.tldwTtsNormalizeEmails,
+        tldwTtsNormalizePhones: ttsSettings.tldwTtsNormalizePhones,
+        tldwTtsNormalizePlurals: ttsSettings.tldwTtsNormalizePlurals
       }).then(() => {
         queryClient.invalidateQueries({ queryKey: ["fetchTTSSettings"] })
       })

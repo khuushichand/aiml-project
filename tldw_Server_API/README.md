@@ -4,22 +4,23 @@ This document covers the API layout, how to run the server, authentication, and 
 
 ## Overview
 
-The server is FastAPI-based with an OpenAI-compatible Chat and Audio API, a unified RAG module, a unified Evaluations module, and an integrated WebUI served from the same origin.
+The server is FastAPI-based with an OpenAI-compatible Chat and Audio API, a unified RAG module, and a unified Evaluations module. The Next.js WebUI lives under `apps/tldw-frontend/`.
 
 Key directories:
-- `app/main.py` - FastAPI app, router includes, middleware, WebUI mount
+- `app/main.py` - FastAPI app, router includes, middleware
 - `app/api/v1/endpoints/` - Endpoint modules (media, chat, audio, rag, evals, prompts, notes, etc.)
 - `app/api/v1/schemas/` - Pydantic request/response models
 - `app/api/v1/API_Deps/` - Shared dependencies (auth, DB, rate limits)
 - `app/core/` - Business logic (AuthNZ, RAG, LLM, DB, TTS, MCP, etc.)
-- `WebUI/` - Static WebUI served at `/webui`
+- `app/Setup_UI/` - Setup UI HTML (served at `/setup`)
 
 ## Running the Server
 
 ```bash
 python -m uvicorn tldw_Server_API.app.main:app --reload
 # API docs: http://127.0.0.1:8000/docs
-# WebUI:    http://127.0.0.1:8000/webui/
+# Quickstart: http://127.0.0.1:8000/api/v1/config/quickstart
+# Setup UI:  http://127.0.0.1:8000/setup (if required)
 ```
 
 ### Authentication
@@ -180,7 +181,7 @@ Auto vs explicit backend
 
 - CORS and security middleware are configured in `app/main.py`.
 - Single-user mode prints the API key and URLs on startup.
-- The WebUI consumes the same-origin API and auto-detects single-user keys.
+- The WebUI consumes the API; set `NEXT_PUBLIC_X_API_KEY` in the frontend to prefill single-user auth.
 
 ---
 

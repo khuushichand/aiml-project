@@ -1,4 +1,4 @@
-import OptionLayout from "@web/extension/components/Layouts/Layout"
+import OptionLayout from "@web/components/layout/WebLayout"
 import ContentReviewPage from "@/components/ContentReview/ContentReviewPage"
 
 const OptionContentReview = () => {

@@ -19,7 +19,9 @@ export type TtsPlaygroundSegment = {
   source?: "browser" | "generated"
 }
 
-export type TtsPlaygroundOverrides = TtsProviderOverrides
+export type TtsPlaygroundOverrides = TtsProviderOverrides & {
+  splitBy?: string
+}
 
 const createObjectUrl = (
   audio: TtsSynthesisResult
@@ -70,7 +72,10 @@ export const useTtsPlayground = () => {
         supported,
         formatInfo
       } = context
-      const sentences = splitMessageContent(utterance)
+      const sentences = splitMessageContent(
+        utterance,
+        overrides?.splitBy || "punctuation"
+      )
       const outSegments: TtsPlaygroundSegment[] = []
 
       if (!supported) {
@@ -188,6 +193,7 @@ export const useTtsPlayground = () => {
     segments,
     isGenerating,
     generateSegments,
-    clearSegments
+    clearSegments,
+    setSegments
   }
 }

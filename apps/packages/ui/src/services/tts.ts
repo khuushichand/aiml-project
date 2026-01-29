@@ -21,14 +21,18 @@ export const SUPPORTED_TLDW_TTS_FORMATS = [
   "aac",
   "flac",
   "wav",
-  "pcm"
+  "pcm",
+  "ogg",
+  "webm",
+  "ulaw"
 ] as const
 type SupportedTldwTtsFormat = (typeof SUPPORTED_TLDW_TTS_FORMATS)[number]
 const SUPPORTED_TLDW_TTS_FORMAT_SET = new Set(SUPPORTED_TLDW_TTS_FORMATS)
 
 const normalizeTldwTtsFormatInput = (format?: string | null): string => {
   const normalized = (format || "").trim().toLowerCase()
-  return normalized === "ogg" ? "opus" : normalized
+  if (normalized === "mulaw" || normalized === "mu-law") return "ulaw"
+  return normalized
 }
 
 export const isSupportedTldwTtsResponseFormat = (
@@ -141,6 +145,56 @@ const TLDW_TTS_SPEED_SETTING = defineSetting(
   "tldwTtsSpeed",
   1,
   (value) => coercePositiveNumber(value, 1)
+)
+const TLDW_TTS_LANGUAGE_SETTING = defineSetting(
+  "tldwTtsLanguage",
+  "",
+  (value) => coerceOptionalString(value) || ""
+)
+const TLDW_TTS_STREAMING_SETTING = defineSetting(
+  "tldwTtsStreaming",
+  false,
+  (value) => coerceBoolean(value, false)
+)
+const TLDW_TTS_EMOTION_SETTING = defineSetting(
+  "tldwTtsEmotion",
+  "",
+  (value) => coerceOptionalString(value) || ""
+)
+const TLDW_TTS_EMOTION_INTENSITY_SETTING = defineSetting(
+  "tldwTtsEmotionIntensity",
+  1,
+  (value) => coerceNumber(value, 1)
+)
+const TLDW_TTS_NORMALIZE_SETTING = defineSetting(
+  "tldwTtsNormalize",
+  true,
+  (value) => coerceBoolean(value, true)
+)
+const TLDW_TTS_NORMALIZE_UNITS_SETTING = defineSetting(
+  "tldwTtsNormalizeUnits",
+  false,
+  (value) => coerceBoolean(value, false)
+)
+const TLDW_TTS_NORMALIZE_URLS_SETTING = defineSetting(
+  "tldwTtsNormalizeUrls",
+  true,
+  (value) => coerceBoolean(value, true)
+)
+const TLDW_TTS_NORMALIZE_EMAILS_SETTING = defineSetting(
+  "tldwTtsNormalizeEmails",
+  true,
+  (value) => coerceBoolean(value, true)
+)
+const TLDW_TTS_NORMALIZE_PHONES_SETTING = defineSetting(
+  "tldwTtsNormalizePhones",
+  true,
+  (value) => coerceBoolean(value, true)
+)
+const TLDW_TTS_NORMALIZE_PLURALS_SETTING = defineSetting(
+  "tldwTtsNormalizePlurals",
+  true,
+  (value) => coerceBoolean(value, true)
 )
 
 export const getTTSProvider = async (): Promise<TtsProviderValue> =>
@@ -285,6 +339,76 @@ export const setTldwTTSSpeed = async (speed: number) => {
   await setSetting(TLDW_TTS_SPEED_SETTING, speed)
 }
 
+export const getTldwTTSLanguage = async () =>
+  getSetting(TLDW_TTS_LANGUAGE_SETTING)
+
+export const setTldwTTSLanguage = async (language: string) => {
+  await setSetting(TLDW_TTS_LANGUAGE_SETTING, language)
+}
+
+export const getTldwTTSStreamingEnabled = async () =>
+  getSetting(TLDW_TTS_STREAMING_SETTING)
+
+export const setTldwTTSStreamingEnabled = async (enabled: boolean) => {
+  await setSetting(TLDW_TTS_STREAMING_SETTING, enabled)
+}
+
+export const getTldwTTSEmotion = async () =>
+  getSetting(TLDW_TTS_EMOTION_SETTING)
+
+export const setTldwTTSEmotion = async (emotion: string) => {
+  await setSetting(TLDW_TTS_EMOTION_SETTING, emotion)
+}
+
+export const getTldwTTSEmotionIntensity = async () =>
+  getSetting(TLDW_TTS_EMOTION_INTENSITY_SETTING)
+
+export const setTldwTTSEmotionIntensity = async (value: number) => {
+  await setSetting(TLDW_TTS_EMOTION_INTENSITY_SETTING, value)
+}
+
+export const getTldwTTSNormalize = async () =>
+  getSetting(TLDW_TTS_NORMALIZE_SETTING)
+
+export const setTldwTTSNormalize = async (value: boolean) => {
+  await setSetting(TLDW_TTS_NORMALIZE_SETTING, value)
+}
+
+export const getTldwTTSNormalizeUnits = async () =>
+  getSetting(TLDW_TTS_NORMALIZE_UNITS_SETTING)
+
+export const setTldwTTSNormalizeUnits = async (value: boolean) => {
+  await setSetting(TLDW_TTS_NORMALIZE_UNITS_SETTING, value)
+}
+
+export const getTldwTTSNormalizeUrls = async () =>
+  getSetting(TLDW_TTS_NORMALIZE_URLS_SETTING)
+
+export const setTldwTTSNormalizeUrls = async (value: boolean) => {
+  await setSetting(TLDW_TTS_NORMALIZE_URLS_SETTING, value)
+}
+
+export const getTldwTTSNormalizeEmails = async () =>
+  getSetting(TLDW_TTS_NORMALIZE_EMAILS_SETTING)
+
+export const setTldwTTSNormalizeEmails = async (value: boolean) => {
+  await setSetting(TLDW_TTS_NORMALIZE_EMAILS_SETTING, value)
+}
+
+export const getTldwTTSNormalizePhones = async () =>
+  getSetting(TLDW_TTS_NORMALIZE_PHONES_SETTING)
+
+export const setTldwTTSNormalizePhones = async (value: boolean) => {
+  await setSetting(TLDW_TTS_NORMALIZE_PHONES_SETTING, value)
+}
+
+export const getTldwTTSNormalizePlurals = async () =>
+  getSetting(TLDW_TTS_NORMALIZE_PLURALS_SETTING)
+
+export const setTldwTTSNormalizePlurals = async (value: boolean) => {
+  await setSetting(TLDW_TTS_NORMALIZE_PLURALS_SETTING, value)
+}
+
 export const getTTSSettings = async () => {
   const [
     ttsEnabled,
@@ -309,7 +433,17 @@ export const getTTSSettings = async () => {
     tldwTtsModel,
     tldwTtsVoice,
     tldwTtsResponseFormat,
-    tldwTtsSpeed
+    tldwTtsSpeed,
+    tldwTtsLanguage,
+    tldwTtsStreaming,
+    tldwTtsEmotion,
+    tldwTtsEmotionIntensity,
+    tldwTtsNormalize,
+    tldwTtsNormalizeUnits,
+    tldwTtsNormalizeUrls,
+    tldwTtsNormalizeEmails,
+    tldwTtsNormalizePhones,
+    tldwTtsNormalizePlurals
   ] = await Promise.all([
     isTTSEnabled(),
     getTTSProvider(),
@@ -333,7 +467,17 @@ export const getTTSSettings = async () => {
     getTldwTTSModel(),
     getTldwTTSVoice(),
     getTldwTTSResponseFormat(),
-    getTldwTTSSpeed()
+    getTldwTTSSpeed(),
+    getTldwTTSLanguage(),
+    getTldwTTSStreamingEnabled(),
+    getTldwTTSEmotion(),
+    getTldwTTSEmotionIntensity(),
+    getTldwTTSNormalize(),
+    getTldwTTSNormalizeUnits(),
+    getTldwTTSNormalizeUrls(),
+    getTldwTTSNormalizeEmails(),
+    getTldwTTSNormalizePhones(),
+    getTldwTTSNormalizePlurals()
   ])
 
   return {
@@ -357,7 +501,17 @@ export const getTTSSettings = async () => {
     tldwTtsModel,
     tldwTtsVoice,
     tldwTtsResponseFormat,
-    tldwTtsSpeed
+    tldwTtsSpeed,
+    tldwTtsLanguage,
+    tldwTtsStreaming,
+    tldwTtsEmotion,
+    tldwTtsEmotionIntensity,
+    tldwTtsNormalize,
+    tldwTtsNormalizeUnits,
+    tldwTtsNormalizeUrls,
+    tldwTtsNormalizeEmails,
+    tldwTtsNormalizePhones,
+    tldwTtsNormalizePlurals
   }
 }
 
@@ -380,7 +534,17 @@ export const setTTSSettings = async ({
   tldwTtsModel,
   tldwTtsVoice,
   tldwTtsResponseFormat,
-  tldwTtsSpeed
+  tldwTtsSpeed,
+  tldwTtsLanguage,
+  tldwTtsStreaming,
+  tldwTtsEmotion,
+  tldwTtsEmotionIntensity,
+  tldwTtsNormalize,
+  tldwTtsNormalizeUnits,
+  tldwTtsNormalizeUrls,
+  tldwTtsNormalizeEmails,
+  tldwTtsNormalizePhones,
+  tldwTtsNormalizePlurals
 }: {
   ttsEnabled: boolean
   ttsProvider: string
@@ -401,6 +565,16 @@ export const setTTSSettings = async ({
   tldwTtsVoice: string
   tldwTtsResponseFormat: string
   tldwTtsSpeed: number
+  tldwTtsLanguage: string
+  tldwTtsStreaming: boolean
+  tldwTtsEmotion: string
+  tldwTtsEmotionIntensity: number
+  tldwTtsNormalize: boolean
+  tldwTtsNormalizeUnits: boolean
+  tldwTtsNormalizeUrls: boolean
+  tldwTtsNormalizeEmails: boolean
+  tldwTtsNormalizePhones: boolean
+  tldwTtsNormalizePlurals: boolean
 }) => {
   await Promise.all([
     setTTSEnabled(ttsEnabled),
@@ -421,6 +595,16 @@ export const setTTSSettings = async ({
     setTldwTTSModel(tldwTtsModel),
     setTldwTTSVoice(tldwTtsVoice),
     setTldwTTSResponseFormat(tldwTtsResponseFormat),
-    setTldwTTSSpeed(tldwTtsSpeed)
+    setTldwTTSSpeed(tldwTtsSpeed),
+    setTldwTTSLanguage(tldwTtsLanguage),
+    setTldwTTSStreamingEnabled(tldwTtsStreaming),
+    setTldwTTSEmotion(tldwTtsEmotion),
+    setTldwTTSEmotionIntensity(tldwTtsEmotionIntensity),
+    setTldwTTSNormalize(tldwTtsNormalize),
+    setTldwTTSNormalizeUnits(tldwTtsNormalizeUnits),
+    setTldwTTSNormalizeUrls(tldwTtsNormalizeUrls),
+    setTldwTTSNormalizeEmails(tldwTtsNormalizeEmails),
+    setTldwTTSNormalizePhones(tldwTtsNormalizePhones),
+    setTldwTTSNormalizePlurals(tldwTtsNormalizePlurals)
   ])
 }

@@ -775,7 +775,7 @@ export const AddSourceModal: React.FC = () => {
       title={t("playground:sources.addSourceTitle", "Add Sources")}
       footer={null}
       width={600}
-      destroyOnClose
+      destroyOnHidden
     >
       <Spin spinning={isProcessing}>
         {error && (

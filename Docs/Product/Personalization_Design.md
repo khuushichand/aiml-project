@@ -162,7 +162,7 @@ Admin & Ops:
 
 ## WebUI Additions
 
-- Personalization Dashboard (`/webui/personalization`)
+- Personalization Dashboard (Next.js WebUI)
   - Opt-in toggle, sliders for `alpha/beta/gamma`, half-life selector.
   - Topic list with affinity bars; memory list with search, pin, delete.
   - “Why” popovers on search/chat results.

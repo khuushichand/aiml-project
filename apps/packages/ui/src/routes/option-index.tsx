@@ -9,7 +9,7 @@ import { ConnectionPhase } from "@/types/connection"
 import { useFocusComposerOnConnect } from "@/hooks/useComposerFocus"
 import { OnboardingWizard } from "@/components/Option/Onboarding/OnboardingWizard"
 import OptionLayout from "~/components/Layouts/Layout"
-import { Playground } from "~/components/Option/Playground/Playground"
+import { LandingHub } from "~/components/Option/LandingHub"
 
 const OptionIndex = () => {
   const { phase } = useConnectionState()
@@ -73,7 +73,7 @@ const OptionIndex = () => {
 
   return (
     <OptionLayout>
-      <Playground />
+      <LandingHub />
     </OptionLayout>
   )
 }

@@ -19,7 +19,7 @@ It covers quick paths for both cloud-hosted and local backends, plus verificatio
 - Start the server
   - `python -m uvicorn tldw_Server_API.app.main:app --reload`
   - API: <http://127.0.0.1:8000/docs>
-  - WebUI: <http://127.0.0.1:8000/webui/>
+  - WebUI (Next.js): run `apps/tldw-frontend/` or visit <http://127.0.0.1:8000/api/v1/config/quickstart>
 
 Auth quick note
 - Single-user mode: server prints an API key on startup; or set `SINGLE_USER_API_KEY`.
@@ -254,11 +254,11 @@ Troubleshooting
 ---
 
 ## Verifying Setup via WebUI
-- Open <http://127.0.0.1:8000/webui/>
+- Open the Next.js WebUI (`apps/tldw-frontend`) or visit <http://127.0.0.1:8000/api/v1/config/quickstart>.
 - Tabs:
   - Audio → Transcription (STT): upload a short clip and transcribe
   - Audio → TTS: enter text, pick a voice/model, and synthesize
-- The WebUI auto-detects single-user mode and populates the API key.
+- In single-user mode, set `NEXT_PUBLIC_X_API_KEY` in the frontend config if you want auto-auth.
 
 ---
 

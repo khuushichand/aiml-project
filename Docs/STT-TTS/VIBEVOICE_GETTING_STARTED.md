@@ -86,7 +86,7 @@ providers:
 ```bash
 python -m uvicorn tldw_Server_API.app.main:app --reload
 # API docs:   http://127.0.0.1:8000/docs
-# Web UI:     http://127.0.0.1:8000/webui/
+# Quickstart: http://127.0.0.1:8000/api/v1/config/quickstart
 ```
 
 ## 5) Quick Start: Generate Speech (Streaming)
@@ -219,7 +219,7 @@ Use the built-in Web UI to try VibeVoice quickly without writing code:
 
 1. Start the API server and Web UI
    - API: `python -m uvicorn tldw_Server_API.app.main:app --reload`
-   - Web UI: `http://localhost:8000/webui/` (or use `tldw_Server_API/WebUI/Start-WebUI.sh` on port 8080)
+   - Web UI: `http://localhost:8000/api/v1/config/quickstart`
 
 2. Open Audio → Text-to-Speech
    - In the Web UI top tabs, click “Audio” and find the TTS request form for `POST /api/v1/audio/speech`.

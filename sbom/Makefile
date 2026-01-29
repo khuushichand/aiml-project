@@ -21,7 +21,7 @@ sbom:
 	else \
 		echo "(info) No pyproject.toml or requirements.txt found; skipping Python SBOM"; \
 	fi
-	@echo "==> Generating Node/WebUI SBOM (if package-lock.json present)"
+	@echo "==> Generating Node/Frontend SBOM (if package-lock.json present)"
 	@npx -y @cyclonedx/cyclonedx-npm --output-file sbom/sbom-frontend.cdx.json || true
 	@echo "==> Generating source SBOM via syft (if installed)"
 	@if command -v syft >/dev/null 2>&1; then \

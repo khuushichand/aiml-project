@@ -1,6 +1,10 @@
 import { SaveButton } from "@/components/Common/SaveButton"
 import { getModels, getVoices } from "@/services/elevenlabs"
-import { getTTSSettings, setTTSSettings } from "@/services/tts"
+import {
+  getTTSSettings,
+  setTTSSettings,
+  SUPPORTED_TLDW_TTS_FORMATS
+} from "@/services/tts"
 import { inferTldwProviderFromModel } from "@/services/tts-provider"
 import { TTS_PROVIDER_OPTIONS } from "@/services/tts-providers"
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
@@ -12,12 +16,15 @@ import {
 import {
   fetchTtsProviders,
   type TldwTtsProvidersInfo,
-  type TldwTtsVoiceInfo
+  type TldwTtsVoiceInfo,
+  type TldwTtsProviderCapabilities
 } from "@/services/tldw/audio-providers"
 import {
   fetchTldwTtsModels,
   type TldwTtsModel
 } from "@/services/tldw/audio-models"
+import { normalizeTtsProviderKey, toServerTtsProviderKey } from "@/services/tldw/tts-provider-keys"
+import { listCustomVoices, type TldwCustomVoice } from "@/services/tldw/voice-cloning"
 import { useWebUI } from "@/store/webui"
 import { Alert, Button, Input, InputNumber, Select, Skeleton, Switch, Space } from "antd"
 import { useTranslation } from "react-i18next"
@@ -47,6 +54,16 @@ export const TTSModeSettings = ({ hideBorder }: { hideBorder?: boolean }) => {
     tldwVoice: "tldw-voice-select",
     tldwResponseFormat: "tldw-response-format",
     tldwSpeed: "tldw-speed-input",
+    tldwLanguage: "tldw-language-select",
+    tldwStreaming: "tldw-streaming-toggle",
+    tldwEmotion: "tldw-emotion-select",
+    tldwEmotionIntensity: "tldw-emotion-intensity",
+    tldwNormalize: "tldw-normalize-toggle",
+    tldwNormalizeUnits: "tldw-normalize-units-toggle",
+    tldwNormalizeUrls: "tldw-normalize-urls-toggle",
+    tldwNormalizeEmails: "tldw-normalize-emails-toggle",
+    tldwNormalizePhones: "tldw-normalize-phones-toggle",
+    tldwNormalizePlurals: "tldw-normalize-plurals-toggle",
     ssmlEnabled: "tts-ssml-toggle",
     removeReasoning: "tts-remove-reasoning-toggle",
     playbackSpeed: "tts-playback-speed-input",
@@ -71,10 +88,20 @@ export const TTSModeSettings = ({ hideBorder }: { hideBorder?: boolean }) => {
       openAITTSVoice: "",
       ttsAutoPlay: false,
       playbackSpeed: 1,
-      tldwTtsModel: "",
-      tldwTtsVoice: "",
-      tldwTtsResponseFormat: "mp3",
-      tldwTtsSpeed: 1
+    tldwTtsModel: "",
+    tldwTtsVoice: "",
+    tldwTtsResponseFormat: "mp3",
+    tldwTtsSpeed: 1,
+    tldwTtsLanguage: "",
+    tldwTtsStreaming: false,
+    tldwTtsEmotion: "",
+    tldwTtsEmotionIntensity: 1,
+    tldwTtsNormalize: true,
+    tldwTtsNormalizeUnits: false,
+    tldwTtsNormalizeUrls: true,
+    tldwTtsNormalizeEmails: true,
+    tldwTtsNormalizePhones: true,
+    tldwTtsNormalizePlurals: true
     },
     validate: {
       playbackSpeed: (value) =>
@@ -121,11 +148,19 @@ export const TTSModeSettings = ({ hideBorder }: { hideBorder?: boolean }) => {
     queryKey: ["fetchTldwVoices", inferredTldwProviderKey],
     queryFn: async () => {
       if (inferredTldwProviderKey) {
-        const catalog = await fetchTldwVoiceCatalog(inferredTldwProviderKey)
+        const catalog = await fetchTldwVoiceCatalog(
+          toServerTtsProviderKey(inferredTldwProviderKey)
+        )
         if (catalog.length > 0) return catalog
       }
       return fetchTldwVoices()
     },
+    enabled: form.values.ttsProvider === "tldw"
+  })
+
+  const { data: customVoices = [] } = useQuery<TldwCustomVoice[]>({
+    queryKey: ["tts-custom-voices"],
+    queryFn: listCustomVoices,
     enabled: form.values.ttsProvider === "tldw"
   })
 
@@ -135,6 +170,54 @@ export const TTSModeSettings = ({ hideBorder }: { hideBorder?: boolean }) => {
       queryFn: fetchTtsProviders,
       enabled: form.values.ttsProvider === "tldw"
     })
+
+  const activeProviderCaps = React.useMemo((): TldwTtsProviderCapabilities | null => {
+    if (!tldwProvidersInfo || !inferredTldwProviderKey) return null
+    const providers = tldwProvidersInfo.providers || {}
+    const matchKey = Object.keys(providers).find(
+      (key) =>
+        toServerTtsProviderKey(key) === toServerTtsProviderKey(inferredTldwProviderKey)
+    )
+    return matchKey ? providers[matchKey] : null
+  }, [tldwProvidersInfo, inferredTldwProviderKey])
+
+  const tldwFormatOptions = React.useMemo(() => {
+    const formats =
+      activeProviderCaps?.formats?.length
+        ? activeProviderCaps.formats
+        : SUPPORTED_TLDW_TTS_FORMATS
+    const unique = Array.from(
+      new Set(formats.map((f) => String(f).toLowerCase()))
+    )
+    return unique.map((fmt) => ({
+      label: fmt === "pcm" ? "pcm (raw)" : fmt,
+      value: fmt
+    }))
+  }, [activeProviderCaps])
+
+  const tldwLanguageOptions = React.useMemo(() => {
+    const languages = activeProviderCaps?.languages || []
+    if (!languages.length) return []
+    const labelMap: Record<string, string> = {
+      en: "English",
+      es: "Spanish",
+      fr: "French",
+      de: "German",
+      it: "Italian",
+      pt: "Portuguese",
+      ru: "Russian",
+      ja: "Japanese",
+      ko: "Korean",
+      zh: "Chinese",
+      ar: "Arabic",
+      hi: "Hindi",
+      pl: "Polish"
+    }
+    return Array.from(new Set(languages)).map((lang) => ({
+      label: labelMap[String(lang)] ? `${labelMap[String(lang)]} (${lang})` : String(lang),
+      value: String(lang)
+    }))
+  }, [activeProviderCaps])
 
   const { data: tldwModels } = useQuery<TldwTtsModel[]>({
     queryKey: ["fetchTldwTtsModels"],
@@ -158,15 +241,36 @@ export const TTSModeSettings = ({ hideBorder }: { hideBorder?: boolean }) => {
   }, [inferredTldwProviderKey, tldwProvidersInfo])
 
   const tldwVoiceOptions = React.useMemo(() => {
-    const combined: Array<TldwVoice | TldwTtsVoiceInfo> = []
+    const options: { label: string; value: string }[] = []
     const seen = new Set<string>()
+    const customIds = new Set(
+      customVoices
+        .map((voice) => voice.voice_id)
+        .filter((id): id is string => Boolean(id))
+    )
 
-    const pushVoice = (voice: TldwVoice | TldwTtsVoiceInfo) => {
-      const value = voice.voice_id || voice.id || voice.name
+    const pushOption = (value: string, label: string) => {
       if (!value || seen.has(value)) return
       seen.add(value)
-      combined.push(voice)
+      options.push({ label, value })
     }
+
+    const normalizedProvider = inferredTldwProviderKey
+      ? normalizeTtsProviderKey(inferredTldwProviderKey)
+      : ""
+
+    const filteredCustomVoices = normalizedProvider
+      ? customVoices.filter((voice) => {
+          const voiceProvider = normalizeTtsProviderKey(voice.provider)
+          return !voiceProvider || voiceProvider === normalizedProvider
+        })
+      : customVoices
+
+    filteredCustomVoices.forEach((voice) => {
+      const id = voice.voice_id || voice.name
+      if (!id) return
+      pushOption(`custom:${id}`, `Custom: ${voice.name || id}`)
+    })
 
     const providerKey = inferredTldwProviderKey?.toLowerCase() || ""
     const scopedVoices = providerKey
@@ -176,27 +280,29 @@ export const TTSModeSettings = ({ hideBorder }: { hideBorder?: boolean }) => {
         })
       : tldwVoices
 
+    const pushVoice = (voice: TldwVoice | TldwTtsVoiceInfo, index: number) => {
+      const value = voice.voice_id || voice.id || voice.name
+      if (!value) return
+      if (customIds.has(value)) return
+      const label =
+        voice.name ||
+        voice.voice_id ||
+        voice.id ||
+        `Voice ${index + 1}`
+      pushOption(value, label)
+    }
+
     providerVoices.forEach(pushVoice)
     scopedVoices.forEach(pushVoice)
 
-    if (combined.length > 0) {
-      return combined
-        .map((voice, index) => {
-          const value = voice.voice_id || voice.id || voice.name
-          if (!value) return null
-          const label =
-            voice.name ||
-            voice.voice_id ||
-            voice.id ||
-            `Voice ${index + 1}`
-          return { label, value }
-        })
-        .filter(Boolean) as { label: string; value: string }[]
+    if (options.length > 0) {
+      return options
     }
 
     const fallback = (form.values.tldwTtsVoice || "").trim()
     return fallback ? [{ label: fallback, value: fallback }] : []
   }, [
+    customVoices,
     form.values.tldwTtsVoice,
     inferredTldwProviderKey,
     providerVoices,
@@ -480,25 +586,6 @@ export const TTSModeSettings = ({ hideBorder }: { hideBorder?: boolean }) => {
                     {...form.getInputProps("elevenLabsModel")}
                   />
                 </div>
-                <div className="flex sm:flex-row flex-col space-y-4 sm:space-y-0 sm:justify-between">
-                  <span className="text-text ">
-                    {t("generalSettings.tts.responseSplitting.label")}
-                  </span>
-                  <div>
-                    <Select
-                      placeholder={t(
-                        "generalSettings.tts.responseSplitting.placeholder"
-                      )}
-                      className="w-full mt-4 sm:mt-0 sm:w-[200px]"
-                      options={[
-                        { label: "None", value: "none" },
-                        { label: "Punctuation", value: "punctuation" },
-                        { label: "Paragraph", value: "paragraph" }
-                      ]}
-                      {...form.getInputProps("responseSplitting")}
-                    />
-                  </div>
-                </div>
               </>
             )}
           </>
@@ -622,14 +709,7 @@ export const TTSModeSettings = ({ hideBorder }: { hideBorder?: boolean }) => {
                 id={ids.tldwResponseFormat}
                 aria-label="tldw response format"
                 className="w-full mt-4 sm:mt-0 sm:w-[200px] focus-ring"
-                options={[
-                  { label: "mp3", value: "mp3" },
-                  { label: "opus", value: "opus" },
-                  { label: "aac", value: "aac" },
-                  { label: "flac", value: "flac" },
-                  { label: "wav", value: "wav" },
-                  { label: "pcm (raw)", value: "pcm" }
-                ]}
+                options={tldwFormatOptions}
                 {...form.getInputProps("tldwTtsResponseFormat")}
               />
             </div>
@@ -648,8 +728,159 @@ export const TTSModeSettings = ({ hideBorder }: { hideBorder?: boolean }) => {
                 {...form.getInputProps("tldwTtsSpeed")}
               />
             </div>
+            {tldwLanguageOptions.length > 0 && (
+              <div className="flex sm:flex-row flex-col space-y-4 sm:space-y-0 sm:justify-between">
+                <span className="text-text">
+                  Language
+                </span>
+                <Select
+                  id={ids.tldwLanguage}
+                  aria-label="tldw language"
+                  className="w-full mt-4 sm:mt-0 sm:w-[200px] focus-ring"
+                  options={tldwLanguageOptions}
+                  allowClear
+                  placeholder="Auto"
+                  {...form.getInputProps("tldwTtsLanguage")}
+                />
+              </div>
+            )}
+            <div className="flex sm:flex-row flex-col space-y-4 sm:space-y-0 sm:justify-between">
+              <div className="flex flex-col gap-0.5">
+                <label className="text-text" htmlFor={ids.tldwStreaming}>
+                  Stream audio (WebSocket)
+                </label>
+                <span className="text-xs text-text-subtle">
+                  Low-latency playback while audio is generated.
+                </span>
+              </div>
+              <div>
+                <Switch
+                  id={ids.tldwStreaming}
+                  aria-label="Stream audio (WebSocket)"
+                  className="mt-4 sm:mt-0 focus-ring"
+                  {...form.getInputProps("tldwTtsStreaming", { type: "checkbox" })}
+                />
+              </div>
+            </div>
+            {activeProviderCaps?.supports_emotion_control && (
+              <>
+                <div className="flex sm:flex-row flex-col space-y-4 sm:space-y-0 sm:justify-between">
+                  <span className="text-text">
+                    Emotion preset
+                  </span>
+                  <Select
+                    id={ids.tldwEmotion}
+                    aria-label="tldw emotion"
+                    className="w-full mt-4 sm:mt-0 sm:w-[200px] focus-ring"
+                    allowClear
+                    placeholder="Default"
+                    options={[
+                      { label: "Neutral", value: "neutral" },
+                      { label: "Calm", value: "calm" },
+                      { label: "Energetic", value: "energetic" },
+                      { label: "Happy", value: "happy" },
+                      { label: "Sad", value: "sad" },
+                      { label: "Angry", value: "angry" }
+                    ]}
+                    {...form.getInputProps("tldwTtsEmotion")}
+                  />
+                </div>
+                <div className="flex sm:flex-row flex-col space-y-4 sm:space-y-0 sm:justify-between">
+                  <span className="text-text">
+                    Emotion intensity
+                  </span>
+                  <InputNumber
+                    id={ids.tldwEmotionIntensity}
+                    aria-label="tldw emotion intensity"
+                    placeholder="1"
+                    min={0.1}
+                    max={2}
+                    step={0.1}
+                    className=" mt-4 sm:mt-0 !w-[300px] sm:w-[200px]"
+                    {...form.getInputProps("tldwTtsEmotionIntensity")}
+                  />
+                </div>
+              </>
+            )}
+            <div className="rounded-md border border-border p-3 space-y-3">
+              <div className="flex items-center justify-between">
+                <label className="text-text" htmlFor={ids.tldwNormalize}>
+                  Smart normalization
+                </label>
+                <Switch
+                  id={ids.tldwNormalize}
+                  aria-label="Smart normalization"
+                  className="focus-ring"
+                  {...form.getInputProps("tldwTtsNormalize", { type: "checkbox" })}
+                />
+              </div>
+              <div className="text-xs text-text-subtle">
+                Expands units, URLs, emails, and phone numbers to improve pronunciation.
+              </div>
+              {form.values.tldwTtsNormalize && (
+                <div className="grid gap-2 sm:grid-cols-2">
+                  <div className="flex items-center justify-between">
+                    <span className="text-xs text-text-subtle">Units</span>
+                    <Switch
+                      id={ids.tldwNormalizeUnits}
+                      size="small"
+                      {...form.getInputProps("tldwTtsNormalizeUnits", { type: "checkbox" })}
+                    />
+                  </div>
+                  <div className="flex items-center justify-between">
+                    <span className="text-xs text-text-subtle">URLs</span>
+                    <Switch
+                      id={ids.tldwNormalizeUrls}
+                      size="small"
+                      {...form.getInputProps("tldwTtsNormalizeUrls", { type: "checkbox" })}
+                    />
+                  </div>
+                  <div className="flex items-center justify-between">
+                    <span className="text-xs text-text-subtle">Emails</span>
+                    <Switch
+                      id={ids.tldwNormalizeEmails}
+                      size="small"
+                      {...form.getInputProps("tldwTtsNormalizeEmails", { type: "checkbox" })}
+                    />
+                  </div>
+                  <div className="flex items-center justify-between">
+                    <span className="text-xs text-text-subtle">Phone</span>
+                    <Switch
+                      id={ids.tldwNormalizePhones}
+                      size="small"
+                      {...form.getInputProps("tldwTtsNormalizePhones", { type: "checkbox" })}
+                    />
+                  </div>
+                  <div className="flex items-center justify-between">
+                    <span className="text-xs text-text-subtle">Pluralization</span>
+                    <Switch
+                      id={ids.tldwNormalizePlurals}
+                      size="small"
+                      {...form.getInputProps("tldwTtsNormalizePlurals", { type: "checkbox" })}
+                    />
+                  </div>
+                </div>
+              )}
+            </div>
           </>
         )}
+        <div className="flex sm:flex-row flex-col space-y-4 sm:space-y-0 sm:justify-between">
+          <span className="text-text ">
+            {t("generalSettings.tts.responseSplitting.label")}
+          </span>
+          <div>
+            <Select
+              placeholder={t("generalSettings.tts.responseSplitting.placeholder")}
+              className="w-full mt-4 sm:mt-0 sm:w-[200px]"
+              options={[
+                { label: "None", value: "none" },
+                { label: "Punctuation", value: "punctuation" },
+                { label: "Paragraph", value: "paragraph" }
+              ]}
+              {...form.getInputProps("responseSplitting")}
+            />
+          </div>
+        </div>
         <div className="flex sm:flex-row flex-col space-y-4 sm:space-y-0 sm:justify-between">
           <label
             className="text-text "
@@ -669,11 +900,16 @@ export const TTSModeSettings = ({ hideBorder }: { hideBorder?: boolean }) => {
         </div>
 
         <div className="flex sm:flex-row flex-col space-y-4 sm:space-y-0 sm:justify-between">
-          <label
-            className="text-text "
-            htmlFor={ids.removeReasoning}>
-            {t("generalSettings.tts.removeReasoningTagTTS.label")}
-          </label>
+          <div className="flex flex-col gap-0.5">
+            <label
+              className="text-text"
+              htmlFor={ids.removeReasoning}>
+              {t("generalSettings.tts.removeReasoningTagTTS.label")}
+            </label>
+            <span className="text-xs text-text-subtle">
+              {t("generalSettings.tts.removeReasoningTagTTS.description", "Strip <think>...</think> reasoning blocks before speaking.")}
+            </span>
+          </div>
           <div>
             <Switch
               id={ids.removeReasoning}
@@ -689,11 +925,16 @@ export const TTSModeSettings = ({ hideBorder }: { hideBorder?: boolean }) => {
         </div>
 
         <div className="flex sm:flex-row flex-col space-y-4 sm:space-y-0 sm:justify-between">
-          <label
-            className="text-text"
-            htmlFor={ids.playbackSpeed}>
-            {t("generalSettings.tts.playbackSpeed.label", "Playback Speed")}
-          </label>
+          <div className="flex flex-col gap-0.5">
+            <label
+              className="text-text"
+              htmlFor={ids.playbackSpeed}>
+              {t("generalSettings.tts.playbackSpeed.label", "Playback Speed")}
+            </label>
+            <span className="text-xs text-text-subtle">
+              {t("generalSettings.tts.playbackSpeed.description", "Controls how fast audio plays back (does not affect generation).")}
+            </span>
+          </div>
           <div className="flex flex-col gap-1">
             <InputNumber
               id={ids.playbackSpeed}

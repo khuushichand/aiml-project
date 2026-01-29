@@ -2773,7 +2773,7 @@ async def register(
         if payload.registration_code:
             detail = (
                 "Username or email already exists. If you're joining an organization, "
-                "log in and accept the invite at /webui/accept-invite.html "
+                "log in and accept the invite in the WebUI "
                 "or POST /api/v1/orgs/invites/accept."
             )
         raise HTTPException(

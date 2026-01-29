@@ -1,6 +1,18 @@
 import { browser } from "./wxt-browser"
 import { createSafeStorage } from "@/utils/safe-storage"
 import type { TldwConfig } from "@/services/tldw/TldwApiClient"
+import { FEATURE_FLAGS } from "@/hooks/useFeatureFlags"
+import {
+  DEFAULT_HEADER_SHORTCUT_SELECTION,
+  DEFAULT_SIDEBAR_SHORTCUT_SELECTION,
+  HEADER_SHORTCUTS_EXPANDED_SETTING,
+  HEADER_SHORTCUT_SELECTION_SETTING,
+  SIDEBAR_ACTIVE_TAB_SETTING,
+  SIDEBAR_SHORTCUTS_COLLAPSED_SETTING,
+  SIDEBAR_SHORTCUT_SELECTION_SETTING,
+  THEME_SETTING,
+  UI_MODE_SETTING
+} from "@/services/settings/ui-settings"
 
 if (typeof globalThis !== "undefined") {
   const globalScope = globalThis as typeof globalThis & {
@@ -71,3 +83,84 @@ const seedTldwConfigFromEnv = async (): Promise<void> => {
 }
 
 void seedTldwConfigFromEnv()
+
+const WEB_DEFAULTS_MIRRORED_KEY = "tldw:web-defaults:mirrored"
+
+const isWebRuntime = () => {
+  if (typeof window === "undefined") return false
+  const protocol = window.location.protocol
+  return protocol !== "chrome-extension:" && protocol !== "moz-extension:"
+}
+
+const writeLocalStorageValue = (key: string, value: unknown) => {
+  if (typeof window === "undefined") return
+  try {
+    const serialized =
+      typeof value === "string" ? value : JSON.stringify(value)
+    window.localStorage.setItem(key, serialized)
+  } catch {
+    // ignore storage failures
+  }
+}
+
+const getLocalStorageValue = (key: string) => {
+  if (typeof window === "undefined") return null
+  try {
+    return window.localStorage.getItem(key)
+  } catch {
+    return null
+  }
+}
+
+const setDefault = (key: string, value: unknown, force = false) => {
+  const existing = getLocalStorageValue(key)
+  if (!force && existing !== null) return
+  writeLocalStorageValue(key, value)
+}
+
+const mirrorWebDefaultsFromExtension = () => {
+  if (!isWebRuntime()) return
+  const force = getLocalStorageValue(WEB_DEFAULTS_MIRRORED_KEY) !== "true"
+
+  // Theme + UI mode defaults
+  setDefault(THEME_SETTING.key, THEME_SETTING.defaultValue, force)
+  setDefault(UI_MODE_SETTING.key, UI_MODE_SETTING.defaultValue, force)
+  setDefault("tldw-ui-mode", "casual", force)
+
+  // Feature flags (default true, compare mode default false)
+  Object.values(FEATURE_FLAGS).forEach((flag) => {
+    const isCompareMode = flag === FEATURE_FLAGS.COMPARE_MODE
+    setDefault(flag, isCompareMode ? false : true, force)
+  })
+
+  // Sidebar + header shortcuts defaults
+  setDefault(
+    SIDEBAR_ACTIVE_TAB_SETTING.key,
+    SIDEBAR_ACTIVE_TAB_SETTING.defaultValue,
+    force
+  )
+  setDefault(
+    SIDEBAR_SHORTCUTS_COLLAPSED_SETTING.key,
+    SIDEBAR_SHORTCUTS_COLLAPSED_SETTING.defaultValue,
+    force
+  )
+  setDefault(
+    SIDEBAR_SHORTCUT_SELECTION_SETTING.key,
+    DEFAULT_SIDEBAR_SHORTCUT_SELECTION,
+    force
+  )
+  setDefault(
+    HEADER_SHORTCUT_SELECTION_SETTING.key,
+    DEFAULT_HEADER_SHORTCUT_SELECTION,
+    force
+  )
+  setDefault(
+    HEADER_SHORTCUTS_EXPANDED_SETTING.key,
+    HEADER_SHORTCUTS_EXPANDED_SETTING.defaultValue,
+    force
+  )
+
+  writeLocalStorageValue(WEB_DEFAULTS_MIRRORED_KEY, "true")
+}
+
+mirrorWebDefaultsFromExtension()

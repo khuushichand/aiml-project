@@ -7,7 +7,7 @@ import {
 } from "@/hooks/useConnectionState"
 import { useFocusComposerOnConnect } from "@/hooks/useComposerFocus"
 import { OnboardingWizard } from "@/components/Option/Onboarding/OnboardingWizard"
-import OptionLayout from "@web/extension/components/Layouts/Layout"
+import OptionLayout from "@web/components/layout/WebLayout"
 import { Playground } from "~/components/Option/Playground/Playground"
 
 const OptionIndex = () => {

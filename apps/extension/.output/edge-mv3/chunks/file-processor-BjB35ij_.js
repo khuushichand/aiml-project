@@ -1,0 +1,1 @@
+import{aw as t}from"./react-instance-check-Bz0kNSNK.js";const c=async o=>{const{convertFileToSource:r}=await t(async()=>{const{convertFileToSource:e}=await import("./to-source-DmzMTwmv.js");return{convertFileToSource:e}},[]);return r({file:o})};export{c as processFileUpload};

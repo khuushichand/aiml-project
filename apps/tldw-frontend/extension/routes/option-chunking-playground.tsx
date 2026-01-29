@@ -1,4 +1,4 @@
-import OptionLayout from "@web/extension/components/Layouts/Layout"
+import OptionLayout from "@web/components/layout/WebLayout"
 import { PageShell } from "@/components/Common/PageShell"
 import { ChunkingPlayground } from "@/components/Option/ChunkingPlayground"
 

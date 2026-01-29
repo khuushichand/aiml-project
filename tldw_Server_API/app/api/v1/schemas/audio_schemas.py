@@ -53,14 +53,14 @@ class OpenAISpeechRequest(BaseModel):
         default="af_heart",
         description="The voice to use for generation. Can be a base voice or a combined voice name.",
     )
-    response_format: Literal["mp3", "opus", "aac", "flac", "wav", "pcm"] = Field(
+    response_format: Literal["mp3", "opus", "aac", "flac", "wav", "pcm", "ogg", "webm", "ulaw"] = Field(
         default="mp3",
         description=(
-            "The format to return audio in. Supported formats: mp3, opus, aac, flac, wav, pcm. "
+            "The format to return audio in. Supported formats: mp3, opus, aac, flac, wav, pcm, ogg, webm, ulaw. "
             "PCM format returns raw 16-bit samples without headers."
         ),
     )
-    download_format: Optional[Literal["mp3", "opus", "aac", "flac", "wav", "pcm"]] = (
+    download_format: Optional[Literal["mp3", "opus", "aac", "flac", "wav", "pcm", "ogg", "webm", "ulaw"]] = (
         Field(
             default=None,
             description=(

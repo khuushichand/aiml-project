@@ -1158,7 +1158,10 @@ class TTSServiceV2:
             "aac": AudioFormat.AAC,
             "flac": AudioFormat.FLAC,
             "wav": AudioFormat.WAV,
-            "pcm": AudioFormat.PCM
+            "pcm": AudioFormat.PCM,
+            "ogg": AudioFormat.OGG,
+            "webm": AudioFormat.WEBM,
+            "ulaw": AudioFormat.ULAW
         }
 
         audio_format = format_mapping.get(

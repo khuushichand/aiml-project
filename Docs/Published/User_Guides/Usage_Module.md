@@ -13,7 +13,7 @@ This guide explains how API usage and LLM usage are logged, aggregated, queried,
 ## Configuration
 
 - `USAGE_LOG_ENABLED` (bool): Enables HTTP usage logging middleware writing to `usage_log`.
-- `USAGE_LOG_EXCLUDE_PREFIXES` (list[str]): Path prefixes to exclude (defaults include `/docs`, `/metrics`, `/static`, `/webui`).
+- `USAGE_LOG_EXCLUDE_PREFIXES` (list[str]): Path prefixes to exclude (defaults include `/docs`, `/metrics`, `/static`).
 - `USAGE_AGGREGATOR_INTERVAL_MINUTES` (int): Background aggregation cadence for `usage_daily`.
 - `USAGE_LOG_DISABLE_META` (bool): If true, stores `{}` in `usage_log.meta` instead of IP/User-Agent.
 - `DISABLE_USAGE_AGGREGATOR` (env only): If true, skips starting the HTTP usage background aggregator at startup.

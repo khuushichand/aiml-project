@@ -37,6 +37,13 @@ import OptionLayout from "~/components/Layouts/Layout"
 import { OnboardingWizard } from "@/components/Option/Onboarding/OnboardingWizard"
 import { createSettingsRoute } from "./settings-route"
 
+// Eagerly loaded routes for instant navigation on frequently visited pages
+import OptionIndex from "./option-index"
+import OptionChat from "./option-chat"
+import OptionWorkspacePlayground from "./option-workspace-playground"
+import OptionMediaMulti from "./option-media-multi"
+import OptionMedia from "./option-media"
+
 export type RouteKind = "options" | "sidepanel"
 
 export type NavGroupKey = "server" | "knowledge" | "workspace" | "about"
@@ -56,8 +63,6 @@ export type RouteDefinition = {
   targets?: PlatformTarget[]
   nav?: RouteNav
 }
-
-const OptionIndex = lazy(() => import("./option-index"))
 const OptionSettings = createSettingsRoute(
   () => import("~/components/Option/Settings/general-settings"),
   "GeneralSettings"
@@ -101,8 +106,7 @@ const OptionTldwSettings = createSettingsRoute(
   () => import("~/components/Option/Settings/tldw"),
   "TldwSettings"
 )
-const OptionMedia = lazy(() => import("./option-media"))
-const OptionMediaMulti = lazy(() => import("./option-media-multi"))
+// OptionMedia and OptionMediaMulti are eagerly imported above
 const OptionNotes = lazy(() => import("./option-notes"))
 const OptionWorldBooks = createSettingsRoute(
   () => import("~/components/Option/Settings/WorkspaceLinks"),
@@ -173,10 +177,13 @@ const OptionDataTables = lazy(() => import("./option-data-tables"))
 const OptionCollections = lazy(() => import("./option-collections"))
 const OptionAudiobookStudio = lazy(() => import("./option-audiobook-studio"))
 const OptionWorkflowEditor = lazy(() => import("./option-workflow-editor"))
-const OptionWorkspacePlayground = lazy(() => import("./option-workspace-playground"))
+const OptionSetup = lazy(() => import("./option-setup"))
+// OptionWorkspacePlayground and OptionChat are eagerly imported above
 
 export const ROUTE_DEFINITIONS: RouteDefinition[] = [
   { kind: "options", path: "/", element: <OptionIndex /> },
+  { kind: "options", path: "/setup", element: <OptionSetup /> },
+  { kind: "options", path: "/chat", element: <OptionChat /> },
   {
     kind: "options",
     path: "/onboarding-test",

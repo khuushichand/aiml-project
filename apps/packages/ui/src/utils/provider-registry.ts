@@ -233,11 +233,11 @@ export const PROVIDER_REGISTRY: Record<string, ProviderMeta> = {
     order: 24
   },
   tldw: {
-    label: "tldw",
+    label: "tldw Server",
     iconKey: "tldw",
     order: 6,
     capabilities: ["llm", "tts"],
-    ttsLabel: "tldw server (audio/speech)"
+    ttsLabel: "tldw Server (Local)"
   },
   chrome: {
     label: "Chrome",
@@ -309,8 +309,40 @@ export const PROVIDER_REGISTRY: Record<string, ProviderMeta> = {
     label: "PocketTTS",
     capabilities: ["tts-engine"]
   },
+  pocket_tts: {
+    label: "PocketTTS",
+    capabilities: ["tts-engine"]
+  },
   index_tts: {
     label: "IndexTTS",
+    capabilities: ["tts-engine"]
+  },
+  index_tts2: {
+    label: "IndexTTS2",
+    capabilities: ["tts-engine"]
+  },
+  lux_tts: {
+    label: "LuxTTS",
+    capabilities: ["tts-engine"]
+  },
+  qwen3_tts: {
+    label: "Qwen3-TTS",
+    capabilities: ["tts-engine"]
+  },
+  vibevoice_realtime: {
+    label: "VibeVoice Realtime",
+    capabilities: ["tts-engine"]
+  },
+  supertonic: {
+    label: "Supertonic",
+    capabilities: ["tts-engine"]
+  },
+  supertonic2: {
+    label: "Supertonic2",
+    capabilities: ["tts-engine"]
+  },
+  echo_tts: {
+    label: "Echo TTS",
     capabilities: ["tts-engine"]
   },
   unknown: {
@@ -430,6 +462,10 @@ const TTS_PROVIDER_RULES: ProviderInferenceRule[] = [
   { provider: "dia", match: (value) => value.startsWith("dia") },
   { provider: "chatterbox", match: (value) => value.startsWith("chatterbox") },
   { provider: "vibevoice", match: (value) => value.startsWith("vibevoice") },
+  {
+    provider: "vibevoice_realtime",
+    match: (value) => value.startsWith("vibevoice_realtime") || value.startsWith("vibevoice-realtime")
+  },
   { provider: "neutts", match: (value) => value.startsWith("neutts") },
   {
     provider: "pockettts",
@@ -438,11 +474,27 @@ const TTS_PROVIDER_RULES: ProviderInferenceRule[] = [
       value.startsWith("pocket-tts") ||
       value.startsWith("pocket_tts")
   },
+  { provider: "qwen3_tts", match: (value) => value.startsWith("qwen3") || value.startsWith("qwen3_tts") },
+  { provider: "lux_tts", match: (value) => value.startsWith("lux_tts") || value.startsWith("luxtts") },
+  { provider: "echo_tts", match: (value) => value.startsWith("echo_tts") || value.startsWith("echo") },
   { provider: "elevenlabs", match: (value) => value.startsWith("eleven") },
   {
     provider: "index_tts",
     match: (value) =>
       value.startsWith("index_tts") || value.startsWith("indextts")
+  },
+  {
+    provider: "index_tts2",
+    match: (value) =>
+      value.startsWith("index_tts2") || value.startsWith("indextts2")
+  },
+  {
+    provider: "supertonic2",
+    match: (value) => value.startsWith("supertonic2") || value.startsWith("supertonic-2")
+  },
+  {
+    provider: "supertonic",
+    match: (value) => value.startsWith("supertonic")
   }
 ]
 

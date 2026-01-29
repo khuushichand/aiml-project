@@ -95,7 +95,7 @@ curl -s http://127.0.0.1:8000/health | jq .
 curl -s http://127.0.0.1:8000/ready  | jq .
 # OpenAPI (enable explicitly in prod if desired)
 open http://127.0.0.1:8000/docs
-open http://127.0.0.1:8000/webui/
+open http://127.0.0.1:8000/api/v1/config/quickstart
 ```
 
 Notes

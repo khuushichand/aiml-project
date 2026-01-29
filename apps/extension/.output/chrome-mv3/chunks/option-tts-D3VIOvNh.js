@@ -1,0 +1,1 @@
+import{j as t,Y as o}from"./react-instance-check-Bx4cImxR.js";import{S as i}from"./SpeechPlaygroundPage-Boxl9w2v.js";import"./PageShell-DpihpHTJ.js";import"./useTtsProviderData-Du6sXj_j.js";import"./tts-provider-keys-DTqcsaTa.js";import"./TTSModeSettings-DrvwF9Pc.js";import"./index-CT7JHAiG.js";const l=()=>t.jsx(o,{children:t.jsx(i,{initialMode:"listen"})});export{l as default};

@@ -1,11 +1,11 @@
 # tldw_server User Guide
 
-This guide shows how to use the integrated WebUI and API to ingest media, search and retrieve, chat with LLMs, generate embeddings, and run evaluations.
+This guide shows how to use the Next.js WebUI and API to ingest media, search and retrieve, chat with LLMs, generate embeddings, and run evaluations.
 
 ## Quick Start
 
 - Start the server: `python -m uvicorn tldw_Server_API.app.main:app --reload`
-- Open the WebUI: `http://127.0.0.1:8000/webui/`
+- Open the WebUI: run the Next.js client in `apps/tldw-frontend/`, or visit `http://127.0.0.1:8000/api/v1/config/quickstart`.
 - Open API docs: `http://127.0.0.1:8000/docs`
 
 Authentication:

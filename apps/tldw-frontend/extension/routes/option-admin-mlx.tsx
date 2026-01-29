@@ -1,4 +1,4 @@
-import OptionLayout from "@web/extension/components/Layouts/Layout"
+import OptionLayout from "@web/components/layout/WebLayout"
 import MlxAdminPage from "@/components/Option/Admin/MlxAdminPage"
 
 const OptionAdminMlx = () => {

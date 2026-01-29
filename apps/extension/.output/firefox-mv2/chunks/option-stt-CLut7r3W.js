@@ -1,0 +1,1 @@
+import{j as t,Y as o}from"./react-instance-check-jRY8MRSc.js";import{S as r}from"./SpeechPlaygroundPage-DRvAkQg_.js";import"./PageShell-BsqJ_m5Y.js";import"./useTtsProviderData-BoG6C6_F.js";import"./tts-provider-keys-qMUC4Eiz.js";import"./TTSModeSettings-Ck0GesGC.js";import"./index-CMvXt9J8.js";const u=()=>t.jsx(o,{children:t.jsx(r,{initialMode:"speak"})});export{u as default};
