@@ -20,6 +20,7 @@ export function ActiveSessionsPanel({ onSessionEnded }: ActiveSessionsPanelProps
   const [sessions, setSessions] = useState<VoiceSession[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [endingSessionId, setEndingSessionId] = useState<string | null>(null);
   const { success, error: showError } = useToast();
   const confirm = useConfirm();
 
@@ -47,6 +48,7 @@ export function ActiveSessionsPanel({ onSessionEnded }: ActiveSessionsPanelProps
   }, [loadSessions]);
 
   const handleEndSession = async (session: VoiceSession) => {
+    if (endingSessionId === session.session_id) return;
     const confirmed = await confirm({
       title: 'End Voice Session',
       message: `End session for user ${session.user_id}? This will disconnect their voice assistant.`,
@@ -57,6 +59,7 @@ export function ActiveSessionsPanel({ onSessionEnded }: ActiveSessionsPanelProps
     if (!confirmed) return;
 
     try {
+      setEndingSessionId(session.session_id);
       await api.deleteVoiceSession(session.session_id);
       success('Session ended', 'Voice session has been terminated.');
       void loadSessions();
@@ -64,6 +67,8 @@ export function ActiveSessionsPanel({ onSessionEnded }: ActiveSessionsPanelProps
     } catch (err) {
       const message = err instanceof Error ? err.message : 'Failed to end session';
       showError('End session failed', message);
+    } finally {
+      setEndingSessionId((prev) => (prev === session.session_id ? null : prev));
     }
   };
 
@@ -138,6 +143,7 @@ export function ActiveSessionsPanel({ onSessionEnded }: ActiveSessionsPanelProps
                       size="sm"
                       onClick={() => handleEndSession(session)}
                       className="text-destructive hover:text-destructive"
+                      disabled={endingSessionId === session.session_id}
                     >
                       <XCircle className="h-4 w-4 mr-1" />
                       End

@@ -97,6 +97,25 @@ const getChannelIcon = (type: string) => {
   return <Bell className="h-4 w-4" />;
 };
 
+const createClientId = () => {
+  if (typeof crypto !== 'undefined' && 'randomUUID' in crypto) {
+    return crypto.randomUUID();
+  }
+  return `channel-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+};
+
+const withChannelClientIds = (settings: NotificationSettings): NotificationSettings => ({
+  ...settings,
+  channels: settings.channels.map((channel) =>
+    channel.clientId ? channel : { ...channel, clientId: createClientId() }
+  ),
+});
+
+const stripChannelClientIds = (settings: NotificationSettings): NotificationSettings => ({
+  ...settings,
+  channels: settings.channels.map(({ clientId: _clientId, ...channel }) => channel),
+});
+
 type NotificationsPanelFormProps = Omit<NotificationsPanelProps, 'settings'> & {
   settings: NotificationSettings;
 };
@@ -109,7 +128,9 @@ const NotificationsPanelForm = ({
   onSave,
   onTest,
 }: NotificationsPanelFormProps) => {
-  const [editSettings, setEditSettings] = useState<NotificationSettings>(settings);
+  const [editSettings, setEditSettings] = useState<NotificationSettings>(() =>
+    withChannelClientIds(settings)
+  );
   const [isDirty, setIsDirty] = useState(false);
   const [showAddChannel, setShowAddChannel] = useState(false);
   const [newChannelType, setNewChannelType] = useState<NotificationChannel['type']>('email');
@@ -132,13 +153,13 @@ const NotificationsPanelForm = ({
     previousSettingsIdRef.current = settingsId;
 
     if (hasNewSettingsId) {
-      setEditSettings(settings);
+      setEditSettings(withChannelClientIds(settings));
       setIsDirty(false);
       return;
     }
 
     if (!isDirty) {
-      setEditSettings(settings);
+      setEditSettings(withChannelClientIds(settings));
     }
   }, [settings, settingsId, isDirty]);
 
@@ -150,7 +171,7 @@ const NotificationsPanelForm = ({
       settingsChangedWhileSavingRef.current = false;
       previousSettingsIdRef.current = settingsId;
       if (!isDirty) {
-        setEditSettings(settings);
+        setEditSettings(withChannelClientIds(settings));
         setIsDirty(false);
       }
     }
@@ -172,6 +193,7 @@ const NotificationsPanelForm = ({
       config: {
         [newChannelType === 'email' ? 'address' : 'url']: newChannelConfig.trim(),
       },
+      clientId: createClientId(),
     };
 
     updateEditSettings((prev) => ({
@@ -198,7 +220,7 @@ const NotificationsPanelForm = ({
   };
 
   const handleSave = () => {
-    onSave(editSettings);
+    onSave(stripChannelClientIds(editSettings));
   };
 
   const enabledChannels = editSettings.channels.filter((c) => c.enabled).length;
@@ -272,7 +294,7 @@ const NotificationsPanelForm = ({
                 <div className="space-y-2">
                   {editSettings.channels.map((channel, index) => (
                     <div
-                      key={`channel-${index}`}
+                      key={channel.clientId ?? `channel-${index}`}
                       className={`flex items-center justify-between p-3 rounded-lg border ${
                         channel.enabled ? 'bg-background' : 'bg-muted/30 opacity-60'
                       }`}
@@ -370,7 +392,7 @@ const NotificationsPanelForm = ({
               </div>
             </div>
 
-            <Button onClick={handleSave} disabled={saving}>
+            <Button onClick={handleSave} disabled={saving || !isDirty}>
               {saving ? 'Saving...' : 'Save Settings'}
             </Button>
 

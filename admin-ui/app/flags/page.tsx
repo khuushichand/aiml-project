@@ -136,6 +136,7 @@ export default function FlagsPage() {
   const [flagUserId, setFlagUserId] = useState('');
   const [flagNote, setFlagNote] = useState('');
   const [flagSaving, setFlagSaving] = useState(false);
+  const [deletingFlagId, setDeletingFlagId] = useState<string | null>(null);
 
   const flagParams = useMemo(() => {
     const params: Record<string, string> = {};
@@ -298,6 +299,8 @@ export default function FlagsPage() {
   };
 
   const handleDeleteFlag = async (flag: FeatureFlagItem) => {
+    const flagId = `${flag.key}:${flag.scope}:${flag.org_id ?? ''}:${flag.user_id ?? ''}`;
+    if (deletingFlagId === flagId) return;
     const confirmed = await confirm({
       title: `Delete flag ${flag.key}?`,
       message: 'This removes the flag override for the selected scope.',
@@ -306,6 +309,7 @@ export default function FlagsPage() {
     });
     if (!confirmed) return;
     try {
+      setDeletingFlagId(flagId);
       const params: Record<string, string> = { scope: flag.scope };
       if (flag.org_id !== null && flag.org_id !== undefined) {
         params.org_id = String(flag.org_id);
@@ -319,6 +323,8 @@ export default function FlagsPage() {
     } catch (err: unknown) {
       const message = err instanceof Error && err.message ? err.message : 'Failed to delete feature flag';
       showError(message);
+    } finally {
+      setDeletingFlagId((prev) => (prev === flagId ? null : prev));
     }
   };
 
@@ -554,6 +560,8 @@ export default function FlagsPage() {
                                 flag.user_id ?? 'NULL',
                               ])
                             : `flag-index-${index}`;
+                      const flagId = `${flag.key}:${flag.scope}:${flag.org_id ?? ''}:${flag.user_id ?? ''}`;
+                      const isDeleting = deletingFlagId === flagId;
                       return (
                         <TableRow key={rowKey}>
                           <TableCell className="font-medium">{flag.key}</TableCell>
@@ -597,6 +605,7 @@ export default function FlagsPage() {
                               variant="ghost"
                               size="icon"
                               onClick={() => handleDeleteFlag(flag)}
+                              disabled={isDeleting}
                             >
                               <Trash2 className="h-4 w-4" />
                             </Button>

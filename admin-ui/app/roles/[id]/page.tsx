@@ -24,6 +24,14 @@ type RateLimits = {
   requests_per_day?: number | null;
 };
 
+type RateLimitUpsertPayload = {
+  resource: string;
+  limit_per_min: number | null;
+  burst: number | null;
+};
+
+const DEFAULT_RATE_LIMIT_RESOURCE = 'api.default';
+
 type ToolPermission = {
   id?: number;
   tool_name: string;
@@ -59,6 +67,34 @@ const PermissionItem = ({ perm, isChecked, onToggle, disabled }: PermissionItemP
   </div>
 );
 
+const normalizeRateLimitValue = (value: number | null): number | null => {
+  if (value === null) return null;
+  return value > 0 ? value : null;
+};
+
+const deriveLimitPerMinute = (value: number | null, divisor: number): number | null => {
+  if (value === null) return null;
+  const perMinute = Math.floor(value / divisor);
+  return perMinute > 0 ? perMinute : 1;
+};
+
+const buildRateLimitPayload = (
+  rpm: number | null,
+  rph: number | null,
+  rpd: number | null
+): RateLimitUpsertPayload => {
+  const limitPerMin = rpm
+    ?? deriveLimitPerMinute(rph, 60)
+    ?? deriveLimitPerMinute(rpd, 1440);
+  const burst = rph ?? rpd;
+
+  return {
+    resource: DEFAULT_RATE_LIMIT_RESOURCE,
+    limit_per_min: normalizeRateLimitValue(limitPerMin),
+    burst: normalizeRateLimitValue(burst),
+  };
+};
+
 export default function RoleDetailPage() {
   const params = useParams();
   const router = useRouter();
@@ -71,6 +107,7 @@ export default function RoleDetailPage() {
   const [roleUsers, setRoleUsers] = useState<User[]>([]);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
+  const [isDeletingRole, setIsDeletingRole] = useState(false);
   const [error, setError] = useState('');
   const [warning, setWarning] = useState('');
   const [success, setSuccess] = useState('');
@@ -278,6 +315,7 @@ export default function RoleDetailPage() {
   };
 
   const handleDeleteRole = async () => {
+    if (isDeletingRole) return;
     const confirmed = await confirm({
       title: 'Delete Role',
       message: `Delete role "${role?.name || 'this role'}"? This cannot be undone.`,
@@ -288,10 +326,13 @@ export default function RoleDetailPage() {
     if (!confirmed) return;
 
     try {
+      setIsDeletingRole(true);
       await api.deleteRole(roleId);
       router.push('/roles');
     } catch (err: unknown) {
       setError(err instanceof Error && err.message ? err.message : 'Failed to delete role');
+    } finally {
+      setIsDeletingRole(false);
     }
   };
 
@@ -303,9 +344,12 @@ export default function RoleDetailPage() {
       const rpm = parseOptionalInt(editRpm);
       const rph = parseOptionalInt(editRph);
       const rpd = parseOptionalInt(editRpd);
-      if (rpm !== null) data.requests_per_minute = rpm;
-      if (rph !== null) data.requests_per_hour = rph;
-      if (rpd !== null) data.requests_per_day = rpd;
+      const normalizedRpm = normalizeRateLimitValue(rpm);
+      const normalizedRph = normalizeRateLimitValue(rph);
+      const normalizedRpd = normalizeRateLimitValue(rpd);
+      if (normalizedRpm !== null) data.requests_per_minute = normalizedRpm;
+      if (normalizedRph !== null) data.requests_per_hour = normalizedRph;
+      if (normalizedRpd !== null) data.requests_per_day = normalizedRpd;
 
       if (Object.keys(data).length === 0) {
         setRateLimitsSaving(false);
@@ -313,7 +357,8 @@ export default function RoleDetailPage() {
         return;
       }
 
-      await api.setRoleRateLimits(roleId, data);
+      const payload = buildRateLimitPayload(normalizedRpm, normalizedRph, normalizedRpd);
+      await api.setRoleRateLimits(roleId, payload);
       setRateLimits(data);
       setSuccess('Rate limits updated');
     } catch (err: unknown) {
@@ -365,9 +410,17 @@ export default function RoleDetailPage() {
       setSuccess(`Tool permissions granted for prefix "${prefix}"`);
       setNewToolPrefix('');
       // Reload tool permissions
-      const toolPermsData = await api.getRoleToolPermissions(roleId);
-      const tools = toolPermsData as { tools?: ToolPermission[]; items?: ToolPermission[] };
-      setToolPermissions(Array.isArray(tools.tools) ? tools.tools : Array.isArray(tools.items) ? tools.items : []);
+      try {
+        const toolPermsData = await api.getRoleToolPermissions(roleId);
+        const tools = toolPermsData as { tools?: ToolPermission[]; items?: ToolPermission[] };
+        setToolPermissions(Array.isArray(tools.tools) ? tools.tools : Array.isArray(tools.items) ? tools.items : []);
+      } catch (err: unknown) {
+        const message = err instanceof Error && err.message
+          ? `Failed to reload tool permissions: ${err.message}`
+          : 'Failed to reload tool permissions';
+        setToolPermissionsError(message);
+        setError(message);
+      }
     } catch (err: unknown) {
       console.error('Failed to grant tool permissions:', err);
       setError(err instanceof Error && err.message ? err.message : 'Failed to grant tool permissions');
@@ -399,9 +452,17 @@ export default function RoleDetailPage() {
       setSuccess(`Tool permissions revoked for prefix "${prefix}"`);
       setNewToolPrefix('');
       // Reload tool permissions
-      const toolPermsData = await api.getRoleToolPermissions(roleId);
-      const tools = toolPermsData as { tools?: ToolPermission[]; items?: ToolPermission[] };
-      setToolPermissions(Array.isArray(tools.tools) ? tools.tools : Array.isArray(tools.items) ? tools.items : []);
+      try {
+        const toolPermsData = await api.getRoleToolPermissions(roleId);
+        const tools = toolPermsData as { tools?: ToolPermission[]; items?: ToolPermission[] };
+        setToolPermissions(Array.isArray(tools.tools) ? tools.tools : Array.isArray(tools.items) ? tools.items : []);
+      } catch (err: unknown) {
+        const message = err instanceof Error && err.message
+          ? `Failed to reload tool permissions: ${err.message}`
+          : 'Failed to reload tool permissions';
+        setToolPermissionsError(message);
+        setError(message);
+      }
     } catch (err: unknown) {
       console.error('Failed to revoke tool permissions:', err);
       setError(err instanceof Error && err.message ? err.message : 'Failed to revoke tool permissions');
@@ -822,6 +883,7 @@ export default function RoleDetailPage() {
                         variant="outline"
                         className="text-red-500 hover:text-red-600"
                         onClick={handleDeleteRole}
+                        disabled={isDeletingRole}
                       >
                         <Trash2 className="mr-2 h-4 w-4" />
                         Delete Role

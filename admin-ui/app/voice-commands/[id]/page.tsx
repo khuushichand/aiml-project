@@ -55,6 +55,7 @@ export default function VoiceCommandDetailPage({
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [isToggling, setIsToggling] = useState(false);
+  const [isDeleting, setIsDeleting] = useState(false);
   const [error, setError] = useState('');
   const [saveError, setSaveError] = useState('');
 
@@ -161,7 +162,7 @@ export default function VoiceCommandDetailPage({
   };
 
   const handleDelete = async () => {
-    if (!command) return;
+    if (!command || isDeleting) return;
     const confirmed = await confirm({
       title: 'Delete Voice Command',
       message: `Delete "${command.name}"? This cannot be undone.`,
@@ -172,12 +173,15 @@ export default function VoiceCommandDetailPage({
     if (!confirmed) return;
 
     try {
+      setIsDeleting(true);
       await api.deleteVoiceCommand(commandId);
       success('Command deleted', `"${command.name}" has been removed.`);
       router.push('/voice-commands');
     } catch (err: unknown) {
       const message = err instanceof Error ? err.message : 'Failed to delete command';
       showError('Delete failed', message);
+    } finally {
+      setIsDeleting(false);
     }
   };
 
@@ -256,7 +260,7 @@ export default function VoiceCommandDetailPage({
                   </>
                 )}
               </Button>
-              <Button variant="destructive" onClick={handleDelete}>
+              <Button variant="destructive" onClick={handleDelete} disabled={isDeleting}>
                 <Trash2 className="mr-2 h-4 w-4" />
                 Delete
               </Button>

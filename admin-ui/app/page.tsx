@@ -232,6 +232,7 @@ export default function DashboardPage() {
   });
   const [registrationError, setRegistrationError] = useState('');
   const [creatingRegistration, setCreatingRegistration] = useState(false);
+  const [deletingRegistrationId, setDeletingRegistrationId] = useState<string | null>(null);
   const [latestRegistrationCode, setLatestRegistrationCode] = useState<RegistrationCode | null>(null);
   const [showCreateUserDialog, setShowCreateUserDialog] = useState(false);
   const [createUserForm, setCreateUserForm] = useState({
@@ -484,6 +485,8 @@ export default function DashboardPage() {
   };
 
   const handleRegistrationDelete = async (code: RegistrationCode) => {
+    const codeId = String(code.id);
+    if (deletingRegistrationId === codeId) return;
     const confirmed = await confirm({
       title: 'Delete registration code',
       message: `Delete code ${code.code.slice(0, 6)}…? Users will no longer be able to register with it.`,
@@ -494,12 +497,15 @@ export default function DashboardPage() {
     if (!confirmed) return;
 
     try {
+      setDeletingRegistrationId(codeId);
       await api.deleteRegistrationCode(code.id);
       success('Registration code deleted', `Code ${code.code.slice(0, 6)}… removed.`);
       await loadDashboardData();
     } catch (err: unknown) {
       const message = err instanceof Error ? err.message : 'Failed to delete registration code';
       showError('Delete failed', message);
+    } finally {
+      setDeletingRegistrationId((prev) => (prev === codeId ? null : prev));
     }
   };
 
@@ -786,6 +792,7 @@ export default function DashboardPage() {
                     ) : (
                       recentRegistrationCodes.map((code) => {
                         const active = isRegistrationCodeActive(code);
+                        const isDeleting = deletingRegistrationId === String(code.id);
                         return (
                           <div key={code.id} className="flex items-start justify-between gap-2 rounded-lg border p-3">
                             <div className="min-w-0 space-y-1">
@@ -812,6 +819,7 @@ export default function DashboardPage() {
                                 label="Delete registration code"
                                 variant="ghost"
                                 onClick={() => handleRegistrationDelete(code)}
+                                disabled={isDeleting}
                               />
                             </div>
                           </div>

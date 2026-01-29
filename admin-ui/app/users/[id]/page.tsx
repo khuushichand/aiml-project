@@ -120,7 +120,7 @@ const normalizeRateLimits = (value: unknown): UserRateLimits | null => {
   }
 
   const rpm = toOptionalNumber(container.requests_per_minute ?? container.limit_per_min);
-  const rph = toOptionalNumber(container.requests_per_hour ?? container.burst);
+  const rph = toOptionalNumber(container.requests_per_hour);
   const rpd = toOptionalNumber(container.requests_per_day);
 
   if (rpm === null && rph === null && rpd === null) return null;
@@ -454,14 +454,21 @@ export default function UserDetailPage() {
     return value > 0 ? value : null;
   };
 
+  const deriveLimitPerMinute = (value: number | null, divisor: number): number | null => {
+    if (value === null) return null;
+    // Avoid inflating limits when converting larger windows to per-minute values.
+    const perMinute = Math.floor(value / divisor);
+    return perMinute > 0 ? perMinute : 1;
+  };
+
   const buildRateLimitPayload = (
     rpm: number | null,
     rph: number | null,
     rpd: number | null
   ): RateLimitUpsertPayload => {
     const limitPerMin = rpm
-      ?? (rph !== null ? Math.ceil(rph / 60) : null)
-      ?? (rpd !== null ? Math.ceil(rpd / 1440) : null);
+      ?? deriveLimitPerMinute(rph, 60)
+      ?? deriveLimitPerMinute(rpd, 1440);
     const burst = rph ?? rpd;
 
     return {

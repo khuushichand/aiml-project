@@ -1,6 +1,7 @@
 'use client';
 
 import { useCallback, useEffect, useState } from 'react';
+import { useRouter } from 'next/navigation';
 import { PermissionGuard } from '@/components/PermissionGuard';
 import { ResponsiveLayout } from '@/components/ResponsiveLayout';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
@@ -28,6 +29,68 @@ type SecurityAlertStatus = {
   }[];
 };
 
+const isRecord = (value: unknown): value is Record<string, unknown> =>
+  typeof value === 'object' && value !== null;
+
+const isSecurityHealthData = (data: unknown): data is SecurityHealthData => {
+  if (!isRecord(data)) return false;
+  const knownKeys = [
+    'risk_score',
+    'recent_security_events',
+    'failed_logins_24h',
+    'suspicious_activity',
+    'mfa_adoption_rate',
+    'active_sessions',
+    'api_keys_active',
+    'last_security_scan',
+  ];
+  if (!knownKeys.some((key) => key in data)) return false;
+  const numberKeys = [
+    'risk_score',
+    'recent_security_events',
+    'failed_logins_24h',
+    'suspicious_activity',
+    'mfa_adoption_rate',
+    'active_sessions',
+    'api_keys_active',
+  ];
+  for (const key of numberKeys) {
+    const value = data[key];
+    if (value !== undefined && typeof value !== 'number') return false;
+  }
+  if (data.last_security_scan !== undefined && typeof data.last_security_scan !== 'string') return false;
+  return true;
+};
+
+const isSecurityAlertStatus = (data: unknown): data is SecurityAlertStatus => {
+  if (!isRecord(data)) return false;
+  const knownKeys = [
+    'total_alerts',
+    'critical_alerts',
+    'warning_alerts',
+    'unacknowledged',
+    'recent_alerts',
+  ];
+  if (!knownKeys.some((key) => key in data)) return false;
+  const numberKeys = ['total_alerts', 'critical_alerts', 'warning_alerts', 'unacknowledged'];
+  for (const key of numberKeys) {
+    const value = data[key];
+    if (value !== undefined && typeof value !== 'number') return false;
+  }
+  if (data.recent_alerts !== undefined) {
+    if (!Array.isArray(data.recent_alerts)) return false;
+    const validAlerts = data.recent_alerts.every((alert) =>
+      isRecord(alert) &&
+      typeof alert.id === 'string' &&
+      typeof alert.severity === 'string' &&
+      typeof alert.message === 'string' &&
+      typeof alert.timestamp === 'string'
+    );
+    if (!validAlerts) return false;
+  }
+  return true;
+};
+
 const formatTimestamp = (dateStr?: string) => formatDateTime(dateStr, { fallback: '—' });
 
 const getRiskLevelLabel = (score: number) => {
@@ -43,6 +106,7 @@ const getRiskLevelColor = (score: number) => {
 };
 
 export default function SecurityPage() {
+  const router = useRouter();
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [securityHealth, setSecurityHealth] = useState<SecurityHealthData | null>(null);
@@ -58,8 +122,8 @@ export default function SecurityPage() {
         api.getSecurityAlertStatus(),
       ]);
 
-      if (healthResult.status === 'fulfilled') {
-        setSecurityHealth(healthResult.value as SecurityHealthData);
+      if (healthResult.status === 'fulfilled' && isSecurityHealthData(healthResult.value)) {
+        setSecurityHealth(healthResult.value);
       } else {
         // Set defaults if endpoint unavailable
         setSecurityHealth({
@@ -73,8 +137,8 @@ export default function SecurityPage() {
         });
       }
 
-      if (alertsResult.status === 'fulfilled') {
-        setAlertStatus(alertsResult.value as SecurityAlertStatus);
+      if (alertsResult.status === 'fulfilled' && isSecurityAlertStatus(alertsResult.value)) {
+        setAlertStatus(alertsResult.value);
       } else {
         setAlertStatus({
           total_alerts: 0,
@@ -145,7 +209,7 @@ export default function SecurityPage() {
               <div className="flex items-center gap-8">
                 <div>
                   <div className={`text-6xl font-bold ${riskColor}`}>
-                    {riskScore}
+                    {riskScoreClamped}
                   </div>
                   <Badge variant={riskLevel.variant} className="mt-2">
                     {riskLevel.label}
@@ -158,7 +222,7 @@ export default function SecurityPage() {
                     aria-valuenow={riskScoreClamped}
                     aria-valuemin={0}
                     aria-valuemax={100}
-                    aria-label={`Security risk score: ${riskScore}`}
+                    aria-label={`Security risk score: ${riskScoreClamped}`}
                   >
                     <div
                       className={`h-full transition-all ${
@@ -336,7 +400,7 @@ export default function SecurityPage() {
                               {alert.severity}
                             </Badge>
                           </TableCell>
-                          <TableCell className="max-w-[200px] truncate">
+                          <TableCell className="max-w-[200px] truncate" title={alert.message}>
                             {alert.message}
                           </TableCell>
                           <TableCell className="text-sm text-muted-foreground">
@@ -363,28 +427,20 @@ export default function SecurityPage() {
             </CardHeader>
             <CardContent>
               <div className="flex flex-wrap gap-4">
-                <Link href="/users">
-                  <Button variant="outline">
-                    <Users className="mr-2 h-4 w-4" />
-                    Manage Users
-                  </Button>
-                </Link>
-                <Link href="/api-keys">
-                  <Button variant="outline">
-                    <Key className="mr-2 h-4 w-4" />
-                    API Key Management
-                  </Button>
-                </Link>
-                <Link href="/audit">
-                  <Button variant="outline">
-                    Audit Logs
-                  </Button>
-                </Link>
-                <Link href="/roles">
-                  <Button variant="outline">
-                    Roles & Permissions
-                  </Button>
-                </Link>
+                <Button variant="outline" onClick={() => router.push('/users')}>
+                  <Users className="mr-2 h-4 w-4" />
+                  Manage Users
+                </Button>
+                <Button variant="outline" onClick={() => router.push('/api-keys')}>
+                  <Key className="mr-2 h-4 w-4" />
+                  API Key Management
+                </Button>
+                <Button variant="outline" onClick={() => router.push('/audit')}>
+                  Audit Logs
+                </Button>
+                <Button variant="outline" onClick={() => router.push('/roles')}>
+                  Roles & Permissions
+                </Button>
               </div>
             </CardContent>
           </Card>

@@ -271,6 +271,11 @@ export default function JobsPage() {
           Array.isArray(data.items) ? data.items :
           Array.isArray(data) ? data as JobAttachment[] : []
         );
+      } else {
+        const message = attachments.reason instanceof Error
+          ? attachments.reason.message
+          : 'Failed to load attachments';
+        showError('Attachments unavailable', message);
       }
     } finally {
       setJobDetailLoading(false);

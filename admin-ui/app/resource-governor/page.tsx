@@ -74,6 +74,7 @@ export default function ResourceGovernorPage() {
   const [showForm, setShowForm] = useState(false);
   const [editingPolicy, setEditingPolicy] = useState<ResourcePolicy | null>(null);
   const [formSaving, setFormSaving] = useState(false);
+  const [deletingPolicyId, setDeletingPolicyId] = useState<string | null>(null);
 
   // Form fields
   const [formName, setFormName] = useState('');
@@ -245,6 +246,8 @@ export default function ResourceGovernorPage() {
       showError('Cannot delete policy without ID');
       return;
     }
+    const policyId = String(policy.id);
+    if (deletingPolicyId === policyId) return;
 
     const confirmed = await confirm({
       title: `Delete policy "${policy.name}"?`,
@@ -256,12 +259,15 @@ export default function ResourceGovernorPage() {
     if (!confirmed) return;
 
     try {
-      await api.deleteResourceGovernorPolicy(String(policy.id));
+      setDeletingPolicyId(policyId);
+      await api.deleteResourceGovernorPolicy(policyId);
       success('Policy deleted');
       await loadPolicies();
     } catch (err: unknown) {
       const message = err instanceof Error && err.message ? err.message : 'Failed to delete policy';
       showError(message);
+    } finally {
+      setDeletingPolicyId((prev) => (prev === policyId ? null : prev));
     }
   };
 
@@ -378,7 +384,7 @@ export default function ResourceGovernorPage() {
                     >
                       {RESOURCE_TYPES.map((type) => (
                         <option key={type} value={type}>
-                          {type.replace('_', ' ').replace(/\b\w/g, (l) => l.toUpperCase())}
+                          {type.replaceAll('_', ' ').replace(/\b\w/g, (l) => l.toUpperCase())}
                         </option>
                       ))}
                     </Select>
@@ -520,7 +526,7 @@ export default function ResourceGovernorPage() {
                     <option value="">All Resources</option>
                     {RESOURCE_TYPES.map((type) => (
                       <option key={type} value={type}>
-                        {type.replace('_', ' ').replace(/\b\w/g, (l) => l.toUpperCase())}
+                        {type.replaceAll('_', ' ').replace(/\b\w/g, (l) => l.toUpperCase())}
                       </option>
                     ))}
                   </Select>
@@ -550,6 +556,8 @@ export default function ResourceGovernorPage() {
                   <TableBody>
                     {policies.map((policy, index) => {
                       const rowKey = policy.id ? `policy-${policy.id}` : `policy-index-${index}`;
+                      const policyId = policy.id != null ? String(policy.id) : '';
+                      const isDeleting = policyId !== '' && deletingPolicyId === policyId;
                       return (
                         <TableRow key={rowKey}>
                           <TableCell className="font-medium">
@@ -561,7 +569,7 @@ export default function ResourceGovernorPage() {
                           <TableCell>{getScopeDisplay(policy)}</TableCell>
                           <TableCell>
                             <Badge variant="outline">
-                              {policy.resource_type?.replace('_', ' ') || 'all'}
+                              {policy.resource_type?.replaceAll('_', ' ') || 'all'}
                             </Badge>
                           </TableCell>
                           <TableCell className="text-sm">{getLimitsDisplay(policy)}</TableCell>
@@ -589,6 +597,7 @@ export default function ResourceGovernorPage() {
                                 size="icon"
                                 onClick={() => handleDeletePolicy(policy)}
                                 title="Delete policy"
+                                disabled={isDeleting}
                               >
                                 <Trash2 className="h-4 w-4" />
                               </Button>

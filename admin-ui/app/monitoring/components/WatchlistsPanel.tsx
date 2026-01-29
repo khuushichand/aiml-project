@@ -24,6 +24,7 @@ type WatchlistsPanelProps = {
   setNewWatchlist: (next: WatchlistDraft) => void;
   onCreate: () => void;
   onDelete: (watchlist: Watchlist) => void;
+  deletingWatchlistId?: string | null;
 };
 
 const getStatusIcon = (status?: string) => {
@@ -55,6 +56,7 @@ export default function WatchlistsPanel({
   setNewWatchlist,
   onCreate,
   onDelete,
+  deletingWatchlistId,
 }: WatchlistsPanelProps) {
   return (
     <Card>
@@ -174,11 +176,13 @@ export default function WatchlistsPanel({
           </div>
         ) : (
           <div className="space-y-3">
-            {watchlists.map((watchlist) => (
-              <div
-                key={watchlist.id}
-                className="flex items-start justify-between p-3 rounded-lg border"
-              >
+            {watchlists.map((watchlist) => {
+              const isDeleting = deletingWatchlistId === String(watchlist.id);
+              return (
+                <div
+                  key={watchlist.id}
+                  className="flex items-start justify-between p-3 rounded-lg border"
+                >
                 <div className="flex-1 min-w-0">
                   <div className="flex items-center gap-2 mb-1">
                     {getStatusIcon(watchlist.status)}
@@ -199,11 +203,13 @@ export default function WatchlistsPanel({
                   size="sm"
                   onClick={() => onDelete(watchlist)}
                   title="Delete watchlist"
+                  disabled={isDeleting}
                 >
                   <Trash2 className="h-4 w-4 text-red-500" />
                 </Button>
               </div>
-            ))}
+              );
+            })}
           </div>
         )}
       </CardContent>

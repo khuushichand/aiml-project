@@ -355,7 +355,7 @@ Verification:
 - Search/filter works on source list
 - Multi-select checkboxes work
 
-### Stage 3: Chat Pane (Est. files: 3)
+### Stage 3: Chat Pane (Est. files: 2)
 
 Goal: RAG-powered chat using selected sources
 

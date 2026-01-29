@@ -64,6 +64,7 @@ function UsersPageContent() {
   const [showCreateUserDialog, setShowCreateUserDialog] = useState(false);
   const [createUserError, setCreateUserError] = useState('');
   const [creatingUser, setCreatingUser] = useState(false);
+  const [deletingUserId, setDeletingUserId] = useState<string | null>(null);
   const [savedViews, setSavedViews] = useState<SavedUserView[]>([]);
   const [showSaveViewDialog, setShowSaveViewDialog] = useState(false);
   const [saveViewName, setSaveViewName] = useState('');
@@ -432,6 +433,8 @@ function UsersPageContent() {
       showError('Cannot delete yourself', 'You cannot delete your own account.');
       return;
     }
+    const userId = user.id.toString();
+    if (deletingUserId === userId) return;
     const confirmed = await confirm({
       title: 'Delete User',
       message: `Delete ${user.username || user.email}? This cannot be undone.`,
@@ -442,12 +445,15 @@ function UsersPageContent() {
     if (!confirmed) return;
 
     try {
-      await api.deleteUser(user.id.toString());
+      setDeletingUserId(userId);
+      await api.deleteUser(userId);
       success('User deleted', `${user.username || user.email} removed.`);
       void loadUsers();
     } catch (err: unknown) {
       const message = err instanceof Error ? err.message : 'Failed to delete user';
       showError('Delete failed', message);
+    } finally {
+      setDeletingUserId((prev) => (prev === userId ? null : prev));
     }
   };
 
@@ -734,7 +740,9 @@ function UsersPageContent() {
                             user.storage_used_mb || 0,
                             user.storage_quota_mb || 0
                           );
+                          const userId = user.id.toString();
                           const isCurrentUser = currentUserId === user.id;
+                          const isDeleting = deletingUserId === userId;
                           return (
                             <TableRow key={user.id}>
                               <TableCell>
@@ -824,7 +832,7 @@ function UsersPageContent() {
                                     variant="ghost"
                                     size="sm"
                                     onClick={() => handleDeleteUser(user)}
-                                    disabled={isCurrentUser}
+                                    disabled={isCurrentUser || isDeleting}
                                     iconClassName="text-destructive"
                                   />
                                 </div>

@@ -55,6 +55,7 @@ export default function OrganizationDetailPage() {
   const [byokProvider, setByokProvider] = useState('');
   const [byokApiKey, setByokApiKey] = useState('');
   const [showByokApiKey, setShowByokApiKey] = useState(false);
+  const [deletingByokProvider, setDeletingByokProvider] = useState<string | null>(null);
 
   // Watchlist Settings
   const [watchlistSettings, setWatchlistSettings] = useState<WatchlistSettings | null>(null);
@@ -264,6 +265,7 @@ export default function OrganizationDetailPage() {
   };
 
   const handleDeleteByokKey = async (provider: string) => {
+    if (deletingByokProvider === provider) return;
     const confirmed = await confirm({
       title: 'Remove API Key',
       message: `Remove the API key for ${provider}?`,
@@ -275,12 +277,15 @@ export default function OrganizationDetailPage() {
 
     try {
       setError('');
+      setDeletingByokProvider(provider);
       await api.deleteOrgByokKey(orgId, provider);
       setSuccess('Provider key removed');
       void loadData();
     } catch (err: unknown) {
       console.error('Failed to delete BYOK key:', err);
       setError(err instanceof Error && err.message ? err.message : 'Failed to delete provider key');
+    } finally {
+      setDeletingByokProvider((prev) => (prev === provider ? null : prev));
     }
   };
 
@@ -776,7 +781,9 @@ export default function OrganizationDetailPage() {
                         </TableRow>
                       </TableHeader>
                       <TableBody>
-                        {byokKeys.map((key) => (
+                        {byokKeys.map((key) => {
+                          const isDeleting = deletingByokProvider === key.provider;
+                          return (
                           <TableRow key={key.provider}>
                             <TableCell>
                               <Badge variant="outline" className="capitalize">
@@ -794,12 +801,14 @@ export default function OrganizationDetailPage() {
                                 variant="ghost"
                                 size="sm"
                                 onClick={() => handleDeleteByokKey(key.provider)}
+                                disabled={isDeleting}
                               >
                                 <Trash2 className="h-4 w-4 text-red-500" />
                               </Button>
                             </TableCell>
                           </TableRow>
-                        ))}
+                          );
+                        })}
                       </TableBody>
                     </Table>
                   )}

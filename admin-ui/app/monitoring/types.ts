@@ -56,6 +56,7 @@ export interface NotificationChannel {
   type: 'email' | 'webhook' | 'slack' | 'discord';
   enabled: boolean;
   config: Record<string, string>;
+  clientId?: string;
 }
 
 export interface NotificationSettings {

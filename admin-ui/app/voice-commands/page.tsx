@@ -58,6 +58,7 @@ function VoiceCommandsPageContent() {
   const [showCreateDialog, setShowCreateDialog] = useState(false);
   const [createError, setCreateError] = useState('');
   const [creating, setCreating] = useState(false);
+  const [deletingCommandId, setDeletingCommandId] = useState<string | null>(null);
   const [showDetailedAnalytics, setShowDetailedAnalytics] = useState(false);
   const [analyticsLoading, setAnalyticsLoading] = useState(false);
 
@@ -208,6 +209,7 @@ function VoiceCommandsPageContent() {
   };
 
   const handleDeleteCommand = async (command: VoiceCommand) => {
+    if (deletingCommandId === command.id) return;
     const confirmed = await confirm({
       title: 'Delete Voice Command',
       message: `Delete "${command.name}"? This cannot be undone.`,
@@ -218,12 +220,15 @@ function VoiceCommandsPageContent() {
     if (!confirmed) return;
 
     try {
+      setDeletingCommandId(command.id);
       await api.deleteVoiceCommand(command.id);
       success('Command deleted', `"${command.name}" has been removed.`);
       void loadCommands();
     } catch (err: unknown) {
       const message = err instanceof Error ? err.message : 'Failed to delete command';
       showError('Delete failed', message);
+    } finally {
+      setDeletingCommandId((prev) => (prev === command.id ? null : prev));
     }
   };
 
@@ -469,7 +474,9 @@ function VoiceCommandsPageContent() {
                       </TableRow>
                     </TableHeader>
                     <TableBody>
-                      {paginatedCommands.map((cmd) => (
+                      {paginatedCommands.map((cmd) => {
+                        const isDeleting = deletingCommandId === cmd.id;
+                        return (
                         <TableRow key={cmd.id}>
                           <TableCell>
                             <div className="font-medium">{cmd.name}</div>
@@ -534,12 +541,14 @@ function VoiceCommandsPageContent() {
                                 variant="ghost"
                                 size="sm"
                                 onClick={() => handleDeleteCommand(cmd)}
+                                disabled={isDeleting}
                                 iconClassName="text-destructive"
                               />
                             </div>
                           </TableCell>
                         </TableRow>
-                      ))}
+                        );
+                      })}
                     </TableBody>
                   </Table>
 

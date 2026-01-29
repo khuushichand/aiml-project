@@ -511,7 +511,7 @@ export const api = {
   // ============================================
   // Rate Limiting
   // ============================================
-  setRoleRateLimits: (roleId: string, data: { requests_per_minute?: number; requests_per_hour?: number; requests_per_day?: number }) =>
+  setRoleRateLimits: (roleId: string, data: { resource: string; limit_per_min?: number | null; burst?: number | null }) =>
     requestJson(`/admin/roles/${encodeURIComponent(roleId)}/rate-limits`, {
       method: 'POST',
       body: JSON.stringify(data),

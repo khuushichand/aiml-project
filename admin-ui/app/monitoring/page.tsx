@@ -105,6 +105,7 @@ export default function MonitoringPage() {
   const [error, setError] = useState('');
   const [success, setSuccess] = useState('');
   const [lastUpdated, setLastUpdated] = useState<Date | null>(null);
+  const [deletingWatchlistId, setDeletingWatchlistId] = useState<string | null>(null);
   const successTimerRef = useRef<number | null>(null);
 
   // Create watchlist dialog
@@ -365,6 +366,8 @@ export default function MonitoringPage() {
   };
 
   const handleDeleteWatchlist = async (watchlist: Watchlist) => {
+    const watchlistId = String(watchlist.id);
+    if (deletingWatchlistId === watchlistId) return;
     const confirmed = await confirm({
       title: 'Delete Watchlist',
       message: `Delete watchlist "${watchlist.name}"?`,
@@ -376,12 +379,15 @@ export default function MonitoringPage() {
 
     try {
       setError('');
+      setDeletingWatchlistId(watchlistId);
       await api.deleteWatchlist(watchlist.id);
       setSuccess('Watchlist deleted');
       loadData();
     } catch (err: unknown) {
       console.error('Failed to delete watchlist:', err);
       setError(err instanceof Error && err.message ? err.message : 'Failed to delete watchlist');
+    } finally {
+      setDeletingWatchlistId((prev) => (prev === watchlistId ? null : prev));
     }
   };
 
@@ -523,6 +529,7 @@ export default function MonitoringPage() {
                 setNewWatchlist={setNewWatchlist}
                 onCreate={handleCreateWatchlist}
                 onDelete={handleDeleteWatchlist}
+                deletingWatchlistId={deletingWatchlistId}
               />
             </div>
 
