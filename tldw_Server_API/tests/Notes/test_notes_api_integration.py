@@ -197,6 +197,40 @@ def test_create_note(client: TestClient):
     mock_chacha_db_instance.get_note_by_id.assert_called_once_with(note_id=note_id_val)
 
 
+def test_create_note_keyword_conflict_refetch(client: TestClient):
+    note_id_val = str(uuid.uuid4())
+    kw_id = 7
+    expected_db_client_id = "test_api_client_for_user_db"
+    mock_chacha_db_instance.add_note.return_value = note_id_val
+    mock_chacha_db_instance.get_note_by_id.return_value = create_timestamped_data(
+        {"id": note_id_val, "title": "Note", "content": "Body"},
+        expected_db_client_id,
+    )
+    mock_chacha_db_instance.get_keywords_for_note.return_value = []
+    mock_chacha_db_instance.get_keyword_by_text.side_effect = [
+        None,
+        {"id": kw_id, "keyword": "alpha"},
+    ]
+    mock_chacha_db_instance.add_keyword.side_effect = Actual_ConflictError(
+        "Keyword already exists.",
+        entity="keywords",
+        entity_id="alpha",
+    )
+
+    response = client.post(
+        "/api/v1/notes/",
+        json={"title": "Note", "content": "Body", "keywords": ["alpha"]},
+    )
+
+    assert response.status_code == status.HTTP_201_CREATED, response.text
+    mock_chacha_db_instance.add_keyword.assert_called_once_with("alpha")
+    assert mock_chacha_db_instance.get_keyword_by_text.call_count == 2
+    mock_chacha_db_instance.link_note_to_keyword.assert_called_once_with(
+        note_id=note_id_val,
+        keyword_id=kw_id,
+    )
+
+
 def test_create_note_rejects_overlong_keyword(client: TestClient):
     long_kw = "k" * 101
     response = client.post(
@@ -344,6 +378,89 @@ def test_update_note(client: TestClient):
     mock_chacha_db_instance.update_note.assert_called_once_with(
         note_id=note_id_val, update_data=update_payload, expected_version=expected_version_header
     )
+
+
+def test_update_note_rejects_mismatched_conversation_and_existing_message(client: TestClient):
+    note_id_val = str(uuid.uuid4())
+    expected_version_header = 1
+    expected_db_client_id = "test_api_client_for_user_db"
+    # Existing note has message_id tied to a different conversation
+    mock_chacha_db_instance.get_note_by_id.return_value = create_timestamped_data(
+        {
+            "id": note_id_val,
+            "title": "Existing",
+            "content": "Body",
+            "conversation_id": "conv-1",
+            "message_id": "msg-1",
+            "version": expected_version_header,
+        },
+        expected_db_client_id,
+    )
+    mock_chacha_db_instance.get_conversation_by_id.return_value = {"id": "conv-2"}
+    mock_chacha_db_instance.get_message_conversation_id.return_value = "conv-1"
+
+    response = client.put(
+        f"/api/v1/notes/{note_id_val}",
+        json={"conversation_id": "conv-2"},
+        headers={"expected-version": str(expected_version_header)},
+    )
+    assert response.status_code == status.HTTP_404_NOT_FOUND
+    assert response.json()["detail"] == "Message not found in conversation"
+    mock_chacha_db_instance.update_note.assert_not_called()
+
+
+def test_patch_note_rejects_mismatched_message_and_existing_conversation(client: TestClient):
+    note_id_val = str(uuid.uuid4())
+    expected_db_client_id = "test_api_client_for_user_db"
+    mock_chacha_db_instance.get_note_by_id.return_value = create_timestamped_data(
+        {
+            "id": note_id_val,
+            "title": "Existing",
+            "content": "Body",
+            "conversation_id": "conv-1",
+            "message_id": "msg-1",
+            "version": 1,
+        },
+        expected_db_client_id,
+    )
+    mock_chacha_db_instance.get_conversation_by_id.return_value = {"id": "conv-1"}
+    mock_chacha_db_instance.get_message_conversation_id.return_value = "conv-2"
+
+    response = client.patch(
+        f"/api/v1/notes/{note_id_val}",
+        json={"message_id": "msg-2"},
+    )
+    assert response.status_code == status.HTTP_404_NOT_FOUND
+    assert response.json()["detail"] == "Message not found in conversation"
+    mock_chacha_db_instance.update_note.assert_not_called()
+
+
+def test_create_note_auto_title_clamped_to_255(client: TestClient, monkeypatch):
+    note_id_val = str(uuid.uuid4())
+    expected_db_client_id = "test_api_client_for_user_db"
+    captured: Dict[str, Any] = {}
+
+    def _fake_generate_note_title(content: str, options=None):
+        captured["max_len"] = getattr(options, "max_len", None)
+        max_len = captured["max_len"] or 0
+        return "x" * max_len
+
+    monkeypatch.setattr(notes_router_module, "generate_note_title", _fake_generate_note_title)
+
+    mock_chacha_db_instance.add_note.return_value = note_id_val
+    mock_chacha_db_instance.get_note_by_id.return_value = create_timestamped_data(
+        {"id": note_id_val, "title": "x" * 255, "content": "Note content"},
+        expected_db_client_id,
+    )
+
+    response = client.post(
+        "/api/v1/notes/",
+        json={"content": "Note content", "auto_title": True, "title_max_len": 500},
+    )
+    assert response.status_code == status.HTTP_201_CREATED
+    assert captured.get("max_len") == 255
+    called_title = mock_chacha_db_instance.add_note.call_args.kwargs.get("title")
+    assert called_title is not None and len(called_title) == 255
 
 
 def test_update_note_conflict(client: TestClient):

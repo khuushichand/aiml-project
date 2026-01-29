@@ -1,7 +1,6 @@
 from __future__ import annotations
 
-from datetime import datetime
-from typing import Any, Dict, List, Optional, Literal
+from typing import Any, Dict, List, Literal, Optional
 
 from pydantic import BaseModel, HttpUrl, validator
 
@@ -68,6 +67,221 @@ class ReadingImportResponse(BaseModel):
     updated: int
     skipped: int
     errors: List[str] = Field(default_factory=list)
+
+ReadingImportJobState = Literal[
+    "queued",
+    "processing",
+    "completed",
+    "failed",
+    "cancelled",
+    "quarantined",
+]
+
+
+class ReadingImportJobResponse(BaseModel):
+    """Response payload for a newly created reading import job."""
+
+    job_id: int
+    job_uuid: Optional[str] = None
+    status: ReadingImportJobState
+
+
+class ReadingImportJobStatus(BaseModel):
+    """Status payload for tracking a reading import job."""
+
+    job_id: int
+    job_uuid: Optional[str] = None
+    status: ReadingImportJobState
+    created_at: Optional[str] = None
+    started_at: Optional[str] = None
+    completed_at: Optional[str] = None
+    progress_percent: Optional[float] = None
+    progress_message: Optional[str] = None
+    error_message: Optional[str] = None
+    result: Optional[ReadingImportResponse] = None
+
+
+class ReadingImportJobsListResponse(BaseModel):
+    jobs: List[ReadingImportJobStatus]
+    total: int
+    limit: Optional[int] = None
+    offset: Optional[int] = None
+
+
+class ReadingDigestSuggestionsConfig(BaseModel):
+    enabled: bool = False
+    limit: Optional[int] = Field(default=None, ge=1, le=200)
+    status: Optional[List[Literal["saved", "reading", "read", "archived"]]] = None
+    exclude_tags: Optional[List[str]] = None
+    max_age_days: Optional[int] = Field(default=None, ge=1, le=3650)
+    include_read: bool = False
+    include_archived: bool = False
+
+    @validator("status", pre=True)
+    def _coerce_suggestions_status(cls, value: Any) -> Any:
+        if isinstance(value, str):
+            return [value]
+        return value
+
+    @validator("exclude_tags", pre=True)
+    def _coerce_exclude_tags(cls, value: Any) -> Any:
+        if isinstance(value, str):
+            return [value]
+        return value
+
+    @validator("exclude_tags", pre=True, each_item=True)
+    def _strip_exclude_tags(cls, value: str) -> str:
+        return value.strip()
+
+
+class ReadingDigestScheduleFilters(BaseModel):
+    status: Optional[List[Literal["saved", "reading", "read", "archived"]]] = None
+    tags: Optional[List[str]] = None
+    favorite: Optional[bool] = None
+    domain: Optional[str] = None
+    q: Optional[str] = None
+    date_from: Optional[str] = None
+    date_to: Optional[str] = None
+    sort: Optional[str] = Field(
+        default=None,
+        description="updated_desc|updated_asc|created_desc|created_asc|title_asc|title_desc|relevance",
+    )
+    limit: Optional[int] = Field(default=None, ge=1, le=500)
+    suggestions: Optional[ReadingDigestSuggestionsConfig] = None
+
+    @validator("status", pre=True)
+    def _coerce_status_list(cls, value: Any) -> Any:
+        if isinstance(value, str):
+            return [value]
+        return value
+
+    @validator("tags", pre=True)
+    def _coerce_tags_list(cls, value: Any) -> Any:
+        if isinstance(value, str):
+            return [value]
+        return value
+
+    @validator("tags", pre=True, each_item=True)
+    def _strip_digest_tags(cls, value: str) -> str:
+        return value.strip()
+
+
+class ReadingDigestScheduleCreateRequest(BaseModel):
+    name: Optional[str] = None
+    cron: str = Field(..., description="Cron expression, e.g., '0 8 * * *'")
+    timezone: Optional[str] = Field(
+        None,
+        description="IANA timezone name (e.g., 'UTC', 'America/New_York')",
+    )
+    enabled: bool = True
+    require_online: bool = False
+    format: Literal["md", "html"] = Field(default="md")
+    template_id: Optional[int] = None
+    template_name: Optional[str] = None
+    retention_days: Optional[int] = Field(
+        default=None,
+        ge=0,
+        le=3650,
+        deprecated=True,
+        description="Deprecated. Use retention.default_seconds instead.",
+    )
+    filters: Optional[ReadingDigestScheduleFilters] = None
+
+
+class ReadingDigestScheduleUpdateRequest(BaseModel):
+    name: Optional[str] = None
+    cron: Optional[str] = None
+    timezone: Optional[str] = None
+    enabled: Optional[bool] = None
+    require_online: Optional[bool] = None
+    format: Optional[Literal["md", "html"]] = None
+    template_id: Optional[int] = None
+    template_name: Optional[str] = None
+    retention_days: Optional[int] = Field(
+        default=None,
+        ge=0,
+        le=3650,
+        deprecated=True,
+        description="Deprecated. Use retention.default_seconds instead.",
+    )
+    filters: Optional[ReadingDigestScheduleFilters] = None
+
+
+class ReadingDigestScheduleResponse(BaseModel):
+    id: str
+    name: Optional[str] = None
+    cron: str
+    timezone: Optional[str] = None
+    enabled: bool
+    require_online: bool
+    format: Literal["md", "html"]
+    template_id: Optional[int] = None
+    template_name: Optional[str] = None
+    retention_days: Optional[int] = Field(
+        default=None,
+        deprecated=True,
+        description="Deprecated. Use retention.default_seconds instead.",
+    )
+    filters: Optional[ReadingDigestScheduleFilters] = None
+    last_run_at: Optional[str] = None
+    next_run_at: Optional[str] = None
+    last_status: Optional[str] = None
+    created_at: Optional[str] = None
+    updated_at: Optional[str] = None
+
+
+class ReadingDigestOutput(BaseModel):
+    output_id: int
+    title: str
+    format: Literal["md", "html"]
+    created_at: Optional[str] = None
+    download_url: str
+    schedule_id: Optional[str] = None
+    schedule_name: Optional[str] = None
+    item_count: Optional[int] = None
+    metadata: Optional[Dict[str, Any]] = None
+
+
+class ReadingDigestOutputsListResponse(BaseModel):
+    items: List[ReadingDigestOutput]
+    total: int
+    limit: Optional[int] = None
+    offset: Optional[int] = None
+
+
+class ReadingArchiveCreateRequest(BaseModel):
+    format: Literal["html", "md"] = Field(
+        default="html",
+        description="Archive format (html or md).",
+        example="html",
+    )
+    source: Literal["auto", "clean_html", "text"] = Field(
+        default="auto",
+        description="Source content preference (auto uses clean_html then text).",
+        example="auto",
+    )
+    title: Optional[str] = Field(default=None, max_length=200, description="Optional archive title override")
+    retention_days: Optional[int] = Field(
+        default=None,
+        ge=0,
+        le=3650,
+        description="Retention window in days (0 to disable retention). Ignored if retention_until is provided.",
+    )
+    retention_until: Optional[str] = Field(
+        default=None,
+        description="ISO timestamp when this archive can be purged. Takes precedence over retention_days when set.",
+        example="2025-12-31T00:00:00Z",
+    )
+
+
+class ReadingArchiveResponse(BaseModel):
+    output_id: int
+    title: str
+    format: Literal["html", "md"]
+    storage_path: str
+    created_at: Optional[str] = None
+    retention_until: Optional[str] = None
+    download_url: str
 
 
 class ReadingDeleteResponse(BaseModel):

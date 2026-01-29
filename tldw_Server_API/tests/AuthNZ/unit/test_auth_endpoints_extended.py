@@ -58,10 +58,23 @@ async def test_reset_password_weak_and_success(monkeypatch):
 
     monkeypatch.setattr(_auth, "is_postgres_backend", _fake_is_pg)
 
+    scope = {
+        "type": "http",
+        "method": "POST",
+        "path": "/api/v1/auth/reset-password",
+        "headers": [],
+        "client": ("203.0.113.10", 1234),
+        "scheme": "http",
+        "query_string": b"",
+        "server": ("testserver", 80),
+    }
+    request = Request(scope)
+
     # Weak password
     with pytest.raises(Exception):
         await _auth.reset_password(
             data=_auth.ResetPasswordRequest(token="tok", new_password="weak"),
+            request=request,
             db=_StubDB(),
             jwt_service=_StubJWT(),
             password_service=_StubPwd(weak=True),
@@ -70,6 +83,7 @@ async def test_reset_password_weak_and_success(monkeypatch):
     # Success path
     out = await _auth.reset_password(
         data=_auth.ResetPasswordRequest(token="tok", new_password="Strong@12345"),
+        request=request,
         db=_StubDB(),
         jwt_service=_StubJWT(),
         password_service=_StubPwd(weak=False),
@@ -173,9 +187,10 @@ async def test_logout_uses_utc_expiry(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_login_returns_mfa_challenge_when_enabled(monkeypatch):
-    reset_settings()
     monkeypatch.setenv("AUTH_MODE", "multi_user")
     monkeypatch.setenv("MFA_LOGIN_TTL_SECONDS", "300")
+    monkeypatch.setenv("REDIS_URL", "redis://localhost:6379/0")
+    reset_settings()
 
     import tldw_Server_API.app.api.v1.endpoints.auth as auth
 
@@ -203,6 +218,7 @@ async def test_login_returns_mfa_challenge_when_enabled(monkeypatch):
     class _StubSessionManager:
         def __init__(self):
             self.cached = {}
+            self.redis_client = object()
 
         async def create_session(self, **kwargs):
             return {"session_id": 777}
@@ -267,8 +283,9 @@ async def test_login_returns_mfa_challenge_when_enabled(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_mfa_login_completes_tokens(monkeypatch):
-    reset_settings()
     monkeypatch.setenv("AUTH_MODE", "multi_user")
+    monkeypatch.setenv("REDIS_URL", "redis://localhost:6379/0")
+    reset_settings()
 
     import tldw_Server_API.app.api.v1.endpoints.auth as auth
 
@@ -302,6 +319,7 @@ async def test_mfa_login_completes_tokens(monkeypatch):
             self.ephemeral = {}
             self.updated = {}
             self.deleted = []
+            self.redis_client = object()
 
         async def get_ephemeral_value(self, key: str):
             return self.ephemeral.get(key)

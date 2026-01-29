@@ -36,3 +36,28 @@ async def test_async_local_provider_loads_once(monkeypatch):
     )
 
     assert load_count["count"] == 1
+
+
+@pytest.mark.asyncio
+async def test_async_local_provider_eviction_calls_cpu_cleanup():
+    class DummyModel:
+        def __init__(self):
+            self.cpu_called = False
+
+        def cpu(self):
+            self.cpu_called = True
+
+    provider = AsyncLocalProvider(max_models_in_memory=1, model_ttl_seconds=0)
+    model_old = DummyModel()
+    model_new = DummyModel()
+
+    # Seed two models with different last-used timestamps
+    provider.models = {"old": model_old, "new": model_new}
+    provider.model_last_used = {"old": 1.0, "new": 2.0}
+    provider.model_in_use = {"old": 0, "new": 0}
+
+    await provider._evict_if_needed()
+
+    assert "old" not in provider.models
+    assert "new" in provider.models
+    assert model_old.cpu_called is True

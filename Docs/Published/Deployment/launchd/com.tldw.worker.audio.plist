@@ -28,6 +28,7 @@
   <string>tldw</string>
   <key>GroupName</key>
   <string>tldw</string>
+  <!-- Ensure /opt/tldw_server/logs/launchd exists and is writable by tldw:tldw. -->
   <key>StandardOutPath</key>
   <string>/opt/tldw_server/logs/launchd/audio.log</string>
   <key>StandardErrorPath</key>

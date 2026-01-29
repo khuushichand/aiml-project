@@ -14,10 +14,42 @@ and this project adheres to Some kind of Versioning
 ### Removed
 
 ### Fixed
+- Workspace selector remove handler now uses the imported MouseEvent type instead of the React namespace.
 
 
 
-## [0.1.16] 2026-01-19
+## [0.1.18] 2026-01-29
+
+### Added
+- Slides Module
+- TTS:
+  - Added NeuTTS, PocketTTS (ONNX), EchoTTS, Qwen3-TTS, LuxTTS, VibeVoice-ASR docs; updated streaming/format rules, default voice behavior, and setup guides.
+- Moved the tldw_Browser_Assistant project and the tldw-frontent folder into the '/apps/' folder, as moving forward they will share the same base.
+  - As a result, new frontend!
+- New monorepo development guide, shared UI package scaffold, ambient typings, and testing guide for extension/web UI.
+- Image creation API via files 
+
+### Changed
+- Workflows Module
+  - New "llm" step type (distinct from "prompt")
+  - MCP tool allowlist and scope validation
+  - Stricter approve/reject permission checks
+  - Configurable LLM retry cap
+- Admin-UI Updates
+- New frontend, tldw-frontend
+- New Storage API guide, Voice Assistant API (REST & WebSocket), Watchlists API docs, Anthropic Messages API docs, and expanded /llm/models metadata (image backends & filters).
+- Wide-ranging documentation additions and edits (OCR backends, image generation, storage, benchmarks, guides, link dumps, examples).
+- Kanban: vector search integration, activity logging with filtering, rate limiting on endpoints
+- Reading Collections: async import jobs workflow with job monitoring endpoints
+- Workflows: LLM step type with MCP tool allowlist and scope validation
+
+### Removed
+- Legacy webui
+
+### Fixed
+
+
+## [0.1.17] 2026-01-19
 
 ### Added
 - File Artifacts System: Comprehensive implementation of file artifact management with support for multiple export formats (iCalendar, Markdown tables, HTML tables, XLSX, data tables) including export lifecycle management, garbage collection, and validation
@@ -102,7 +134,7 @@ and this project adheres to Some kind of Versioning
 ## [0.1.13] - 2025-12-29
 
 ### Added
-- tldw-frontend
+- Next.js WebUI (apps/tldw-frontend)
 - admin-ui - Full Admin UI: dashboard, users/orgs/teams, roles & permissions, API keys, jobs, usage analytics, budgets, BYOK, flags, incidents, logs, monitoring panels.
 - Content Review: draft editor, sidebar, reattach-source flow, commit/review workflows.
 - BYOK improvements: scoped resolution, validation, dashboard and key management.

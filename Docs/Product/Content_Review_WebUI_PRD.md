@@ -15,7 +15,7 @@
 
 ### Problem Statement
 
-The current WebUI ingest flow at `tldw-frontend/pages/media.tsx` sends content to the process-only endpoints by default. This means ingested content does not persist, which is a severe bug for the WebUI. Users also have no pre-storage review step to fix transcription or OCR errors before content is permanently stored.
+The current WebUI ingest flow at `apps/tldw-frontend/pages/media.tsx` sends content to the process-only endpoints by default. This means ingested content does not persist, which is a severe bug for the WebUI. Users also have no pre-storage review step to fix transcription or OCR errors before content is permanently stored.
 
 ### Proposed Solution
 
@@ -66,7 +66,7 @@ No telemetry or analytics. Success is validated via user feedback and internal Q
 
 ### FR-1: Review Mode Toggle
 
-- Location: `tldw-frontend/pages/media.tsx`.
+- Location: `apps/tldw-frontend/pages/media.tsx`.
 - Two toggles:
   - `Store in Media Library` (default on).
   - `Review before storing` (visible only when store is on; default off).
@@ -98,7 +98,7 @@ No telemetry or analytics. Success is validated via user feedback and internal Q
 
 ### FR-3: Content Review Page
 
-- Route: `tldw-frontend/pages/content-review.tsx`.
+- Route: `apps/tldw-frontend/pages/content-review.tsx`.
 - Layout: sidebar list + editor panel.
 - Editor features:
   - Markdown plain-text editor (no WYSIWYG).
@@ -329,8 +329,8 @@ Modal error states:
 ### Phase 1: Storage Layer (Dexie)
 
 Files:
-- Add `tldw-frontend/lib/drafts.ts`
-- Add `tldw-frontend/types/content-review.ts`
+- Add `apps/tldw-frontend/lib/drafts.ts`
+- Add `apps/tldw-frontend/types/content-review.ts`
 - Add `dexie` dependency
 
 Deliverables:
@@ -341,7 +341,7 @@ Deliverables:
 ### Phase 2: Ingest Flow Fix + Review Toggle
 
 File:
-- Modify `tldw-frontend/pages/media.tsx`
+- Modify `apps/tldw-frontend/pages/media.tsx`
 
 Deliverables:
 - Store by default using `/media/add`
@@ -351,7 +351,7 @@ Deliverables:
 ### Phase 3: Content Review Page
 
 File:
-- Add `tldw-frontend/pages/content-review.tsx`
+- Add `apps/tldw-frontend/pages/content-review.tsx`
 
 Deliverables:
 - Sidebar list + editor
@@ -361,7 +361,7 @@ Deliverables:
 ### Phase 4: Config Settings
 
 File:
-- Modify `tldw-frontend/pages/config.tsx`
+- Modify `apps/tldw-frontend/pages/config.tsx`
 
 Deliverables:
 - Content Review settings section
@@ -449,7 +449,7 @@ Deliverables:
 ### Internal
 
 - Media processing endpoints
-- `apiClient` in `tldw-frontend/lib/api.ts`
+- `apiClient` in `apps/tldw-frontend/lib/api.ts`
 
 ### External
 
@@ -513,9 +513,9 @@ Notes:
 
 | File | Action | Notes |
 |------|--------|-------|
-| tldw-frontend/package.json | Modify | Add dexie dependency |
-| tldw-frontend/types/content-review.ts | Add | Draft types |
-| tldw-frontend/lib/drafts.ts | Add | Dexie CRUD + cleanup |
-| tldw-frontend/pages/media.tsx | Modify | Store by default + review toggle |
-| tldw-frontend/pages/content-review.tsx | Add | Review UI |
-| tldw-frontend/pages/config.tsx | Modify | Content Review settings |
+| apps/tldw-frontend/package.json | Modify | Add dexie dependency |
+| apps/tldw-frontend/types/content-review.ts | Add | Draft types |
+| apps/tldw-frontend/lib/drafts.ts | Add | Dexie CRUD + cleanup |
+| apps/tldw-frontend/pages/media.tsx | Modify | Store by default + review toggle |
+| apps/tldw-frontend/pages/content-review.tsx | Add | Review UI |
+| apps/tldw-frontend/pages/config.tsx | Modify | Content Review settings |

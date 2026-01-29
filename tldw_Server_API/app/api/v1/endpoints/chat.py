@@ -80,9 +80,12 @@ from tldw_Server_API.app.api.v1.API_Deps.ChaCha_Notes_DB_Deps import (
 )
 from tldw_Server_API.app.api.v1.schemas.chat_request_schemas import (
     ChatCompletionRequest,
+    ChatCompletionSystemMessageParam,
     DEFAULT_LLM_PROVIDER,
     API_KEYS as SCHEMAS_API_KEYS,
     get_api_keys,
+    RagContext,
+    RagContextDocument,
 )
 from tldw_Server_API.app.core.DB_Management.ChaChaNotes_DB import (
     CharactersRAGDB,
@@ -159,6 +162,7 @@ from tldw_Server_API.app.api.v1.API_Deps.auth_deps import (
     get_auth_principal,
 )
 from tldw_Server_API.app.core.AuthNZ.llm_budget_guard import enforce_llm_budget
+from pydantic import BaseModel, Field, ConfigDict
 from tldw_Server_API.app.core.AuthNZ.rbac import user_has_permission
 from tldw_Server_API.app.core.AuthNZ.permissions import SYSTEM_LOGS
 from tldw_Server_API.app.core.AuthNZ.byok_runtime import (
@@ -243,7 +247,7 @@ def _cfg_float(key: str, fallback: float) -> float:
     try:
         raw = _chat_config.get(key)
         return float(raw) if raw is not None else fallback
-    except Exception:
+    except (TypeError, ValueError):
         return fallback
 
 RECENCY_HALF_LIFE_DAYS: float = _cfg_float("half_life_days", 14.0)
@@ -285,7 +289,8 @@ def _resolve_base64_image_limit_enforcement() -> bool:
         return _to_bool(env_val)
     cfg_val = _chat_config.get("enforce_base64_image_limit") if _chat_config else None
     if cfg_val is None:
-        return False
+        # Default to enforcing base64 image limits unless explicitly disabled.
+        return True
     return _to_bool(cfg_val)
 
 # Optional flag: allow auto-switch from 'local-llm' to 'openai' when an
@@ -328,6 +333,8 @@ _recent_calls_by_user: dict[str, deque] = defaultdict(lambda: deque(maxlen=16))
 _active_request_counts: dict[str, int] = defaultdict(int)
 _active_request_locks: "WeakKeyDictionary[asyncio.AbstractEventLoop, asyncio.Lock]" = WeakKeyDictionary()
 _active_request_guard = threading.Lock()
+_system_message_locks: "WeakKeyDictionary[asyncio.AbstractEventLoop, dict[str, asyncio.Lock]]" = WeakKeyDictionary()
+_system_message_guard = threading.Lock()
 
 
 def _get_active_request_lock() -> asyncio.Lock:
@@ -341,6 +348,21 @@ def _get_active_request_lock() -> asyncio.Lock:
         if lock is None:
             lock = asyncio.Lock()
             _active_request_locks[loop] = lock
+    return lock
+
+
+def _get_system_message_lock(conversation_id: str) -> asyncio.Lock:
+    """Return an asyncio.Lock scoped to the current loop + conversation_id."""
+    loop = asyncio.get_running_loop()
+    with _system_message_guard:
+        per_loop = _system_message_locks.get(loop)
+        if per_loop is None:
+            per_loop = {}
+            _system_message_locks[loop] = per_loop
+        lock = per_loop.get(conversation_id)
+        if lock is None:
+            lock = asyncio.Lock()
+            per_loop[conversation_id] = lock
     return lock
 
 
@@ -690,6 +712,39 @@ async def _process_content_for_db_sync(
         processed_content_iterable = [{"type": "text", "text": f"<unsupported content type: {type(content_iterable).__name__}>"}]
 
     for part in processed_content_iterable:
+        if isinstance(part, str):
+            text_parts_sync.append(part)
+            continue
+        if not isinstance(part, dict):
+            if hasattr(part, "model_dump"):
+                try:
+                    part = part.model_dump(exclude_none=True)
+                except Exception as e:
+                    logger.debug(
+                        "model_dump failed for part type=%s, falling back to string: %s",
+                        type(part).__name__,
+                        e,
+                    )
+                    part = {"type": "text", "text": str(part)}
+            else:
+                p_type_attr = getattr(part, "type", None)
+                if p_type_attr == "text":
+                    text_parts_sync.append(str(getattr(part, "text", "")))
+                    continue
+                if p_type_attr == "image_url":
+                    image_url_obj = getattr(part, "image_url", None)
+                    if hasattr(image_url_obj, "model_dump"):
+                        try:
+                            image_url_obj = image_url_obj.model_dump(exclude_none=True)
+                        except Exception as e:
+                            logger.debug("model_dump failed for image_url_obj, setting to None: %s", e)
+                            image_url_obj = None
+                    if not isinstance(image_url_obj, dict):
+                        image_url_obj = {"url": getattr(image_url_obj, "url", "") if image_url_obj is not None else ""}
+                    part = {"type": "image_url", "image_url": image_url_obj}
+                else:
+                    text_parts_sync.append(str(part))
+                    continue
         p_type = part.get("type")
         if p_type == "text":
             snippet = str(part.get("text", ""))[:MAX_TEXT_LENGTH + 1] # Ensure text is string
@@ -703,6 +758,14 @@ async def _process_content_for_db_sync(
             text_parts_sync.append(snippet)
         elif p_type == "image_url":
             url_dict = part.get("image_url", {})
+            if not isinstance(url_dict, dict):
+                if hasattr(url_dict, "model_dump"):
+                    try:
+                        url_dict = url_dict.model_dump(exclude_none=True)
+                    except Exception:
+                        url_dict = {}
+                if not isinstance(url_dict, dict):
+                    url_dict = {"url": getattr(url_dict, "url", "")}
             url_str = url_dict.get("url", "")
 
             if url_str.startswith("data:"):
@@ -901,6 +964,13 @@ async def _save_message_turn_to_db(
             if serialized_extra is None:
                 serialized_extra = {}
             serialized_extra["tool_name"] = _jsonify_metadata_payload(tool_name)
+    # Preserve sender role/name separately to avoid role misclassification when sender is custom.
+    sender_meta: Dict[str, Any] = {}
+    if role in ("user", "assistant", "system", "tool"):
+        sender_meta["sender_role"] = _jsonify_metadata_payload(role)
+    sender_name_raw = message_obj.get("name")
+    if role in ("user", "assistant", "system") and sender_name_raw:
+        sender_meta["sender_name"] = _jsonify_metadata_payload(sender_name_raw)
     placeholder_reason: Optional[str] = None
 
     if not text_parts and not images:
@@ -928,6 +998,11 @@ async def _save_message_turn_to_db(
             serialized_extra = {}
         serialized_extra["content_placeholder_reason"] = placeholder_reason
 
+    if sender_meta:
+        if serialized_extra is None:
+            serialized_extra = {}
+        serialized_extra.update(sender_meta)
+
     if serialized_extra is not None and not serialized_extra:
         serialized_extra = None
 
@@ -947,7 +1022,8 @@ async def _save_message_turn_to_db(
     if not text_parts and normalized_images:
         text_parts = [f"<Image attachment x{len(normalized_images)}>"]
 
-    sender = message_obj.get("name") or role
+    # Store sender role in DB; preserve display name in metadata.
+    sender = role or "assistant"
     if role == "tool":
         sender = "tool"
     db_payload = {
@@ -1046,46 +1122,47 @@ async def _persist_system_message_if_needed(
 ) -> Optional[str]:
     if not system_message or not system_message.strip():
         return None
-    try:
-        # Best-effort guard; concurrent requests may still race and insert duplicates.
-        has_system = await loop.run_in_executor(
-            None,
-            db.has_system_message_for_conversation,
-            conversation_id,
-        )
-    except (CharactersRAGDBError, RuntimeError) as exc:
-        logger.debug(
-            "System message presence check failed for conv=%s: %s",
-            conversation_id,
-            exc,
-        )
-        has_system = False
-    if has_system:
-        return None
-    try:
-        conv_created_at = None
+    async with _get_system_message_lock(conversation_id):
         try:
-            conv = await loop.run_in_executor(None, db.get_conversation_by_id, conversation_id)
-            if conv:
-                conv_created_at = conv.get("created_at")
-        except (CharactersRAGDBError, RuntimeError):
+            # Best-effort guard; serialize within a process to avoid duplicates.
+            has_system = await loop.run_in_executor(
+                None,
+                db.has_system_message_for_conversation,
+                conversation_id,
+            )
+        except (CharactersRAGDBError, RuntimeError) as exc:
+            logger.debug(
+                "System message presence check failed for conv=%s: %s",
+                conversation_id,
+                exc,
+            )
+            has_system = False
+        if has_system:
+            return None
+        try:
             conv_created_at = None
-        system_payload: Dict[str, Any] = {"role": "system", "content": system_message.strip()}
-        if conv_created_at:
-            system_payload["timestamp"] = conv_created_at
-        return await save_message_fn(
-            db,
-            conversation_id,
-            system_payload,
-            use_transaction=True,
-        )
-    except (CharactersRAGDBError, InputError, ConflictError, RuntimeError) as exc:
-        logger.warning(
-            "Failed to persist system message for conv=%s: %s",
-            conversation_id,
-            exc,
-        )
-        return None
+            try:
+                conv = await loop.run_in_executor(None, db.get_conversation_by_id, conversation_id)
+                if conv:
+                    conv_created_at = conv.get("created_at")
+            except (CharactersRAGDBError, RuntimeError):
+                conv_created_at = None
+            system_payload: Dict[str, Any] = {"role": "system", "content": system_message.strip()}
+            if conv_created_at:
+                system_payload["timestamp"] = conv_created_at
+            return await save_message_fn(
+                db,
+                conversation_id,
+                system_payload,
+                use_transaction=True,
+            )
+        except (CharactersRAGDBError, InputError, ConflictError, RuntimeError) as exc:
+            logger.warning(
+                "Failed to persist system message for conv=%s: %s",
+                conversation_id,
+                exc,
+            )
+            return None
 
 
 @router.post(
@@ -1120,13 +1197,13 @@ async def _persist_system_message_if_needed(
     ]
 )
 async def create_chat_completion(
+    request: Request,  # Request object for audit logging, rate limiting, and provider state access
     request_data: ChatCompletionRequest = Body(...),
     chat_db: CharactersRAGDB = Depends(get_chacha_db_for_user),
     current_user: User = Depends(get_request_user),
     Authorization: str = Header(None, alias="Authorization", description="Bearer token for authentication."),
     Token: str = Header(None, alias="Token", description="Alternate bearer token header for backward compatibility."),
     X_API_KEY: str = Header(None, alias="X-API-KEY", description="Direct API key header for single-user mode."),
-    request: Request = None,  # Optional Request object for audit logging and rate limiting
     audit_service=Depends(get_audit_service_for_user),
     usage_log: UsageEventLogger = Depends(get_usage_event_logger),
     # background_tasks: BackgroundTasks = Depends(), # Replaced by starlette.background.BackgroundTask for StreamingResponse
@@ -1447,16 +1524,21 @@ async def create_chat_completion(
                                             part.text = (cmd_args or '').strip()
                                             break
                                 try:
-                                    from tldw_Server_API.app.api.v1.schemas.chat_request_schemas import ChatCompletionSystemMessageParam
-                                    sys_msg = ChatCompletionSystemMessageParam(role='system', content=moderated_content_text, name='system-command')
+                                    # Use model_construct to bypass schema validation for system-command injections;
+                                    # the full payload is validated after mutation.
+                                    sys_msg = ChatCompletionSystemMessageParam.model_construct(
+                                        role="system",
+                                        content=moderated_content_text,
+                                        name="system-command",
+                                    )
                                     # Attach metadata if possible
                                     try:
-                                        setattr(sys_msg, 'metadata', {'tldw_injection': inj_meta, 'moderation': inj_mod})
+                                        setattr(sys_msg, "metadata", {"tldw_injection": inj_meta, "moderation": inj_mod})
                                     except Exception:
                                         pass
                                     request_data.messages.append(sys_msg)
-                                except Exception:
-                                    request_data.messages.append({'role': 'system', 'content': moderated_content_text, 'name': 'system-command', 'metadata': {'tldw_injection': inj_meta, 'moderation': inj_mod}})
+                                except Exception as inj_err:
+                                    logger.debug(f"Failed to append system injection message: {inj_err}")
         except Exception as _cmd_err:
             logger.debug(f"Slash command handling skipped due to error: {_cmd_err}")
 
@@ -1981,6 +2063,7 @@ async def create_chat_completion(
                     cleaned_args["model"] = default_model_for_provider
                     if not request_data.model:
                         request_data.model = default_model_for_provider
+                    model = default_model_for_provider
                 else:
                     # Fail fast with a clear client error instead of cascading into a 500
                     # when downstream provider adapters require an explicit model.
@@ -1991,6 +2074,11 @@ async def create_chat_completion(
                             f"or configure a default via environment variable 'DEFAULT_MODEL_{provider.replace('.', '_').replace('-', '_').upper()}'"
                         ),
                     )
+
+            # Re-validate provider override after applying a default model.
+            override_error = validate_provider_override(provider, cleaned_args.get("model") or request_data.model)
+            if override_error:
+                raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=override_error)
 
             async def rebuild_call_params_for_provider(target_provider: str) -> Tuple[Dict[str, Any], Optional[str]]:
                 refreshed_resolution = await _resolve_byok(target_provider)
@@ -2021,11 +2109,17 @@ async def create_chat_completion(
                 use_default_model = False
                 if not refreshed_model:
                     use_default_model = True
-                elif target_provider != initial_provider and raw_model_input:
-                    if "/" in raw_model_input:
-                        prefix = raw_model_input.split("/", 1)[0].strip().lower()
-                        if prefix and prefix != target_provider.lower():
-                            use_default_model = True
+                elif target_provider != initial_provider:
+                    raw_model_str = (raw_model_input or "").strip()
+                    raw_prefix = None
+                    if raw_model_str and "/" in raw_model_str:
+                        raw_prefix = raw_model_str.split("/", 1)[0].strip().lower()
+                    # If the original model was unprefixed (or missing), prefer the
+                    # fallback provider's default model to avoid cross-provider mismatches.
+                    if not raw_model_str or raw_prefix is None:
+                        use_default_model = True
+                    elif raw_prefix != target_provider.lower():
+                        use_default_model = True
                 if use_default_model:
                     default_model = _get_default_model_for_provider_name(target_provider)
                     if default_model:
@@ -2122,9 +2216,10 @@ async def create_chat_completion(
                     queue = queue_candidate
             if queue is not None and not queue_is_active(queue):
                 queue = None
-            # Admission-only gating: even when background queue execution is disabled,
-            # perform an admission check to apply backpressure/fairness.
-            if queue is not None:
+            # Admission-only gating: only apply when queued execution is disabled to
+            # avoid double-charging rate limits (execution path will enqueue itself).
+            admission_queue = queue if (queue is not None and not QUEUED_EXECUTION) else None
+            if admission_queue is not None:
                 try:
                     # Estimate tokens for queue gating (sanitize base64 payloads)
                     est_tokens_for_queue = _estimate_tokens_for_queue(request_json)
@@ -2138,7 +2233,7 @@ async def create_chat_completion(
                         getattr(priority, "name", str(priority)),
                         est_tokens_for_queue,
                     )
-                    q_future = await queue.enqueue(
+                    q_future = await admission_queue.enqueue(
                         request_id=request_id,
                         request_data={"endpoint": "/api/v1/chat/completions"},
                         client_id=str(user_id),
@@ -3027,15 +3122,15 @@ async def list_chat_conversations(
 
         total = len(rows)
         page_rows = rows[offset: offset + limit]
+        conv_ids = [row.get("id") for row in page_rows if row.get("id")]
+        keyword_map = db.get_keywords_for_conversations(conv_ids) if conv_ids else {}
+        message_counts = db.count_messages_for_conversations(conv_ids) if conv_ids else {}
         items: List[ConversationListItem] = []
         for row in page_rows:
             conv_id = row.get("id") or ""
-            keyword_rows = db.get_keywords_for_conversation(conv_id)
+            keyword_rows = keyword_map.get(conv_id, [])
             keywords_list = [k.get("keyword") for k in keyword_rows if k.get("keyword")]
-            try:
-                message_count = db.count_messages_for_conversation(conv_id)
-            except Exception:
-                message_count = 0
+            message_count = message_counts.get(conv_id, 0)
 
             bm25_norm = row.get("_bm25_norm") if order_by in {"bm25", "hybrid"} else None
             items.append(
@@ -3224,25 +3319,19 @@ async def get_conversation_tree(
             card = db.get_character_card_by_id(int(conversation.get("character_id")))
             character_name = card.get("name") if card else None
 
-        total_messages = db.count_messages_for_conversation(conversation_id)
-        messages: List[Dict[str, Any]] = []
-        batch_size = 1000
-        current_offset = 0
-        while current_offset < total_messages:
-            batch = db.get_messages_for_conversation(
-                conversation_id,
-                limit=batch_size,
-                offset=current_offset,
-                order_by_timestamp="ASC",
-            )
-            if not batch:
-                break
-            messages.extend(batch)
-            current_offset += len(batch)
+        total_root_threads = db.count_root_messages_for_conversation(conversation_id)
+        root_rows = db.get_root_messages_for_conversation(
+            conversation_id,
+            limit=limit,
+            offset=offset,
+            order_by_timestamp="ASC",
+        )
 
         nodes: Dict[str, ConversationTreeNode] = {}
         roots: List[ConversationTreeNode] = []
-        for msg in messages:
+        node_depths: Dict[str, int] = {}
+
+        for msg in root_rows:
             msg_id = msg.get("id")
             if not msg_id:
                 continue
@@ -3256,19 +3345,63 @@ async def get_conversation_tree(
                 truncated=False,
             )
             nodes[msg_id] = node
+            roots.append(node)
+            node_depths[msg_id] = 1
 
-        for msg in messages:
-            msg_id = msg.get("id")
-            if not msg_id or msg_id not in nodes:
-                continue
-            parent_id = msg.get("parent_message_id")
-            if parent_id and parent_id in nodes:
-                nodes[parent_id].children.append(nodes[msg_id])
-            else:
-                roots.append(nodes[msg_id])
+        # BFS over child messages up to max_depth
+        current_parent_ids = [msg.get("id") for msg in root_rows if msg.get("id")]
+        current_depth = 1
+        while current_parent_ids and current_depth < max_depth:
+            children = db.get_messages_for_conversation_by_parent_ids(
+                conversation_id,
+                current_parent_ids,
+                order_by_timestamp="ASC",
+            )
+            if not children:
+                break
+            next_parent_ids: List[str] = []
+            next_depth = current_depth + 1
+            for child in children:
+                child_id = child.get("id")
+                if not child_id or child_id in nodes:
+                    continue
+                created_at = _coerce_datetime(child.get("timestamp")) or datetime.now(timezone.utc)
+                node = ConversationTreeNode(
+                    id=child_id,
+                    role=map_sender_to_role(child.get("sender"), character_name),
+                    content=child.get("content") or "",
+                    created_at=created_at,
+                    children=[],
+                    truncated=False,
+                )
+                nodes[child_id] = node
+                node_depths[child_id] = next_depth
+                parent_id = child.get("parent_message_id")
+                if parent_id and parent_id in nodes:
+                    nodes[parent_id].children.append(node)
+                next_parent_ids.append(child_id)
+            current_parent_ids = next_parent_ids
+            current_depth = next_depth
 
-        total_root_threads = len(roots)
-        root_page = roots[offset: offset + limit]
+        # Mark nodes at max_depth as truncated if they have undisplayed children.
+        parents_at_max_depth = [mid for mid, depth in node_depths.items() if depth == max_depth]
+        if parents_at_max_depth:
+            extra_children = db.get_messages_for_conversation_by_parent_ids(
+                conversation_id,
+                parents_at_max_depth,
+                order_by_timestamp="ASC",
+            )
+            parents_with_more = {
+                child.get("parent_message_id")
+                for child in extra_children
+                if child.get("parent_message_id")
+            }
+            for parent_id in parents_with_more:
+                node = nodes.get(parent_id)
+                if node is not None:
+                    node.truncated = True
+
+        root_page = roots
 
         message_cap = min(max(TREE_MESSAGE_CAP_DEFAULT, 1), TREE_MESSAGE_CAP_MAX)
         count = 0
@@ -3281,6 +3414,8 @@ async def get_conversation_tree(
             if depth >= max_depth:
                 if node.children:
                     node.truncated = True
+                    node.children = []
+                elif node.truncated:
                     node.children = []
                 return node
             pruned_children: List[ConversationTreeNode] = []
@@ -3422,3 +3557,261 @@ async def get_chat_analytics(
     except Exception as exc:
         logger.error(f"Chat analytics failed: {exc}", exc_info=True)
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Failed to fetch analytics") from exc
+
+
+# ---------------------------------------------------------------------------
+# RAG Context Persistence Endpoints
+# ---------------------------------------------------------------------------
+
+
+class RagContextPersistRequest(BaseModel):
+    """Request body for persisting RAG context with a message."""
+
+    message_id: str = Field(..., description="The message ID to attach RAG context to")
+    rag_context: RagContext = Field(..., description="The RAG context to persist")
+
+
+class RagContextPersistResponse(BaseModel):
+    """Response for RAG context persistence."""
+
+    success: bool = Field(..., description="Whether the operation succeeded")
+    message_id: str = Field(..., description="The message ID that was updated")
+    error: Optional[str] = Field(None, description="Error message if operation failed")
+
+
+class MessageWithRagContextResponse(BaseModel):
+    """Response containing a message with its RAG context."""
+
+    id: str
+    conversation_id: str
+    sender: str
+    content: Optional[str] = None
+    timestamp: Optional[str] = None
+    rag_context: Optional[Dict[str, Any]] = None
+
+
+class ConversationCitationsResponse(BaseModel):
+    """Response containing all citations from a conversation."""
+
+    conversation_id: str
+    citations: List[Dict[str, Any]] = Field(
+        default_factory=list,
+        description="All unique citations from the conversation"
+    )
+    total_count: int = Field(0, description="Total number of unique citations")
+
+
+@router.post(
+    "/messages/{message_id}/rag-context",
+    response_model=RagContextPersistResponse,
+    summary="Persist RAG context with a message",
+    description="""
+    Store RAG search results, citations, and settings with a message.
+
+    This endpoint allows the frontend to persist RAG context after a search
+    is performed, enabling citation persistence for Knowledge QA conversations.
+
+    The RAG context includes:
+    - Search query and mode used
+    - Retrieved documents with scores and excerpts
+    - Generated answer (if any)
+    - Citation metadata
+    - Settings snapshot for reproducibility
+    """,
+    tags=["chat", "rag"],
+    dependencies=[
+        Depends(rbac_rate_limit("chat.messages.rag_context")),
+        Depends(require_token_scope("any", require_if_present=True, endpoint_id="chat.messages.rag_context")),
+    ],
+)
+async def persist_rag_context(
+    message_id: str = Path(..., description="The message ID to attach RAG context to"),
+    request_body: RagContextPersistRequest = Body(...),
+    db: CharactersRAGDB = Depends(get_chacha_db_for_user),
+    current_user: User = Depends(get_request_user),
+):
+    """Persist RAG context (citations, retrieved documents, settings) with a message."""
+    try:
+        # Verify the message exists and belongs to the user
+        message = db.get_message_by_id(message_id)
+        if not message:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=f"Message {message_id} not found"
+            )
+
+        # Convert RagContext to dict for storage
+        rag_context_dict = request_body.rag_context.model_dump(exclude_none=True)
+
+        # Add timestamp if not provided
+        if 'timestamp' not in rag_context_dict:
+            rag_context_dict['timestamp'] = datetime.now(timezone.utc).isoformat()
+
+        # Persist the RAG context
+        success = db.set_message_rag_context(message_id, rag_context_dict)
+
+        if not success:
+            return RagContextPersistResponse(
+                success=False,
+                message_id=message_id,
+                error="Failed to persist RAG context"
+            )
+
+        return RagContextPersistResponse(
+            success=True,
+            message_id=message_id
+        )
+
+    except HTTPException:
+        raise
+    except Exception as exc:
+        logger.error(f"Failed to persist RAG context for message {message_id}: {exc}", exc_info=True)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Failed to persist RAG context"
+        ) from exc
+
+
+@router.get(
+    "/messages/{message_id}/rag-context",
+    response_model=Dict[str, Any],
+    summary="Get RAG context for a message",
+    description="Retrieve the RAG context stored with a message, including citations and search settings.",
+    tags=["chat", "rag"],
+    dependencies=[
+        Depends(rbac_rate_limit("chat.messages.rag_context")),
+        Depends(require_token_scope("any", require_if_present=True, endpoint_id="chat.messages.rag_context")),
+    ],
+)
+async def get_rag_context(
+    message_id: str = Path(..., description="The message ID to get RAG context for"),
+    db: CharactersRAGDB = Depends(get_chacha_db_for_user),
+    current_user: User = Depends(get_request_user),
+):
+    """Retrieve RAG context stored with a message."""
+    try:
+        # Verify the message exists
+        message = db.get_message_by_id(message_id)
+        if not message:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=f"Message {message_id} not found"
+            )
+
+        rag_context = db.get_message_rag_context(message_id)
+        if not rag_context:
+            return {"rag_context": None}
+
+        return {"rag_context": rag_context}
+
+    except HTTPException:
+        raise
+    except Exception as exc:
+        logger.error(f"Failed to get RAG context for message {message_id}: {exc}", exc_info=True)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Failed to retrieve RAG context"
+        ) from exc
+
+
+@router.get(
+    "/conversations/{conversation_id}/messages-with-context",
+    response_model=List[Dict[str, Any]],
+    summary="Get conversation messages with RAG context",
+    description="""
+    Retrieve messages from a conversation with their RAG context attached.
+
+    This is optimized for the Knowledge QA page to load conversation history
+    with full citation data for each message.
+    """,
+    tags=["chat", "rag"],
+    dependencies=[
+        Depends(rbac_rate_limit("chat.conversations.messages")),
+        Depends(require_token_scope("any", require_if_present=True, endpoint_id="chat.conversations.messages")),
+    ],
+)
+async def get_messages_with_rag_context(
+    conversation_id: str = Path(..., description="The conversation ID"),
+    limit: int = Query(100, ge=1, le=500, description="Maximum messages to return"),
+    offset: int = Query(0, ge=0, description="Number of messages to skip"),
+    include_rag_context: bool = Query(True, description="Whether to include RAG context"),
+    db: CharactersRAGDB = Depends(get_chacha_db_for_user),
+    current_user: User = Depends(get_request_user),
+):
+    """Get messages from a conversation with optional RAG context."""
+    try:
+        # Verify conversation exists
+        conversation = db.get_conversation_by_id(conversation_id)
+        if not conversation:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=f"Conversation {conversation_id} not found"
+            )
+
+        messages = db.get_messages_with_rag_context(
+            conversation_id,
+            limit=limit,
+            offset=offset,
+            include_rag_context=include_rag_context
+        )
+
+        return messages
+
+    except HTTPException:
+        raise
+    except Exception as exc:
+        logger.error(f"Failed to get messages with RAG context for conversation {conversation_id}: {exc}", exc_info=True)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Failed to retrieve messages"
+        ) from exc
+
+
+@router.get(
+    "/conversations/{conversation_id}/citations",
+    response_model=ConversationCitationsResponse,
+    summary="Get all citations from a conversation",
+    description="""
+    Retrieve all unique citations from a conversation's messages.
+
+    This aggregates all retrieved documents from RAG context across
+    all messages, useful for generating a citation bibliography
+    or export.
+    """,
+    tags=["chat", "rag"],
+    dependencies=[
+        Depends(rbac_rate_limit("chat.conversations.citations")),
+        Depends(require_token_scope("any", require_if_present=True, endpoint_id="chat.conversations.citations")),
+    ],
+)
+async def get_conversation_citations(
+    conversation_id: str = Path(..., description="The conversation ID"),
+    db: CharactersRAGDB = Depends(get_chacha_db_for_user),
+    current_user: User = Depends(get_request_user),
+):
+    """Get all citations from a conversation."""
+    try:
+        # Verify conversation exists
+        conversation = db.get_conversation_by_id(conversation_id)
+        if not conversation:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=f"Conversation {conversation_id} not found"
+            )
+
+        citations = db.get_conversation_citations(conversation_id)
+
+        return ConversationCitationsResponse(
+            conversation_id=conversation_id,
+            citations=citations,
+            total_count=len(citations)
+        )
+
+    except HTTPException:
+        raise
+    except Exception as exc:
+        logger.error(f"Failed to get citations for conversation {conversation_id}: {exc}", exc_info=True)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Failed to retrieve citations"
+        ) from exc

@@ -11,8 +11,11 @@ Note: Secrets should be set via environment or `.env`. `config.txt` is supported
 
 For the full, frequently updated raw reference (auto-generated), see `Env_Vars.md` in the repository root.
 
+Config file support (selected):
+- Section `[Image-Generation]` in `Config_Files/config.txt` can define: `default_backend`, `enabled_backends`, `max_width`, `max_height`, `max_pixels`, `max_steps`, `max_prompt_length`, `inline_max_bytes`, `sd_cpp_binary_path`, `sd_cpp_diffusion_model_path`, `sd_cpp_model_path`, `sd_cpp_llm_path`, `sd_cpp_vae_path`, `sd_cpp_lora_paths`, `sd_cpp_allowed_extra_params`, `sd_cpp_default_steps`, `sd_cpp_default_cfg_scale`, `sd_cpp_default_sampler`, `sd_cpp_device`, `sd_cpp_timeout_seconds`.
+
 ## Core Server
-- `tldw_production`: Enable production guards (`true|false`). Masks API key in logs, hardens WebUI config, enforces DB/secret checks.
+- `tldw_production`: Enable production guards (`true|false`). Masks API key in logs and enforces DB/secret checks.
 - `ENABLE_OPENAPI`: Show OpenAPI/Swagger UI when `true`. Defaults to hidden in production unless explicitly enabled.
 - `ALLOWED_ORIGINS`: CORS allowlist. Comma-separated or JSON array.
 - `TLDW_CONFIG_PATH`: Absolute path to the primary `config.txt`. The parent directory becomes the config root for auxiliary assets (e.g., `Synonyms/`).
@@ -33,18 +36,18 @@ Logging & OpenAPI URLs
 - `OPENAPI_SERVER_BASE_URL`: Base URL for the API server used in OpenAPI server URLs (defaults to `http://127.0.0.1:8000`).
 - `OPENAPI_EXTERNAL_DOCS_BASE_URL`: Absolute base used for externalDocs links in the OpenAPI spec.
 
-WebUI Access Guard (remote access controls)
-- `TLDW_WEBUI_ALLOW_REMOTE` (or `WEBUI_ALLOW_REMOTE`): Temporarily allow remote access to the legacy WebUI (`/webui`). Only use on trusted networks.
-- `TLDW_WEBUI_ALLOWLIST`: Comma-separated IPs/CIDRs allowed to access `/webui`.
-- `TLDW_WEBUI_DENYLIST`: Comma-separated IPs/CIDRs denied from `/webui`.
+Setup Access Guard (remote access controls)
+- `TLDW_SETUP_ALLOW_REMOTE`: Temporarily allow remote access to the Setup UI (`/setup`). Only use on trusted networks.
+- `TLDW_SETUP_ALLOWLIST`: Comma-separated IPs/CIDRs allowed to access `/setup`.
+- `TLDW_SETUP_DENYLIST`: Comma-separated IPs/CIDRs denied from `/setup`.
 - `TLDW_TRUSTED_PROXIES`: Comma-separated proxy IPs/CIDRs trusted for X-Forwarded-For/X-Real-IP.
 
-WebUI CSP (Content Security Policy)
-- `TLDW_WEBUI_NO_EVAL`: When set, controls whether `'unsafe-eval'` is allowed for `/webui` scripts.
-  - Precedence: if present, its truthiness decides the policy; otherwise a production-aware default applies.
+Setup CSP (Content Security Policy)
+- `TLDW_SETUP_NO_EVAL`: When set, controls whether `'unsafe-eval'` is allowed for `/setup` scripts.
+  - Precedence: if present, its truthiness decides the policy.
   - Truthy values (case-insensitive): `1`, `true`, `yes`, `on`, `y` → DISABLE eval (no `'unsafe-eval'`).
   - Falsy values (e.g., `0`, `false`) → ENABLE eval.
-  - If unset: default is `False` (no eval) in production (`ENVIRONMENT|APP_ENV|ENV in {prod, production}`), and `True` (allow eval) in non-production.
+  - If unset: default is allow eval.
 
 ## AuthNZ (Authentication)
 - `AUTH_MODE`: `single_user` | `multi_user`.
@@ -151,7 +154,7 @@ RAG precomputed spans (late-interaction index)
 
 Monitoring & Telemetry
 - `METRICS_ENABLED`: Enable text metrics endpoints.
-- `METRICS_RING_BUFFER_MAXLEN`: Rolling metrics sample window size (default `10000`). Set `0` or a negative value to disable the limit.
+- `METRICS_RING_BUFFER_MAXLEN_OR_UNBOUNDED`: Rolling metrics sample window size (default `10000`). Set `0` or a negative value for an unbounded buffer.
 - OpenTelemetry export is controlled via standard `OTEL_*` environment variables (e.g., `OTEL_EXPORTER_OTLP_ENDPOINT`, `OTEL_SERVICE_NAME`, `OTEL_TRACES_EXPORTER`). See the Deployment/Monitoring docs.
 
 ## Workflows (Auth & Scheduler)

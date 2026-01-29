@@ -55,6 +55,7 @@ from tldw_Server_API.app.api.v1.schemas.kanban_schemas import (
 from tldw_Server_API.app.api.v1.API_Deps.kanban_deps import (
     get_kanban_db_for_user,
     handle_kanban_db_error,
+    kanban_rate_limit,
 )
 
 
@@ -146,7 +147,7 @@ def _execute_search(
         priority: Optional priority filter
         include_archived: Whether to include archived cards
         search_mode: Search mode (fts, vector, hybrid)
-        limit: Results per page
+        limit: Maximum results
         offset: Offset for pagination
 
     Returns:
@@ -154,10 +155,8 @@ def _execute_search(
     """
     # Get vector search if available (for vector/hybrid modes)
     vector_search: Optional[KanbanVectorSearch] = None
-    if search_mode in ["vector", "hybrid"] and is_vector_search_available():
-        # Note: In production, this would use embedding_config from app settings
-        # For now, vector search gracefully falls back to FTS
-        vector_search = None  # Will be configured when embedding config is available
+    if search_mode in ["vector", "hybrid"]:
+        vector_search = db.get_vector_search()
 
     # Perform search based on mode
     if search_mode == "fts" or search_mode not in ["fts", "vector", "hybrid"]:
@@ -411,7 +410,8 @@ def _perform_hybrid_search(
     "/search",
     response_model=SearchResponse,
     summary="Search cards",
-    description="Search cards using FTS5 full-text search."
+    description="Search cards using FTS5 full-text search.",
+    dependencies=[Depends(kanban_rate_limit("kanban.search"))]
 )
 async def search_cards_get(
     q: str = Query(..., min_length=1, max_length=500, description="Search query"),
@@ -420,8 +420,8 @@ async def search_cards_get(
     priority: Optional[str] = Query(None, description="Filter by priority"),
     include_archived: bool = Query(False, description="Include archived cards"),
     search_mode: str = Query("fts", description="Search mode: fts, vector, or hybrid"),
-    page: int = Query(1, ge=1, description="Page number"),
-    per_page: int = Query(20, ge=1, le=100, description="Results per page"),
+    limit: int = Query(20, ge=1, le=100, description="Maximum results"),
+    offset: int = Query(0, ge=0, description="Results to skip"),
     db: KanbanDB = Depends(get_kanban_db_for_user)
 ) -> SearchResponse:
     """
@@ -433,8 +433,8 @@ async def search_cards_get(
     - **priority**: Filter by priority (low, medium, high, urgent)
     - **include_archived**: Include archived cards in results
     - **search_mode**: fts (default), vector, or hybrid
-    - **page**: Page number for pagination
-    - **per_page**: Results per page (max 100)
+    - **limit**: Maximum results (max 100)
+    - **offset**: Results to skip
 
     Note: Vector and hybrid search modes require ChromaDB integration.
     If unavailable, falls back to FTS.
@@ -445,9 +445,6 @@ async def search_cards_get(
         if label_ids:
             parsed_label_ids = [int(lid.strip()) for lid in label_ids.split(",")]
 
-        # Calculate offset
-        offset = (page - 1) * per_page
-
         return _execute_search(
             db=db,
             query=q,
@@ -456,7 +453,7 @@ async def search_cards_get(
             priority=priority,
             include_archived=include_archived,
             search_mode=search_mode,
-            limit=per_page,
+            limit=limit,
             offset=offset,
         )
 
@@ -466,14 +463,13 @@ async def search_cards_get(
             detail=f"Invalid label_ids format: {str(e)}"
         )
     except Exception as e:
-        raise _handle_error(e)
-
-
+        raise _handle_error(e) from e
 @router.post(
     "/search",
     response_model=SearchResponse,
     summary="Search cards (POST)",
-    description="Search cards using FTS5 full-text search with request body."
+    description="Search cards using FTS5 full-text search with request body.",
+    dependencies=[Depends(kanban_rate_limit("kanban.search"))]
 )
 async def search_cards_post(
     request: SearchRequest,
@@ -486,9 +482,6 @@ async def search_cards_post(
     Useful for complex queries or when query parameters are too long.
     """
     try:
-        # Calculate offset
-        offset = (request.page - 1) * request.per_page
-
         return _execute_search(
             db=db,
             query=request.query,
@@ -497,30 +490,35 @@ async def search_cards_post(
             priority=request.priority,
             include_archived=request.include_archived,
             search_mode=request.search_mode,
-            limit=request.per_page,
-            offset=offset,
+            limit=request.limit,
+            offset=request.offset,
         )
 
     except Exception as e:
-        raise _handle_error(e)
-
-
+        raise _handle_error(e) from e
 @router.get(
     "/search/status",
     summary="Get search status",
-    description="Get the status of search capabilities and scoring configuration."
+    description="Get the status of search capabilities and scoring configuration.",
+    dependencies=[Depends(kanban_rate_limit("kanban.search.status"))]
 )
-async def search_status() -> Dict[str, Any]:
+async def search_status(
+    db: KanbanDB = Depends(get_kanban_db_for_user)
+) -> Dict[str, Any]:
     """
     Get the status of search capabilities.
 
     Returns information about which search modes are available and
     the current hybrid search scoring weights.
     """
+    vector_search = db.get_vector_search()
+    vector_enabled = bool(vector_search and vector_search.available)
+    vector_backend = is_vector_search_available()
     return {
         "fts_available": True,  # Always available (SQLite FTS5)
-        "vector_available": is_vector_search_available(),
-        "hybrid_available": is_vector_search_available(),
+        "vector_available": vector_enabled,
+        "vector_backend_available": vector_backend,
+        "hybrid_available": vector_enabled,
         "default_mode": "fts",
         "supported_modes": ["fts", "vector", "hybrid"],
         "scoring_weights": {

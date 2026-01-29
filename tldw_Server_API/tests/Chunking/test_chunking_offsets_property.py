@@ -101,6 +101,7 @@ def test_chunk_with_metadata_re_slices_source(lang: str, method: str, max_size: 
         max_size=max_size,
         overlap=overlap,
         language=lang,
+        align_text_to_source=True,
     )
 
     # Property: every chunk's text equals text[start:end], and bounds are valid

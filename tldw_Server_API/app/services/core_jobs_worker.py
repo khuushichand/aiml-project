@@ -249,15 +249,31 @@ async def run_chatbooks_core_jobs_worker(stop_event: Optional[asyncio.Event] = N
                     except Exception as e:
                         logger.debug(f"Core Jobs Worker: invalid conflict_resolution {conf_val}: {e}; defaulting to SKIP")
                         conf = ConflictResolution.SKIP
-                    _renew_task = await _start_renewal(int(job["id"]))
-                    ok, msg, _ = await asyncio.to_thread(
-                        svc._import_chatbook_sync,
-                        file_ref, cs,
-                        conf,
-                        bool(payload.get("prefix_imported", False)),
-                        bool(payload.get("import_media", True)),
-                        bool(payload.get("import_embeddings", False)),
-                    )
+                    import_media = bool(payload.get("import_media", False))
+                    import_embeddings = bool(payload.get("import_embeddings", False))
+                    unsupported_conflicts = {ConflictResolution.OVERWRITE, ConflictResolution.MERGE, ConflictResolution.ASK}
+                    if conf in unsupported_conflicts:
+                        ok = False
+                        msg = (
+                            f"Conflict resolution '{conf.value}' is not supported yet. "
+                            "Use 'skip' or 'rename'."
+                        )
+                    elif import_media or import_embeddings:
+                        ok = False
+                        msg = (
+                            "Media/embedding imports are not supported yet. "
+                            "Set import_media=false and import_embeddings=false."
+                        )
+                    else:
+                        _renew_task = await _start_renewal(int(job["id"]))
+                        ok, msg, _ = await asyncio.to_thread(
+                            svc._import_chatbook_sync,
+                            file_ref, cs,
+                            conf,
+                            bool(payload.get("prefix_imported", False)),
+                            import_media,
+                            import_embeddings,
+                        )
                     ij = svc._get_import_job(chatbooks_job_id)
                     if ok:
                         # Mid-flight cancel check (honor cancellation request or terminal state)

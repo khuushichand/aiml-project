@@ -5,6 +5,7 @@
 
   Non‑streaming usage (stream: false), handling JSON errors vs audio:
 ```python
+  import base64
   import json
   import os
   from urllib.error import HTTPError
@@ -32,6 +33,10 @@
   try:
       with urlopen(req) as resp:
           # Success: treat as audio
+          # Optional alignment header (non-streaming, when available)
+          alignment_b64 = resp.headers.get("X-TTS-Alignment")
+          if alignment_b64:
+              alignment = json.loads(base64.urlsafe_b64decode(alignment_b64).decode("utf-8"))
           with open("speech.mp3", "wb") as f:
               f.write(resp.read())
   except HTTPError as err:
@@ -82,6 +87,9 @@ Streaming variant (Python):
   - Use try/except HTTPError to catch non-2xx responses.
   - Only treat body as audio when the request succeeds (no exception).
   - On non‑200, parse JSON and surface detail to the caller.
+  - Alignment metadata (if available) is returned via `X-TTS-Alignment` (base64url JSON) on non-streaming responses.
+  - `return_download_link` requires `stream: false`. When enabled, the response includes `X-Download-Path` and `X-Generated-File-Id` headers pointing at `/api/v1/storage/files/{id}/download`.
+  - For streaming alignment, call `POST /api/v1/audio/speech/metadata` with the same payload.
 
   ———
 
@@ -189,6 +197,7 @@ Streaming variant (Python):
   - Check resp.ok first.
   - If ok, read resp.body as a stream (e.g., into a MediaSource or buffer it).
   - If not ok, read JSON/text as above and treat as an error.
+  - For streaming alignment, call `POST /api/v1/audio/speech/metadata` with the same payload and parse the JSON response.
 
 
 

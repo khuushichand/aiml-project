@@ -67,7 +67,7 @@ This plan tracks the remaining work to wrap Watchlists v1 per the Bridge PRD. Ea
 - API: preview returns candidates and `matched_filter` indications; respects include-only gating.
   - tldw_Server_API/tests/Watchlists/test_preview_endpoint.py
 - UI (lightweight): validate presence of editor controls and basic input constraints (IDs numeric, non-negative).
-  - tldw-frontend/tests/watchlists_ui_smoke.test.ts
+  - apps/tldw-frontend/tests/watchlists_ui_smoke.test.ts
 
 **Status**: Completed
 

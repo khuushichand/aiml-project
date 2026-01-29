@@ -12,6 +12,18 @@ from tldw_Server_API.app.core.Ingestion_Media_Processing.OCR.backends.dots_ocr i
 from tldw_Server_API.app.core.Ingestion_Media_Processing.OCR.backends.points_reader import (
     PointsReaderBackend,
 )
+from tldw_Server_API.app.core.Ingestion_Media_Processing.OCR.backends.deepseek_ocr import (
+    DeepSeekOCRBackend,
+)
+from tldw_Server_API.app.core.Ingestion_Media_Processing.OCR.backends.hunyuan_ocr import (
+    HunyuanOCRBackend,
+)
+from tldw_Server_API.app.core.Ingestion_Media_Processing.OCR.backends.nemotron_parse import (
+    NemotronParseBackend,
+)
+from tldw_Server_API.app.core.Ingestion_Media_Processing.OCR.backends.dolphin_ocr import (
+    DolphinOCRBackend,
+)
 try:
     # Optional config override
     from tldw_Server_API.app.core.config import loaded_config_data as _loaded_cfg
@@ -22,8 +34,17 @@ _BACKENDS: Dict[str, Type[OCRBackend]] = {
     # Auto-detection priority is the dictionary order below
     # Keep Tesseract first for a lightweight default, but users can force 'dots'
     TesseractCLIBackend.name: TesseractCLIBackend,
+    NemotronParseBackend.name: NemotronParseBackend,
     DotsOCRBackend.name: DotsOCRBackend,
     PointsReaderBackend.name: PointsReaderBackend,
+    DeepSeekOCRBackend.name: DeepSeekOCRBackend,
+    HunyuanOCRBackend.name: HunyuanOCRBackend,
+    DolphinOCRBackend.name: DolphinOCRBackend,
+}
+
+_AUTO_EXCLUDE = {
+    # Opt-in only unless explicitly selected or in backend_priority
+    "dolphin",
 }
 
 
@@ -54,6 +75,8 @@ def get_backend(name: Optional[str] = None) -> Optional[OCRBackend]:
     name = "tesseract"  -> Tesseract CLI backend, if available
     name = "dots"       -> dots.ocr CLI backend, if available
     name = "points"     -> POINTS-Reader backend, if available
+    name = "deepseek"   -> DeepSeek OCR backend, if available
+    name = "dolphin"    -> Dolphin backend, if available
     """
     candidates = []
     if name and name not in ("auto", "auto_high_quality"):
@@ -65,7 +88,9 @@ def get_backend(name: Optional[str] = None) -> Optional[OCRBackend]:
     # Auto resolution
     preferred_order: Optional[List[str]] = None
     if name == "auto_high_quality":
-        preferred_order = ["points", "dots", "tesseract"]
+        preferred_order = _resolve_priority_from_config()
+        if not preferred_order:
+            preferred_order = ["nemotron_parse", "hunyuan", "deepseek", "points", "dots", "tesseract"]
     else:
         # Try config override for normal auto
         preferred_order = _resolve_priority_from_config()
@@ -79,6 +104,8 @@ def get_backend(name: Optional[str] = None) -> Optional[OCRBackend]:
 
     # Default: first available in registration order
     for cls in _BACKENDS.values():
+        if getattr(cls, "name", None) in _AUTO_EXCLUDE:
+            continue
         if cls.available():
             candidates.append(cls)
     if not candidates:

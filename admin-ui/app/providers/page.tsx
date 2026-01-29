@@ -44,6 +44,7 @@ interface OverrideDialogState {
   apiKey: string;
   clearApiKey: boolean;
   isSaving: boolean;
+  isDeleting: boolean;
 }
 
 interface ByokState {
@@ -77,9 +78,10 @@ interface ByokKeysTableProps {
   keys: ByokKey[];
   onDelete: (provider: string) => void;
   formatProviderName: (name: string) => string;
+  deletingProvider?: string | null;
 }
 
-function ByokKeysTable({ keys, onDelete, formatProviderName }: ByokKeysTableProps) {
+function ByokKeysTable({ keys, onDelete, formatProviderName, deletingProvider }: ByokKeysTableProps) {
   return (
     <Table>
       <TableHeader>
@@ -91,7 +93,9 @@ function ByokKeysTable({ keys, onDelete, formatProviderName }: ByokKeysTableProp
         </TableRow>
       </TableHeader>
       <TableBody>
-        {keys.map((key) => (
+        {keys.map((key) => {
+          const isDeleting = deletingProvider === key.provider;
+          return (
           <TableRow key={key.provider}>
             <TableCell>
               <div className="font-medium">{formatProviderName(key.provider)}</div>
@@ -111,12 +115,20 @@ function ByokKeysTable({ keys, onDelete, formatProviderName }: ByokKeysTableProp
                 variant="ghost"
                 size="sm"
                 onClick={() => onDelete(key.provider)}
+                disabled={isDeleting}
+                title={isDeleting ? 'Deleting key' : 'Delete key'}
+                aria-label={isDeleting ? 'Deleting key' : 'Delete key'}
               >
-                <Trash2 className="h-4 w-4 text-red-500" />
+                {isDeleting ? (
+                  <RefreshCw className="h-4 w-4 text-red-500 animate-spin" />
+                ) : (
+                  <Trash2 className="h-4 w-4 text-red-500" />
+                )}
               </Button>
             </TableCell>
           </TableRow>
-        ))}
+          );
+        })}
       </TableBody>
     </Table>
   );
@@ -139,8 +151,11 @@ export default function ProvidersPage() {
     apiKey: '',
     clearApiKey: false,
     isSaving: false,
+    isDeleting: false,
   });
   const [testingProvider, setTestingProvider] = useState<string | null>(null);
+  const [deletingUserByokProvider, setDeletingUserByokProvider] = useState<string | null>(null);
+  const [deletingOrgByokProvider, setDeletingOrgByokProvider] = useState<string | null>(null);
 
   // BYOK management state
   const [byokState, setByokState] = useState<ByokState>({
@@ -310,6 +325,7 @@ export default function ProvidersPage() {
 
   const handleDeleteUserByok = async (provider: string) => {
     if (!byokState.selectedUser) return;
+    if (deletingUserByokProvider === provider) return;
 
     const confirmed = await confirm({
       title: 'Delete API Key',
@@ -321,17 +337,21 @@ export default function ProvidersPage() {
     if (!confirmed) return;
 
     try {
+      setDeletingUserByokProvider(provider);
       await api.deleteUserByokKey(byokState.selectedUser.id.toString(), provider);
       await loadUserByokKeys(byokState.selectedUser);
       toastSuccess('BYOK key deleted', `Removed ${provider} for ${byokState.selectedUser.email}`);
     } catch (err: unknown) {
       console.error('Failed to delete BYOK key:', err);
       toastError('Failed to delete BYOK key', err instanceof Error ? err.message : 'Try again.');
+    } finally {
+      setDeletingUserByokProvider((prev) => (prev === provider ? null : prev));
     }
   };
 
   const handleDeleteOrgByok = async (provider: string) => {
     if (!byokState.selectedOrg) return;
+    if (deletingOrgByokProvider === provider) return;
 
     const confirmed = await confirm({
       title: 'Delete API Key',
@@ -343,12 +363,15 @@ export default function ProvidersPage() {
     if (!confirmed) return;
 
     try {
+      setDeletingOrgByokProvider(provider);
       await api.deleteOrgByokKey(byokState.selectedOrg.id.toString(), provider);
       await loadOrgByokKeys(byokState.selectedOrg);
       toastSuccess('BYOK key deleted', `Removed ${provider} for ${byokState.selectedOrg.name}`);
     } catch (err: unknown) {
       console.error('Failed to delete BYOK key:', err);
       toastError('Failed to delete BYOK key', err instanceof Error ? err.message : 'Try again.');
+    } finally {
+      setDeletingOrgByokProvider((prev) => (prev === provider ? null : prev));
     }
   };
 
@@ -488,6 +511,7 @@ export default function ProvidersPage() {
 
   const handleDeleteOverride = async () => {
     if (!overrideDialog.provider) return;
+    if (overrideDialog.isDeleting) return;
     const confirmed = await confirm({
       title: 'Remove Override',
       message: `Remove override for ${formatProviderName(overrideDialog.provider.name)}?`,
@@ -497,6 +521,7 @@ export default function ProvidersPage() {
     });
     if (!confirmed) return;
     try {
+      updateOverrideDialog({ isDeleting: true });
       await api.deleteLLMProviderOverride(overrideDialog.provider.name);
       toastSuccess(
         'Override removed',
@@ -507,6 +532,8 @@ export default function ProvidersPage() {
     } catch (err: unknown) {
       console.error('Failed to delete provider override:', err);
       toastError('Failed to remove override', err instanceof Error ? err.message : 'Try again.');
+    } finally {
+      updateOverrideDialog({ isDeleting: false });
     }
   };
 
@@ -887,6 +914,7 @@ export default function ProvidersPage() {
                           keys={byokState.userKeys}
                           onDelete={handleDeleteUserByok}
                           formatProviderName={formatProviderName}
+                          deletingProvider={deletingUserByokProvider}
                         />
                       )}
                     </CardContent>
@@ -975,6 +1003,7 @@ export default function ProvidersPage() {
                           keys={byokState.orgKeys}
                           onDelete={handleDeleteOrgByok}
                           formatProviderName={formatProviderName}
+                          deletingProvider={deletingOrgByokProvider}
                         />
                       )}
                     </CardContent>
@@ -1089,8 +1118,19 @@ export default function ProvidersPage() {
             <DialogFooter className="flex items-center justify-between sm:justify-between">
               <div className="flex gap-2">
                 {overrideDialog.override && (
-                  <Button variant="destructive" onClick={handleDeleteOverride}>
-                    Remove Override
+                  <Button
+                    variant="destructive"
+                    onClick={handleDeleteOverride}
+                    disabled={overrideDialog.isDeleting || overrideDialog.isSaving}
+                  >
+                    {overrideDialog.isDeleting ? (
+                      <>
+                        <RefreshCw className="h-4 w-4 mr-2 animate-spin" />
+                        Removing...
+                      </>
+                    ) : (
+                      'Remove Override'
+                    )}
                   </Button>
                 )}
               </div>

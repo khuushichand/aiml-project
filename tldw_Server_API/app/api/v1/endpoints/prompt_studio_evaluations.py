@@ -129,9 +129,9 @@ def _is_prompt_studio_test_mode() -> bool:
 async def create_evaluation(
     evaluation: EvaluationCreate,
     background_tasks: BackgroundTasks,
+    request: Request,
     db: PromptStudioDatabase = Depends(get_prompt_studio_db),
     user_context: Dict = Depends(get_prompt_studio_user),
-    request: Request = None,
 ) -> EvaluationResponse:
     """
     Create a new evaluation for a prompt.
@@ -368,13 +368,13 @@ async def create_evaluation(
     "responses": {"200": {"description": "Evaluations", "content": {"application/json": {"examples": {"list": {"summary": "Eval list", "value": [{"id": 501, "project_id": 1, "prompt_id": 12, "status": "running"}]}}}}}}
 })
 async def list_evaluations(
+    request: Request,
     project_id: int = Query(..., description="Project ID"),
     prompt_id: Optional[int] = Query(None, description="Filter by prompt ID"),
     limit: int = Query(100, ge=1, le=1000),
     offset: int = Query(0, ge=0),
     db: PromptStudioDatabase = Depends(get_prompt_studio_db),
     user_context: Dict = Depends(get_prompt_studio_user),
-    request: Request = None,
 ) -> List[EvaluationResponse]:
     """
     List evaluations for a project.
@@ -466,9 +466,9 @@ async def list_evaluations(
 )
 async def get_evaluation(
     evaluation_id: int,
+    request: Request,
     db: PromptStudioDatabase = Depends(get_prompt_studio_db),
     user_context: Dict = Depends(get_prompt_studio_user),
-    request: Request = None,
 ) -> EvaluationResponse:
     """
     Get a specific evaluation.
@@ -565,9 +565,9 @@ async def get_evaluation(
 })
 async def delete_evaluation(
     evaluation_id: int,
+    request: Request,
     db: PromptStudioDatabase = Depends(get_prompt_studio_db),
     user_context: Dict = Depends(get_prompt_studio_user),
-    request: Request = None,
 ) -> Dict[str, str]:
     """
     Delete an evaluation (soft delete).

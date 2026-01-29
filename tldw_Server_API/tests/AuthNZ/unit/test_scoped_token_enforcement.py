@@ -45,15 +45,15 @@ def _build_app(with_scope_dep: bool) -> FastAPI:
     return app
 
 
-def _make_scoped_token() -> str:
+def _make_scoped_token(scope: str = "workflows", role: str = "user") -> str:
 
 
     svc = JWTService(get_settings())
     return svc.create_access_token(
         user_id=1,
         username="tester",
-        role="user",
-        additional_claims={"scope": "workflows"},
+        role=role,
+        additional_claims={"scope": scope},
     )
 
 
@@ -118,6 +118,37 @@ def test_scoped_token_allows_when_scope_dependency_present(monkeypatch):
     r = client.get("/protected", headers={"Authorization": f"Bearer {token}"})
     assert r.status_code == 200
     assert r.json() == {"ok": True}
+
+
+def test_scoped_token_does_not_bypass_with_admin_claim(monkeypatch):
+    monkeypatch.setenv("TEST_MODE", "1")
+    monkeypatch.setenv("AUTH_MODE", "multi_user")
+    monkeypatch.setenv("JWT_ALGORITHM", "HS256")
+    monkeypatch.setenv("JWT_SECRET_KEY", "unit-test-secret-key-1234567890-abcdef")
+    reset_settings()
+
+    import tldw_Server_API.app.core.AuthNZ.User_DB_Handling as user_mod
+    import tldw_Server_API.app.core.DB_Management.Users_DB as users_db
+
+    async def _fake_get_user_by_id(_user_id: int):
+        return {"id": 1, "username": "tester", "is_active": True}
+
+    monkeypatch.setattr(users_db, "get_user_by_id", _fake_get_user_by_id)
+
+    async def _fake_get_session_manager():
+        return _StubSessionManager()
+
+    monkeypatch.setattr(user_mod, "get_session_manager", _fake_get_session_manager)
+    # Ensure principal is not admin even if token role claim is "admin".
+    monkeypatch.setattr(user_mod, "_enrich_user_with_rbac", lambda *_args, **_kwargs: (["user"], [], False))
+
+    token = _make_scoped_token(scope="notes", role="admin")
+    app = _build_app(with_scope_dep=True)
+    client = TestClient(app)
+
+    r = client.get("/protected", headers={"Authorization": f"Bearer {token}"})
+    assert r.status_code == 403
+    assert "invalid token scope" in r.json().get("detail", "").lower()
 
 
 def test_require_token_scope_enforces_bearer_api_key(monkeypatch):

@@ -5,6 +5,8 @@ from typing import Any, Dict, Literal, Optional, TypedDict
 
 from .analyzers.behavioral_detector import detect_honeypots
 from .analyzers.captcha_detector import detect_captcha
+from .analyzers.fingerprint_analyzer import analyze_fingerprinting
+from .analyzers.integrity_analyzer import analyze_function_integrity
 from .analyzers.js_detector import analyze_js_rendering
 from .analyzers.rate_limit_profiler import profile_rate_limits
 from .analyzers.robots_checker import check_robots_txt
@@ -41,6 +43,8 @@ async def gather_analysis(
     depth = scan_depth or "default"
     behavioral_result = detect_honeypots(url, scan_depth=depth)
     captcha_result = detect_captcha(url)
+    fingerprint_result = analyze_fingerprinting(url)
+    integrity_result = analyze_function_integrity(url)
 
     rate_limit_result = await profile_rate_limits(url, crawl_delay, impersonate=impersonate)
     waf_result = detect_waf(url, find_all=find_all)
@@ -51,6 +55,8 @@ async def gather_analysis(
         "js": js_result,
         "behavioral": behavioral_result,
         "captcha": captcha_result,
+        "fingerprint": fingerprint_result,
+        "integrity": integrity_result,
         "rate_limit": rate_limit_result,
         "waf": waf_result,
     }

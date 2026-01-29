@@ -1,6 +1,6 @@
 # User Guides
 
-Welcome to the tldw_server User Guides. This section collects practical, task-focused docs to help you install, configure, and use the server, the integrated WebUI, and key features like media ingestion, chat, RAG, embeddings, and evaluations.
+Welcome to the tldw_server User Guides. This section collects practical, task-focused docs to help you install, configure, and use the server, the Next.js WebUI, and key features like media ingestion, chat, RAG, embeddings, and evaluations.
 
 ## Quick Start
 
@@ -22,7 +22,7 @@ pip install -e .
 ```bash
 python -m uvicorn tldw_Server_API.app.main:app --reload
 # API docs:   http://127.0.0.1:8000/docs
-# Web UI:     http://127.0.0.1:8000/webui/
+# Quickstart: http://127.0.0.1:8000/api/v1/config/quickstart
 ```
 
 ## Start Here
@@ -39,6 +39,7 @@ python -m uvicorn tldw_Server_API.app.main:app --reload
 - Evaluations (Deployment): Evaluations_Deployment_Guide.md
 - Evaluations (Production): Evaluations_Production_Deployment_Guide.md
 - Chunking Templates: Chunking_Templates_User_Guide.md
+- Web Scraping & Ingestion: Web_Scraping_Ingestion_Guide.md
 - Chatbooks (export/import): Chatbook_User_Guide.md
 - Bring Your Own Keys (BYOK): BYOK_User_Guide.md
 
@@ -56,4 +57,4 @@ python -m uvicorn tldw_Server_API.app.main:app --reload
 - Prompt Engineering Notes: Prompt_Engineering_Notes.md
 - Local LLM Setup: Setting_up_a_local_LLM.md
 
-Tip: The WebUI is served at `/webui` from the same server to avoid CORS issues. The OpenAPI docs at `/docs` include an Authorize button that supports both auth modes: use `X-API-KEY` for single-user or `Bearer` JWT for multi-user.
+Tip: Use `/api/v1/config/quickstart` to reach the configured UI/docs target. The OpenAPI docs at `/docs` include an Authorize button that supports both auth modes: use `X-API-KEY` for single-user or `Bearer` JWT for multi-user.

@@ -28,6 +28,7 @@ from collections import deque, defaultdict
 from urllib.parse import urlparse, urljoin
 import random
 import os
+import re
 
 from loguru import logger
 import aiofiles
@@ -646,6 +647,18 @@ class EnhancedWebScraper:
         self._progress: Dict[str, Any] = defaultdict(dict)
 
     @staticmethod
+    def _as_bool(value: Any, default: bool = False) -> bool:
+        if isinstance(value, bool):
+            return value
+        if value is None:
+            return default
+        if isinstance(value, (int, float)):
+            return bool(value)
+        if isinstance(value, str):
+            return value.strip().lower() in {"1", "true", "yes", "on", "y"}
+        return default
+
+    @staticmethod
     def _normalize_cookie_map(
         custom_cookies: Optional[List[Dict[str, Any]]]
     ) -> Dict[str, str]:
@@ -705,6 +718,27 @@ class EnhancedWebScraper:
         return cookies_list
 
     @staticmethod
+    def _parse_proxy_for_playwright(proxy_url: str) -> Optional[Dict[str, str]]:
+        if not proxy_url:
+            return None
+        pattern = r"^(?:(?P<scheme>\\w+)://)?(?:(?P<username>[^:@]+):(?P<password>[^@]+)@)?(?P<host>[^:]+):(?P<port>\\d+)$"
+        match = re.match(pattern, proxy_url)
+        if not match:
+            return None
+        scheme = match.group("scheme") or "http"
+        host = match.group("host")
+        port = match.group("port")
+        if not host or not port:
+            return None
+        result: Dict[str, str] = {"server": f"{scheme}://{host}:{port}"}
+        username = match.group("username")
+        password = match.group("password")
+        if username and password:
+            result["username"] = username
+            result["password"] = password
+        return result
+
+    @staticmethod
     def _build_request_headers(
         user_agent: Optional[str],
         custom_headers: Optional[Dict[str, str]],
@@ -731,6 +765,72 @@ class EnhancedWebScraper:
         if user_agent:
             headers["User-Agent"] = user_agent
         return headers
+
+    async def _run_preflight_analysis(self, url: str) -> Optional[Dict[str, Any]]:
+        cfg = self.config or {}
+        enabled = self._as_bool(cfg.get("web_scraper_preflight_analyzers", False), False)
+        if not enabled:
+            return None
+
+        find_all = self._as_bool(cfg.get("web_scraper_preflight_find_all_waf", False), False)
+        impersonate = self._as_bool(cfg.get("web_scraper_preflight_impersonate", False), False)
+        scan_depth_raw = str(cfg.get("web_scraper_preflight_scan_depth", "") or "").strip().lower()
+        if scan_depth_raw not in {"default", "thorough", "deep"}:
+            scan_depth_raw = "default"
+
+        try:
+            timeout_s = float(cfg.get("web_scraper_preflight_timeout_s", 0) or 0)
+        except Exception:
+            timeout_s = 0.0
+
+        try:
+            from tldw_Server_API.app.core.Web_Scraping.scraper_analyzers import run_analysis
+
+            task = asyncio.to_thread(
+                run_analysis,
+                url,
+                find_all=find_all,
+                impersonate=impersonate,
+                scan_depth=scan_depth_raw,
+            )
+            if timeout_s and timeout_s > 0:
+                return await asyncio.wait_for(task, timeout=timeout_s)
+            return await task
+        except asyncio.TimeoutError:
+            logger.debug(f"Preflight analysis timed out for {url}")
+            return None
+        except Exception as exc:
+            logger.debug(f"Preflight analysis failed for {url}: {exc}")
+            return None
+
+    @staticmethod
+    def _apply_preflight_advice(
+        preflight: Optional[Dict[str, Any]],
+        backend_choice: str,
+        method: str,
+        backend_setting: str,
+    ) -> Tuple[str, str, List[str]]:
+        notes: List[str] = []
+        if not preflight or not isinstance(preflight, dict):
+            return backend_choice, method, notes
+
+        results = preflight.get("results", {})
+        if isinstance(results, dict):
+            js_result = results.get("js", {}) or {}
+            if (
+                method == "auto"
+                and js_result.get("status") == "success"
+                and (js_result.get("js_required") or js_result.get("is_spa"))
+            ):
+                method = "playwright"
+                notes.append("js_required")
+
+            tls_result = results.get("tls", {}) or {}
+            if backend_setting == "auto" and tls_result.get("status") == "active":
+                backend_choice = "curl"
+                notes.append("tls_active")
+
+        return backend_choice, method, notes
 
     def _build_cookie_map(
         self,
@@ -1041,6 +1141,34 @@ class EnhancedWebScraper:
                 except Exception:
                     pass
 
+            preflight_analysis = await self._run_preflight_analysis(url)
+            backend_setting = str(getattr(plan, "backend", "auto") or "auto").lower()
+            backend_choice, method, preflight_notes = self._apply_preflight_advice(
+                preflight_analysis, backend_choice, method, backend_setting
+            )
+            if preflight_notes:
+                logger.debug(f"Preflight advice for {url}: {preflight_notes}")
+
+            include_preflight = self._as_bool(
+                (self.config or {}).get("web_scraper_preflight_include_results", False),
+                False,
+            )
+            preflight_payload = None
+            if include_preflight and preflight_analysis is not None:
+                preflight_payload = {
+                    "analysis": preflight_analysis,
+                    "advice": {
+                        "backend": backend_choice,
+                        "method": method,
+                        "notes": preflight_notes,
+                    },
+                }
+
+            def _attach_preflight(result: Dict[str, Any]) -> Dict[str, Any]:
+                if preflight_payload and isinstance(result, dict):
+                    result.setdefault("preflight_analysis", preflight_payload)
+                return result
+
             # robots.txt enforcement (fail open if error)
             if getattr(plan, "respect_robots", True):
                 try:
@@ -1053,11 +1181,11 @@ class EnhancedWebScraper:
                             increment_counter("scrape_blocked_by_robots_total", labels={"domain": parsed.netloc})
                         except Exception:
                             increment_counter("scrape_blocked_by_robots_total", labels={})
-                        return {
+                        return _attach_preflight({
                             "url": url,
                             "error": "Blocked by robots policy",
                             "extraction_successful": False,
-                        }
+                        })
                 except Exception:
                     pass
 
@@ -1068,7 +1196,7 @@ class EnhancedWebScraper:
                 effective_method = "trafilatura"
 
             if effective_method == "trafilatura":
-                return await self._scrape_with_trafilatura(
+                result = await self._scrape_with_trafilatura(
                     url,
                     merged_cookies,
                     user_agent=None,
@@ -1084,8 +1212,9 @@ class EnhancedWebScraper:
                     regex_settings=regex_settings,
                     cluster_settings=cluster_settings,
                 )
+                return _attach_preflight(result)
             elif effective_method == "playwright":
-                return await self._scrape_with_playwright(
+                result = await self._scrape_with_playwright(
                     url,
                     merged_cookies,
                     user_agent=None,
@@ -1099,8 +1228,9 @@ class EnhancedWebScraper:
                     regex_settings=regex_settings,
                     cluster_settings=cluster_settings,
                 )
+                return _attach_preflight(result)
             elif effective_method == "beautifulsoup":
-                return await self._scrape_with_beautifulsoup(
+                result = await self._scrape_with_beautifulsoup(
                     url,
                     merged_cookies,
                     user_agent=None,
@@ -1116,6 +1246,7 @@ class EnhancedWebScraper:
                     regex_settings=regex_settings,
                     cluster_settings=cluster_settings,
                 )
+                return _attach_preflight(result)
             else:
                 raise ValueError(f"Unknown scraping method: {effective_method}")
 
@@ -1271,7 +1402,12 @@ class EnhancedWebScraper:
                 _http_client._validate_proxies_or_raise(proxies)  # type: ignore[attr-defined]
                 proxy_server = _http_client._resolve_proxy_for_url(url, proxies)  # type: ignore[attr-defined]
                 if proxy_server:
-                    proxy_cfg = {"server": proxy_server}
+                    proxy_cfg = self._parse_proxy_for_playwright(proxy_server)
+                    if proxy_cfg is None:
+                        if "://" in proxy_server:
+                            proxy_cfg = {"server": proxy_server}
+                        else:
+                            proxy_cfg = {"server": f"http://{proxy_server}"}
             except Exception as exc:
                 logger.debug(f"Playwright proxy validation failed: {exc}")
 

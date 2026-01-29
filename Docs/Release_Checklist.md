@@ -8,7 +8,7 @@ This document provides a practical checklist for preparing a full tldw_server re
 
 Ensure version numbers and release metadata are consistent and discoverable.
 
-- [ ] Bump the version in `pyproject.toml` and verify it matches all visible references (for example `README.md`, `Docs/`, Docker tags, and `start-webui.sh` comments if applicable).
+- [ ] Bump the version in `pyproject.toml` and verify it matches all visible references (for example `README.md`, `Docs/`, Docker tags).
 - [ ] Update release notes (for example `CHANGELOG.md` or a dedicated release notes file) with all user-visible changes, including any notable performance or behavior changes.
 - [ ] Verify API docs that mention a version or base URL are current.
 - [ ] Document any new or changed environment variables in `README.md` and the relevant docs under `Docs/`.
@@ -56,7 +56,7 @@ Verify that a new user can cleanly install and start the backend using the docum
 - [ ] Start the server (for example `python -m uvicorn tldw_Server_API.app.main:app --reload`) and verify there are no import or configuration errors.
 - [ ] Follow the minimal configuration flow: copy `.env.authnz.template` to `.env`, run the AuthNZ initialization script, and confirm it completes successfully.
 - [ ] Verify the server handles missing but optional configuration files gracefully (clear error messages, no crashes).
-- [ ] Build and run the main Docker image, confirming the container serves `/docs` and `/webui` as expected.
+- [ ] Build and run the main Docker image, confirming the container serves `/docs` and `/api/v1/config/quickstart` as expected.
 - [ ] Verify that `ffmpeg` is installed and available on `PATH` so that audio/video ingestion and STT features work as documented.
 - [ ] After startup, call a simple health or status endpoint (for example `GET /docs` or a dedicated health check) and confirm it responds successfully.
 
@@ -98,8 +98,8 @@ Exercise the system under different authentication modes and provider configurat
 
 Confirm that the Web UI integrates correctly with the backend and that core user flows work.
 
-- [ ] Run the `tldw-frontend` dev build and verify it can connect to the backend in at least single-user mode (and multi-user, if supported).
-- [ ] Run the production build for `tldw-frontend` (for example `npm run build`) and ensure it completes without errors.
+- [ ] Run the `apps/tldw-frontend` dev build and verify it can connect to the backend in at least single-user mode (and multi-user, if supported).
+- [ ] Run the production build for `apps/tldw-frontend` (for example `npm run build`) and ensure it completes without errors.
 - [ ] From the Web UI, upload and process media (video, audio, or documents) and confirm processing completes successfully.
 - [ ] Use the Web UI to search ingested content and verify results match expectations.
 - [ ] Start a chat session from the Web UI and confirm messages stream or complete as expected.

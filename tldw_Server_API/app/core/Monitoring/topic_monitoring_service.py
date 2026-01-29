@@ -82,6 +82,45 @@ class TopicMonitoringService:
             os.getenv("TOPIC_MONITOR_SIMHASH_DISTANCE", monitoring_cfg.get("simhash_distance", 3)),
             3,
         )
+        self._watchlists_path, self._db_path = self._resolve_paths(monitoring_cfg)
+        self._db = TopicMonitoringDB(db_path=self._db_path)
+        self._watchlists: Dict[str, Watchlist] = {}
+        self._compiled: Dict[str, List[CompiledRule]] = {}
+        self._dedupe_state: Dict[str, Dict[str, Deque[Tuple[float, int]]]] = {}
+        self._dedupe_stream_last_seen: Dict[str, float] = {}
+        self._dedupe_last_cleanup: float = 0.0
+        self._seed_watchlists_from_file()
+        self._load_watchlists_from_db()
+
+    @staticmethod
+    def _coerce_int(value: Any, default: int) -> int:
+        if value is None or value == "":
+            return default
+        try:
+            return int(value)
+        except (TypeError, ValueError):
+            return default
+
+    def _resolve_enabled(self, monitoring_cfg: Dict[str, Any]) -> bool:
+        raw = monitoring_cfg.get("enabled") if isinstance(monitoring_cfg, dict) else None
+        if raw is None:
+            raw = os.getenv("MONITORING_ENABLED", "false")
+        return str(raw).strip().lower() in {"1", "true", "yes", "on", "y"}
+
+    def _resolve_max_scan_chars(self) -> int:
+        default = 200000
+        mod_cfg = self._config.get("moderation") if isinstance(self._config, dict) else None
+        if isinstance(mod_cfg, dict) and "max_scan_chars" in mod_cfg:
+            try:
+                return int(mod_cfg.get("max_scan_chars", default))
+            except Exception:
+                pass
+        raw = os.getenv("MODERATION_MAX_SCAN_CHARS")
+        if raw is None:
+            raw = os.getenv("TOPIC_MONITOR_MAX_SCAN_CHARS", str(default))
+        return self._coerce_int(raw, default)
+
+    def _resolve_paths(self, monitoring_cfg: Dict[str, Any]) -> Tuple[str, str]:
         configured_watchlists = monitoring_cfg.get("watchlists_file") if isinstance(monitoring_cfg, dict) else None
         if configured_watchlists:
             raw_watchlists = configured_watchlists
@@ -146,42 +185,7 @@ class TopicMonitoringService:
                 wl_p = (root / wl_p).resolve()
             if not db_p.is_absolute():
                 db_p = (root / db_p).resolve()
-        self._watchlists_path = str(wl_p)
-        self._db_path = str(db_p)
-        self._db = TopicMonitoringDB(db_path=self._db_path)
-        self._watchlists: Dict[str, Watchlist] = {}
-        self._compiled: Dict[str, List[CompiledRule]] = {}
-        self._dedupe_state: Dict[str, Dict[str, Deque[Tuple[float, int]]]] = {}
-        self._seed_watchlists_from_file()
-        self._load_watchlists_from_db()
-
-    @staticmethod
-    def _coerce_int(value: Any, default: int) -> int:
-        if value is None or value == "":
-            return default
-        try:
-            return int(value)
-        except (TypeError, ValueError):
-            return default
-
-    def _resolve_enabled(self, monitoring_cfg: Dict[str, Any]) -> bool:
-        raw = monitoring_cfg.get("enabled") if isinstance(monitoring_cfg, dict) else None
-        if raw is None:
-            raw = os.getenv("MONITORING_ENABLED", "false")
-        return str(raw).strip().lower() in {"1", "true", "yes", "on", "y"}
-
-    def _resolve_max_scan_chars(self) -> int:
-        default = 200000
-        mod_cfg = self._config.get("moderation") if isinstance(self._config, dict) else None
-        if isinstance(mod_cfg, dict) and "max_scan_chars" in mod_cfg:
-            try:
-                return int(mod_cfg.get("max_scan_chars", default))
-            except Exception:
-                pass
-        raw = os.getenv("MODERATION_MAX_SCAN_CHARS")
-        if raw is None:
-            raw = os.getenv("TOPIC_MONITOR_MAX_SCAN_CHARS", str(default))
-        return self._coerce_int(raw, default)
+        return str(wl_p), str(db_p)
 
     # --------------------- File I/O (seed/import) ---------------------
     def _load_watchlists_file(self) -> Optional[List[Watchlist]]:
@@ -517,6 +521,10 @@ class TopicMonitoringService:
             self._enabled = self._resolve_enabled(monitoring_cfg)
             self._max_scan_chars = self._resolve_max_scan_chars()
             self._dedupe_state = {}
+            self._dedupe_stream_last_seen = {}
+            self._dedupe_last_cleanup = 0.0
+            self._watchlists_path, self._db_path = self._resolve_paths(monitoring_cfg)
+            self._db = TopicMonitoringDB(db_path=self._db_path)
             self._seed_watchlists_from_file(
                 delete_missing=delete_missing,
                 disable_missing=disable_missing,
@@ -578,8 +586,6 @@ class TopicMonitoringService:
     ) -> List[Tuple[str, Watchlist]]:
         out_global: List[Tuple[str, Watchlist]] = []
         out_scoped: List[Tuple[str, Watchlist]] = []
-        if not user_id:
-            return []
         with self._lock:
             items = list(self._watchlists.items())
         for wid, wl in items:
@@ -592,6 +598,9 @@ class TopicMonitoringService:
                 continue
             if scope_type == "global":
                 out_global.append((wid, wl))
+                continue
+            if not user_id:
+                continue
             elif scope_type == "user" and str(scope_id) == str(user_id):
                 out_scoped.append((wid, wl))
             elif scope_type == "team" and team_ids:
@@ -640,6 +649,21 @@ class TopicMonitoringService:
     def _hamming_distance(a: int, b: int) -> int:
         return (a ^ b).bit_count()
 
+    def _prune_dedupe_state(self, now: float) -> None:
+        if not self._dedupe_stream_last_seen:
+            self._dedupe_last_cleanup = now
+            return
+        window = self._dedup_window_seconds
+        stale = [
+            stream_id
+            for stream_id, last_seen in self._dedupe_stream_last_seen.items()
+            if (now - last_seen) > window
+        ]
+        for stream_id in stale:
+            self._dedupe_stream_last_seen.pop(stream_id, None)
+            self._dedupe_state.pop(stream_id, None)
+        self._dedupe_last_cleanup = now
+
     def _dedupe_should_skip(
         self,
         *,
@@ -651,6 +675,9 @@ class TopicMonitoringService:
         simhash = self._simhash(text)
         simhash_hex = f"{simhash:016x}"
         with self._lock:
+            self._dedupe_stream_last_seen[stream_id] = now
+            if (now - self._dedupe_last_cleanup) >= self._dedup_window_seconds:
+                self._prune_dedupe_state(now)
             by_rule = self._dedupe_state.setdefault(stream_id, {})
             entries = by_rule.setdefault(rule_id, deque())
             while entries and (now - entries[0][0]) > self._dedup_window_seconds:
@@ -693,15 +720,18 @@ class TopicMonitoringService:
         """Scan text for any watchlist matches and emit alerts.
         Returns count of alerts created.
         """
-        if not text or not user_id:
+        if not text:
             return 0
         if not self._monitoring_active():
             return 0
         total_created = 0
         applicable = self._applicable_watchlists(user_id, team_ids=team_ids, org_ids=org_ids)
+        if not applicable:
+            return 0
         with self._lock:
             compiled_map = {wid: list(self._compiled.get(wid) or []) for wid, _ in applicable}
         streaming_mode = bool(source_id and (chunk_id is not None or chunk_seq is not None))
+        alert_user_id = str(user_id) if user_id is not None else None
         for wid, wl in applicable:
             compiled = compiled_map.get(wid, [])
             for cr in compiled:
@@ -709,9 +739,11 @@ class TopicMonitoringService:
                 if not match_span:
                     continue
                 if streaming_mode:
+                    # Dedupe per watchlist to avoid suppressing alerts across distinct watchlists
+                    rule_key = f"{wid}:{cr.rule_id}"
                     skip, dedupe_meta = self._dedupe_should_skip(
                         stream_id=str(source_id),
-                        rule_id=str(cr.rule_id),
+                        rule_id=rule_key,
                         text=text,
                     )
                     if skip:
@@ -723,7 +755,7 @@ class TopicMonitoringService:
                         continue
                 else:
                     if self._db.recent_duplicate_exists(
-                        user_id=str(user_id),
+                        user_id=alert_user_id,
                         watchlist_id=str(wid),
                         source=str(source),
                         rule_id=str(cr.rule_id),
@@ -749,7 +781,7 @@ class TopicMonitoringService:
                 if alert_scope_type != "global":
                     alert_scope_id = str(wl.scope_id) if getattr(wl, "scope_id", None) is not None else scope_id
                 alert = TopicAlert(
-                    user_id=str(user_id),
+                    user_id=alert_user_id,
                     scope_type=alert_scope_type,
                     scope_id=alert_scope_id,
                     source=source,
@@ -790,9 +822,11 @@ class TopicMonitoringService:
         metadata: Optional[Dict[str, Any]] = None,
     ) -> None:
         """Run evaluate_and_alert in the background to avoid blocking the caller."""
-        if not text or not user_id:
+        if not text:
             return
         if not self._monitoring_active():
+            return
+        if not self._applicable_watchlists(user_id, team_ids=team_ids, org_ids=org_ids):
             return
 
         def _run_sync() -> None:

@@ -6,9 +6,8 @@ import userEvent from '@testing-library/user-event';
 import BudgetsPage from '../page';
 import { api } from '@/lib/api-client';
 
-const setPageMock = vi.hoisted(() => vi.fn());
-const setPageSizeMock = vi.hoisted(() => vi.fn());
-const resetPaginationMock = vi.hoisted(() => vi.fn());
+const setPaginationValuesMock = vi.hoisted(() => vi.fn());
+const clearPaginationMock = vi.hoisted(() => vi.fn());
 
 vi.mock('@/components/PermissionGuard', () => ({
   PermissionGuard: ({ children }: { children: ReactNode }) => <>{children}</>,
@@ -27,13 +26,11 @@ vi.mock('@/components/OrgContextSwitcher', () => ({
 }));
 
 vi.mock('@/lib/use-url-state', () => ({
-  useUrlPagination: () => ({
-    page: 1,
-    pageSize: 20,
-    setPage: setPageMock,
-    setPageSize: setPageSizeMock,
-    resetPagination: resetPaginationMock,
-  }),
+  useUrlMultiState: () => ([
+    { page: 1, pageSize: 20 },
+    setPaginationValuesMock,
+    clearPaginationMock,
+  ]),
 }));
 
 vi.mock('@/lib/api-client', () => ({
@@ -144,16 +141,14 @@ describe('BudgetsPage', () => {
     render(<BudgetsPage />);
 
     await screen.findByText('Acme Co');
-    setPageMock.mockClear();
-    setPageSizeMock.mockClear();
-    resetPaginationMock.mockClear();
+    setPaginationValuesMock.mockClear();
+    clearPaginationMock.mockClear();
 
     const user = userEvent.setup();
     await user.click(screen.getByRole('button', { name: '2' }));
-    expect(setPageMock).toHaveBeenCalledWith(2);
+    expect(setPaginationValuesMock).toHaveBeenCalledWith({ page: 2 });
 
     await user.selectOptions(screen.getByRole('combobox'), '50');
-    expect(setPageSizeMock).toHaveBeenCalledWith(50);
-    expect(resetPaginationMock).toHaveBeenCalled();
+    expect(setPaginationValuesMock).toHaveBeenCalledWith({ pageSize: 50, page: 1 });
   });
 });

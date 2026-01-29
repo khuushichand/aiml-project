@@ -77,12 +77,12 @@ Commercial
     https://docs.cartesia.ai/get-started/overview
 
 
-
+https://github.com/ananta-sj/ReFlow-Studio
 
 https://github.com/bytedance/MegaTTS3
     https://modelscope.cn/models/ACoderPassBy/MegaTTS-SFT/files
 
-
+https://github.com/High-Logic/Genie-TTS/tree/master/src/genie_tts
 https://metis-demo.github.io/#metis-tts
 https://www.reddit.com/r/LocalLLaMA/comments/1n0bhd7/microsoft_vibevoice_tts_opensourced_supports_90/
 https://github.com/Extraltodeus/Quick-slap-tkinter-dia/blob/main/README.md

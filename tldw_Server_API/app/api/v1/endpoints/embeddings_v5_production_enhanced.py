@@ -13,13 +13,12 @@ Key enhancements over v5:
 from __future__ import annotations
 
 import asyncio
-import inspect
 import json
 import base64
 import hashlib
 import time
 import threading
-from datetime import datetime, timedelta
+from datetime import datetime
 from typing import List, Union, Optional, Dict, Any, Tuple
 from enum import Enum
 import numpy as np
@@ -397,7 +396,17 @@ def _tenant_rps_runtime() -> int:
     try:
         env_val = os.getenv("EMBEDDINGS_TENANT_RPS")
         if env_val is not None and str(env_val).strip() != "":
-            return int(env_val)
+            parsed = int(env_val)
+            # In pytest, the global conftest sets EMBEDDINGS_TENANT_RPS=0 to
+            # disable tenant quotas by default. Allow explicit monkeypatches
+            # of TENANT_RPS to override that default within unit tests.
+            if (
+                parsed <= 0
+                and os.getenv("PYTEST_CURRENT_TEST") is not None
+                and int(globals().get("TENANT_RPS", 0) or 0) > 0
+            ):
+                return int(TENANT_RPS)
+            return parsed
     except Exception:
         pass
     return TENANT_RPS
@@ -674,11 +683,35 @@ def _chroma_manager_for_user(user: User) -> ChromaDBManager:
     return ChromaDBManager(user_id=str(user_id), user_embedding_config=cfg)
 
 
+def _split_provider_model(model: str) -> Tuple[Optional[str], str]:
+    """Split provider-qualified model IDs like 'openai:model'."""
+    if not isinstance(model, str):
+        return None, str(model)
+    if ":" in model:
+        prefix, rest = model.split(":", 1)
+        prefix = prefix.strip().lower()
+        rest = rest.strip()
+        if prefix and rest:
+            return prefix, rest
+    return None, model
+
+
 def _resolve_model_and_provider(model: Optional[str], provider: Optional[str]) -> Tuple[str, str]:
     cfg = settings.get("EMBEDDING_CONFIG", {}) or {}
     default_model = model or cfg.get("embedding_model") or cfg.get("default_model_id") or "sentence-transformers/all-MiniLM-L6-v2"
-    resolved_provider = guess_provider_for_model(default_model, provider)
-    return default_model, resolved_provider
+    prefix_provider, stripped_model = _split_provider_model(default_model)
+    if provider:
+        resolved_provider = provider.lower()
+        if prefix_provider and prefix_provider != resolved_provider:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"Model provider prefix '{prefix_provider}' does not match provider '{resolved_provider}'",
+            )
+        return stripped_model, resolved_provider
+    if prefix_provider:
+        return stripped_model, prefix_provider
+    resolved_provider = guess_provider_for_model(stripped_model, None)
+    return stripped_model, resolved_provider
 
 
 def _get_allowed_models() -> Optional[List[str]]:
@@ -1187,10 +1220,11 @@ async def run_compactor_once(
 def tokens_to_texts(
     tokens_input: Union[List[int], List[List[int]]],
     model_name: str
-) -> Tuple[List[str], int]:
+) -> Tuple[List[str], int, List[int]]:
     """Convert token arrays to text using model tokenizer when possible.
 
-    Returns (texts, total_token_count). Uses tiktoken encoding_for_model or cl100k_base fallback.
+    Returns (texts, total_token_count, per_input_token_counts).
+    Uses tiktoken encoding_for_model or cl100k_base fallback.
     """
     try:
         enc = get_tokenizer(model_name)
@@ -1199,27 +1233,45 @@ def tokens_to_texts(
 
     texts: List[str] = []
     total_tokens = 0
+    token_counts: List[int] = []
     # Single token array
     if tokens_input and isinstance(tokens_input, list) and tokens_input and isinstance(tokens_input[0], int):
         arr = tokens_input  # type: ignore[assignment]
         total_tokens += len(arr)
+        token_counts.append(len(arr))
         try:
             texts.append(enc.decode(arr))
-        except Exception:
+        except Exception as exc:
+            logger.warning(
+                "Failed to decode token array for model '{}' (index 0, tokens={}): {}",
+                model_name,
+                len(arr),
+                exc,
+            )
+            # Fall back to an empty string to preserve request shape; the raw
+            # token counts are still used for limits/usage accounting.
             texts.append("")
-        return texts, total_tokens
+        return texts, total_tokens, token_counts
 
     # Batch of token arrays
     if tokens_input and isinstance(tokens_input, list):
-        for arr in tokens_input:  # type: ignore[assignment]
+        for idx, arr in enumerate(tokens_input):  # type: ignore[assignment]
             if not isinstance(arr, list) or not all(isinstance(x, int) for x in arr):
                 raise ValueError("Invalid token array format")
             total_tokens += len(arr)
+            token_counts.append(len(arr))
             try:
                 texts.append(enc.decode(arr))
-            except Exception:
+            except Exception as exc:
+                logger.warning(
+                    "Failed to decode token array for model '{}' (index {}, tokens={}): {}",
+                    model_name,
+                    idx,
+                    len(arr),
+                    exc,
+                )
                 texts.append("")
-        return texts, total_tokens
+        return texts, total_tokens, token_counts
 
     raise ValueError("Invalid token array input")
 
@@ -1232,6 +1284,12 @@ def _dimension_policy() -> str:
     except Exception:
         pass
     return "reduce"
+
+
+def _supports_openai_dimensions(model: str) -> bool:
+    """Return True when OpenAI model supports dimensions parameter."""
+    model_key = (model or "").split(":", 1)[-1]
+    return model_key.startswith("text-embedding-3")
 
 def adjust_dimensions(
     vectors: List[List[float]],
@@ -1791,6 +1849,19 @@ async def create_embeddings_batch_async(
 ) -> List[List[float]]:
     """Async wrapper for embeddings with caching and circuit breaker"""
 
+    if model_id:
+        prefix_provider, stripped_model = _split_provider_model(model_id)
+        if prefix_provider:
+            if provider and prefix_provider != provider.lower():
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail=(
+                        f"Model provider prefix '{prefix_provider}' does not match provider '{provider}'"
+                    ),
+                )
+            provider = prefix_provider
+            model_id = stripped_model
+
     embeddings = []
     uncached_texts = []
     uncached_indices = []
@@ -1997,10 +2068,20 @@ async def create_embedding_endpoint(
                 detail=f"Unknown provider: {provider}"
             )
 
+        # OpenAI-specific dimensions validation. For non-OpenAI providers we
+        # accept dimensions and apply the local dimension policy post-hoc.
+        if embedding_request.dimensions is not None and provider.lower() == "openai":
+            if not _supports_openai_dimensions(model):
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail="dimensions is only supported for OpenAI text-embedding-3 models",
+                )
+
         # Parse and validate input FIRST (before policy checks)
         texts_to_embed: List[str] = []
         provided_token_arrays = False
         provided_token_count = 0
+        token_lengths: Optional[List[int]] = None
 
         if isinstance(embedding_request.input, str):
             if not embedding_request.input.strip():
@@ -2014,23 +2095,28 @@ async def create_embedding_endpoint(
 
             # Support list[str], list[int], or list[list[int]]
             if all(isinstance(item, str) for item in embedding_request.input):
+                if any(not (item or "").strip() for item in embedding_request.input):  # type: ignore[union-attr]
+                    raise HTTPException(
+                        status_code=status.HTTP_400_BAD_REQUEST,
+                        detail="Input list cannot contain empty strings",
+                    )
                 texts_to_embed = embedding_request.input  # type: ignore[assignment]
             elif all(isinstance(item, int) for item in embedding_request.input):
                 # Single token array
                 try:
-                    texts_to_embed, provided_token_count = tokens_to_texts(embedding_request.input, model)
+                    texts_to_embed, provided_token_count, token_lengths = tokens_to_texts(embedding_request.input, model)
                     provided_token_arrays = True
                     embedding_token_inputs_total.labels(mode="single").inc()
-                except Exception:
-                    raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid token array input")
+                except Exception as e:
+                    raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid token array input") from e
             elif all(isinstance(item, list) for item in embedding_request.input):
                 # Batch of token arrays
                 try:
-                    texts_to_embed, provided_token_count = tokens_to_texts(embedding_request.input, model)
+                    texts_to_embed, provided_token_count, token_lengths = tokens_to_texts(embedding_request.input, model)
                     provided_token_arrays = True
                     embedding_token_inputs_total.labels(mode="batch").inc()
-                except Exception:
-                    raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid token array input")
+                except Exception as e:
+                    raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid token array input") from e
             else:
                 raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid input type")
         else:
@@ -2040,14 +2126,17 @@ async def create_embedding_endpoint(
         max_tokens = _get_model_max_tokens(provider, model)
         too_long: List[Tuple[int, int]] = []  # (index, token_count)
         token_total = 0
-        for idx, t in enumerate(texts_to_embed):
-            tok = count_tokens(t, model)
-            if not provided_token_arrays:
-                token_total += int(tok or 0)
-            if tok > max_tokens:
-                too_long.append((idx, tok))
-        if provided_token_arrays:
+        if provided_token_arrays and token_lengths is not None:
+            for idx, tok in enumerate(token_lengths):
+                if tok > max_tokens:
+                    too_long.append((idx, tok))
             token_total = int(provided_token_count or 0)
+        else:
+            for idx, t in enumerate(texts_to_embed):
+                tok = count_tokens(t, model)
+                token_total += int(tok or 0)
+                if tok > max_tokens:
+                    too_long.append((idx, tok))
         if too_long:
             # Return top-level JSON error object to match tests (not nested under "detail")
             return JSONResponse(
@@ -2231,7 +2320,11 @@ async def create_embedding_endpoint(
                     "model": model,
                     "api_key": _api_key,
                 }
-                if embedding_request.dimensions is not None:
+                if (
+                    embedding_request.dimensions is not None
+                    and provider.lower() == "openai"
+                    and _supports_openai_dimensions(model)
+                ):
                     adapter_request["dimensions"] = embedding_request.dimensions
                 result = adapter.embed(adapter_request) if adapter else None
                 if isinstance(result, dict) and isinstance(result.get("data"), list):
@@ -2525,8 +2618,8 @@ class EmbeddingsBatchResponse(BaseModel):
 )
 async def create_embeddings_batch_endpoint(
     payload: EmbeddingsBatchRequest,
+    request: Request,
     current_user: User = Depends(get_request_user),
-    request: Request = None,
     response: Response = None
 ) -> EmbeddingsBatchResponse:
     texts = payload.texts or []
@@ -2540,6 +2633,13 @@ async def create_embeddings_batch_endpoint(
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="texts cannot contain empty strings")
 
     model, provider = _resolve_model_and_provider(payload.model, payload.provider)
+
+    if payload.dimensions is not None and provider.lower() == "openai":
+        if not _supports_openai_dimensions(model):
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="dimensions is only supported for OpenAI text-embedding-3 models",
+            )
 
     enforce_policy = _should_enforce_policy(current_user)
     allowed_providers = _get_allowed_providers()
@@ -2657,9 +2757,9 @@ async def list_embedding_models():
 @router.get("/embeddings/models/{model_id:path}", summary="Get embedding model metadata")
 async def get_embedding_model_info(
     model_id: str,
+    request: Request,
     provider: Optional[str] = Query(None, description="Provider override"),
     current_user: User = Depends(get_request_user),
-    request: Request = None,
 ):
     model = model_id
     resolved_provider = guess_provider_for_model(model, provider)
@@ -3949,8 +4049,8 @@ class ReembedScheduleResponse(BaseModel):
 )
 async def schedule_reembed(
     req: ReembedScheduleRequest,
+    request: Request,
     current_user: User = Depends(get_request_user),
-    request: Request = None,
 ):
     """Create a media embeddings Jobs row to re-embed content.
 

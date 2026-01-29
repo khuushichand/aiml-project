@@ -211,6 +211,66 @@ def test_available_at_scheduling_delays_acquire(jobs_db):
     assert j2["status"] == "processing"
 
 
+def test_create_job_backfills_missing_batch_group(tmp_path, monkeypatch):
+
+
+    db_path = tmp_path / "jobs_legacy.db"
+    conn = sqlite3.connect(db_path)
+    try:
+        conn.executescript(
+            """
+            CREATE TABLE jobs (
+              id INTEGER PRIMARY KEY,
+              uuid TEXT UNIQUE,
+              domain TEXT NOT NULL,
+              queue TEXT NOT NULL,
+              job_type TEXT NOT NULL,
+              owner_user_id TEXT,
+              project_id INTEGER,
+              idempotency_key TEXT,
+              payload TEXT,
+              result TEXT,
+              status TEXT NOT NULL,
+              priority INTEGER DEFAULT 5,
+              max_retries INTEGER DEFAULT 3,
+              retry_count INTEGER DEFAULT 0,
+              available_at TEXT,
+              created_at TEXT,
+              updated_at TEXT,
+              request_id TEXT,
+              trace_id TEXT
+            );
+            """
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+    import tldw_Server_API.app.core.Jobs.manager as jobs_manager
+
+    def _no_migrate(path=None):
+        return path if path is not None else db_path
+
+    monkeypatch.setattr(jobs_manager, "ensure_jobs_tables", _no_migrate, raising=True)
+
+    jm = jobs_manager.JobManager(db_path)
+    job = jm.create_job(
+        domain="chatbooks",
+        queue="default",
+        job_type="export",
+        payload={"action": "export"},
+        owner_user_id="1",
+    )
+    assert job["status"] == "queued"
+
+    conn = sqlite3.connect(db_path)
+    try:
+        cols = {r[1] for r in conn.execute("PRAGMA table_info(jobs)").fetchall()}
+        assert "batch_group" in cols
+    finally:
+        conn.close()
+
+
 def test_dependencies_gate_acquire_and_unblock(jobs_db):
 
 

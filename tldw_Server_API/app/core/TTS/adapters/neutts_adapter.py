@@ -167,7 +167,7 @@ class NeuTTSAdapter(TTSAdapter):
                 )
             if request.format == AudioFormat.WAV:
                 raise TTSValidationError(
-                    "NeuTTS streaming does not support WAV output. Use PCM or disable streaming.",
+                    "NeuTTS streaming does not support WAV output. Use PCM/MP3/OPUS or disable streaming.",
                     provider=self.provider_name,
                     details={"format": request.format.value},
                 )
@@ -274,7 +274,7 @@ class NeuTTSAdapter(TTSAdapter):
             )
         if request.format == AudioFormat.WAV:
             raise TTSValidationError(
-                "NeuTTS streaming does not support WAV output. Use PCM or disable streaming.",
+                "NeuTTS streaming does not support WAV output. Use PCM/MP3/OPUS or disable streaming.",
                 provider=self.provider_name,
                 details={"format": request.format.value},
             )

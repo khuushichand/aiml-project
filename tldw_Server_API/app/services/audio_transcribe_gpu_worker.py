@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import os
+from functools import partial
 from pathlib import Path
 from typing import Optional, Dict, Any
 
@@ -28,6 +29,7 @@ async def _handle_gpu_audio_transcribe_stage(payload: Dict[str, Any]) -> Dict[st
 
     raw_model = payload.get("model")
     model = (raw_model.strip() if isinstance(raw_model, str) else raw_model) or None
+    hotwords = payload.get("hotwords")
     temp_dir = payload.get("temp_dir")
     # Constrain adapter file access to the job's temp dir for path safety.
     base_dir = Path(temp_dir) if temp_dir else None
@@ -37,11 +39,14 @@ async def _handle_gpu_audio_transcribe_stage(payload: Dict[str, Any]) -> Dict[st
     )
 
     artifact = await asyncio.to_thread(
-        run_stt_job_via_registry,
-        wav_path,
-        model,
-        None,
-        base_dir,
+        partial(
+            run_stt_job_via_registry,
+            wav_path,
+            model,
+            None,
+            hotwords=hotwords,
+            base_dir=base_dir,
+        )
     )
 
     segments_list = artifact.get("segments") or []

@@ -721,6 +721,8 @@ async def pmc_oa_ingest_pdf(
     ocr_dpi: int = Query(300, ge=72, le=600, description="OCR render DPI"),
     ocr_mode: Optional[str] = Query("fallback", description="OCR mode: 'always' or 'fallback'"),
     ocr_min_page_text_chars: int = Query(40, ge=0, le=2000, description="Min text chars/page to skip OCR"),
+    ocr_output_format: Optional[str] = Query(None, description="OCR output format: text|markdown|json"),
+    ocr_prompt_preset: Optional[str] = Query(None, description="OCR prompt preset (e.g., 'general', 'doc', 'table', 'spotting', 'json')"),
     chunk_method: Optional[str] = Query(None, description="Chunking method (e.g., 'sentences', 'semantic')"),
     chunk_size: int = Query(500, ge=50, le=4000, description="Target chunk size"),
     chunk_overlap: int = Query(200, ge=0, le=1000, description="Chunk overlap"),
@@ -776,6 +778,8 @@ async def pmc_oa_ingest_pdf(
             ocr_dpi=ocr_dpi,
             ocr_mode=ocr_mode,
             ocr_min_page_text_chars=ocr_min_page_text_chars,
+            ocr_output_format=ocr_output_format,
+            ocr_prompt_preset=ocr_prompt_preset,
         )
 
         # 3) Optional OAI-PMH metadata enrichment (oai_dc)
@@ -943,6 +947,8 @@ async def arxiv_ingest(
     ocr_dpi: int = Query(300, ge=72, le=600),
     ocr_mode: Optional[str] = Query("fallback"),
     ocr_min_page_text_chars: int = Query(40, ge=0, le=2000),
+    ocr_output_format: Optional[str] = Query(None, description="OCR output format: text|markdown|json"),
+    ocr_prompt_preset: Optional[str] = Query(None, description="OCR prompt preset (e.g., 'general', 'doc', 'table', 'spotting', 'json')"),
     db: MediaDatabase = Depends(get_media_db_for_user),
 ):
     loop = asyncio.get_running_loop()
@@ -989,6 +995,8 @@ async def arxiv_ingest(
             ocr_dpi=ocr_dpi,
             ocr_mode=ocr_mode,
             ocr_min_page_text_chars=ocr_min_page_text_chars,
+            ocr_output_format=ocr_output_format,
+            ocr_prompt_preset=ocr_prompt_preset,
         )
 
         # Persist with safe_metadata
@@ -1100,6 +1108,8 @@ async def eartharxiv_ingest(
     ocr_dpi: int = Query(300, ge=72, le=600),
     ocr_mode: Optional[str] = Query("fallback"),
     ocr_min_page_text_chars: int = Query(40, ge=0, le=2000),
+    ocr_output_format: Optional[str] = Query(None, description="OCR output format: text|markdown|json"),
+    ocr_prompt_preset: Optional[str] = Query(None, description="OCR prompt preset (e.g., 'general', 'doc', 'table', 'spotting', 'json')"),
     db: MediaDatabase = Depends(get_media_db_for_user),
 ):
     """Download an EarthArXiv PDF by OSF ID, process, and persist to the Media DB."""
@@ -1134,6 +1144,8 @@ async def eartharxiv_ingest(
             ocr_dpi=ocr_dpi,
             ocr_mode=ocr_mode,
             ocr_min_page_text_chars=ocr_min_page_text_chars,
+            ocr_output_format=ocr_output_format,
+            ocr_prompt_preset=ocr_prompt_preset,
         )
         content_for_db = result.get('transcript') or result.get('content') or result.get('text')
         if not content_for_db:
@@ -1242,6 +1254,8 @@ async def pubmed_ingest(
     ocr_dpi: int = Query(300, ge=72, le=600),
     ocr_mode: Optional[str] = Query("fallback"),
     ocr_min_page_text_chars: int = Query(40, ge=0, le=2000),
+    ocr_output_format: Optional[str] = Query(None, description="OCR output format: text|markdown|json"),
+    ocr_prompt_preset: Optional[str] = Query(None, description="OCR prompt preset (e.g., 'general', 'doc', 'table', 'spotting', 'json')"),
     db: MediaDatabase = Depends(get_media_db_for_user),
 ):
     loop = asyncio.get_running_loop()
@@ -1284,6 +1298,8 @@ async def pubmed_ingest(
             ocr_dpi=ocr_dpi,
             ocr_mode=ocr_mode,
             ocr_min_page_text_chars=ocr_min_page_text_chars,
+            ocr_output_format=ocr_output_format,
+            ocr_prompt_preset=ocr_prompt_preset,
         )
         content_for_db = result.get('transcript') or result.get('content')
         if not content_for_db:
@@ -1391,6 +1407,8 @@ async def s2_ingest(
     ocr_dpi: int = Query(300, ge=72, le=600),
     ocr_mode: Optional[str] = Query("fallback"),
     ocr_min_page_text_chars: int = Query(40, ge=0, le=2000),
+    ocr_output_format: Optional[str] = Query(None, description="OCR output format: text|markdown|json"),
+    ocr_prompt_preset: Optional[str] = Query(None, description="OCR prompt preset (e.g., 'general', 'doc', 'table', 'spotting', 'json')"),
     db: MediaDatabase = Depends(get_media_db_for_user),
 ):
     loop = asyncio.get_running_loop()
@@ -1432,6 +1450,8 @@ async def s2_ingest(
             ocr_dpi=ocr_dpi,
             ocr_mode=ocr_mode,
             ocr_min_page_text_chars=ocr_min_page_text_chars,
+            ocr_output_format=ocr_output_format,
+            ocr_prompt_preset=ocr_prompt_preset,
         )
         content_for_db = result.get('transcript') or result.get('content')
         if not content_for_db:
@@ -2717,6 +2737,8 @@ async def ingest_by_doi(
     ocr_dpi: int = Query(300, ge=72, le=600, description="OCR render DPI"),
     ocr_mode: Optional[str] = Query("fallback", description="OCR mode: 'always' or 'fallback'"),
     ocr_min_page_text_chars: int = Query(40, ge=0, le=2000, description="Min text chars/page to skip OCR"),
+    ocr_output_format: Optional[str] = Query(None, description="OCR output format: text|markdown|json"),
+    ocr_prompt_preset: Optional[str] = Query(None, description="OCR prompt preset (e.g., 'general', 'doc', 'table', 'spotting', 'json')"),
     chunk_method: Optional[str] = Query(None, description="Chunking method (e.g., 'sentences', 'semantic')"),
     chunk_size: int = Query(500, ge=50, le=4000, description="Target chunk size"),
     chunk_overlap: int = Query(200, ge=0, le=1000, description="Chunk overlap"),
@@ -2766,6 +2788,8 @@ async def ingest_by_doi(
             ocr_dpi=ocr_dpi,
             ocr_mode=ocr_mode,
             ocr_min_page_text_chars=ocr_min_page_text_chars,
+            ocr_output_format=ocr_output_format,
+            ocr_prompt_preset=ocr_prompt_preset,
         )
 
         content_for_db = None
@@ -2900,6 +2924,8 @@ async def ingest_batch(
                     ocr_dpi=payload.ocr_dpi,
                     ocr_mode=payload.ocr_mode,
                     ocr_min_page_text_chars=payload.ocr_min_page_text_chars,
+                    ocr_output_format=payload.ocr_output_format,
+                    ocr_prompt_preset=payload.ocr_prompt_preset,
                 )
                 content_for_db = result.get("transcript") or result.get("content") or result.get("text")
                 analysis_for_db = result.get("summary") or result.get("analysis")
@@ -3002,6 +3028,8 @@ async def ingest_batch(
                     ocr_dpi=payload.ocr_dpi,
                     ocr_mode=payload.ocr_mode,
                     ocr_min_page_text_chars=payload.ocr_min_page_text_chars,
+                    ocr_output_format=payload.ocr_output_format,
+                    ocr_prompt_preset=payload.ocr_prompt_preset,
                 )
                 content_for_db = result.get('transcript') or result.get('content') or result.get('text')
                 analysis_for_db = result.get('summary') or result.get('analysis')
@@ -3110,6 +3138,8 @@ async def ingest_batch(
                     ocr_dpi=payload.ocr_dpi,
                     ocr_mode=payload.ocr_mode,
                     ocr_min_page_text_chars=payload.ocr_min_page_text_chars,
+                    ocr_output_format=payload.ocr_output_format,
+                    ocr_prompt_preset=payload.ocr_prompt_preset,
                 )
                 content_for_db = result.get('transcript') or result.get('content') or result.get('text')
                 analysis_for_db = result.get('summary') or result.get('analysis')
@@ -3218,6 +3248,8 @@ async def ingest_batch(
                 ocr_dpi=payload.ocr_dpi,
                 ocr_mode=payload.ocr_mode,
                 ocr_min_page_text_chars=payload.ocr_min_page_text_chars,
+                ocr_output_format=payload.ocr_output_format,
+                ocr_prompt_preset=payload.ocr_prompt_preset,
             )
             content_for_db = None
             analysis_for_db = None
@@ -3677,6 +3709,8 @@ async def osf_ingest(
     ocr_dpi: int = Query(300, ge=72, le=600),
     ocr_mode: Optional[str] = Query("fallback"),
     ocr_min_page_text_chars: int = Query(40, ge=0, le=2000),
+    ocr_output_format: Optional[str] = Query(None, description="OCR output format: text|markdown|json"),
+    ocr_prompt_preset: Optional[str] = Query(None, description="OCR prompt preset (e.g., 'general', 'doc', 'table', 'spotting', 'json')"),
     db: MediaDatabase = Depends(get_media_db_for_user),
 ):
     loop = asyncio.get_running_loop()
@@ -3717,6 +3751,8 @@ async def osf_ingest(
             ocr_dpi=ocr_dpi,
             ocr_mode=ocr_mode,
             ocr_min_page_text_chars=ocr_min_page_text_chars,
+            ocr_output_format=ocr_output_format,
+            ocr_prompt_preset=ocr_prompt_preset,
         )
 
         content_for_db = result.get('transcript') or result.get('content')
@@ -3991,6 +4027,8 @@ async def zenodo_ingest(
     ocr_dpi: int = Query(300, ge=72, le=600),
     ocr_mode: Optional[str] = Query("fallback"),
     ocr_min_page_text_chars: int = Query(40, ge=0, le=2000),
+    ocr_output_format: Optional[str] = Query(None, description="OCR output format: text|markdown|json"),
+    ocr_prompt_preset: Optional[str] = Query(None, description="OCR prompt preset (e.g., 'general', 'doc', 'table', 'spotting', 'json')"),
     db: MediaDatabase = Depends(get_media_db_for_user),
 ):
     """Download a PDF from a Zenodo record (if available), process, and persist.
@@ -4044,6 +4082,8 @@ async def zenodo_ingest(
             ocr_dpi=ocr_dpi,
             ocr_mode=ocr_mode,
             ocr_min_page_text_chars=ocr_min_page_text_chars,
+            ocr_output_format=ocr_output_format,
+            ocr_prompt_preset=ocr_prompt_preset,
         )
         content_for_db = result.get('transcript') or result.get('content') or result.get('text')
         if not content_for_db:
@@ -4267,6 +4307,8 @@ async def figshare_ingest(
     ocr_dpi: int = Query(300, ge=72, le=600),
     ocr_mode: Optional[str] = Query("fallback"),
     ocr_min_page_text_chars: int = Query(40, ge=0, le=2000),
+    ocr_output_format: Optional[str] = Query(None, description="OCR output format: text|markdown|json"),
+    ocr_prompt_preset: Optional[str] = Query(None, description="OCR prompt preset (e.g., 'general', 'doc', 'table', 'spotting', 'json')"),
     db: MediaDatabase = Depends(get_media_db_for_user),
 ):
     loop = asyncio.get_running_loop()
@@ -4308,6 +4350,8 @@ async def figshare_ingest(
             ocr_dpi=ocr_dpi,
             ocr_mode=ocr_mode,
             ocr_min_page_text_chars=ocr_min_page_text_chars,
+            ocr_output_format=ocr_output_format,
+            ocr_prompt_preset=ocr_prompt_preset,
         )
         content_for_db = result.get('transcript') or result.get('content') or result.get('text')
         if not content_for_db:
@@ -4412,6 +4456,8 @@ async def figshare_ingest_by_doi(
     ocr_dpi: int = Query(300, ge=72, le=600),
     ocr_mode: Optional[str] = Query("fallback"),
     ocr_min_page_text_chars: int = Query(40, ge=0, le=2000),
+    ocr_output_format: Optional[str] = Query(None, description="OCR output format: text|markdown|json"),
+    ocr_prompt_preset: Optional[str] = Query(None, description="OCR prompt preset (e.g., 'general', 'doc', 'table', 'spotting', 'json')"),
     db: MediaDatabase = Depends(get_media_db_for_user),
 ):
     """Convenience endpoint: resolves DOI to Figshare article, downloads its PDF, and ingests it."""
@@ -4460,6 +4506,8 @@ async def figshare_ingest_by_doi(
             ocr_dpi=ocr_dpi,
             ocr_mode=ocr_mode,
             ocr_min_page_text_chars=ocr_min_page_text_chars,
+            ocr_output_format=ocr_output_format,
+            ocr_prompt_preset=ocr_prompt_preset,
         )
         content_for_db = result.get('transcript') or result.get('content') or result.get('text')
         if not content_for_db:
@@ -4661,6 +4709,8 @@ async def hal_ingest(
     ocr_dpi: int = Query(300, ge=72, le=600),
     ocr_mode: Optional[str] = Query("fallback"),
     ocr_min_page_text_chars: int = Query(40, ge=0, le=2000),
+    ocr_output_format: Optional[str] = Query(None, description="OCR output format: text|markdown|json"),
+    ocr_prompt_preset: Optional[str] = Query(None, description="OCR prompt preset (e.g., 'general', 'doc', 'table', 'spotting', 'json')"),
     db: MediaDatabase = Depends(get_media_db_for_user),
 ):
     loop = asyncio.get_running_loop()
@@ -4700,6 +4750,8 @@ async def hal_ingest(
             ocr_dpi=ocr_dpi,
             ocr_mode=ocr_mode,
             ocr_min_page_text_chars=ocr_min_page_text_chars,
+            ocr_output_format=ocr_output_format,
+            ocr_prompt_preset=ocr_prompt_preset,
         )
         content_for_db = result.get('transcript') or result.get('content') or result.get('text')
         if not content_for_db:
@@ -4820,6 +4872,8 @@ async def vixra_ingest(
     ocr_dpi: int = Query(300, ge=72, le=600),
     ocr_mode: Optional[str] = Query("fallback"),
     ocr_min_page_text_chars: int = Query(40, ge=0, le=2000),
+    ocr_output_format: Optional[str] = Query(None, description="OCR output format: text|markdown|json"),
+    ocr_prompt_preset: Optional[str] = Query(None, description="OCR prompt preset (e.g., 'general', 'doc', 'table', 'spotting', 'json')"),
     db: MediaDatabase = Depends(get_media_db_for_user),
 ):
     loop = asyncio.get_running_loop()
@@ -4855,6 +4909,8 @@ async def vixra_ingest(
             ocr_dpi=ocr_dpi,
             ocr_mode=ocr_mode,
             ocr_min_page_text_chars=ocr_min_page_text_chars,
+            ocr_output_format=ocr_output_format,
+            ocr_prompt_preset=ocr_prompt_preset,
         )
         content_for_db = result.get('transcript') or result.get('content') or result.get('text')
         if not content_for_db:

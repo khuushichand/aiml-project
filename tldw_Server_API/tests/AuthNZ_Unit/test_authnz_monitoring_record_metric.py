@@ -30,3 +30,33 @@ async def test_record_metric_continues_when_prometheus_update_fails(monkeypatch)
 
     assert calls["store"] == 1
     assert calls["check"] == 1
+
+
+@pytest.mark.asyncio
+async def test_auth_attempt_uses_attempt_status_label(monkeypatch):
+    monitor = AuthNZMonitor()
+
+    class _DummyCounter:
+        def __init__(self):
+            self.last_labels = None
+            self.last_inc = None
+
+        def labels(self, **kwargs):
+            self.last_labels = kwargs
+            return self
+
+        def inc(self, value):
+            self.last_inc = value
+
+    dummy = _DummyCounter()
+
+    monkeypatch.setattr(monitoring_module, "PROMETHEUS_AVAILABLE", True)
+    monkeypatch.setattr(monitoring_module, "auth_attempts_total", dummy)
+
+    await monitor._update_prometheus_metric(
+        MetricType.AUTH_ATTEMPT,
+        1.0,
+        labels={"method": "password"},
+    )
+
+    assert dummy.last_labels == {"method": "password", "status": "attempt"}

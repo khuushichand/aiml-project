@@ -117,6 +117,12 @@ async def test_refresh_session_replaces_cached_access_token(monkeypatch):
     session_id = 555
     user_id = 42
 
+    # Token binding validation now requires JWT-like claims aligned with the session.
+    manager._get_unverified_claims = types.MethodType(
+        lambda self, _token: {"sub": user_id, "session_id": session_id},
+        manager,
+    )
+
     # Seed redis cache with previous access token entry
     old_access_hash = manager.hash_token("old-access-token")
     fake_redis.kv[f"session:{old_access_hash}"] = json.dumps(
@@ -189,6 +195,13 @@ async def test_refresh_session_accepts_legacy_refresh_hash(monkeypatch):
 
     legacy_refresh = "legacy-refresh-token"
     legacy_hash = manager._token_hash_candidates(legacy_refresh)[1]
+    session_id = 777
+    user_id = 101
+
+    manager._get_unverified_claims = types.MethodType(
+        lambda self, _token: {"sub": user_id, "session_id": session_id},
+        manager,
+    )
 
     class CandidateStubConn:
         def __init__(self, expected_hash):
@@ -199,7 +212,7 @@ async def test_refresh_session_accepts_legacy_refresh_hash(monkeypatch):
         async def fetchrow(self, query, candidate_hash):
             self.fetch_calls.append(candidate_hash)
             if candidate_hash == self.expected_hash:
-                return {"id": 777, "user_id": 101}
+                return {"id": session_id, "user_id": user_id}
             return None
 
         async def execute(self, *args, **kwargs):

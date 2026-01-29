@@ -83,6 +83,16 @@ from tldw_Server_API.app.core.config import load_comprehensive_config, settings
 #
 # Functions:
 
+# --- Order-by validation helpers (defense in depth) ---
+_ORDER_BY_COLUMN_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*(?:\.[A-Za-z_][A-Za-z0-9_]*)?$")
+_ORDER_BY_EXPR_RE = re.compile(
+    r"^[A-Za-z_][A-Za-z0-9_]*(?:\.[A-Za-z_][A-Za-z0-9_]*)?"
+    r"(?:\s+COLLATE\s+NOCASE)?"
+    r"(?:\s+(?:ASC|DESC))?$",
+    re.IGNORECASE,
+)
+_SAFE_IDENTIFIER_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
+
 # --- Custom Exceptions ---
 class CharactersRAGDBError(Exception):
     """Base exception for CharactersRAGDB related errors."""
@@ -365,7 +375,7 @@ class CharactersRAGDB:
         is_memory_db (bool): True if the database is in-memory.
         db_path_str (str): String representation of the database path for SQLite connection.
     """
-    _CURRENT_SCHEMA_VERSION = 14  # Schema v14 adds chat topic metadata + clusters + flashcard backlinks
+    _CURRENT_SCHEMA_VERSION = 19  # Schema v19 adds voice assistant analytics tables
     _SCHEMA_NAME = "rag_char_chat_schema"  # Used for the db_schema_version table
     _ALLOWED_CONVERSATION_STATES: Tuple[str, ...] = ("in-progress", "resolved", "backlog", "non-viable")
     _DEFAULT_CONVERSATION_STATE = "in-progress"
@@ -424,6 +434,9 @@ class CharactersRAGDB:
         ("quizzes", "id"),
         ("quiz_questions", "id"),
         ("quiz_attempts", "id"),
+        ("writing_templates", "id"),
+        ("writing_themes", "id"),
+        ("voice_command_events", "id"),
     )
 
     _FULL_SCHEMA_SQL_V4 = """
@@ -1724,6 +1737,7 @@ CREATE TABLE IF NOT EXISTS quizzes (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   name TEXT NOT NULL,
   description TEXT,
+  workspace_tag TEXT,
   media_id INTEGER,
   total_questions INTEGER DEFAULT 0,
   time_limit_seconds INTEGER,
@@ -1872,6 +1886,427 @@ UPDATE db_schema_version
    SET version = 14
  WHERE schema_name = 'rag_char_chat_schema'
    AND version < 14;
+"""
+
+    # --- Migration: V14 -> V15 (Writing Playground persistence) ---
+    _MIGRATION_SQL_V14_TO_V15 = """
+/*───────────────────────────────────────────────────────────────
+  Migration to Version 15 - Writing Playground persistence (2026-02-10)
+───────────────────────────────────────────────────────────────*/
+PRAGMA foreign_keys = ON;
+
+CREATE TABLE IF NOT EXISTS writing_sessions(
+  id TEXT PRIMARY KEY,
+  name TEXT NOT NULL,
+  payload_json TEXT NOT NULL,
+  schema_version INTEGER NOT NULL DEFAULT 1,
+  version_parent_id TEXT,
+  created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  last_modified DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  deleted BOOLEAN NOT NULL DEFAULT 0,
+  client_id TEXT NOT NULL DEFAULT 'unknown',
+  version INTEGER NOT NULL DEFAULT 1
+);
+CREATE INDEX IF NOT EXISTS idx_writing_sessions_deleted ON writing_sessions(deleted);
+CREATE INDEX IF NOT EXISTS idx_writing_sessions_last_modified ON writing_sessions(last_modified);
+CREATE INDEX IF NOT EXISTS idx_writing_sessions_name ON writing_sessions(name);
+
+CREATE TABLE IF NOT EXISTS writing_templates(
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  name TEXT UNIQUE NOT NULL,
+  payload_json TEXT NOT NULL,
+  schema_version INTEGER NOT NULL DEFAULT 1,
+  version_parent_id TEXT,
+  is_default BOOLEAN NOT NULL DEFAULT 0,
+  created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  last_modified DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  deleted BOOLEAN NOT NULL DEFAULT 0,
+  client_id TEXT NOT NULL DEFAULT 'unknown',
+  version INTEGER NOT NULL DEFAULT 1
+);
+CREATE INDEX IF NOT EXISTS idx_writing_templates_deleted ON writing_templates(deleted);
+CREATE INDEX IF NOT EXISTS idx_writing_templates_last_modified ON writing_templates(last_modified);
+
+CREATE TABLE IF NOT EXISTS writing_themes(
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  name TEXT UNIQUE NOT NULL,
+  class_name TEXT,
+  css TEXT,
+  schema_version INTEGER NOT NULL DEFAULT 1,
+  version_parent_id TEXT,
+  is_default BOOLEAN NOT NULL DEFAULT 0,
+  order_index INTEGER NOT NULL DEFAULT 0,
+  created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  last_modified DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  deleted BOOLEAN NOT NULL DEFAULT 0,
+  client_id TEXT NOT NULL DEFAULT 'unknown',
+  version INTEGER NOT NULL DEFAULT 1
+);
+CREATE INDEX IF NOT EXISTS idx_writing_themes_deleted ON writing_themes(deleted);
+CREATE INDEX IF NOT EXISTS idx_writing_themes_last_modified ON writing_themes(last_modified);
+CREATE INDEX IF NOT EXISTS idx_writing_themes_order ON writing_themes(order_index);
+
+DROP TRIGGER IF EXISTS writing_sessions_sync_create;
+DROP TRIGGER IF EXISTS writing_sessions_sync_update;
+DROP TRIGGER IF EXISTS writing_sessions_sync_delete;
+DROP TRIGGER IF EXISTS writing_sessions_sync_undelete;
+
+CREATE TRIGGER writing_sessions_sync_create
+AFTER INSERT ON writing_sessions BEGIN
+  INSERT INTO sync_log(entity,entity_id,operation,timestamp,client_id,version,payload)
+  VALUES('writing_sessions',NEW.id,'create',NEW.last_modified,NEW.client_id,NEW.version,
+         json_object('id',NEW.id,'name',NEW.name,'payload_json',NEW.payload_json,
+                     'schema_version',NEW.schema_version,'version_parent_id',NEW.version_parent_id,
+                     'created_at',NEW.created_at,'last_modified',NEW.last_modified,
+                     'deleted',NEW.deleted,'client_id',NEW.client_id,'version',NEW.version));
+END;
+
+CREATE TRIGGER writing_sessions_sync_update
+AFTER UPDATE ON writing_sessions
+WHEN OLD.deleted = NEW.deleted AND (
+     OLD.name IS NOT NEW.name OR
+     OLD.payload_json IS NOT NEW.payload_json OR
+     OLD.schema_version IS NOT NEW.schema_version OR
+     OLD.version_parent_id IS NOT NEW.version_parent_id OR
+     OLD.last_modified IS NOT NEW.last_modified OR
+     OLD.version IS NOT NEW.version)
+BEGIN
+  INSERT INTO sync_log(entity,entity_id,operation,timestamp,client_id,version,payload)
+  VALUES('writing_sessions',NEW.id,'update',NEW.last_modified,NEW.client_id,NEW.version,
+         json_object('id',NEW.id,'name',NEW.name,'payload_json',NEW.payload_json,
+                     'schema_version',NEW.schema_version,'version_parent_id',NEW.version_parent_id,
+                     'created_at',NEW.created_at,'last_modified',NEW.last_modified,
+                     'deleted',NEW.deleted,'client_id',NEW.client_id,'version',NEW.version));
+END;
+
+CREATE TRIGGER writing_sessions_sync_delete
+AFTER UPDATE ON writing_sessions
+WHEN OLD.deleted = 0 AND NEW.deleted = 1
+BEGIN
+  INSERT INTO sync_log(entity,entity_id,operation,timestamp,client_id,version,payload)
+  VALUES('writing_sessions',NEW.id,'delete',NEW.last_modified,NEW.client_id,NEW.version,
+         json_object('id',NEW.id,'deleted',NEW.deleted,'last_modified',NEW.last_modified,
+                     'version',NEW.version,'client_id',NEW.client_id));
+END;
+
+CREATE TRIGGER writing_sessions_sync_undelete
+AFTER UPDATE ON writing_sessions
+WHEN OLD.deleted = 1 AND NEW.deleted = 0
+BEGIN
+  INSERT INTO sync_log(entity,entity_id,operation,timestamp,client_id,version,payload)
+  VALUES('writing_sessions',NEW.id,'update',NEW.last_modified,NEW.client_id,NEW.version,
+         json_object('id',NEW.id,'name',NEW.name,'payload_json',NEW.payload_json,
+                     'schema_version',NEW.schema_version,'version_parent_id',NEW.version_parent_id,
+                     'created_at',NEW.created_at,'last_modified',NEW.last_modified,
+                     'deleted',NEW.deleted,'client_id',NEW.client_id,'version',NEW.version));
+END;
+
+DROP TRIGGER IF EXISTS writing_templates_sync_create;
+DROP TRIGGER IF EXISTS writing_templates_sync_update;
+DROP TRIGGER IF EXISTS writing_templates_sync_delete;
+DROP TRIGGER IF EXISTS writing_templates_sync_undelete;
+
+CREATE TRIGGER writing_templates_sync_create
+AFTER INSERT ON writing_templates BEGIN
+  INSERT INTO sync_log(entity,entity_id,operation,timestamp,client_id,version,payload)
+  VALUES('writing_templates',CAST(NEW.id AS TEXT),'create',NEW.last_modified,NEW.client_id,NEW.version,
+         json_object('id',NEW.id,'name',NEW.name,'payload_json',NEW.payload_json,
+                     'schema_version',NEW.schema_version,'version_parent_id',NEW.version_parent_id,
+                     'is_default',NEW.is_default,'created_at',NEW.created_at,'last_modified',NEW.last_modified,
+                     'deleted',NEW.deleted,'client_id',NEW.client_id,'version',NEW.version));
+END;
+
+CREATE TRIGGER writing_templates_sync_update
+AFTER UPDATE ON writing_templates
+WHEN OLD.deleted = NEW.deleted AND (
+     OLD.name IS NOT NEW.name OR
+     OLD.payload_json IS NOT NEW.payload_json OR
+     OLD.schema_version IS NOT NEW.schema_version OR
+     OLD.version_parent_id IS NOT NEW.version_parent_id OR
+     OLD.is_default IS NOT NEW.is_default OR
+     OLD.last_modified IS NOT NEW.last_modified OR
+     OLD.version IS NOT NEW.version)
+BEGIN
+  INSERT INTO sync_log(entity,entity_id,operation,timestamp,client_id,version,payload)
+  VALUES('writing_templates',CAST(NEW.id AS TEXT),'update',NEW.last_modified,NEW.client_id,NEW.version,
+         json_object('id',NEW.id,'name',NEW.name,'payload_json',NEW.payload_json,
+                     'schema_version',NEW.schema_version,'version_parent_id',NEW.version_parent_id,
+                     'is_default',NEW.is_default,'created_at',NEW.created_at,'last_modified',NEW.last_modified,
+                     'deleted',NEW.deleted,'client_id',NEW.client_id,'version',NEW.version));
+END;
+
+CREATE TRIGGER writing_templates_sync_delete
+AFTER UPDATE ON writing_templates
+WHEN OLD.deleted = 0 AND NEW.deleted = 1
+BEGIN
+  INSERT INTO sync_log(entity,entity_id,operation,timestamp,client_id,version,payload)
+  VALUES('writing_templates',CAST(NEW.id AS TEXT),'delete',NEW.last_modified,NEW.client_id,NEW.version,
+         json_object('id',NEW.id,'deleted',NEW.deleted,'last_modified',NEW.last_modified,
+                     'version',NEW.version,'client_id',NEW.client_id));
+END;
+
+CREATE TRIGGER writing_templates_sync_undelete
+AFTER UPDATE ON writing_templates
+WHEN OLD.deleted = 1 AND NEW.deleted = 0
+BEGIN
+  INSERT INTO sync_log(entity,entity_id,operation,timestamp,client_id,version,payload)
+  VALUES('writing_templates',CAST(NEW.id AS TEXT),'update',NEW.last_modified,NEW.client_id,NEW.version,
+         json_object('id',NEW.id,'name',NEW.name,'payload_json',NEW.payload_json,
+                     'schema_version',NEW.schema_version,'version_parent_id',NEW.version_parent_id,
+                     'is_default',NEW.is_default,'created_at',NEW.created_at,'last_modified',NEW.last_modified,
+                     'deleted',NEW.deleted,'client_id',NEW.client_id,'version',NEW.version));
+END;
+
+DROP TRIGGER IF EXISTS writing_themes_sync_create;
+DROP TRIGGER IF EXISTS writing_themes_sync_update;
+DROP TRIGGER IF EXISTS writing_themes_sync_delete;
+DROP TRIGGER IF EXISTS writing_themes_sync_undelete;
+
+CREATE TRIGGER writing_themes_sync_create
+AFTER INSERT ON writing_themes BEGIN
+  INSERT INTO sync_log(entity,entity_id,operation,timestamp,client_id,version,payload)
+  VALUES('writing_themes',CAST(NEW.id AS TEXT),'create',NEW.last_modified,NEW.client_id,NEW.version,
+         json_object('id',NEW.id,'name',NEW.name,'class_name',NEW.class_name,'css',NEW.css,
+                     'schema_version',NEW.schema_version,'version_parent_id',NEW.version_parent_id,
+                     'is_default',NEW.is_default,'order_index',NEW.order_index,
+                     'created_at',NEW.created_at,'last_modified',NEW.last_modified,
+                     'deleted',NEW.deleted,'client_id',NEW.client_id,'version',NEW.version));
+END;
+
+CREATE TRIGGER writing_themes_sync_update
+AFTER UPDATE ON writing_themes
+WHEN OLD.deleted = NEW.deleted AND (
+     OLD.name IS NOT NEW.name OR
+     OLD.class_name IS NOT NEW.class_name OR
+     OLD.css IS NOT NEW.css OR
+     OLD.schema_version IS NOT NEW.schema_version OR
+     OLD.version_parent_id IS NOT NEW.version_parent_id OR
+     OLD.is_default IS NOT NEW.is_default OR
+     OLD.order_index IS NOT NEW.order_index OR
+     OLD.last_modified IS NOT NEW.last_modified OR
+     OLD.version IS NOT NEW.version)
+BEGIN
+  INSERT INTO sync_log(entity,entity_id,operation,timestamp,client_id,version,payload)
+  VALUES('writing_themes',CAST(NEW.id AS TEXT),'update',NEW.last_modified,NEW.client_id,NEW.version,
+         json_object('id',NEW.id,'name',NEW.name,'class_name',NEW.class_name,'css',NEW.css,
+                     'schema_version',NEW.schema_version,'version_parent_id',NEW.version_parent_id,
+                     'is_default',NEW.is_default,'order_index',NEW.order_index,
+                     'created_at',NEW.created_at,'last_modified',NEW.last_modified,
+                     'deleted',NEW.deleted,'client_id',NEW.client_id,'version',NEW.version));
+END;
+
+CREATE TRIGGER writing_themes_sync_delete
+AFTER UPDATE ON writing_themes
+WHEN OLD.deleted = 0 AND NEW.deleted = 1
+BEGIN
+  INSERT INTO sync_log(entity,entity_id,operation,timestamp,client_id,version,payload)
+  VALUES('writing_themes',CAST(NEW.id AS TEXT),'delete',NEW.last_modified,NEW.client_id,NEW.version,
+         json_object('id',NEW.id,'deleted',NEW.deleted,'last_modified',NEW.last_modified,
+                     'version',NEW.version,'client_id',NEW.client_id));
+END;
+
+CREATE TRIGGER writing_themes_sync_undelete
+AFTER UPDATE ON writing_themes
+WHEN OLD.deleted = 1 AND NEW.deleted = 0
+BEGIN
+  INSERT INTO sync_log(entity,entity_id,operation,timestamp,client_id,version,payload)
+  VALUES('writing_themes',CAST(NEW.id AS TEXT),'update',NEW.last_modified,NEW.client_id,NEW.version,
+         json_object('id',NEW.id,'name',NEW.name,'class_name',NEW.class_name,'css',NEW.css,
+                     'schema_version',NEW.schema_version,'version_parent_id',NEW.version_parent_id,
+                     'is_default',NEW.is_default,'order_index',NEW.order_index,
+                     'created_at',NEW.created_at,'last_modified',NEW.last_modified,
+                     'deleted',NEW.deleted,'client_id',NEW.client_id,'version',NEW.version));
+END;
+
+UPDATE db_schema_version
+   SET version = 15
+ WHERE schema_name = 'rag_char_chat_schema'
+   AND version < 15;
+"""
+
+    # --- Migration: V15 -> V16 (Writing Wordclouds) ---
+    _MIGRATION_SQL_V15_TO_V16 = """
+/*───────────────────────────────────────────────────────────────
+  Migration to Version 16 - Writing Wordclouds (2026-01-24)
+───────────────────────────────────────────────────────────────*/
+PRAGMA foreign_keys = ON;
+
+CREATE TABLE IF NOT EXISTS writing_wordclouds(
+  id TEXT PRIMARY KEY,
+  status TEXT NOT NULL DEFAULT 'queued',
+  options_json TEXT NOT NULL,
+  words_json TEXT,
+  meta_json TEXT,
+  error TEXT,
+  input_chars INTEGER NOT NULL DEFAULT 0,
+  created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  last_modified DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  client_id TEXT NOT NULL DEFAULT 'unknown'
+);
+CREATE INDEX IF NOT EXISTS idx_writing_wordclouds_status ON writing_wordclouds(status);
+CREATE INDEX IF NOT EXISTS idx_writing_wordclouds_last_modified ON writing_wordclouds(last_modified);
+
+UPDATE db_schema_version
+   SET version = 16
+ WHERE schema_name = 'rag_char_chat_schema'
+   AND version < 16;
+"""
+
+    # --- Migration: V16 -> V17 (Workspace tag for quizzes) ---
+    _MIGRATION_SQL_V16_TO_V17 = """
+/*───────────────────────────────────────────────────────────────
+  Migration to Version 17 - Quizzes workspace_tag (2026-02-18)
+───────────────────────────────────────────────────────────────*/
+PRAGMA foreign_keys = ON;
+
+ALTER TABLE quizzes ADD COLUMN IF NOT EXISTS workspace_tag TEXT;
+CREATE INDEX IF NOT EXISTS idx_quizzes_workspace_tag ON quizzes(workspace_tag);
+
+UPDATE db_schema_version
+   SET version = 17
+ WHERE schema_name = 'rag_char_chat_schema'
+   AND version < 17;
+"""
+
+    _MIGRATION_SQL_V17_TO_V18 = """
+/*───────────────────────────────────────────────────────────────
+  Migration to Version 18 - Voice Assistant Tables (2026-01-26)
+───────────────────────────────────────────────────────────────*/
+PRAGMA foreign_keys = ON;
+
+-- Voice Commands: User-defined voice command triggers
+CREATE TABLE IF NOT EXISTS voice_commands (
+    id TEXT PRIMARY KEY,
+    user_id INTEGER NOT NULL,
+    name TEXT NOT NULL,
+    phrases TEXT NOT NULL,        -- JSON array of trigger phrases
+    action_type TEXT NOT NULL,    -- mcp_tool|workflow|custom|llm_chat
+    action_config TEXT NOT NULL,  -- JSON configuration
+    priority INTEGER DEFAULT 0,
+    enabled INTEGER DEFAULT 1,
+    requires_confirmation INTEGER DEFAULT 0,
+    description TEXT,
+    created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    deleted INTEGER DEFAULT 0
+);
+
+CREATE INDEX IF NOT EXISTS idx_voice_commands_user_id ON voice_commands(user_id);
+CREATE INDEX IF NOT EXISTS idx_voice_commands_enabled ON voice_commands(enabled, deleted);
+
+-- Voice Sessions: Track voice assistant session state
+CREATE TABLE IF NOT EXISTS voice_sessions (
+    session_id TEXT PRIMARY KEY,
+    user_id INTEGER NOT NULL,
+    conversation_id TEXT REFERENCES conversations(id) ON DELETE SET NULL,
+    state TEXT NOT NULL DEFAULT 'idle',  -- idle|listening|processing|speaking|awaiting_confirmation|error
+    context TEXT,                 -- JSON session context
+    conversation_history TEXT,    -- JSON array of turns
+    pending_intent TEXT,          -- JSON pending intent awaiting confirmation
+    last_action_result TEXT,      -- JSON last action result
+    created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    last_activity DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE INDEX IF NOT EXISTS idx_voice_sessions_user_id ON voice_sessions(user_id);
+CREATE INDEX IF NOT EXISTS idx_voice_sessions_last_activity ON voice_sessions(last_activity);
+
+-- Sync log triggers for voice_commands
+DROP TRIGGER IF EXISTS voice_commands_insert_sync;
+DROP TRIGGER IF EXISTS voice_commands_update_sync;
+
+CREATE TRIGGER IF NOT EXISTS voice_commands_insert_sync
+AFTER INSERT ON voice_commands
+BEGIN
+    INSERT INTO sync_log(entity,entity_id,operation,timestamp,client_id,version,payload)
+    VALUES(
+        'voice_commands',
+        NEW.id,
+        'create',
+        NEW.created_at,
+        'system',
+        1,
+        json_object(
+            'id',NEW.id,
+            'user_id',NEW.user_id,
+            'name',NEW.name,
+            'phrases',NEW.phrases,
+            'action_type',NEW.action_type,
+            'action_config',NEW.action_config,
+            'priority',NEW.priority,
+            'enabled',NEW.enabled,
+            'requires_confirmation',NEW.requires_confirmation,
+            'description',NEW.description,
+            'created_at',NEW.created_at,
+            'updated_at',NEW.updated_at,
+            'deleted',NEW.deleted
+        )
+    );
+END;
+
+CREATE TRIGGER IF NOT EXISTS voice_commands_update_sync
+AFTER UPDATE ON voice_commands
+BEGIN
+    INSERT INTO sync_log(entity,entity_id,operation,timestamp,client_id,version,payload)
+    VALUES(
+        'voice_commands',
+        NEW.id,
+        'update',
+        NEW.updated_at,
+        'system',
+        1,
+        json_object(
+            'id',NEW.id,
+            'user_id',NEW.user_id,
+            'name',NEW.name,
+            'phrases',NEW.phrases,
+            'action_type',NEW.action_type,
+            'action_config',NEW.action_config,
+            'priority',NEW.priority,
+            'enabled',NEW.enabled,
+            'requires_confirmation',NEW.requires_confirmation,
+            'description',NEW.description,
+            'created_at',NEW.created_at,
+            'updated_at',NEW.updated_at,
+            'deleted',NEW.deleted
+        )
+    );
+END;
+
+UPDATE db_schema_version
+   SET version = 18
+ WHERE schema_name = 'rag_char_chat_schema'
+   AND version < 18;
+"""
+
+    _MIGRATION_SQL_V18_TO_V19 = """
+/*───────────────────────────────────────────────────────────────
+  Migration to Version 19 - Voice Assistant Analytics (2026-01-27)
+───────────────────────────────────────────────────────────────*/
+PRAGMA foreign_keys = ON;
+
+-- Voice Command Events: Track usage for analytics
+CREATE TABLE IF NOT EXISTS voice_command_events (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    command_id TEXT,
+    command_name TEXT,
+    user_id INTEGER NOT NULL,
+    action_type TEXT NOT NULL,
+    success INTEGER DEFAULT 1,
+    response_time_ms REAL,
+    session_id TEXT,
+    created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE INDEX IF NOT EXISTS idx_voice_command_events_user_time
+    ON voice_command_events(user_id, created_at);
+CREATE INDEX IF NOT EXISTS idx_voice_command_events_command_time
+    ON voice_command_events(command_id, created_at);
+
+UPDATE db_schema_version
+   SET version = 19
+ WHERE schema_name = 'rag_char_chat_schema'
+   AND version < 19;
 """
 
     _MIGRATION_SQL_V10_TO_V11_POSTGRES = """
@@ -2031,29 +2466,93 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
             pool = self.backend.get_pool()
             conn = pool.get_connection()
             # Apply per-tenant session guard for PostgreSQL (RLS via current_setting('app.current_user_id'))
-            try:
-                if self.backend_type == BackendType.POSTGRESQL and self.client_id:
-                    cur = conn.cursor()
-                    # Use SESSION scope so it persists for pooled connection lifecycle
-                    user_value = str(self.client_id)
-                    if psycopg_sql is not None:  # type: ignore[name-defined]
-                        statement = psycopg_sql.SQL("SET SESSION app.current_user_id = {}").format(
-                            psycopg_sql.Literal(user_value)
-                        )
-                        cur.execute(statement)
-                    else:
-                        safe_value = user_value.replace("'", "''")
-                        cur.execute(f"SET SESSION app.current_user_id = '{safe_value}'")
-                    try:
-                        conn.commit()
-                    except Exception:
-                        pass
-            except Exception:
-                # Best-effort; if setting fails, continue without crashing
-                pass
+            if self.backend_type == BackendType.POSTGRESQL and self.client_id:
+                conn = self._apply_postgres_client_scope(conn, pool)
             return conn
         except BackendDatabaseError as exc:
             raise CharactersRAGDBError(f"Failed to acquire database connection: {exc}") from exc
+
+    def _apply_postgres_client_scope(self, conn, pool):
+        """Best-effort helper to set session-scoped client_id in PostgreSQL.
+
+        Ensures failed SET/COMMIT attempts do not leave pooled connections in a
+        broken transaction state by rolling back (or replacing) the connection.
+        """
+        user_value = str(self.client_id)
+
+        def _set_session(target) -> None:
+            cur = target.cursor()
+            if psycopg_sql is not None:  # type: ignore[name-defined]
+                statement = psycopg_sql.SQL(
+                    "SELECT set_config('app.current_user_id', {}, false)"
+                ).format(psycopg_sql.Literal(user_value))
+                cur.execute(statement)
+            else:
+                cur.execute(
+                    "SELECT set_config('app.current_user_id', %s, false)",
+                    (user_value,),
+                )
+
+        def _replace_connection(bad_conn) -> Any:
+            try:
+                bad_conn.close()
+            except Exception:
+                pass
+            try:
+                pool.return_connection(bad_conn)
+            except Exception:
+                pass
+            return pool.get_connection()
+
+        def _safe_rollback(target, context: str) -> bool:
+            try:
+                target.rollback()
+                return True
+            except Exception as rollback_exc:  # noqa: BLE001
+                logger.warning(
+                    "Rollback failed after %s while setting PostgreSQL session scope: %s",
+                    context,
+                    rollback_exc,
+                )
+                return False
+
+        try:
+            _set_session(conn)
+            try:
+                conn.commit()
+            except Exception as commit_exc:  # noqa: BLE001
+                logger.warning(
+                    "Commit failed after setting PostgreSQL session scope; attempting rollback: %s",
+                    commit_exc,
+                )
+                if not _safe_rollback(conn, "commit failure"):
+                    conn = _replace_connection(conn)
+                    try:
+                        _set_session(conn)
+                        conn.commit()
+                    except Exception as retry_exc:  # noqa: BLE001
+                        logger.warning(
+                            "Retrying PostgreSQL session scope setup failed: %s",
+                            retry_exc,
+                        )
+                        _safe_rollback(conn, "retry failure")
+        except Exception as exc:  # noqa: BLE001
+            logger.warning(
+                "Failed to set PostgreSQL session scope; attempting rollback: %s",
+                exc,
+            )
+            if not _safe_rollback(conn, "SET failure"):
+                conn = _replace_connection(conn)
+                try:
+                    _set_session(conn)
+                    conn.commit()
+                except Exception as retry_exc:  # noqa: BLE001
+                    logger.warning(
+                        "Retrying PostgreSQL session scope setup failed: %s",
+                        retry_exc,
+                    )
+                    _safe_rollback(conn, "retry failure")
+        return conn
 
     def _release_connection(self, connection) -> None:
         try:
@@ -2864,6 +3363,125 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
             logger.error(f"[{self._SCHEMA_NAME}] Unexpected error during migration V13->V14: {e}", exc_info=True)
             raise SchemaError(f"Unexpected error migrating to V14 for '{self._SCHEMA_NAME}': {e}") from e
 
+    def _migrate_from_v14_to_v15(self, conn: sqlite3.Connection):
+        """Migrates schema from V14 to V15 (Writing Playground persistence)."""
+        logger.info(f"Migrating '{self._SCHEMA_NAME}' schema from V14 to V15 for DB: {self.db_path_str}...")
+        try:
+            conn.executescript(self._MIGRATION_SQL_V14_TO_V15)
+            final_version = self._get_db_version(conn)
+            if final_version != 15:
+                raise SchemaError(
+                    f"[{self._SCHEMA_NAME}] Migration V14->V15 failed version check. Expected 15, got: {final_version}"
+                )
+            logger.info(f"[{self._SCHEMA_NAME}] Migration to V15 completed.")
+        except sqlite3.Error as e:
+            logger.error(f"[{self._SCHEMA_NAME}] Migration V14->V15 failed: {e}", exc_info=True)
+            raise SchemaError(f"Migration V14->V15 failed for '{self._SCHEMA_NAME}': {e}") from e
+        except SchemaError:
+            raise
+        except Exception as e:
+            logger.error(f"[{self._SCHEMA_NAME}] Unexpected error during migration V14->V15: {e}", exc_info=True)
+            raise SchemaError(f"Unexpected error migrating to V15 for '{self._SCHEMA_NAME}': {e}") from e
+
+    def _migrate_from_v15_to_v16(self, conn: sqlite3.Connection):
+        """Migrates schema from V15 to V16 (Writing Wordclouds)."""
+        logger.info(f"Migrating '{self._SCHEMA_NAME}' schema from V15 to V16 for DB: {self.db_path_str}...")
+        try:
+            conn.executescript(self._MIGRATION_SQL_V15_TO_V16)
+            final_version = self._get_db_version(conn)
+            if final_version != 16:
+                raise SchemaError(
+                    f"[{self._SCHEMA_NAME}] Migration V15->V16 failed version check. Expected 16, got: {final_version}"
+                )
+            logger.info(f"[{self._SCHEMA_NAME}] Migration to V16 completed.")
+        except sqlite3.Error as e:
+            logger.error(f"[{self._SCHEMA_NAME}] Migration V15->V16 failed: {e}", exc_info=True)
+            raise SchemaError(f"Migration V15->V16 failed for '{self._SCHEMA_NAME}': {e}") from e
+        except SchemaError:
+            raise
+        except Exception as e:
+            logger.error(f"[{self._SCHEMA_NAME}] Unexpected error during migration V15->V16: {e}", exc_info=True)
+            raise SchemaError(f"Unexpected error migrating to V16 for '{self._SCHEMA_NAME}': {e}") from e
+
+    def _migrate_from_v16_to_v17(self, conn: sqlite3.Connection):
+        """Migrates schema from V16 to V17 (Workspace tag for quizzes)."""
+        logger.info(f"Migrating '{self._SCHEMA_NAME}' schema from V16 to V17 for DB: {self.db_path_str}...")
+        try:
+            # quizzes.workspace_tag already exists in earlier schema versions.
+            # Add column only if missing to keep migration idempotent.
+            try:
+                cursor = conn.execute("PRAGMA table_info(quizzes)")
+                columns = {row[1] for row in cursor.fetchall()}
+            except sqlite3.Error:
+                columns = set()
+
+            if "workspace_tag" not in columns:
+                conn.execute("ALTER TABLE quizzes ADD COLUMN workspace_tag TEXT")
+
+            conn.execute("CREATE INDEX IF NOT EXISTS idx_quizzes_workspace_tag ON quizzes(workspace_tag)")
+            conn.execute(
+                """
+                UPDATE db_schema_version
+                   SET version = 17
+                 WHERE schema_name = 'rag_char_chat_schema'
+                   AND version < 17;
+                """
+            )
+            final_version = self._get_db_version(conn)
+            if final_version != 17:
+                raise SchemaError(
+                    f"[{self._SCHEMA_NAME}] Migration V16->V17 failed version check. Expected 17, got: {final_version}"
+                )
+            logger.info(f"[{self._SCHEMA_NAME}] Migration to V17 completed.")
+        except sqlite3.Error as e:
+            logger.error(f"[{self._SCHEMA_NAME}] Migration V16->V17 failed: {e}", exc_info=True)
+            raise SchemaError(f"Migration V16->V17 failed for '{self._SCHEMA_NAME}': {e}") from e
+        except SchemaError:
+            raise
+        except Exception as e:
+            logger.error(f"[{self._SCHEMA_NAME}] Unexpected error during migration V16->V17: {e}", exc_info=True)
+            raise SchemaError(f"Unexpected error migrating to V17 for '{self._SCHEMA_NAME}': {e}") from e
+
+    def _migrate_from_v17_to_v18(self, conn: sqlite3.Connection):
+        """Migrates schema from V17 to V18 (Voice Assistant tables)."""
+        logger.info(f"Migrating '{self._SCHEMA_NAME}' schema from V17 to V18 for DB: {self.db_path_str}...")
+        try:
+            conn.executescript(self._MIGRATION_SQL_V17_TO_V18)
+            final_version = self._get_db_version(conn)
+            if final_version != 18:
+                raise SchemaError(
+                    f"[{self._SCHEMA_NAME}] Migration V17->V18 failed version check. Expected 18, got: {final_version}"
+                )
+            logger.info(f"[{self._SCHEMA_NAME}] Migration to V18 completed.")
+        except sqlite3.Error as e:
+            logger.error(f"[{self._SCHEMA_NAME}] Migration V17->V18 failed: {e}", exc_info=True)
+            raise SchemaError(f"Migration V17->V18 failed for '{self._SCHEMA_NAME}': {e}") from e
+        except SchemaError:
+            raise
+        except Exception as e:
+            logger.error(f"[{self._SCHEMA_NAME}] Unexpected error during migration V17->V18: {e}", exc_info=True)
+            raise SchemaError(f"Unexpected error migrating to V18 for '{self._SCHEMA_NAME}': {e}") from e
+
+    def _migrate_from_v18_to_v19(self, conn: sqlite3.Connection):
+        """Migrates schema from V18 to V19 (Voice Assistant analytics)."""
+        logger.info(f"Migrating '{self._SCHEMA_NAME}' schema from V18 to V19 for DB: {self.db_path_str}...")
+        try:
+            conn.executescript(self._MIGRATION_SQL_V18_TO_V19)
+            final_version = self._get_db_version(conn)
+            if final_version != 19:
+                raise SchemaError(
+                    f"[{self._SCHEMA_NAME}] Migration V18->V19 failed version check. Expected 19, got: {final_version}"
+                )
+            logger.info(f"[{self._SCHEMA_NAME}] Migration to V19 completed.")
+        except sqlite3.Error as e:
+            logger.error(f"[{self._SCHEMA_NAME}] Migration V18->V19 failed: {e}", exc_info=True)
+            raise SchemaError(f"Migration V18->V19 failed for '{self._SCHEMA_NAME}': {e}") from e
+        except SchemaError:
+            raise
+        except Exception as e:
+            logger.error(f"[{self._SCHEMA_NAME}] Unexpected error during migration V18->V19: {e}", exc_info=True)
+            raise SchemaError(f"Unexpected error migrating to V19 for '{self._SCHEMA_NAME}': {e}") from e
+
     def _initialize_schema(self):
         if self.backend_type == BackendType.SQLITE:
             self._initialize_schema_sqlite()
@@ -2984,6 +3602,15 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
                         )
                         conn.execute("CREATE INDEX IF NOT EXISTS idx_notes_conversation ON notes(conversation_id)")
                         conn.execute("CREATE INDEX IF NOT EXISTS idx_notes_message ON notes(message_id)")
+                        conn.execute("CREATE INDEX IF NOT EXISTS idx_writing_sessions_last_modified ON writing_sessions(last_modified)")
+                        conn.execute("CREATE INDEX IF NOT EXISTS idx_writing_sessions_deleted ON writing_sessions(deleted)")
+                        conn.execute("CREATE INDEX IF NOT EXISTS idx_writing_templates_last_modified ON writing_templates(last_modified)")
+                        conn.execute("CREATE INDEX IF NOT EXISTS idx_writing_templates_deleted ON writing_templates(deleted)")
+                        conn.execute("CREATE INDEX IF NOT EXISTS idx_writing_themes_last_modified ON writing_themes(last_modified)")
+                        conn.execute("CREATE INDEX IF NOT EXISTS idx_writing_themes_deleted ON writing_themes(deleted)")
+                        conn.execute("CREATE INDEX IF NOT EXISTS idx_writing_themes_order ON writing_themes(order_index)")
+                        conn.execute("CREATE INDEX IF NOT EXISTS idx_writing_wordclouds_status ON writing_wordclouds(status)")
+                        conn.execute("CREATE INDEX IF NOT EXISTS idx_writing_wordclouds_last_modified ON writing_wordclouds(last_modified)")
                     except sqlite3.Error:
                         pass
                     # Verify core FTS tables exist to avoid silent search failures
@@ -3027,6 +3654,21 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
                     if target_version >= 14 and current_db_version == 13:
                         self._migrate_from_v13_to_v14(conn)
                         current_db_version = self._get_db_version(conn)
+                    if target_version >= 15 and current_db_version == 14:
+                        self._migrate_from_v14_to_v15(conn)
+                        current_db_version = self._get_db_version(conn)
+                    if target_version >= 16 and current_db_version == 15:
+                        self._migrate_from_v15_to_v16(conn)
+                        current_db_version = self._get_db_version(conn)
+                    if target_version >= 17 and current_db_version == 16:
+                        self._migrate_from_v16_to_v17(conn)
+                        current_db_version = self._get_db_version(conn)
+                    if target_version >= 18 and current_db_version == 17:
+                        self._migrate_from_v17_to_v18(conn)
+                        current_db_version = self._get_db_version(conn)
+                    if target_version >= 19 and current_db_version == 18:
+                        self._migrate_from_v18_to_v19(conn)
+                        current_db_version = self._get_db_version(conn)
                 # Ensure helpful indexes that may have been introduced post-creation
                 try:
                     conn.execute("CREATE INDEX IF NOT EXISTS idx_flashcards_created_at ON flashcards(created_at)")
@@ -3041,6 +3683,15 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
                     )
                     conn.execute("CREATE INDEX IF NOT EXISTS idx_notes_conversation ON notes(conversation_id)")
                     conn.execute("CREATE INDEX IF NOT EXISTS idx_notes_message ON notes(message_id)")
+                    conn.execute("CREATE INDEX IF NOT EXISTS idx_writing_sessions_last_modified ON writing_sessions(last_modified)")
+                    conn.execute("CREATE INDEX IF NOT EXISTS idx_writing_sessions_deleted ON writing_sessions(deleted)")
+                    conn.execute("CREATE INDEX IF NOT EXISTS idx_writing_templates_last_modified ON writing_templates(last_modified)")
+                    conn.execute("CREATE INDEX IF NOT EXISTS idx_writing_templates_deleted ON writing_templates(deleted)")
+                    conn.execute("CREATE INDEX IF NOT EXISTS idx_writing_themes_last_modified ON writing_themes(last_modified)")
+                    conn.execute("CREATE INDEX IF NOT EXISTS idx_writing_themes_deleted ON writing_themes(deleted)")
+                    conn.execute("CREATE INDEX IF NOT EXISTS idx_writing_themes_order ON writing_themes(order_index)")
+                    conn.execute("CREATE INDEX IF NOT EXISTS idx_writing_wordclouds_status ON writing_wordclouds(status)")
+                    conn.execute("CREATE INDEX IF NOT EXISTS idx_writing_wordclouds_last_modified ON writing_wordclouds(last_modified)")
                 except sqlite3.Error:
                     pass
                 # Example for future migrations:
@@ -3150,8 +3801,35 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
                         if target_version >= 14 and current_db_version == 13:
                             self._migrate_from_v13_to_v14(conn)
                             current_db_version = self._get_db_version(conn)
+                        if target_version >= 15 and current_db_version == 14:
+                            self._migrate_from_v14_to_v15(conn)
+                            current_db_version = self._get_db_version(conn)
+                        if target_version >= 16 and current_db_version == 15:
+                            self._migrate_from_v15_to_v16(conn)
+                            current_db_version = self._get_db_version(conn)
                     elif current_initial_version == 13 and target_version >= 14:
                         self._migrate_from_v13_to_v14(conn)
+                        current_db_version = self._get_db_version(conn)
+                        if target_version >= 15 and current_db_version == 14:
+                            self._migrate_from_v14_to_v15(conn)
+                            current_db_version = self._get_db_version(conn)
+                        if target_version >= 16 and current_db_version == 15:
+                            self._migrate_from_v15_to_v16(conn)
+                            current_db_version = self._get_db_version(conn)
+                    elif current_initial_version == 14 and target_version >= 15:
+                        self._migrate_from_v14_to_v15(conn)
+                        current_db_version = self._get_db_version(conn)
+                        if target_version >= 16 and current_db_version == 15:
+                            self._migrate_from_v15_to_v16(conn)
+                            current_db_version = self._get_db_version(conn)
+                    elif current_initial_version == 15 and target_version >= 16:
+                        self._migrate_from_v15_to_v16(conn)
+                        current_db_version = self._get_db_version(conn)
+                    elif current_initial_version == 16 and target_version >= 17:
+                        self._migrate_from_v16_to_v17(conn)
+                        current_db_version = self._get_db_version(conn)
+                    elif current_initial_version == 17 and target_version >= 18:
+                        self._migrate_from_v17_to_v18(conn)
                         current_db_version = self._get_db_version(conn)
                     else:
                         raise SchemaError(
@@ -3168,6 +3846,21 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
                     current_db_version = self._get_db_version(conn)
                 if target_version >= 14 and current_db_version == 13:
                     self._migrate_from_v13_to_v14(conn)
+                    current_db_version = self._get_db_version(conn)
+                if target_version >= 15 and current_db_version == 14:
+                    self._migrate_from_v14_to_v15(conn)
+                    current_db_version = self._get_db_version(conn)
+                if target_version >= 16 and current_db_version == 15:
+                    self._migrate_from_v15_to_v16(conn)
+                    current_db_version = self._get_db_version(conn)
+                if target_version >= 17 and current_db_version == 16:
+                    self._migrate_from_v16_to_v17(conn)
+                    current_db_version = self._get_db_version(conn)
+                if target_version >= 18 and current_db_version == 17:
+                    self._migrate_from_v17_to_v18(conn)
+                    current_db_version = self._get_db_version(conn)
+                if target_version >= 19 and current_db_version == 18:
+                    self._migrate_from_v18_to_v19(conn)
                     current_db_version = self._get_db_version(conn)
 
                 final_version_check = self._get_db_version(conn)
@@ -3265,6 +3958,21 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
             if current_version < 14:
                 self._apply_postgres_migration_script(self._MIGRATION_SQL_V13_TO_V14, conn, expected_version=14)
                 current_version = 14
+            if current_version < 15:
+                self._apply_postgres_migration_script(self._MIGRATION_SQL_V14_TO_V15, conn, expected_version=15)
+                current_version = 15
+            if current_version < 16:
+                self._apply_postgres_migration_script(self._MIGRATION_SQL_V15_TO_V16, conn, expected_version=16)
+                current_version = 16
+            if current_version < 17:
+                self._apply_postgres_migration_script(self._MIGRATION_SQL_V16_TO_V17, conn, expected_version=17)
+                current_version = 17
+            if current_version < 18:
+                self._apply_postgres_migration_script(self._MIGRATION_SQL_V17_TO_V18, conn, expected_version=18)
+                current_version = 18
+            if current_version < 19:
+                self._apply_postgres_migration_script(self._MIGRATION_SQL_V18_TO_V19, conn, expected_version=19)
+                current_version = 19
 
             if current_version > target_version:
                 raise SchemaError(
@@ -3284,8 +3992,8 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
                 try:
                     if self.backend.table_exists('keywords', connection=conn) and not self.backend.table_exists('chacha_keywords', connection=conn):
                         self.backend.execute("ALTER TABLE keywords RENAME TO chacha_keywords", connection=conn)
-                except Exception:
-                    pass
+                except Exception as exc:
+                    logger.warning("Failed to rename legacy keywords table: %s", exc)
 
                 self._ensure_postgres_fts(conn)
                 # Ensure helpful indexes that may have been introduced post-creation
@@ -3330,8 +4038,44 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
                         "CREATE INDEX IF NOT EXISTS idx_notes_message ON notes(message_id)",
                         connection=conn,
                     )
-                except Exception:
-                    pass
+                    self.backend.execute(
+                        "CREATE INDEX IF NOT EXISTS idx_writing_sessions_last_modified ON writing_sessions(last_modified)",
+                        connection=conn,
+                    )
+                    self.backend.execute(
+                        "CREATE INDEX IF NOT EXISTS idx_writing_sessions_deleted ON writing_sessions(deleted)",
+                        connection=conn,
+                    )
+                    self.backend.execute(
+                        "CREATE INDEX IF NOT EXISTS idx_writing_templates_last_modified ON writing_templates(last_modified)",
+                        connection=conn,
+                    )
+                    self.backend.execute(
+                        "CREATE INDEX IF NOT EXISTS idx_writing_templates_deleted ON writing_templates(deleted)",
+                        connection=conn,
+                    )
+                    self.backend.execute(
+                        "CREATE INDEX IF NOT EXISTS idx_writing_themes_last_modified ON writing_themes(last_modified)",
+                        connection=conn,
+                    )
+                    self.backend.execute(
+                        "CREATE INDEX IF NOT EXISTS idx_writing_themes_deleted ON writing_themes(deleted)",
+                        connection=conn,
+                    )
+                    self.backend.execute(
+                        "CREATE INDEX IF NOT EXISTS idx_writing_themes_order ON writing_themes(order_index)",
+                        connection=conn,
+                    )
+                    self.backend.execute(
+                        "CREATE INDEX IF NOT EXISTS idx_writing_wordclouds_status ON writing_wordclouds(status)",
+                        connection=conn,
+                    )
+                    self.backend.execute(
+                        "CREATE INDEX IF NOT EXISTS idx_writing_wordclouds_last_modified ON writing_wordclouds(last_modified)",
+                        connection=conn,
+                    )
+                except Exception as exc:
+                    logger.warning("Failed to ensure ChaChaNotes PostgreSQL indexes: %s", exc)
             except BackendDatabaseError as exc:
                 raise SchemaError(f"Failed to ensure PostgreSQL FTS structures: {exc}") from exc
 
@@ -3633,6 +4377,163 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
         except Exception as e:
             logger.warning(f"set_message_metadata_extra failed for {message_id}: {e}")
             return False
+
+    def set_message_rag_context(
+        self,
+        message_id: str,
+        rag_context: Dict[str, Any],
+        merge: bool = True
+    ) -> bool:
+        """
+        Store RAG context (citations, retrieved documents, search settings) with a message.
+
+        This persists RAG search results and citations in message_metadata.extra_json
+        under the 'rag_context' key for later retrieval and export.
+
+        Args:
+            message_id: The message ID to attach RAG context to
+            rag_context: Dict containing:
+                - search_query: The original search query
+                - search_mode: Search mode used (fts/vector/hybrid)
+                - settings_snapshot: Key RAG settings used
+                - retrieved_documents: List of retrieved docs with scores/excerpts
+                - generated_answer: AI-generated answer (if any)
+                - citations: Citation metadata
+                - claims_verified: Verification results (if any)
+                - timestamp: ISO timestamp
+                - feedback_id: Analytics ID
+            merge: If True, merge with existing extra data; if False, replace entire extra
+
+        Returns:
+            bool: True if successful, False otherwise
+        """
+        try:
+            # Get current metadata to preserve other extra fields
+            current = self.get_message_metadata(message_id) or {}
+            current_extra = current.get('extra') or {}
+
+            if merge and isinstance(current_extra, dict):
+                # Merge: preserve existing extra fields, update rag_context
+                new_extra = dict(current_extra)
+                new_extra['rag_context'] = rag_context
+            else:
+                # Replace: only keep rag_context
+                new_extra = {'rag_context': rag_context}
+
+            return self.add_message_metadata(
+                message_id,
+                tool_calls=current.get('tool_calls'),
+                extra=new_extra
+            )
+        except Exception as e:
+            logger.warning(f"set_message_rag_context failed for {message_id}: {e}")
+            return False
+
+    def get_message_rag_context(self, message_id: str) -> Optional[Dict[str, Any]]:
+        """
+        Retrieve RAG context stored with a message.
+
+        Returns the rag_context dict from message_metadata.extra_json,
+        or None if no RAG context is stored.
+        """
+        try:
+            metadata = self.get_message_metadata(message_id)
+            if not metadata:
+                return None
+            extra = metadata.get('extra')
+            if not isinstance(extra, dict):
+                return None
+            return extra.get('rag_context')
+        except Exception as e:
+            logger.warning(f"get_message_rag_context failed for {message_id}: {e}")
+            return None
+
+    def get_messages_with_rag_context(
+        self,
+        conversation_id: str,
+        limit: int = 100,
+        offset: int = 0,
+        include_rag_context: bool = True
+    ) -> List[Dict[str, Any]]:
+        """
+        Retrieve messages for a conversation with optional RAG context attached.
+
+        This is optimized for the Knowledge QA page to load conversation history
+        with full citation data.
+
+        Args:
+            conversation_id: The conversation to fetch messages from
+            limit: Maximum number of messages to return
+            offset: Number of messages to skip
+            include_rag_context: If True, attach rag_context to each message
+
+        Returns:
+            List of message dicts, each optionally including 'rag_context' key
+        """
+        try:
+            messages = self.get_messages_for_conversation(
+                conversation_id,
+                limit=limit,
+                offset=offset
+            )
+
+            if not include_rag_context:
+                return messages
+
+            # Attach RAG context to each message
+            for msg in messages:
+                msg_id = msg.get('id')
+                if msg_id:
+                    rag_context = self.get_message_rag_context(msg_id)
+                    if rag_context:
+                        msg['rag_context'] = rag_context
+
+            return messages
+        except Exception as e:
+            logger.warning(f"get_messages_with_rag_context failed for conversation {conversation_id}: {e}")
+            return []
+
+    def get_conversation_citations(self, conversation_id: str) -> List[Dict[str, Any]]:
+        """
+        Retrieve all citations from a conversation's messages.
+
+        This aggregates all retrieved_documents from rag_context across
+        all messages in a conversation, useful for export and citation
+        bibliography generation.
+
+        Returns:
+            List of unique retrieved documents with their source message IDs
+        """
+        try:
+            messages = self.get_messages_for_conversation(conversation_id, limit=1000)
+            citations_by_id: Dict[str, Dict[str, Any]] = {}
+
+            for msg in messages:
+                msg_id = msg.get('id')
+                if not msg_id:
+                    continue
+
+                rag_context = self.get_message_rag_context(msg_id)
+                if not rag_context:
+                    continue
+
+                retrieved_docs = rag_context.get('retrieved_documents', [])
+                for doc in retrieved_docs:
+                    doc_id = doc.get('id') or doc.get('chunk_id') or f"anon_{len(citations_by_id)}"
+                    if doc_id not in citations_by_id:
+                        citations_by_id[doc_id] = {
+                            **doc,
+                            'message_ids': [msg_id],
+                            'first_cited_at': msg.get('timestamp')
+                        }
+                    else:
+                        if msg_id not in citations_by_id[doc_id]['message_ids']:
+                            citations_by_id[doc_id]['message_ids'].append(msg_id)
+
+            return list(citations_by_id.values())
+        except Exception as e:
+            logger.warning(f"get_conversation_citations failed for conversation {conversation_id}: {e}")
+            return []
 
     def backfill_tool_calls_from_inline(self, strip_inline: bool = False, limit: Optional[int] = None) -> Dict[str, int]:
         """Scan assistant messages for an inline "[tool_calls]: <json>" suffix and backfill message_metadata.
@@ -4133,6 +5034,10 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
             ConflictError: If the record is not found (with `entity` and `entity_id` attributes
                            set in the exception) or if the record is found but is soft-deleted.
         """
+        if not (_SAFE_IDENTIFIER_RE.fullmatch(table_name or "") and _SAFE_IDENTIFIER_RE.fullmatch(pk_col_name or "")):
+            raise CharactersRAGDBError(
+                f"Unsafe identifier in version lookup: table={table_name!r}, column={pk_col_name!r}"
+            )
         cursor = conn.execute(f"SELECT version, deleted FROM {table_name} WHERE {pk_col_name} = ?", (pk_value,))
         row = cursor.fetchone()
 
@@ -5147,12 +6052,13 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
             logger.error(f"Database error listing conversations for client_id {client_id}: {e}")
             raise
 
-    def count_messages_for_conversation(self, conversation_id: str) -> int:
+    def count_messages_for_conversation(self, conversation_id: str, include_deleted: bool = False) -> int:
         """
-        Count non-deleted messages for a conversation, ensuring the parent conversation is active.
+        Count messages for a conversation, ensuring the parent conversation is active.
 
         Args:
             conversation_id: Conversation UUID
+            include_deleted: If True, include soft-deleted messages
 
         Returns:
             Integer count of messages.
@@ -5160,13 +6066,16 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
         Raises:
             CharactersRAGDBError on database failure.
         """
-        query = (
+        base_query = (
             "SELECT COUNT(1) FROM messages m "
             "JOIN conversations c ON m.conversation_id = c.id "
-            "WHERE m.conversation_id = ? AND m.deleted = 0 AND c.deleted = 0"
+            "WHERE m.conversation_id = ? AND c.deleted = 0"
         )
+        params = [conversation_id]
+        if not include_deleted:
+            base_query += " AND m.deleted = 0"
         try:
-            cursor = self.execute_query(query, (conversation_id,))
+            cursor = self.execute_query(base_query, tuple(params))
             row = cursor.fetchone()
             # row may be tuple or dict depending on connection row factory
             if row is None:
@@ -5177,6 +6086,51 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
                 return int(row.get("COUNT(1)") or row.get("count") or 0)
         except CharactersRAGDBError as e:
             logger.error(f"Database error counting messages for conversation {conversation_id}: {e}")
+            raise
+
+    def count_messages_for_conversations(
+        self,
+        conversation_ids: List[str],
+        include_deleted: bool = False,
+    ) -> Dict[str, int]:
+        """
+        Count messages for multiple conversations in a single query.
+
+        Args:
+            conversation_ids: List of conversation UUIDs.
+            include_deleted: If True, include soft-deleted messages.
+
+        Returns:
+            Mapping of conversation_id -> message count.
+        """
+        if not conversation_ids:
+            return {}
+        placeholders = ",".join(["?"] * len(conversation_ids))
+        base_query = (
+            f"SELECT m.conversation_id, COUNT(1) as cnt "
+            f"FROM messages m "
+            f"JOIN conversations c ON m.conversation_id = c.id "
+            f"WHERE m.conversation_id IN ({placeholders}) AND c.deleted = 0"
+        )
+        if not include_deleted:
+            base_query += " AND m.deleted = 0"
+        base_query += " GROUP BY m.conversation_id"
+        try:
+            cursor = self.execute_query(base_query, tuple(conversation_ids))
+            rows = cursor.fetchall()
+            result: Dict[str, int] = {cid: 0 for cid in conversation_ids}
+            for row in rows:
+                if isinstance(row, dict):
+                    conv_id = row.get("conversation_id")
+                    cnt = row.get("cnt") or row.get("COUNT(1)") or 0
+                else:
+                    conv_id = row[0]
+                    cnt = row[1]
+                if conv_id is not None:
+                    result[str(conv_id)] = int(cnt or 0)
+            return result
+        except CharactersRAGDBError as e:
+            logger.error("Database error counting messages for conversations: %s", e)
             raise
 
     def get_latest_message_for_conversation(self, conversation_id: str) -> Optional[Dict[str, Any]]:
@@ -5808,6 +6762,7 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
 
         filters: List[str] = []
         params: List[Any] = []
+        keyword_table = self._map_table_for_backend("keywords")
 
         if self.backend_type == BackendType.POSTGRESQL:
             date_expr = "c.created_at" if date_field == "created_at" else "COALESCE(c.last_modified, c.created_at)"
@@ -5851,7 +6806,6 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
                 filters.append(f"{date_expr} <= ?")
                 params.append(end_date)
             if keywords:
-                keyword_table = self._map_table_for_backend("keywords")
                 for kw in keywords:
                     filters.append(
                         f"EXISTS (SELECT 1 FROM conversation_keywords ck "
@@ -5914,7 +6868,7 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
             for kw in keywords:
                 filters.append(
                     "EXISTS (SELECT 1 FROM conversation_keywords ck "
-                    "JOIN keywords k ON k.id = ck.keyword_id "
+                    f"JOIN {keyword_table} k ON k.id = ck.keyword_id "
                     "WHERE ck.conversation_id = c.id AND k.deleted = 0 AND LOWER(k.keyword) = ?)"
                 )
                 params.append(kw.lower())
@@ -6223,6 +7177,109 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
             return results
         except CharactersRAGDBError as e:
             logger.error(f"Database error fetching messages for conversation ID {conversation_id}: {e}")
+            raise
+
+    def count_root_messages_for_conversation(self, conversation_id: str) -> int:
+        """Count root (parentless) messages for a conversation."""
+        query = (
+            "SELECT COUNT(1) FROM messages m "
+            "JOIN conversations c ON m.conversation_id = c.id "
+            "WHERE m.conversation_id = ? AND m.parent_message_id IS NULL "
+            "AND m.deleted = 0 AND c.deleted = 0"
+        )
+        try:
+            cursor = self.execute_query(query, (conversation_id,))
+            row = cursor.fetchone()
+            if row is None:
+                return 0
+            try:
+                return int(row[0])
+            except Exception:
+                return int(row.get("COUNT(1)") or row.get("count") or 0)
+        except CharactersRAGDBError as e:
+            logger.error("Database error counting root messages for conversation %s: %s", conversation_id, e)
+            raise
+
+    def get_root_messages_for_conversation(
+        self,
+        conversation_id: str,
+        *,
+        limit: int,
+        offset: int,
+        order_by_timestamp: str = "ASC",
+    ) -> List[Dict[str, Any]]:
+        """Fetch root (parentless) messages with minimal columns for tree building."""
+        if order_by_timestamp.upper() not in ["ASC", "DESC"]:
+            raise InputError("order_by_timestamp must be 'ASC' or 'DESC'.")
+        query = f"""
+            SELECT m.id, m.parent_message_id, m.sender, m.content, m.timestamp
+            FROM messages m
+            JOIN conversations c ON m.conversation_id = c.id
+            WHERE m.conversation_id = ?
+              AND m.parent_message_id IS NULL
+              AND m.deleted = 0
+              AND c.deleted = 0
+            ORDER BY m.timestamp {order_by_timestamp}
+            LIMIT ? OFFSET ?
+        """
+        try:
+            cursor = self.execute_query(query, (conversation_id, limit, offset))
+            rows = cursor.fetchall()
+            columns = [col[0] for col in cursor.description] if cursor.description else []
+            results: List[Dict[str, Any]] = []
+            for row in rows:
+                if isinstance(row, dict):
+                    record = dict(row)
+                else:
+                    record = {columns[idx]: row[idx] for idx in range(len(columns))}
+                results.append(record)
+            return results
+        except CharactersRAGDBError as e:
+            logger.error("Database error fetching root messages for conversation %s: %s", conversation_id, e)
+            raise
+
+    def get_messages_for_conversation_by_parent_ids(
+        self,
+        conversation_id: str,
+        parent_ids: List[str],
+        *,
+        order_by_timestamp: str = "ASC",
+    ) -> List[Dict[str, Any]]:
+        """Fetch child messages for the given parent IDs with minimal columns."""
+        if not parent_ids:
+            return []
+        if order_by_timestamp.upper() not in ["ASC", "DESC"]:
+            raise InputError("order_by_timestamp must be 'ASC' or 'DESC'.")
+        placeholders = ",".join(["?"] * len(parent_ids))
+        query = f"""
+            SELECT m.id, m.parent_message_id, m.sender, m.content, m.timestamp
+            FROM messages m
+            JOIN conversations c ON m.conversation_id = c.id
+            WHERE m.conversation_id = ?
+              AND m.parent_message_id IN ({placeholders})
+              AND m.deleted = 0
+              AND c.deleted = 0
+            ORDER BY m.timestamp {order_by_timestamp}
+        """
+        params = [conversation_id, *parent_ids]
+        try:
+            cursor = self.execute_query(query, tuple(params))
+            rows = cursor.fetchall()
+            columns = [col[0] for col in cursor.description] if cursor.description else []
+            results: List[Dict[str, Any]] = []
+            for row in rows:
+                if isinstance(row, dict):
+                    record = dict(row)
+                else:
+                    record = {columns[idx]: row[idx] for idx in range(len(columns))}
+                results.append(record)
+            return results
+        except CharactersRAGDBError as e:
+            logger.error(
+                "Database error fetching child messages for conversation %s: %s",
+                conversation_id,
+                e,
+            )
             raise
 
     def has_system_message_for_conversation(
@@ -6713,11 +7770,14 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
             raise
 
     def _case_insensitive_order_expression(self, column: str, direction: Optional[str] = None) -> str:
+        column_clean = (column or '').strip()
+        if not _ORDER_BY_COLUMN_RE.match(column_clean):
+            raise InputError(f"Invalid order-by column: {column!r}")
         direction_clean = (direction or '').strip()
         direction_clause = f" {direction_clean}" if direction_clean else ""
         if self.backend_type == BackendType.POSTGRESQL:
-            return f"LOWER({column}){direction_clause}"
-        return f"{column} COLLATE NOCASE{direction_clause}"
+            return f"LOWER({column_clean}){direction_clause}"
+        return f"{column_clean} COLLATE NOCASE{direction_clause}"
 
     def _case_insensitive_order_clause(self, column: str, direction: Optional[str] = None) -> str:
         return f"ORDER BY {self._case_insensitive_order_expression(column, direction)}"
@@ -6738,9 +7798,14 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
         Raises:
             CharactersRAGDBError: For database errors.
         """
-        order_expression = order_by_col
-        if 'COLLATE NOCASE' in order_by_col.upper():
-            base, _, direction = order_by_col.partition('COLLATE NOCASE')
+        order_by_clean = (order_by_col or "").strip()
+        if not _ORDER_BY_EXPR_RE.match(order_by_clean):
+            raise InputError(f"Invalid order-by expression: {order_by_col!r}")
+        order_expression = order_by_clean
+        collate_match = re.search(r"\s+COLLATE\s+NOCASE", order_by_clean, flags=re.IGNORECASE)
+        if collate_match:
+            base = order_by_clean[:collate_match.start()]
+            direction = order_by_clean[collate_match.end():]
             order_expression = self._case_insensitive_order_expression(base.strip(), direction.strip() or None)
 
         table_name = self._map_table_for_backend(table_name)
@@ -6859,7 +7924,7 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
             if unique_col_name_in_data and unique_col_name_in_data in update_data:
                 # More specific check for the unique column mentioned
                 db_unique_col_name = unique_col_name_in_data # Assuming it matches DB col name for this check
-                if f"UNIQUE constraint failed: {table_name}.{db_unique_col_name}" in str(e).lower():
+                if f"UNIQUE constraint failed: {table_name}.{db_unique_col_name}".lower() in str(e).lower():
                     val = update_data[unique_col_name_in_data]
                     logger.warning(
                         f"Update failed for {table_name} ID {item_id}: {db_unique_col_name} '{val}' already exists.")
@@ -6902,6 +7967,8 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
                            or if a concurrent modification prevents the update.
             CharactersRAGDBError: For other database errors.
         """
+        logical_table_name = table_name
+        table_name = self._map_table_for_backend(table_name)
         now = self._get_current_utc_timestamp_iso()
         next_version_val = expected_version + 1
 
@@ -6922,14 +7989,14 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
 
                     if record_status and record_status['deleted']:
                         logger.info(
-                            f"{table_name} ID {item_id} already soft-deleted. Operation considered successful (idempotent).")
+                            f"{logical_table_name} ID {item_id} already soft-deleted. Operation considered successful (idempotent).")
                         return True
                     raise e # Re-raise if not found or other conflict
 
                 if current_db_version != expected_version:
                     raise ConflictError(
-                        f"Soft delete failed for {table_name} ID {item_id}: version mismatch (db has {current_db_version}, client expected {expected_version}).",
-                        entity=table_name, entity_id=item_id
+                        f"Soft delete failed for {logical_table_name} ID {item_id}: version mismatch (db has {current_db_version}, client expected {expected_version}).",
+                        entity=logical_table_name, entity_id=item_id
                     )
 
                 cursor = conn.execute(query, params)
@@ -6940,40 +8007,40 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
                     check_again_cursor = conn.execute(
                         f"SELECT deleted, version FROM {table_name} WHERE {pk_col_name} = ?", (item_id,))
                     changed_record = check_again_cursor.fetchone()
-                    msg = f"Soft delete for {table_name} ID {item_id} (expected version {expected_version}) affected 0 rows."
+                    msg = f"Soft delete for {logical_table_name} ID {item_id} (expected version {expected_version}) affected 0 rows."
                     if not changed_record:
                         raise ConflictError(
-                            f"{table_name} ID {item_id} disappeared before soft-delete completion (expected version {expected_version}).",
-                            entity=table_name, entity_id=item_id)
+                            f"{logical_table_name} ID {item_id} disappeared before soft-delete completion (expected version {expected_version}).",
+                            entity=logical_table_name, entity_id=item_id)
 
                     if changed_record['deleted']:
                         # If it got deleted by another process, and the new version matches what we intended, it's fine.
                         if changed_record['version'] == next_version_val:
                             logger.info(
-                                f"{table_name} ID {item_id} was soft-deleted concurrently to version {next_version_val}. Operation successful.")
+                                f"{logical_table_name} ID {item_id} was soft-deleted concurrently to version {next_version_val}. Operation successful.")
                             return True
                         else:
                             raise ConflictError(
-                                f"{table_name} ID {item_id} was soft-deleted concurrently to an unexpected version {changed_record['version']} (expected to set to {next_version_val}).",
-                                entity=table_name, entity_id=item_id)
+                                f"{logical_table_name} ID {item_id} was soft-deleted concurrently to an unexpected version {changed_record['version']} (expected to set to {next_version_val}).",
+                                entity=logical_table_name, entity_id=item_id)
 
                     if changed_record['version'] != expected_version:  # Still active, but version changed
                         raise ConflictError(
-                            f"Soft delete failed for {table_name} ID {item_id}: version changed to {changed_record['version']} concurrently (expected {expected_version}).",
-                            entity=table_name, entity_id=item_id)
+                            f"Soft delete failed for {logical_table_name} ID {item_id}: version changed to {changed_record['version']} concurrently (expected {expected_version}).",
+                            entity=logical_table_name, entity_id=item_id)
 
                     raise ConflictError(
-                        f"Soft delete for {table_name} ID {item_id} (expected version {expected_version}) affected 0 rows for an unknown reason after passing initial checks.",
-                        entity=table_name, entity_id=item_id)
+                        f"Soft delete for {logical_table_name} ID {item_id} (expected version {expected_version}) affected 0 rows for an unknown reason after passing initial checks.",
+                        entity=logical_table_name, entity_id=item_id)
 
                 logger.info(
-                    f"Soft-deleted {table_name} ID {item_id} (was version {expected_version}), new version {next_version_val}.")
+                    f"Soft-deleted {logical_table_name} ID {item_id} (was version {expected_version}), new version {next_version_val}.")
                 return True
         except ConflictError:
             raise
         except CharactersRAGDBError as e:  # Catches sqlite3.Error from conn.execute
             logger.error(
-                f"Database error soft-deleting {table_name} ID {item_id} (expected version {expected_version}): {e}",
+                f"Database error soft-deleting {logical_table_name} ID {item_id} (expected version {expected_version}): {e}",
                 exc_info=True)
             raise
         # No implicit return None.
@@ -7116,7 +8183,8 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
 
     def count_keywords(self) -> int:
         """Return count of active (non-deleted) keywords."""
-        query = "SELECT COUNT(*) AS cnt FROM keywords WHERE deleted = 0"
+        keyword_table = self._map_table_for_backend("keywords")
+        query = f"SELECT COUNT(*) AS cnt FROM {keyword_table} WHERE deleted = 0"
         try:
             cursor = self.execute_query(query)
             row = cursor.fetchone()
@@ -7170,42 +8238,71 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
         search_term = search_term.strip()
         if not search_term:
             raise InputError("Search term cannot be empty.")
-        if not re.fullmatch(r"[\w\s-]+", search_term):
+        if '"' in search_term or "'" in search_term:
             raise InputError("Search term contains unsupported characters.")
+        is_simple_token = re.fullmatch(r"[\w-]+", search_term) is not None
         if self.backend_type == BackendType.POSTGRESQL:
-            tsquery = FTSQueryTranslator.normalize_query(search_term, 'postgresql')
-            if not tsquery:
+            if is_simple_token:
+                tsquery = FTSQueryTranslator.normalize_query(search_term, 'postgresql')
+                if tsquery:
+                    source_table = self._map_table_for_backend("keywords")
+                    fts_column = "keywords_fts_tsv"
+                    query = f"""
+                        SELECT k.*, ts_rank(k.{fts_column}, to_tsquery('english', ?)) AS rank
+                        FROM {source_table} k
+                        WHERE k.deleted = FALSE
+                          AND k.{fts_column} @@ to_tsquery('english', ?)
+                        ORDER BY rank DESC, k.last_modified DESC
+                        LIMIT ?
+                    """
+                    try:
+                        cursor = self.execute_query(query, (tsquery, tsquery, limit))
+                        return [dict(row) for row in cursor.fetchall()]
+                    except CharactersRAGDBError as exc:
+                        logger.error("PostgreSQL FTS search failed for keywords term '%s': %s", search_term, exc)
+                        raise
                 logger.debug("Keyword search term normalized to empty tsquery for input '%s'", search_term)
                 return []
 
+            # Non-simple tokens (e.g., "C++") skip FTS and fall back to ILIKE.
             source_table = self._map_table_for_backend("keywords")
-            fts_column = "keywords_fts_tsv"
+            escaped = search_term.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
             query = f"""
-                SELECT k.*, ts_rank(k.{fts_column}, to_tsquery('english', ?)) AS rank
+                SELECT k.*
                 FROM {source_table} k
                 WHERE k.deleted = FALSE
-                  AND k.{fts_column} @@ to_tsquery('english', ?)
-                ORDER BY rank DESC, k.last_modified DESC
+                  AND k.keyword ILIKE ? ESCAPE '\\'
+                ORDER BY k.last_modified DESC
                 LIMIT ?
             """
+            cursor = self.execute_query(query, (f"%{escaped}%", limit))
+            return [dict(row) for row in cursor.fetchall()]
+
+        # SQLite: use FTS prefix for simple tokens.
+        if is_simple_token:
+            # Support prefix/substring search expectations in tests by using prefix match
+            # e.g., 'fru' should match 'fruit'. FTS5 uses '*' for prefix queries.
+            fts_query = f"{search_term}*"
             try:
-                cursor = self.execute_query(query, (tsquery, tsquery, limit))
-                return [dict(row) for row in cursor.fetchall()]
+                return self._search_generic_items_fts("keywords_fts", "keywords", "keyword", fts_query, limit)
             except CharactersRAGDBError as exc:
-                logger.error("PostgreSQL FTS search failed for keywords term '%s': %s", search_term, exc)
+                msg = str(exc).lower()
+                if "fts" in msg or "match" in msg or "syntax" in msg:
+                    raise InputError("Search term contains unsupported characters.") from exc
                 raise
 
-        # Support prefix/substring search expectations in tests by using prefix match
-        # e.g., 'fru' should match 'fruit'. FTS5 uses '*' for prefix queries.
-        # Avoid quoting here to preserve wildcard behavior.
-        fts_query = f"{search_term}*"
-        try:
-            return self._search_generic_items_fts("keywords_fts", "keywords", "keyword", fts_query, limit)
-        except CharactersRAGDBError as exc:
-            msg = str(exc).lower()
-            if "fts" in msg or "match" in msg or "syntax" in msg:
-                raise InputError("Search term contains unsupported characters.") from exc
-            raise
+        keyword_table = self._map_table_for_backend("keywords")
+        escaped = search_term.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+        query = f"""
+            SELECT k.*
+            FROM {keyword_table} k
+            WHERE k.deleted = 0
+              AND k.keyword LIKE ? ESCAPE '\\'
+            ORDER BY k.last_modified DESC
+            LIMIT ?
+        """
+        cursor = self.execute_query(query, (f"%{escaped}%", limit))
+        return [dict(row) for row in cursor.fetchall()]
 
     # Keyword Collections
     def add_keyword_collection(self, name: str, parent_id: Optional[int] = None) -> Optional[int]:
@@ -7544,6 +8641,35 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
                          exc_info=True)
             raise
 
+    def delete_note(self, note_id: str, expected_version: Optional[int] = None, hard_delete: bool = False) -> bool:
+        """Soft or hard delete a note."""
+        now = self._get_current_utc_timestamp_iso()
+        try:
+            with self.transaction() as conn:
+                row = conn.execute("SELECT id, version, deleted FROM notes WHERE id = ?", (note_id,)).fetchone()
+                if not row:
+                    return False
+                cur_ver = int(row["version"])
+                deleted = bool(row["deleted"])
+                if hard_delete:
+                    conn.execute("DELETE FROM notes WHERE id = ?", (note_id,))
+                    return True
+                if deleted:
+                    return True
+                if expected_version is not None and cur_ver != expected_version:
+                    raise ConflictError("Version mismatch deleting note", entity="notes", identifier=note_id)
+                deleted_val = True if self.backend_type == BackendType.POSTGRESQL else 1
+                rc = conn.execute(
+                    "UPDATE notes SET deleted = ?, last_modified = ?, version = ?, client_id = ? "
+                    "WHERE id = ? AND deleted = 0",
+                    (deleted_val, now, cur_ver + 1, self.client_id, note_id),
+                ).rowcount
+                return rc > 0
+        except BackendDatabaseError as e:
+            raise CharactersRAGDBError(f"Failed to delete note: {e}") from e
+        except sqlite3.Error as e:
+            raise CharactersRAGDBError(f"Failed to delete note: {e}") from e
+
     def search_notes(self, search_term: str, limit: int = 10, offset: int = 0) -> List[Dict[str, Any]]:
         """Searches notes_fts (title and content) with optional pagination."""
         # FTS5 requires wrapping terms with special characters in double quotes
@@ -7650,7 +8776,7 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
                     FROM notes_fts
                     JOIN notes AS n ON notes_fts.rowid = n.rowid
                     JOIN note_keywords nk ON n.id = nk.note_id
-                    JOIN keywords k ON k.id = nk.keyword_id
+                    JOIN {keyword_table} k ON k.id = nk.keyword_id
                     WHERE notes_fts MATCH ?
                       AND n.deleted = 0
                       AND k.deleted = 0
@@ -7664,7 +8790,7 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
                     SELECT DISTINCT n.*
                     FROM notes n
                     JOIN note_keywords nk ON n.id = nk.note_id
-                    JOIN keywords k ON k.id = nk.keyword_id
+                    JOIN {keyword_table} k ON k.id = nk.keyword_id
                     WHERE n.deleted = 0
                       AND k.deleted = 0
                       AND ({like_clause})
@@ -7818,10 +8944,11 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
                                  "unlink")
 
     def get_keywords_for_conversation(self, conversation_id: str) -> List[Dict[str, Any]]:
+        keyword_table = self._map_table_for_backend("keywords")
         order_clause = self._case_insensitive_order_clause("k.keyword")
         query = f"""
                 SELECT k.* \
-                FROM keywords k \
+                FROM {keyword_table} k \
                          JOIN conversation_keywords ck ON k.id = ck.keyword_id
                 WHERE ck.conversation_id = ? \
                   AND k.deleted = 0 \
@@ -7829,6 +8956,36 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
                 """
         cursor = self.execute_query(query, (conversation_id,))
         return [dict(row) for row in cursor.fetchall()]
+
+    def get_keywords_for_conversations(self, conversation_ids: List[str]) -> Dict[str, List[Dict[str, Any]]]:
+        """Fetch keywords for multiple conversations in a single query."""
+        if not conversation_ids:
+            return {}
+        keyword_table = self._map_table_for_backend("keywords")
+        placeholders = ",".join(["?"] * len(conversation_ids))
+        order_expr = self._case_insensitive_order_expression("k.keyword")
+        query = f"""
+                SELECT ck.conversation_id as conversation_id, k.* \
+                FROM {keyword_table} k \
+                         JOIN conversation_keywords ck ON k.id = ck.keyword_id
+                WHERE ck.conversation_id IN ({placeholders}) \
+                  AND k.deleted = 0 \
+                ORDER BY ck.conversation_id, {order_expr}
+                """
+        cursor = self.execute_query(query, tuple(conversation_ids))
+        rows = cursor.fetchall()
+        columns = [col[0] for col in cursor.description] if cursor.description else []
+        result: Dict[str, List[Dict[str, Any]]] = {cid: [] for cid in conversation_ids}
+        for row in rows:
+            if isinstance(row, dict):
+                record = dict(row)
+            else:
+                record = {columns[idx]: row[idx] for idx in range(len(columns))}
+            conv_id = record.pop("conversation_id", None)
+            if conv_id is None:
+                continue
+            result.setdefault(str(conv_id), []).append(record)
+        return result
 
     def get_conversations_for_keyword(self, keyword_id: int, limit: int = 50, offset: int = 0) -> List[Dict[str, Any]]:
         query = """
@@ -7853,10 +9010,11 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
                                  "unlink")
 
     def get_keywords_for_collection(self, collection_id: int) -> List[Dict[str, Any]]:
+        keyword_table = self._map_table_for_backend("keywords")
         order_clause = self._case_insensitive_order_clause("k.keyword")
         query = f"""
                 SELECT k.* \
-                FROM keywords k \
+                FROM {keyword_table} k \
                          JOIN collection_keywords ck ON k.id = ck.keyword_id
                 WHERE ck.collection_id = ? \
                   AND k.deleted = 0 \
@@ -7887,10 +9045,11 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
         return self._manage_link("note_keywords", "note_id", note_id, "keyword_id", keyword_id, "unlink")
 
     def get_keywords_for_note(self, note_id: str) -> List[Dict[str, Any]]: # note_id is str
+        keyword_table = self._map_table_for_backend("keywords")
         order_clause = self._case_insensitive_order_clause("k.keyword")
         query = f"""
                 SELECT k.* \
-                FROM keywords k \
+                FROM {keyword_table} k \
                          JOIN note_keywords nk ON k.id = nk.keyword_id
                 WHERE nk.note_id = ? \
                   AND k.deleted = 0 \
@@ -7903,25 +9062,30 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
         """Return keywords for multiple notes as a map of note_id -> keywords list."""
         if not note_ids:
             return {}
-        placeholders = ",".join(["?"] * len(note_ids))
+        keyword_table = self._map_table_for_backend("keywords")
         order_clause = self._case_insensitive_order_clause("k.keyword")
-        query = f"""
-                SELECT nk.note_id AS note_id, k.* \
-                FROM keywords k \
-                         JOIN note_keywords nk ON k.id = nk.keyword_id
-                WHERE nk.note_id IN ({placeholders}) \
-                  AND k.deleted = 0 \
-                {order_clause}
-                """
-        cursor = self.execute_query(query, tuple(note_ids))
-        rows = cursor.fetchall()
         out: Dict[str, List[Dict[str, Any]]] = {nid: [] for nid in note_ids}
-        for row in rows:
-            record = dict(row)
-            note_id = record.pop("note_id", None)
-            if not note_id:
-                continue
-            out.setdefault(note_id, []).append(record)
+        # SQLite has a default variable cap of 999; keep a buffer to be safe.
+        max_vars = 900
+        for start in range(0, len(note_ids), max_vars):
+            batch = note_ids[start:start + max_vars]
+            placeholders = ",".join(["?"] * len(batch))
+            query = f"""
+                    SELECT nk.note_id AS note_id, k.* \
+                    FROM {keyword_table} k \
+                             JOIN note_keywords nk ON k.id = nk.keyword_id
+                    WHERE nk.note_id IN ({placeholders}) \
+                      AND k.deleted = 0 \
+                    {order_clause}
+                    """
+            cursor = self.execute_query(query, tuple(batch))
+            rows = cursor.fetchall()
+            for row in rows:
+                record = dict(row)
+                note_id = record.pop("note_id", None)
+                if not note_id:
+                    continue
+                out.setdefault(note_id, []).append(record)
         return out
 
     def get_notes_for_keyword(self, keyword_id: int, limit: int = 50, offset: int = 0) -> List[Dict[str, Any]]:
@@ -8213,6 +9377,7 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
         """List flashcards with filters. due_status in {'new','learning','due','all'}."""
         where_clauses = ["1=1"]
         params: List[Any] = []
+        keyword_table = self._map_table_for_backend("keywords")
         if not include_deleted:
             if self.backend_type == BackendType.POSTGRESQL:
                 where_clauses.append("f.deleted = FALSE")
@@ -8234,7 +9399,7 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
         # tag filter (single tag)
         join_tag = ""
         if tag:
-            join_tag = "JOIN flashcard_keywords fk ON fk.card_id = f.id JOIN keywords kw ON kw.id = fk.keyword_id"
+            join_tag = f"JOIN flashcard_keywords fk ON fk.card_id = f.id JOIN {keyword_table} kw ON kw.id = fk.keyword_id"
             where_clauses.append("kw.keyword = ?")
             params.append(tag)
 
@@ -8285,6 +9450,7 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
         """Count flashcards matching filters. Mirrors list_flashcards filters."""
         where_clauses = ["1=1"]
         params: List[Any] = []
+        keyword_table = self._map_table_for_backend("keywords")
         if not include_deleted:
             if self.backend_type == BackendType.POSTGRESQL:
                 where_clauses.append("f.deleted = FALSE")
@@ -8305,7 +9471,7 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
 
         join_tag = ""
         if tag:
-            join_tag = "JOIN flashcard_keywords fk ON fk.card_id = f.id JOIN keywords kw ON kw.id = fk.keyword_id"
+            join_tag = f"JOIN flashcard_keywords fk ON fk.card_id = f.id JOIN {keyword_table} kw ON kw.id = fk.keyword_id"
             where_clauses.append("kw.keyword = ?")
             params.append(tag)
 
@@ -8635,12 +9801,13 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
 
     def get_keywords_for_flashcard(self, card_uuid: str) -> List[Dict[str, Any]]:
         """Return keywords linked to a flashcard."""
+        keyword_table = self._map_table_for_backend("keywords")
         order_clause = self._case_insensitive_order_clause("kw.keyword")
         query = f"""
             SELECT kw.*
               FROM flashcards f
               JOIN flashcard_keywords fk ON fk.card_id = f.id
-              JOIN keywords kw ON kw.id = fk.keyword_id
+              JOIN {keyword_table} kw ON kw.id = fk.keyword_id
              WHERE f.uuid = ? AND f.deleted = 0 AND kw.deleted = 0
              {order_clause}
         """
@@ -8762,6 +9929,7 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
         self,
         name: str,
         description: Optional[str] = None,
+        workspace_tag: Optional[str] = None,
         media_id: Optional[int] = None,
         time_limit_seconds: Optional[int] = None,
         passing_score: Optional[int] = None,
@@ -8772,13 +9940,14 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
         try:
             with self.transaction() as conn:
                 insert_sql = (
-                    "INSERT INTO quizzes(name, description, media_id, total_questions, time_limit_seconds, "
+                    "INSERT INTO quizzes(name, description, workspace_tag, media_id, total_questions, time_limit_seconds, "
                     "passing_score, deleted, client_id, version, created_at, last_modified) "
-                    "VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
+                    "VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
                 )
                 params = (
                     name,
                     description,
+                    workspace_tag,
                     media_id,
                     0,
                     time_limit_seconds,
@@ -8808,7 +9977,7 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
         """Get quiz by ID, returns None if not found or deleted (unless include_deleted)."""
         deleted_clause = "" if include_deleted else "AND deleted = 0"
         query = (
-            "SELECT id, name, description, media_id, total_questions, time_limit_seconds, passing_score, "
+            "SELECT id, name, description, workspace_tag, media_id, total_questions, time_limit_seconds, passing_score, "
             "deleted, client_id, version, created_at, last_modified "
             "FROM quizzes WHERE id = ? " + deleted_clause
         )
@@ -8823,6 +9992,7 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
         self,
         q: Optional[str] = None,
         media_id: Optional[int] = None,
+        workspace_tag: Optional[str] = None,
         include_deleted: bool = False,
         limit: int = 50,
         offset: int = 0,
@@ -8835,6 +10005,9 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
         if media_id is not None:
             where_clauses.append("media_id = ?")
             params.append(media_id)
+        if workspace_tag:
+            where_clauses.append("workspace_tag = ?")
+            params.append(workspace_tag)
         if q:
             where_clauses.append("(LOWER(name) LIKE ? OR LOWER(description) LIKE ?)")
             q_like = f"%{q.lower()}%"
@@ -8842,7 +10015,7 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
 
         where_sql = " AND ".join(where_clauses)
         query = (
-            "SELECT id, name, description, media_id, total_questions, time_limit_seconds, passing_score, "
+            "SELECT id, name, description, workspace_tag, media_id, total_questions, time_limit_seconds, passing_score, "
             "deleted, client_id, version, created_at, last_modified "
             f"FROM quizzes WHERE {where_sql} ORDER BY last_modified DESC LIMIT ? OFFSET ?"
         )
@@ -8860,7 +10033,7 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
     def update_quiz(self, quiz_id: int, updates: Dict[str, Any], client_id: str = "unknown") -> bool:
         """Update quiz fields, returns True if successful."""
         expected_version = updates.pop("expected_version", None)
-        allowed = {"name", "description", "media_id", "time_limit_seconds", "passing_score"}
+        allowed = {"name", "description", "workspace_tag", "media_id", "time_limit_seconds", "passing_score"}
         set_parts = []
         params: List[Any] = []
         for k, v in updates.items():
@@ -9358,6 +10531,850 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
                 return False
             return str(user_answer).strip().lower() == str(correct).strip().lower()
         return False
+
+    # --- Writing Playground Methods ---
+    def _normalize_writing_name(self, name: str, entity_label: str) -> str:
+        """
+        Normalize and validate a writing entity name.
+
+        Args:
+            name: Raw name value supplied by the caller.
+            entity_label: Label used in error messages (e.g., "Session", "Template").
+
+        Returns:
+            The normalized name string.
+
+        Raises:
+            InputError: If the name is empty or whitespace-only.
+        """
+        if not name or not str(name).strip():
+            raise InputError(f"{entity_label} name cannot be empty.")
+        return str(name).strip()
+
+    def _serialize_writing_payload(self, payload: Dict[str, Any], entity_label: str) -> str:
+        """
+        Serialize a writing payload to JSON for storage.
+
+        Args:
+            payload: Payload dictionary to serialize.
+            entity_label: Label used in error messages (e.g., "Session", "Template").
+
+        Returns:
+            JSON-serialized payload string.
+
+        Raises:
+            InputError: If the payload is None or not JSON-serializable.
+        """
+        if payload is None:
+            raise InputError(f"{entity_label} payload cannot be None.")
+        try:
+            return json.dumps(payload, ensure_ascii=True)
+        except (TypeError, ValueError) as exc:
+            raise InputError(f"{entity_label} payload must be JSON-serializable.") from exc
+
+    def _serialize_json_payload(self, payload: Any, entity_label: str) -> str:
+        """
+        Serialize an arbitrary payload to JSON for storage.
+
+        Args:
+            payload: JSON-serializable payload.
+            entity_label: Label used in error messages.
+
+        Returns:
+            JSON-serialized payload string.
+
+        Raises:
+            InputError: If the payload is None or not JSON-serializable.
+        """
+        if payload is None:
+            raise InputError(f"{entity_label} payload cannot be None.")
+        try:
+            return json.dumps(payload, ensure_ascii=True)
+        except (TypeError, ValueError) as exc:
+            raise InputError(f"{entity_label} payload must be JSON-serializable.") from exc
+
+    def add_writing_session(
+        self,
+        name: str,
+        payload: Dict[str, Any],
+        *,
+        schema_version: int = 1,
+        session_id: Optional[str] = None,
+        version_parent_id: Optional[str] = None,
+    ) -> str:
+        """
+        Create a writing session for the Writing Playground.
+
+        Args:
+            name: User-facing session name.
+            payload: Session payload to store; will be JSON-serialized.
+            schema_version: Payload schema version (must be >= 1).
+            session_id: Optional explicit session UUID to store.
+            version_parent_id: Optional parent session ID for versioning.
+
+        Returns:
+            The session ID for the newly created record.
+
+        Raises:
+            InputError: If inputs are invalid or payload cannot be serialized.
+            ConflictError: If the session ID already exists.
+            CharactersRAGDBError: For database errors.
+        """
+        if not isinstance(schema_version, int) or schema_version < 1:
+            raise InputError("Session schema_version must be an integer >= 1.")
+        session_name = self._normalize_writing_name(name, "Session")
+        payload_json = self._serialize_writing_payload(payload, "Session")
+        final_id = session_id or self._generate_uuid()
+        now = self._get_current_utc_timestamp_iso()
+        query = (
+            "INSERT INTO writing_sessions "
+            "(id, name, payload_json, schema_version, version_parent_id, created_at, last_modified, deleted, client_id, version) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
+        )
+        version_parent_id = self._normalize_nullable_text(version_parent_id)
+        if self.backend_type == BackendType.POSTGRESQL:
+            params = (
+                final_id,
+                session_name,
+                payload_json,
+                schema_version,
+                version_parent_id,
+                now,
+                now,
+                False,
+                self.client_id,
+                1,
+            )
+        else:
+            params = (
+                final_id,
+                session_name,
+                payload_json,
+                schema_version,
+                version_parent_id,
+                now,
+                now,
+                0,
+                self.client_id,
+                1,
+            )
+        try:
+            with self.transaction() as conn:
+                conn.execute(query, params)
+                logger.info("Added writing session '%s' with ID: %s.", session_name, final_id)
+                return final_id
+        except sqlite3.IntegrityError as e:
+            msg = str(e).lower()
+            if "unique constraint failed: writing_sessions.id" in msg:
+                raise ConflictError(
+                    f"Session with ID '{final_id}' already exists.",
+                    entity="writing_sessions",
+                    entity_id=final_id,
+                ) from e
+            raise CharactersRAGDBError(f"Database integrity error adding writing session: {e}") from e
+        except BackendDatabaseError as exc:
+            msg = str(exc).lower()
+            if "duplicate key" in msg or "unique constraint" in msg:
+                raise ConflictError(
+                    f"Session with ID '{final_id}' already exists.",
+                    entity="writing_sessions",
+                    entity_id=final_id,
+                ) from exc
+            raise CharactersRAGDBError(f"Backend error adding writing session: {exc}") from exc
+
+    def get_writing_session(self, session_id: str, include_deleted: bool = False) -> Optional[Dict[str, Any]]:
+        """
+        Fetch a writing session by ID.
+
+        Args:
+            session_id: The session UUID.
+            include_deleted: Whether to include soft-deleted records.
+
+        Returns:
+            The session record with a deserialized "payload", or None if not found.
+
+        Raises:
+            CharactersRAGDBError: For database errors.
+        """
+        deleted_clause = "" if include_deleted else "AND deleted = 0"
+        query = f"SELECT * FROM writing_sessions WHERE id = ? {deleted_clause}"
+        try:
+            cursor = self.execute_query(query, (session_id,))
+            row = cursor.fetchone()
+            if not row:
+                return None
+            item = self._deserialize_row_fields(row, ["payload_json"])
+            if not item:
+                return None
+            item["payload"] = item.pop("payload_json", None)
+            return item
+        except CharactersRAGDBError:
+            raise
+
+    def list_writing_sessions(self, limit: int = 100, offset: int = 0) -> List[Dict[str, Any]]:
+        """
+        List non-deleted writing sessions with pagination.
+
+        Args:
+            limit: Maximum number of sessions to return.
+            offset: Number of sessions to skip.
+
+        Returns:
+            A list of session summaries (id, name, last_modified, version).
+
+        Raises:
+            CharactersRAGDBError: For database errors.
+        """
+        query = (
+            "SELECT id, name, last_modified, version "
+            "FROM writing_sessions WHERE deleted = 0 "
+            "ORDER BY last_modified DESC LIMIT ? OFFSET ?"
+        )
+        try:
+            cursor = self.execute_query(query, (limit, offset))
+            return [dict(row) for row in cursor.fetchall()]
+        except CharactersRAGDBError as exc:
+            logger.error(f"Database error listing writing sessions: {exc}")
+            raise
+
+    def count_writing_sessions(self) -> int:
+        """
+        Return the count of non-deleted writing sessions.
+
+        Returns:
+            The number of active (non-deleted) sessions.
+
+        Raises:
+            CharactersRAGDBError: For database errors.
+        """
+        query = "SELECT COUNT(*) AS cnt FROM writing_sessions WHERE deleted = 0"
+        try:
+            cursor = self.execute_query(query)
+            row = cursor.fetchone()
+            return int(row["cnt"]) if row else 0
+        except CharactersRAGDBError as exc:
+            logger.error(f"Database error counting writing sessions: {exc}")
+            raise
+
+    def update_writing_session(
+        self,
+        session_id: str,
+        update_data: Dict[str, Any],
+        expected_version: int,
+    ) -> bool | None:
+        """
+        Update a writing session using optimistic locking.
+
+        Args:
+            session_id: The session UUID to update.
+            update_data: Fields to update; payload can be provided as "payload" (dict)
+                or "payload_json" (str-like).
+            expected_version: The version the client expects to update.
+
+        Returns:
+            True if the update succeeds.
+
+        Raises:
+            InputError: If update_data is empty or payload is invalid.
+            ConflictError: If the session is missing, deleted, or version-mismatched.
+            CharactersRAGDBError: For database errors.
+        """
+        payload = update_data.get("payload")
+        if isinstance(payload, dict):
+            update_data = dict(update_data)
+            update_data["payload_json"] = self._serialize_writing_payload(
+                update_data.pop("payload"),
+                "Session",
+            )
+        else:
+            payload_json = update_data.get("payload_json")
+            if payload_json is not None and not isinstance(payload_json, str):
+                update_data = dict(update_data)
+                update_data["payload_json"] = self._serialize_writing_payload(
+                    payload_json,
+                    "Session",
+                )
+        allowed_fields = ["name", "payload_json", "schema_version", "version_parent_id"]
+        return self._update_generic_item(
+            "writing_sessions",
+            session_id,
+            update_data,
+            expected_version,
+            allowed_fields,
+            pk_col_name="id",
+        )
+
+    def soft_delete_writing_session(self, session_id: str, expected_version: int) -> bool | None:
+        """
+        Soft-delete a writing session using optimistic locking.
+
+        Args:
+            session_id: The session UUID to soft-delete.
+            expected_version: The version the client expects to delete.
+
+        Returns:
+            True if the session was deleted or already deleted.
+
+        Raises:
+            ConflictError: If the session is missing or version-mismatched.
+            CharactersRAGDBError: For database errors.
+        """
+        return self._soft_delete_generic_item("writing_sessions", session_id, expected_version, pk_col_name="id")
+
+    def clone_writing_session(self, session_id: str, *, name: Optional[str] = None) -> Dict[str, Any]:
+        """
+        Clone a writing session, optionally renaming the copy.
+
+        Args:
+            session_id: The source session UUID to clone.
+            name: Optional name for the cloned session.
+
+        Returns:
+            The newly created session record.
+
+        Raises:
+            ConflictError: If the source session does not exist.
+            CharactersRAGDBError: If the cloned session cannot be retrieved.
+        """
+        existing = self.get_writing_session(session_id)
+        if not existing:
+            raise ConflictError("Writing session not found.", entity="writing_sessions", entity_id=session_id)
+        clone_name = self._normalize_writing_name(name or f"{existing['name']} (copy)", "Session")
+        payload = existing.get("payload") or {}
+        schema_version = int(existing.get("schema_version") or 1)
+        new_id = self.add_writing_session(
+            name=clone_name,
+            payload=payload,
+            schema_version=schema_version,
+            version_parent_id=session_id,
+        )
+        cloned = self.get_writing_session(new_id)
+        if not cloned:
+            raise CharactersRAGDBError("Cloned session not found after creation.")
+        return cloned
+
+    def add_writing_template(
+        self,
+        name: str,
+        payload: Dict[str, Any],
+        *,
+        schema_version: int = 1,
+        version_parent_id: Optional[str] = None,
+        is_default: bool = False,
+    ) -> Optional[int]:
+        """
+        Create a writing template for the Writing Playground.
+
+        Args:
+            name: Template name.
+            payload: Template payload to store; will be JSON-serialized.
+            schema_version: Payload schema version (must be >= 1).
+            version_parent_id: Optional parent template ID for versioning.
+            is_default: Whether the template should be marked as default.
+
+        Returns:
+            The template ID for the newly created record.
+
+        Raises:
+            InputError: If inputs are invalid or payload cannot be serialized.
+            ConflictError: If a template with the same name already exists.
+            CharactersRAGDBError: For database errors.
+        """
+        if not isinstance(schema_version, int) or schema_version < 1:
+            raise InputError("Template schema_version must be an integer >= 1.")
+        template_name = self._normalize_writing_name(name, "Template")
+        payload_json = self._serialize_writing_payload(payload, "Template")
+        item_data = {
+            "payload_json": payload_json,
+            "schema_version": schema_version,
+            "version_parent_id": self._normalize_nullable_text(version_parent_id),
+            "is_default": bool(is_default),
+        }
+        other_fields_map = {
+            "payload_json": "payload_json",
+            "schema_version": "schema_version",
+            "version_parent_id": "version_parent_id",
+            "is_default": "is_default",
+        }
+        return self._add_generic_item("writing_templates", "name", item_data, template_name, other_fields_map)
+
+    def get_writing_template_by_name(self, name: str) -> Optional[Dict[str, Any]]:
+        """
+        Fetch a writing template by name.
+
+        Args:
+            name: Template name.
+
+        Returns:
+            The template record with a deserialized "payload", or None if not found.
+
+        Raises:
+            CharactersRAGDBError: For database errors.
+        """
+        template_name = self._normalize_writing_name(name, "Template")
+        row = self._get_generic_item_by_unique_text("writing_templates", "name", template_name)
+        if not row:
+            return None
+        item = dict(row)
+        payload_json = item.get("payload_json")
+        if isinstance(payload_json, str):
+            try:
+                item["payload"] = json.loads(payload_json)
+            except json.JSONDecodeError:
+                item["payload"] = None
+        else:
+            item["payload"] = None
+        item.pop("payload_json", None)
+        return item
+
+    def list_writing_templates(self, limit: int = 100, offset: int = 0) -> List[Dict[str, Any]]:
+        """
+        List non-deleted writing templates with pagination.
+
+        Args:
+            limit: Maximum number of templates to return.
+            offset: Number of templates to skip.
+
+        Returns:
+            A list of template records with deserialized "payload".
+
+        Raises:
+            CharactersRAGDBError: For database errors.
+        """
+        query = (
+            "SELECT * FROM writing_templates WHERE deleted = 0 "
+            "ORDER BY name ASC LIMIT ? OFFSET ?"
+        )
+        try:
+            cursor = self.execute_query(query, (limit, offset))
+            items = []
+            for row in cursor.fetchall():
+                item = dict(row)
+                payload_json = item.get("payload_json")
+                if isinstance(payload_json, str):
+                    try:
+                        item["payload"] = json.loads(payload_json)
+                    except json.JSONDecodeError:
+                        item["payload"] = None
+                else:
+                    item["payload"] = None
+                item.pop("payload_json", None)
+                items.append(item)
+            return items
+        except CharactersRAGDBError as exc:
+            logger.error(f"Database error listing writing templates: {exc}")
+            raise
+
+    def count_writing_templates(self) -> int:
+        """
+        Return the count of non-deleted writing templates.
+
+        Returns:
+            The number of active (non-deleted) templates.
+
+        Raises:
+            CharactersRAGDBError: For database errors.
+        """
+        query = "SELECT COUNT(*) AS cnt FROM writing_templates WHERE deleted = 0"
+        try:
+            cursor = self.execute_query(query)
+            row = cursor.fetchone()
+            return int(row["cnt"]) if row else 0
+        except CharactersRAGDBError as exc:
+            logger.error(f"Database error counting writing templates: {exc}")
+            raise
+
+    def update_writing_template(
+        self,
+        name: str,
+        update_data: Dict[str, Any],
+        expected_version: int,
+    ) -> bool | None:
+        """
+        Update a writing template using optimistic locking.
+
+        Args:
+            name: Template name to update.
+            update_data: Fields to update; payload can be provided as "payload" (dict)
+                or "payload_json" (str-like).
+            expected_version: The version the client expects to update.
+
+        Returns:
+            True if the update succeeds.
+
+        Raises:
+            InputError: If update_data is empty or payload is invalid.
+            ConflictError: If the template is missing, deleted, or version-mismatched.
+            CharactersRAGDBError: For database errors.
+        """
+        template_name = self._normalize_writing_name(name, "Template")
+        payload = update_data.get("payload")
+        if isinstance(payload, dict):
+            update_data = dict(update_data)
+            update_data["payload_json"] = self._serialize_writing_payload(
+                update_data.pop("payload"),
+                "Template",
+            )
+        else:
+            payload_json = update_data.get("payload_json")
+            if payload_json is not None and not isinstance(payload_json, str):
+                update_data = dict(update_data)
+                update_data["payload_json"] = self._serialize_writing_payload(
+                    payload_json,
+                    "Template",
+                )
+        allowed_fields = ["name", "payload_json", "schema_version", "version_parent_id", "is_default"]
+        return self._update_generic_item(
+            "writing_templates",
+            template_name,
+            update_data,
+            expected_version,
+            allowed_fields,
+            pk_col_name="name",
+            unique_col_name_in_data="name",
+        )
+
+    def soft_delete_writing_template(self, name: str, expected_version: int) -> bool | None:
+        """
+        Soft-delete a writing template using optimistic locking.
+
+        Args:
+            name: Template name to delete.
+            expected_version: The version the client expects to delete.
+
+        Returns:
+            True if the template was deleted or already deleted.
+
+        Raises:
+            ConflictError: If the template is missing or version-mismatched.
+            CharactersRAGDBError: For database errors.
+        """
+        template_name = self._normalize_writing_name(name, "Template")
+        return self._soft_delete_generic_item("writing_templates", template_name, expected_version, pk_col_name="name")
+
+    def add_writing_theme(
+        self,
+        name: str,
+        *,
+        class_name: Optional[str] = None,
+        css: Optional[str] = None,
+        schema_version: int = 1,
+        version_parent_id: Optional[str] = None,
+        is_default: bool = False,
+        order_index: int = 0,
+    ) -> Optional[int]:
+        """
+        Create a writing theme for the Writing Playground.
+
+        Args:
+            name: Theme name.
+            class_name: Optional CSS class name for the theme.
+            css: Optional raw CSS string.
+            schema_version: Theme schema version (must be >= 1).
+            version_parent_id: Optional parent theme ID for versioning.
+            is_default: Whether the theme should be marked as default.
+            order_index: Ordering index for theme lists.
+
+        Returns:
+            The theme ID for the newly created record.
+
+        Raises:
+            InputError: If inputs are invalid.
+            ConflictError: If a theme with the same name already exists.
+            CharactersRAGDBError: For database errors.
+        """
+        if not isinstance(schema_version, int) or schema_version < 1:
+            raise InputError("Theme schema_version must be an integer >= 1.")
+        theme_name = self._normalize_writing_name(name, "Theme")
+        if order_index is None:
+            order_index = 0
+        item_data = {
+            "class_name": self._normalize_nullable_text(class_name),
+            "css": css,
+            "schema_version": schema_version,
+            "version_parent_id": self._normalize_nullable_text(version_parent_id),
+            "is_default": bool(is_default),
+            "order_index": int(order_index),
+        }
+        other_fields_map = {
+            "class_name": "class_name",
+            "css": "css",
+            "schema_version": "schema_version",
+            "version_parent_id": "version_parent_id",
+            "is_default": "is_default",
+            "order_index": "order_index",
+        }
+        return self._add_generic_item("writing_themes", "name", item_data, theme_name, other_fields_map)
+
+    def get_writing_theme_by_name(self, name: str) -> Optional[Dict[str, Any]]:
+        """
+        Fetch a writing theme by name.
+
+        Args:
+            name: Theme name.
+
+        Returns:
+            The theme record, or None if not found.
+
+        Raises:
+            CharactersRAGDBError: For database errors.
+        """
+        theme_name = self._normalize_writing_name(name, "Theme")
+        row = self._get_generic_item_by_unique_text("writing_themes", "name", theme_name)
+        return dict(row) if row else None
+
+    def list_writing_themes(self, limit: int = 100, offset: int = 0) -> List[Dict[str, Any]]:
+        """
+        List non-deleted writing themes ordered by sort index.
+
+        Args:
+            limit: Maximum number of themes to return.
+            offset: Number of themes to skip.
+
+        Returns:
+            A list of theme records.
+
+        Raises:
+            CharactersRAGDBError: For database errors.
+        """
+        query = (
+            "SELECT * FROM writing_themes WHERE deleted = 0 "
+            "ORDER BY order_index ASC, name ASC LIMIT ? OFFSET ?"
+        )
+        try:
+            cursor = self.execute_query(query, (limit, offset))
+            return [dict(row) for row in cursor.fetchall()]
+        except CharactersRAGDBError as exc:
+            logger.error(f"Database error listing writing themes: {exc}")
+            raise
+
+    def count_writing_themes(self) -> int:
+        """
+        Return the count of non-deleted writing themes.
+
+        Returns:
+            The number of active (non-deleted) themes.
+
+        Raises:
+            CharactersRAGDBError: For database errors.
+        """
+        query = "SELECT COUNT(*) AS cnt FROM writing_themes WHERE deleted = 0"
+        try:
+            cursor = self.execute_query(query)
+            row = cursor.fetchone()
+            return int(row["cnt"]) if row else 0
+        except CharactersRAGDBError as exc:
+            logger.error(f"Database error counting writing themes: {exc}")
+            raise
+
+    def update_writing_theme(
+        self,
+        name: str,
+        update_data: Dict[str, Any],
+        expected_version: int,
+    ) -> bool | None:
+        """
+        Update a writing theme using optimistic locking.
+
+        Args:
+            name: Theme name to update.
+            update_data: Fields to update.
+            expected_version: The version the client expects to update.
+
+        Returns:
+            True if the update succeeds.
+
+        Raises:
+            InputError: If update_data is empty.
+            ConflictError: If the theme is missing, deleted, or version-mismatched.
+            CharactersRAGDBError: For database errors.
+        """
+        theme_name = self._normalize_writing_name(name, "Theme")
+        allowed_fields = [
+            "name",
+            "class_name",
+            "css",
+            "schema_version",
+            "version_parent_id",
+            "is_default",
+            "order_index",
+        ]
+        return self._update_generic_item(
+            "writing_themes",
+            theme_name,
+            update_data,
+            expected_version,
+            allowed_fields,
+            pk_col_name="name",
+            unique_col_name_in_data="name",
+        )
+
+    def soft_delete_writing_theme(self, name: str, expected_version: int) -> bool | None:
+        """
+        Soft-delete a writing theme using optimistic locking.
+
+        Args:
+            name: Theme name to delete.
+            expected_version: The version the client expects to delete.
+
+        Returns:
+            True if the theme was deleted or already deleted.
+
+        Raises:
+            ConflictError: If the theme is missing or version-mismatched.
+            CharactersRAGDBError: For database errors.
+        """
+        theme_name = self._normalize_writing_name(name, "Theme")
+        return self._soft_delete_generic_item("writing_themes", theme_name, expected_version, pk_col_name="name")
+
+    # --- Writing Wordcloud Methods ---
+    def _normalize_wordcloud_status(self, status: str) -> str:
+        """
+        Normalize and validate a wordcloud status value.
+
+        Allowed values: queued, running, ready, failed.
+        """
+        if not status or not str(status).strip():
+            raise InputError("Wordcloud status cannot be empty.")
+        normalized = str(status).strip().lower()
+        if normalized not in {"queued", "running", "ready", "failed"}:
+            raise InputError(f"Invalid wordcloud status: {status}.")
+        return normalized
+
+    def add_writing_wordcloud_job(
+        self,
+        wordcloud_id: str,
+        options: Dict[str, Any],
+        *,
+        input_chars: int,
+        status: str = "queued",
+    ) -> None:
+        """
+        Create or reset a writing wordcloud job entry.
+
+        Args:
+            wordcloud_id: Deterministic cache key (hash).
+            options: Wordcloud options payload.
+            input_chars: Character count of input text.
+            status: Initial status (queued by default).
+        """
+        if not wordcloud_id or not str(wordcloud_id).strip():
+            raise InputError("Wordcloud ID cannot be empty.")
+        normalized_status = self._normalize_wordcloud_status(status)
+        options_json = self._serialize_json_payload(options, "Wordcloud options")
+        now = self._get_current_utc_timestamp_iso()
+        query = (
+            "INSERT INTO writing_wordclouds "
+            "(id, status, options_json, input_chars, created_at, last_modified, client_id) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?) "
+            "ON CONFLICT(id) DO UPDATE SET "
+            "status=excluded.status, "
+            "options_json=excluded.options_json, "
+            "input_chars=excluded.input_chars, "
+            "words_json=NULL, "
+            "meta_json=NULL, "
+            "error=NULL, "
+            "last_modified=excluded.last_modified, "
+            "client_id=excluded.client_id"
+        )
+        params = (
+            str(wordcloud_id),
+            normalized_status,
+            options_json,
+            int(input_chars),
+            now,
+            now,
+            self.client_id,
+        )
+        try:
+            self.execute_query(query, params, commit=True)
+        except CharactersRAGDBError:
+            raise
+        except Exception as exc:
+            raise CharactersRAGDBError(f"Failed to create wordcloud job: {exc}") from exc
+
+    def get_writing_wordcloud(self, wordcloud_id: str) -> Optional[Dict[str, Any]]:
+        """
+        Fetch a wordcloud job by ID.
+
+        Returns the row with JSON fields deserialized (options, words, meta).
+        """
+        if not wordcloud_id or not str(wordcloud_id).strip():
+            raise InputError("Wordcloud ID cannot be empty.")
+        query = "SELECT * FROM writing_wordclouds WHERE id = ?"
+        try:
+            cursor = self.execute_query(query, (str(wordcloud_id),))
+            row = cursor.fetchone()
+            if not row:
+                return None
+            item = self._deserialize_row_fields(row, ["options_json", "words_json", "meta_json"])
+            if not item:
+                return None
+            item["options"] = item.pop("options_json", None)
+            item["words"] = item.pop("words_json", None)
+            item["meta"] = item.pop("meta_json", None)
+            return item
+        except CharactersRAGDBError:
+            raise
+        except Exception as exc:
+            raise CharactersRAGDBError(f"Failed to fetch wordcloud job: {exc}") from exc
+
+    def _update_writing_wordcloud_fields(self, wordcloud_id: str, update_data: Dict[str, Any]) -> None:
+        if not update_data:
+            raise InputError("No data provided for wordcloud update.")
+        allowed_fields = {
+            "status",
+            "options_json",
+            "words_json",
+            "meta_json",
+            "error",
+            "input_chars",
+        }
+        now = self._get_current_utc_timestamp_iso()
+        fields_sql: List[str] = []
+        params: List[Any] = []
+        for key, value in update_data.items():
+            if key not in allowed_fields:
+                continue
+            fields_sql.append(f"{key} = ?")
+            params.append(value)
+        if not fields_sql:
+            raise InputError("No valid fields provided for wordcloud update.")
+        fields_sql.extend(["last_modified = ?", "client_id = ?"])
+        params.extend([now, self.client_id, str(wordcloud_id)])
+        query = f"UPDATE writing_wordclouds SET {', '.join(fields_sql)} WHERE id = ?"
+        try:
+            cursor = self.execute_query(query, tuple(params), commit=True)
+            if getattr(cursor, "rowcount", 0) == 0:
+                raise ConflictError("Wordcloud job not found.", entity="writing_wordclouds", entity_id=wordcloud_id)
+        except CharactersRAGDBError:
+            raise
+        except Exception as exc:
+            raise CharactersRAGDBError(f"Failed to update wordcloud job: {exc}") from exc
+
+    def set_writing_wordcloud_status(self, wordcloud_id: str, status: str, error: Optional[str] = None) -> None:
+        """Update wordcloud job status (and optional error)."""
+        normalized_status = self._normalize_wordcloud_status(status)
+        update_data: Dict[str, Any] = {"status": normalized_status, "error": error}
+        self._update_writing_wordcloud_fields(wordcloud_id, update_data)
+
+    def set_writing_wordcloud_result(
+        self,
+        wordcloud_id: str,
+        *,
+        status: str,
+        words: Optional[List[Dict[str, Any]]] = None,
+        meta: Optional[Dict[str, Any]] = None,
+        error: Optional[str] = None,
+    ) -> None:
+        """Persist wordcloud results and status."""
+        normalized_status = self._normalize_wordcloud_status(status)
+        update_data: Dict[str, Any] = {"status": normalized_status, "error": error}
+        if words is not None:
+            update_data["words_json"] = self._serialize_json_payload(words, "Wordcloud result")
+        if meta is not None:
+            update_data["meta_json"] = self._serialize_json_payload(meta, "Wordcloud meta")
+        self._update_writing_wordcloud_fields(wordcloud_id, update_data)
 
     # --- Sync Log Methods ---
     def get_sync_log_entries(self, since_change_id: int = 0, limit: Optional[int] = None,

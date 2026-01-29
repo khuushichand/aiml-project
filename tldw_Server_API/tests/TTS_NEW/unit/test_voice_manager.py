@@ -265,6 +265,7 @@ async def test_encode_voice_reference_stores_artifacts(tmp_path, monkeypatch):
 
     voice_id = "voice-encode"
     processed_path = voices_root / "processed" / f"{voice_id}.wav"
+    processed_path.parent.mkdir(parents=True, exist_ok=True)
     processed_path.write_bytes(b"RIFF" + b"\x00" * 1000)
 
     voice_info = VoiceInfo(

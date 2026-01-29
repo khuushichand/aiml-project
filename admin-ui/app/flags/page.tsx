@@ -109,6 +109,9 @@ const parseEmailList = (value: string): ParsedList<string> => {
 const formatFlagDate = (value?: string | null) =>
   formatDateTime(value, { fallback: '—' });
 
+const getFlagId = (flag: FeatureFlagItem) =>
+  `${flag.key}:${flag.scope}:${flag.org_id ?? ''}:${flag.user_id ?? ''}`;
+
 export default function FlagsPage() {
   const confirm = useConfirm();
   const { success, error: showError, warning } = useToast();
@@ -136,6 +139,7 @@ export default function FlagsPage() {
   const [flagUserId, setFlagUserId] = useState('');
   const [flagNote, setFlagNote] = useState('');
   const [flagSaving, setFlagSaving] = useState(false);
+  const [deletingFlagId, setDeletingFlagId] = useState<string | null>(null);
 
   const flagParams = useMemo(() => {
     const params: Record<string, string> = {};
@@ -202,11 +206,11 @@ export default function FlagsPage() {
     if (changed) {
       const confirmed = await confirm({
         title: maintenanceEnabled ? 'Enable maintenance mode?' : 'Disable maintenance mode?',
-        description: maintenanceEnabled
+        message: maintenanceEnabled
           ? 'This will block non-allowlisted users.'
           : 'Service traffic will resume for all users.',
         confirmText: maintenanceEnabled ? 'Enable' : 'Disable',
-        variant: 'destructive',
+        variant: 'danger',
       });
       if (!confirmed) return;
     }
@@ -298,14 +302,17 @@ export default function FlagsPage() {
   };
 
   const handleDeleteFlag = async (flag: FeatureFlagItem) => {
+    const flagId = getFlagId(flag);
+    if (deletingFlagId === flagId) return;
     const confirmed = await confirm({
       title: `Delete flag ${flag.key}?`,
-      description: 'This removes the flag override for the selected scope.',
+      message: 'This removes the flag override for the selected scope.',
       confirmText: 'Delete',
-      variant: 'destructive',
+      variant: 'danger',
     });
     if (!confirmed) return;
     try {
+      setDeletingFlagId(flagId);
       const params: Record<string, string> = { scope: flag.scope };
       if (flag.org_id !== null && flag.org_id !== undefined) {
         params.org_id = String(flag.org_id);
@@ -319,6 +326,8 @@ export default function FlagsPage() {
     } catch (err: unknown) {
       const message = err instanceof Error && err.message ? err.message : 'Failed to delete feature flag';
       showError(message);
+    } finally {
+      setDeletingFlagId((prev) => (prev === flagId ? null : prev));
     }
   };
 
@@ -554,6 +563,8 @@ export default function FlagsPage() {
                                 flag.user_id ?? 'NULL',
                               ])
                             : `flag-index-${index}`;
+                      const flagId = getFlagId(flag);
+                      const isDeleting = deletingFlagId === flagId;
                       return (
                         <TableRow key={rowKey}>
                           <TableCell className="font-medium">{flag.key}</TableCell>
@@ -597,8 +608,15 @@ export default function FlagsPage() {
                               variant="ghost"
                               size="icon"
                               onClick={() => handleDeleteFlag(flag)}
+                              title={isDeleting ? 'Deleting flag' : 'Delete flag'}
+                              aria-label={isDeleting ? 'Deleting flag' : 'Delete flag'}
+                              disabled={isDeleting}
                             >
-                              <Trash2 className="h-4 w-4" />
+                              {isDeleting ? (
+                                <RefreshCw className="h-4 w-4 animate-spin" />
+                              ) : (
+                                <Trash2 className="h-4 w-4" />
+                              )}
                             </Button>
                           </TableCell>
                         </TableRow>

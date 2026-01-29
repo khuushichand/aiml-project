@@ -1,0 +1,753 @@
+"""
+VibeVoice-ASR transcription helpers.
+
+This module provides two staged inference paths for VibeVoice-ASR:
+
+1) Local inference via Hugging Face + trust_remote_code
+2) Optional HTTP-only vLLM path gated by STT config
+
+The goal here is to keep routing/configuration stable even when the exact
+upstream inference API evolves. The parsing logic is intentionally defensive
+and normalizes a variety of plausible response shapes into the project's
+standard artifact contract.
+"""
+
+from __future__ import annotations
+
+import json
+import threading
+from pathlib import Path
+from typing import Any, Callable, Dict, Iterable, List, Optional, Sequence, Tuple
+from urllib.parse import urljoin, urlparse
+
+import numpy as np
+import soundfile as sf  # type: ignore
+from loguru import logger
+
+from tldw_Server_API.app.core.config import get_stt_config
+from tldw_Server_API.app.core.exceptions import BadRequestError, CancelCheckError, TranscriptionCancelled
+from tldw_Server_API.app.core.Ingestion_Media_Processing.path_utils import (
+    open_safe_local_path,
+    resolve_safe_local_path,
+)
+
+# Global cache for local model components
+_MODEL_CACHE: Dict[str, Tuple[Any, Any, str]] = {}
+_MODEL_LOCK = threading.Lock()
+
+
+def _as_bool(value: Any, default: bool = False) -> bool:
+    if isinstance(value, bool):
+        return value
+    if value is None:
+        return default
+    s = str(value).strip().lower()
+    if s in {"1", "true", "yes", "y", "on"}:
+        return True
+    if s in {"0", "false", "no", "n", "off"}:
+        return False
+    return default
+
+
+def _as_int(value: Any, default: int) -> int:
+    if value is None:
+        return default
+    try:
+        return int(str(value).strip())
+    except Exception:
+        return default
+
+
+def _as_str(value: Any, default: str) -> str:
+    if value is None:
+        return default
+    s = str(value).strip()
+    return s if s else default
+
+
+def _check_cancel(cancel_check: Optional[Callable[[], bool]], *, label: str) -> None:
+    if cancel_check is None:
+        return
+    try:
+        should_cancel = bool(cancel_check())
+    except Exception as exc:
+        raise CancelCheckError(f"cancel_check failed during {label}: {exc}") from exc
+    if should_cancel:
+        raise TranscriptionCancelled(f"Cancelled during {label}")
+
+
+def _resolve_settings() -> Dict[str, Any]:
+    try:
+        stt_cfg = get_stt_config() or {}
+    except Exception:
+        stt_cfg = {}
+
+    model_id = _as_str(stt_cfg.get("vibevoice_model_id"), "microsoft/VibeVoice-ASR")
+    settings = {
+        "enabled": _as_bool(stt_cfg.get("vibevoice_enabled"), False),
+        "model_id": model_id,
+        "device": _as_str(stt_cfg.get("vibevoice_device"), "cuda"),
+        "dtype": _as_str(stt_cfg.get("vibevoice_dtype"), "bfloat16"),
+        "cache_dir": _as_str(stt_cfg.get("vibevoice_cache_dir"), "./models/vibevoice"),
+        "allow_download": _as_bool(stt_cfg.get("vibevoice_allow_download"), True),
+        "sample_rate": _as_int(stt_cfg.get("vibevoice_sample_rate"), 16000),
+        "max_new_tokens": _as_int(stt_cfg.get("vibevoice_max_new_tokens"), 4096),
+        # Optional vLLM HTTP path
+        "vllm_enabled": _as_bool(stt_cfg.get("vibevoice_vllm_enabled"), False),
+        "vllm_base_url": str(stt_cfg.get("vibevoice_vllm_base_url") or "").strip(),
+        "vllm_model_id": _as_str(stt_cfg.get("vibevoice_vllm_model_id"), model_id),
+        "vllm_api_key": str(stt_cfg.get("vibevoice_vllm_api_key") or "").strip() or None,
+        "vllm_timeout_seconds": _as_int(stt_cfg.get("vibevoice_vllm_timeout_seconds"), 600),
+    }
+    return settings
+
+
+def _resolve_audio_path(audio_path: str, base_dir: Optional[Path]) -> Path:
+    path_obj = Path(audio_path)
+    base = Path(base_dir) if base_dir is not None else path_obj.parent
+    safe_path = resolve_safe_local_path(path_obj, base)
+    if safe_path is None:
+        raise BadRequestError(f"Audio path rejected outside base_dir: {audio_path}")
+    return safe_path
+
+
+def _load_audio(
+    audio_path: Path,
+    *,
+    target_sample_rate: int,
+) -> Tuple[np.ndarray, int, float]:
+    try:
+        audio_np, sample_rate = sf.read(str(audio_path))
+    except Exception as exc:
+        raise BadRequestError(f"Failed to read audio file {audio_path}: {exc}") from exc
+
+    if not isinstance(audio_np, np.ndarray):
+        audio_np = np.array(audio_np, dtype="float32")
+
+    # Fold stereo/multi-channel to mono
+    if audio_np.ndim > 1:
+        audio_np = np.mean(audio_np, axis=1)
+
+    audio_np = np.asarray(audio_np, dtype="float32")
+    duration_seconds = float(len(audio_np)) / float(sample_rate or 1)
+
+    if sample_rate != target_sample_rate and target_sample_rate > 0:
+        resampled, sr_out = _maybe_resample(audio_np, sample_rate, target_sample_rate)
+        audio_np, sample_rate = resampled, sr_out
+        duration_seconds = float(len(audio_np)) / float(sample_rate or 1)
+
+    return audio_np, int(sample_rate), duration_seconds
+
+
+def _maybe_resample(audio_np: np.ndarray, sample_rate: int, target_sample_rate: int) -> Tuple[np.ndarray, int]:
+    if sample_rate == target_sample_rate:
+        return audio_np, sample_rate
+    try:
+        import torch
+        import torchaudio.functional as F  # type: ignore
+
+        wav = torch.from_numpy(np.asarray(audio_np, dtype="float32")).unsqueeze(0)
+        resampled = F.resample(wav, sample_rate, target_sample_rate)
+        return resampled.squeeze(0).cpu().numpy().astype("float32"), target_sample_rate
+    except Exception as exc:
+        logger.warning(
+            "VibeVoice: resampling from %s Hz to %s Hz failed; proceeding at original rate. Error: %s",
+            sample_rate,
+            target_sample_rate,
+            exc,
+        )
+        return audio_np, sample_rate
+
+
+def _coerce_hotwords(hotwords: Optional[Sequence[str] | str]) -> List[str]:
+    if hotwords is None:
+        return []
+    if isinstance(hotwords, str):
+        raw = hotwords.strip()
+        if not raw:
+            return []
+        if raw.startswith("["):
+            try:
+                parsed = json.loads(raw)
+                if isinstance(parsed, list):
+                    return [str(x).strip() for x in parsed if str(x).strip()]
+            except Exception:
+                # Fall through to CSV handling
+                pass
+        return [part.strip() for part in raw.split(",") if part.strip()]
+    out: List[str] = []
+    for item in hotwords:
+        s = str(item).strip()
+        if s:
+            out.append(s)
+    return out
+
+
+def _speaker_label_from_id(speaker_id: Any) -> str:
+    try:
+        sid = int(speaker_id)
+        return f"SPEAKER_{sid}"
+    except Exception:
+        s = str(speaker_id).strip()
+        return s or "SPEAKER_0"
+
+
+def _normalize_segments(segments: Iterable[Any], *, duration_seconds: float) -> List[Dict[str, Any]]:
+    segments_list = [seg for seg in segments if isinstance(seg, dict)]
+    total_segments = len(segments_list)
+    slice_len = duration_seconds / max(1, total_segments) if duration_seconds > 0 else 0.0
+
+    normalized: List[Dict[str, Any]] = []
+    for seg in segments_list:
+
+        start_raw = (
+            seg.get("start_seconds")
+            or seg.get("start")
+            or seg.get("start_time")
+            or seg.get("begin")
+            or 0.0
+        )
+        end_raw = (
+            seg.get("end_seconds")
+            or seg.get("end")
+            or seg.get("end_time")
+            or seg.get("finish")
+            or start_raw
+        )
+        try:
+            start_s = float(start_raw)
+        except Exception:
+            start_s = 0.0
+        try:
+            end_s = float(end_raw)
+        except Exception:
+            end_s = start_s
+
+        if end_s < start_s:
+            end_s = start_s
+        if end_s == start_s and duration_seconds > 0:
+            # Best-effort spread when timestamps are missing
+            end_s = min(duration_seconds, start_s + slice_len)
+
+        text = (
+            seg.get("Text")
+            or seg.get("text")
+            or seg.get("content")
+            or seg.get("utterance")
+            or ""
+        )
+        text = str(text).strip()
+        if not text:
+            continue
+
+        speaker = (
+            seg.get("speaker")
+            or seg.get("speaker_label")
+            or seg.get("speakerLabel")
+            or seg.get("speaker_id")
+            or seg.get("speakerId")
+        )
+
+        entry: Dict[str, Any] = {
+            "start_seconds": float(max(0.0, start_s)),
+            "end_seconds": float(max(start_s, end_s)),
+            "Text": text,
+        }
+        if speaker is not None and str(speaker).strip():
+            entry["speaker"] = str(speaker).strip()
+        if "speaker_id" in seg:
+            entry["speaker_id"] = seg.get("speaker_id")
+            entry["speaker"] = _speaker_label_from_id(seg.get("speaker_id"))
+        if "speaker_label" in seg and seg.get("speaker_label"):
+            entry["speaker_label"] = seg.get("speaker_label")
+            entry["speaker"] = str(seg.get("speaker_label")).strip()
+        normalized.append(entry)
+
+    # If we were unable to parse any segments, return an empty list and let
+    # the caller fall back to a single-segment transcript.
+    return normalized
+
+
+def _extract_text_from_response(resp: Any) -> str:
+    if isinstance(resp, str):
+        return resp.strip()
+    if isinstance(resp, dict):
+        for key in ("text", "transcript", "content", "output_text"):
+            if key in resp and str(resp.get(key, "")).strip():
+                return str(resp.get(key)).strip()
+        # OpenAI-style chat fallback
+        try:
+            return (
+                resp.get("choices", [{}])[0]
+                .get("message", {})
+                .get("content", "")
+            ).strip()
+        except Exception:
+            return ""
+    return ""
+
+
+def _count_speakers(segments: Sequence[Dict[str, Any]]) -> Optional[int]:
+    speakers = {str(seg.get("speaker")).strip() for seg in segments if seg.get("speaker")}
+    return len(speakers) if speakers else None
+
+
+def _normalize_artifact(
+    raw_resp: Any,
+    *,
+    duration_seconds: float,
+    language_hint: Optional[str],
+    model_id: str,
+    source: str,
+    hotwords: Sequence[str],
+) -> Dict[str, Any]:
+    language_out: Optional[str] = None
+    segments_out: List[Dict[str, Any]] = []
+
+    if isinstance(raw_resp, dict):
+        language_out = (
+            raw_resp.get("language")
+            or raw_resp.get("detected_language")
+            or raw_resp.get("lang")
+            or None
+        )
+        segments_raw = (
+            raw_resp.get("segments")
+            or raw_resp.get("utterances")
+            or raw_resp.get("results")
+            or None
+        )
+        if isinstance(segments_raw, list):
+            segments_out = _normalize_segments(segments_raw, duration_seconds=duration_seconds)
+
+    text_out = _extract_text_from_response(raw_resp)
+    if not segments_out and text_out:
+        segments_out = [
+            {
+                "start_seconds": 0.0,
+                "end_seconds": float(duration_seconds if duration_seconds > 0 else 0.0),
+                "Text": text_out,
+            }
+        ]
+    elif segments_out and not text_out:
+        text_out = " ".join(str(seg.get("Text", "")).strip() for seg in segments_out if seg.get("Text"))
+
+    diarization_enabled = any(seg.get("speaker") for seg in segments_out)
+    diarization_speakers = _count_speakers(segments_out) if diarization_enabled else None
+
+    return {
+        "text": text_out,
+        "language": language_out or language_hint,
+        "segments": segments_out,
+        "diarization": {"enabled": diarization_enabled, "speakers": diarization_speakers},
+        "usage": {"duration_ms": int(duration_seconds * 1000.0) if duration_seconds > 0 else None, "tokens": None},
+        "metadata": {
+            "provider": "vibevoice",
+            "model": model_id,
+            "source": source,
+            "hotwords": list(hotwords),
+        },
+    }
+
+
+def _get_torch_dtype(dtype_name: str) -> Any:
+    import torch
+
+    mapping = {
+        "float32": torch.float32,
+        "float": torch.float32,
+        "fp32": torch.float32,
+        "float16": torch.float16,
+        "fp16": torch.float16,
+        "bfloat16": torch.bfloat16,
+        "bf16": torch.bfloat16,
+    }
+    return mapping.get(str(dtype_name).strip().lower(), torch.float32)
+
+
+def _resolve_device(requested_device: str) -> str:
+    try:
+        import torch
+    except Exception:
+        return "cpu"
+    dev = (requested_device or "cpu").strip().lower()
+    if dev.startswith("cuda") and not torch.cuda.is_available():
+        logger.warning("VibeVoice: CUDA requested but not available; falling back to CPU")
+        return "cpu"
+    return dev or "cpu"
+
+
+def _load_local_components(settings: Dict[str, Any]) -> Tuple[Any, Any, str]:
+    model_id = str(settings["model_id"])
+    device = _resolve_device(str(settings["device"]))
+    dtype_name = str(settings["dtype"])
+    allow_download = bool(settings["allow_download"])
+    cache_dir = Path(str(settings["cache_dir"]))
+    cache_dir.mkdir(parents=True, exist_ok=True)
+
+    cache_key = f"{model_id}|{device}|{dtype_name}|{allow_download}"
+    with _MODEL_LOCK:
+        cached = _MODEL_CACHE.get(cache_key)
+        if cached is not None:
+            return cached
+
+        try:
+            from transformers import AutoModelForCausalLM, AutoProcessor  # type: ignore
+        except Exception as exc:
+            raise BadRequestError(
+                "transformers is required for local VibeVoice-ASR inference. "
+                "Install with: pip install transformers"
+            ) from exc
+
+        import torch
+
+        torch_dtype = _get_torch_dtype(dtype_name)
+        local_only = not allow_download
+
+        processor = AutoProcessor.from_pretrained(
+            model_id,
+            trust_remote_code=True,
+            cache_dir=str(cache_dir),
+            local_files_only=local_only,
+        )
+
+        device_map = "auto" if device != "cpu" else None
+        model = AutoModelForCausalLM.from_pretrained(
+            model_id,
+            trust_remote_code=True,
+            cache_dir=str(cache_dir),
+            local_files_only=local_only,
+            torch_dtype=torch_dtype,
+            device_map=device_map,
+        )
+
+        if device_map is None:
+            model = model.to(device)
+        model.eval()
+
+        _MODEL_CACHE[cache_key] = (processor, model, device)
+        logger.info("VibeVoice: loaded local model '%s' on device '%s'", model_id, device)
+        return processor, model, device
+
+
+def _build_processor_inputs(
+    processor: Any,
+    *,
+    audio_np: np.ndarray,
+    sample_rate: int,
+    language: Optional[str],
+    hotwords: Sequence[str],
+) -> Any:
+    base_kwargs: Dict[str, Any] = {
+        "audio": audio_np,
+        "sampling_rate": sample_rate,
+        "return_tensors": "pt",
+    }
+    if language:
+        base_kwargs["language"] = language
+    if hotwords:
+        base_kwargs["hotwords"] = list(hotwords)
+
+    try:
+        return processor(**base_kwargs)
+    except TypeError:
+        # Retry without optional fields when the processor does not accept them.
+        base_kwargs.pop("hotwords", None)
+        try:
+            return processor(**base_kwargs)
+        except TypeError:
+            base_kwargs.pop("language", None)
+            return processor(**base_kwargs)
+
+
+def _move_inputs_to_device(inputs: Any, device: str) -> Any:
+    try:
+        import torch
+    except Exception:
+        return inputs
+    if device == "cpu":
+        return inputs
+    dev = torch.device(device)
+    if hasattr(inputs, "to"):
+        try:
+            return inputs.to(dev)
+        except Exception:
+            return inputs
+    if isinstance(inputs, dict):
+        out: Dict[str, Any] = {}
+        for k, v in inputs.items():
+            if hasattr(v, "to"):
+                try:
+                    out[k] = v.to(dev)
+                    continue
+                except Exception:
+                    pass
+            out[k] = v
+        return out
+    return inputs
+
+
+def _decode_generated(processor: Any, generated_ids: Any) -> str:
+    try:
+        if hasattr(processor, "batch_decode"):
+            decoded = processor.batch_decode(generated_ids, skip_special_tokens=True)
+            if isinstance(decoded, list) and decoded:
+                return str(decoded[0]).strip()
+        if hasattr(processor, "decode"):
+            # Some processors expose decode for a single sequence.
+            if isinstance(generated_ids, (list, tuple)) and generated_ids:
+                return str(processor.decode(generated_ids[0])).strip()
+            return str(processor.decode(generated_ids)).strip()
+    except Exception:
+        pass
+    return str(generated_ids).strip()
+
+
+def _transcribe_local(
+    *,
+    audio_np: np.ndarray,
+    sample_rate: int,
+    duration_seconds: float,
+    settings: Dict[str, Any],
+    language: Optional[str],
+    hotwords: Sequence[str],
+    cancel_check: Optional[Callable[[], bool]],
+) -> Dict[str, Any]:
+    _check_cancel(cancel_check, label="local model load")
+    processor, model, device = _load_local_components(settings)
+    _check_cancel(cancel_check, label="local preprocessing")
+
+    # Prefer a dedicated transcribe method when the upstream implementation
+    # exposes one; otherwise, fall back to processor+generate.
+    if hasattr(model, "transcribe"):
+        try:
+            raw_resp = model.transcribe(
+                audio_np,
+                sample_rate=sample_rate,
+                language=language,
+                hotwords=list(hotwords) if hotwords else None,
+            )
+            return _normalize_artifact(
+                raw_resp,
+                duration_seconds=duration_seconds,
+                language_hint=language,
+                model_id=str(settings["model_id"]),
+                source="local",
+                hotwords=hotwords,
+            )
+        except TypeError:
+            raw_resp = model.transcribe(audio_np, sample_rate=sample_rate)
+            return _normalize_artifact(
+                raw_resp,
+                duration_seconds=duration_seconds,
+                language_hint=language,
+                model_id=str(settings["model_id"]),
+                source="local",
+                hotwords=hotwords,
+            )
+
+    try:
+        import torch
+    except Exception as exc:
+        raise BadRequestError("torch is required for local VibeVoice-ASR inference") from exc
+
+    inputs = _build_processor_inputs(
+        processor,
+        audio_np=audio_np,
+        sample_rate=sample_rate,
+        language=language,
+        hotwords=hotwords,
+    )
+    inputs = _move_inputs_to_device(inputs, device)
+
+    gen_kwargs: Dict[str, Any] = {
+        "do_sample": False,
+        "max_new_tokens": int(settings.get("max_new_tokens") or 4096),
+    }
+    if language:
+        gen_kwargs["language"] = language
+    if hotwords:
+        gen_kwargs["hotwords"] = list(hotwords)
+
+    _check_cancel(cancel_check, label="local generation")
+    with torch.no_grad():
+        try:
+            generated_ids = model.generate(**inputs, **gen_kwargs)
+        except TypeError:
+            gen_kwargs.pop("hotwords", None)
+            generated_ids = model.generate(**inputs, **gen_kwargs)
+
+    text = _decode_generated(processor, generated_ids)
+    raw_resp = {"text": text}
+    return _normalize_artifact(
+        raw_resp,
+        duration_seconds=duration_seconds,
+        language_hint=language,
+        model_id=str(settings["model_id"]),
+        source="local",
+        hotwords=hotwords,
+    )
+
+
+def _resolve_vllm_endpoint(base_url: str) -> str:
+    parsed = urlparse(base_url)
+    if parsed.path.rstrip("/").endswith("/v1/audio/transcriptions"):
+        return base_url
+    return urljoin(base_url.rstrip("/") + "/", "v1/audio/transcriptions")
+
+
+def _audio_duration_seconds(audio_path: Path) -> float:
+    try:
+        info = sf.info(str(audio_path))
+        if info.samplerate and info.frames:
+            return float(info.frames) / float(info.samplerate)
+    except Exception:
+        pass
+    return 0.0
+
+
+def _transcribe_via_vllm_http(
+    *,
+    audio_path: Path,
+    base_dir: Path,
+    settings: Dict[str, Any],
+    language: Optional[str],
+    hotwords: Sequence[str],
+    cancel_check: Optional[Callable[[], bool]],
+) -> Dict[str, Any]:
+    base_url = str(settings.get("vllm_base_url") or "").strip()
+    if not base_url:
+        raise BadRequestError("vibevoice_vllm_enabled is true but vibevoice_vllm_base_url is not set")
+
+    endpoint = _resolve_vllm_endpoint(base_url)
+    duration_seconds = _audio_duration_seconds(audio_path)
+    _check_cancel(cancel_check, label="vLLM request preparation")
+
+    file_handle = open_safe_local_path(audio_path, base_dir, mode="rb")
+    if file_handle is None:
+        raise BadRequestError("Audio file path rejected outside allowed base directory")
+
+    headers: Dict[str, str] = {}
+    api_key = settings.get("vllm_api_key")
+    if api_key:
+        headers["Authorization"] = f"Bearer {api_key}"
+
+    model_id = str(settings.get("vllm_model_id") or settings.get("model_id") or "microsoft/VibeVoice-ASR")
+    data: Dict[str, Any] = {
+        "model": model_id,
+        "response_format": "json",
+    }
+    if language:
+        data["language"] = language
+    if hotwords:
+        data["hotwords"] = json.dumps(list(hotwords))
+
+    from tldw_Server_API.app.core.http_client import fetch_json
+
+    timeout = int(settings.get("vllm_timeout_seconds") or 600)
+    with file_handle:
+        files = {"file": (audio_path.name, file_handle, "application/octet-stream")}
+        raw_resp = fetch_json(
+            method="POST",
+            url=endpoint,
+            headers=headers,
+            data=data,
+            files=files,
+            timeout=timeout,
+        )
+
+    _check_cancel(cancel_check, label="vLLM response parsing")
+    return _normalize_artifact(
+        raw_resp,
+        duration_seconds=duration_seconds,
+        language_hint=language,
+        model_id=model_id,
+        source="vllm_http",
+        hotwords=hotwords,
+    )
+
+
+def is_vibevoice_available() -> bool:
+    """Lightweight availability check for local VibeVoice-ASR support."""
+    settings = _resolve_settings()
+    if not settings["enabled"]:
+        return False
+    try:
+        import torch  # noqa: F401
+        import transformers  # noqa: F401
+    except Exception:
+        return False
+    return True
+
+
+def transcribe_with_vibevoice(
+    audio_path: str,
+    *,
+    model_id: Optional[str] = None,
+    language: Optional[str] = None,
+    hotwords: Optional[Sequence[str] | str] = None,
+    base_dir: Optional[Path] = None,
+    cancel_check: Optional[Callable[[], bool]] = None,
+) -> Dict[str, Any]:
+    """
+    Transcribe audio via VibeVoice-ASR.
+
+    Routing rules:
+    - If vibevoice_vllm_enabled=true and a base URL is configured, prefer the
+      vLLM HTTP path.
+    - Otherwise use local inference when vibevoice_enabled=true.
+    """
+    settings = _resolve_settings()
+    original_model_id = str(settings.get("model_id") or "microsoft/VibeVoice-ASR")
+    if model_id and str(model_id).strip():
+        override = str(model_id).strip()
+        settings["model_id"] = override
+        if not settings.get("vllm_model_id") or str(settings.get("vllm_model_id")).strip() in {"", original_model_id}:
+            settings["vllm_model_id"] = override
+    hotwords_list = _coerce_hotwords(hotwords)
+
+    resolved_path = _resolve_audio_path(audio_path, base_dir)
+    resolved_base = Path(base_dir) if base_dir is not None else resolved_path.parent
+
+    if settings.get("vllm_enabled"):
+        try:
+            return _transcribe_via_vllm_http(
+                audio_path=resolved_path,
+                base_dir=resolved_base,
+                settings=settings,
+                language=language,
+                hotwords=hotwords_list,
+                cancel_check=cancel_check,
+            )
+        except Exception as exc:
+            logger.warning("VibeVoice vLLM HTTP path failed; falling back to local inference: %s", exc)
+            if not settings.get("enabled"):
+                raise
+
+    if not settings.get("enabled"):
+        raise BadRequestError(
+            "VibeVoice-ASR local inference is disabled. Set [STT-Settings].vibevoice_enabled=true "
+            "or configure the vLLM HTTP path."
+        )
+
+    _check_cancel(cancel_check, label="audio loading")
+    audio_np, sample_rate, duration_seconds = _load_audio(
+        resolved_path,
+        target_sample_rate=int(settings.get("sample_rate") or 16000),
+    )
+
+    return _transcribe_local(
+        audio_np=audio_np,
+        sample_rate=sample_rate,
+        duration_seconds=duration_seconds,
+        settings=settings,
+        language=language,
+        hotwords=hotwords_list,
+        cancel_check=cancel_check,
+    )
+
+
+__all__ = [
+    "is_vibevoice_available",
+    "transcribe_with_vibevoice",
+]

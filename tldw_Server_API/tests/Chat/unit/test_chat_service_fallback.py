@@ -8,6 +8,7 @@ from starlette.responses import StreamingResponse
 
 from tldw_Server_API.app.core.Chat import chat_service
 from tldw_Server_API.app.core.Chat.Chat_Deps import ChatProviderError
+from tldw_Server_API.app.core.Chat.chat_metrics import ChatMetricsCollector
 from tldw_Server_API.app.core.Chat.chat_service import (
     execute_non_stream_call,
     execute_streaming_call,
@@ -19,6 +20,7 @@ class _DummyMetrics:
     def __init__(self):
         self.llm_calls = []
         self.fallback_successes = []
+        self._collector = ChatMetricsCollector()
 
     def track_llm_call(self, provider, model, latency, success, error_type=None):
 
@@ -31,6 +33,9 @@ class _DummyMetrics:
     def track_tokens(self, **_kwargs):
 
         return None
+
+    def track_streaming(self, conversation_id: str):
+        return self._collector.track_streaming(conversation_id)
 
 
 class _DummyProviderManager:
@@ -315,6 +320,136 @@ async def test_execute_streaming_call_preserves_http_exception(monkeypatch):
 
     # The last llm call recorded should indicate an HTTPException error type
     assert metrics.llm_calls[-1][3] in ("HTTPException", "HTTPException")
+
+
+@pytest.mark.asyncio
+async def test_execute_streaming_call_queue_fallback(monkeypatch):
+    metrics = _DummyMetrics()
+    provider_manager = _DummyProviderManager()
+
+    def failing_llm_call():
+        raise ChatProviderError(provider="anthropic", message="primary failed", status_code=502)
+
+    async def save_message_fn(*_args, **_kwargs):
+        return None
+
+    def refresh_provider(provider_name: str):
+        assert provider_name == "openai"
+        return (
+            {
+                "api_endpoint": "openai",
+                "api_key": "fresh-key",
+                "messages_payload": [],
+                "model": "gpt-4o",
+                "streaming": True,
+            },
+            "gpt-4o",
+        )
+
+    def fake_perform_chat_api_call(**kwargs):
+        assert kwargs.get("api_endpoint") == "openai"
+
+        def _stream():
+            yield 'data: {"choices": [{"delta": {"content": "fallback ok"}}]}\n\n'
+            yield "data: [DONE]\n\n"
+
+        return _stream()
+
+    class DummyQueue:
+        def __init__(self):
+            self._running = True
+
+        def is_running(self):
+            return True
+
+        async def enqueue(self, *, processor, stream_channel, **_kwargs):
+            async def _run():
+                try:
+                    result = await asyncio.get_running_loop().run_in_executor(None, processor)
+                    if hasattr(result, "__aiter__"):
+                        async for chunk in result:
+                            await stream_channel.put(chunk)
+                    else:
+                        for chunk in result:
+                            await stream_channel.put(chunk)
+                finally:
+                    await stream_channel.put(None)
+
+            asyncio.create_task(_run())
+            fut = asyncio.Future()
+            fut.set_result({"status": "ok"})
+            return fut
+
+    monkeypatch.setattr(chat_service, "perform_chat_api_call", fake_perform_chat_api_call)
+    monkeypatch.setattr(chat_service, "get_request_queue", lambda: DummyQueue())
+
+    request = SimpleNamespace(
+        method="POST",
+        url=SimpleNamespace(path="/api/v1/chat/completions"),
+        headers={},
+        state=SimpleNamespace(user_id=None, api_key_id=None),
+    )
+
+    resp = await execute_streaming_call(
+        current_loop=asyncio.get_running_loop(),
+        cleaned_args={
+            "api_endpoint": "anthropic",
+            "api_key": "stale-key",
+            "messages_payload": [],
+            "model": "claude-3",
+            "streaming": True,
+        },
+        selected_provider="anthropic",
+        provider="anthropic",
+        model="claude-3",
+        request_json="{}",
+        request=request,
+        metrics=metrics,
+        provider_manager=provider_manager,
+        templated_llm_payload=[],
+        should_persist=False,
+        final_conversation_id="conv-queue",
+        character_card_for_context={"name": "Test"},
+        chat_db=None,
+        save_message_fn=save_message_fn,
+        audit_service=None,
+        audit_context=None,
+        client_id="client",
+        queue_execution_enabled=True,
+        enable_provider_fallback=True,
+        llm_call_func=failing_llm_call,
+        refresh_provider_params=refresh_provider,
+        moderation_getter=lambda: _DummyModeration(),
+    )
+
+    assert isinstance(resp, StreamingResponse)
+
+    agen = resp.body_iterator
+    chunks = []
+    try:
+        for _ in range(8):
+            try:
+                ln = await agen.__anext__()
+            except StopAsyncIteration:
+                break
+            if not ln:
+                continue
+            chunks.append(ln)
+    finally:
+        try:
+            await agen.aclose()
+        except Exception:
+            pass
+
+    chunks = [c.decode() if isinstance(c, (bytes, bytearray)) else str(c) for c in chunks]
+    joined = "".join(chunks)
+    assert "fallback ok" in joined
+    assert any("data: [DONE]" in c for c in chunks)
+    assert provider_manager.success_records == ["openai"]
+    assert any(
+        entry.get("selected_provider") == "openai" and entry.get("queued") is True
+        for entry in metrics.fallback_successes
+    )
 
 
 def test_merge_api_keys_prefers_dynamic_over_module():

@@ -103,6 +103,106 @@ Behavior when disabled:
 
 Tip (CI/Dev): The test suite sets `TTS_AUTO_DOWNLOAD=0` to avoid network during tests.
 
+### Qwen3-TTS Setup
+
+Qwen3-TTS is a local multilingual TTS model family with CustomVoice, VoiceDesign, and Base (voice clone) modes.
+Full runbook: `Docs/STT-TTS/QWEN3_TTS_SETUP.md`.
+
+#### Installation
+```bash
+# Install the Qwen3-TTS Python package and core dependencies
+pip install qwen-tts torch soundfile
+```
+
+If the package name differs for your environment, install from the upstream repo instead.
+
+#### Configuration (YAML)
+Enable Qwen3-TTS in `tldw_Server_API/Config_Files/tts_providers_config.yaml`:
+
+```yaml
+providers:
+  qwen3_tts:
+    enabled: true
+    model: "auto"  # or an explicit model id
+    device: "cuda" # cpu | cuda | mps
+    dtype: "float16"
+    auto_download: false
+    max_text_length: 5000
+```
+
+#### Usage Examples
+
+CustomVoice (speaker + optional instruction):
+```json
+{
+  "model": "Qwen/Qwen3-TTS-12Hz-1.7B-CustomVoice",
+  "input": "Hello from Qwen3-TTS.",
+  "voice": "Vivian",
+  "response_format": "mp3",
+  "stream": true,
+  "extra_params": {
+    "instruct": "Warm and calm delivery."
+  }
+}
+```
+
+VoiceDesign (instruction required):
+```json
+{
+  "model": "Qwen/Qwen3-TTS-12Hz-1.7B-VoiceDesign",
+  "input": "Design a new voice sample.",
+  "response_format": "wav",
+  "stream": false,
+  "extra_params": {
+    "instruct": "A soft, narrative voice with light rasp."
+  }
+}
+```
+
+Base voice clone (reference audio + optional reference text):
+```json
+{
+  "model": "Qwen/Qwen3-TTS-12Hz-0.6B-Base",
+  "input": "Cloned voice output.",
+  "response_format": "mp3",
+  "stream": true,
+  "voice_reference": "<base64 audio>",
+  "extra_params": {
+    "reference_text": "Transcript of the reference clip."
+  }
+}
+```
+Notes:
+- `voice_reference` is always required for Base models.
+- `extra_params.x_vector_only_mode=true` allows omitting `reference_text` (quality may degrade).
+- `reference_duration_min` (seconds) can be provided to enforce a minimum reference clip duration.
+- Base models enforce a default 3s minimum reference duration when `reference_duration_min` is omitted.
+
+#### Tokenizer API Endpoints
+
+Encode audio to tokens:
+```bash
+curl -X POST "http://127.0.0.1:8000/api/v1/audio/tokenizer/encode" \
+  -H "Authorization: Bearer <TOKEN>" \
+  -F "file=@/path/to/audio.wav" \
+  -F "tokenizer_model=Qwen/Qwen3-TTS-Tokenizer-12Hz"
+```
+
+Decode tokens to audio:
+```bash
+curl -X POST "http://127.0.0.1:8000/api/v1/audio/tokenizer/decode" \
+  -H "Authorization: Bearer <TOKEN>" \
+  -H "Content-Type: application/json" \
+  -d '{"tokens":[1,2,3], "tokenizer_model":"Qwen/Qwen3-TTS-Tokenizer-12Hz", "response_format":"wav"}'
+```
+
+Note: tokenizer endpoints require the `audio.tokenizer` scope.
+
+### LuxTTS Setup
+
+LuxTTS is a ZipVoice-based 48kHz voice‑cloning TTS model. Full runbook:
+`Docs/STT-TTS/LUXTTS_TTS_SETUP.md`.
+
 ### Kokoro Setup
 
 Kokoro is a lightweight, high-quality TTS model that runs locally using ONNX Runtime or PyTorch. We recommend the v1.0 ONNX artifacts for most users.
@@ -165,6 +265,47 @@ kokoro:
 - **Disk Space**: ~300–330MB for `model.onnx`, plus voices directory
 - **RAM**: 2GB minimum
 - **eSpeak NG**: install system package; env var only for non-standard library paths
+
+### PocketTTS ONNX Setup
+
+PocketTTS ONNX provides lightweight, streaming-capable voice cloning with short reference audio samples.
+
+#### Installation
+```bash
+# From repo root (runtime deps only)
+pip install -e '.[TTS_pocket_tts]'
+# Optional GPU: pip install onnxruntime-gpu
+```
+Note: PocketTTS ONNX is not published on PyPI. The runtime module and weights are downloaded separately.
+
+#### Download Models (Scripted)
+```bash
+python Helper_Scripts/TTS_Installers/install_tts_pocket_tts_onnx.py --output-dir models/pocket_tts_onnx
+```
+The installer updates `tts_providers_config.yaml` by default and checks that `pocket_tts_onnx` can be imported. Use `--no-config-update` to skip, `--config-path` for a custom file, or `--no-import-check` to skip the import sanity check.
+
+#### Download Models (Manual)
+```bash
+pip install huggingface-hub
+huggingface-cli download KevinAHM/pocket-tts-onnx onnx --local-dir models/pocket_tts_onnx
+huggingface-cli download KevinAHM/pocket-tts-onnx tokenizer.model --local-dir models/pocket_tts_onnx
+# If present in the repo, also fetch the Python module:
+huggingface-cli download KevinAHM/pocket-tts-onnx pocket_tts_onnx --local-dir models/pocket_tts_onnx
+huggingface-cli download KevinAHM/pocket-tts-onnx pocket_tts_onnx.py --local-dir models/pocket_tts_onnx
+```
+If you store the module elsewhere, set `module_path` to that directory in the config.
+
+#### Configuration
+```yaml
+# In tts_providers_config.yaml
+pocket_tts:
+  enabled: true
+  model_path: ./models/pocket_tts_onnx/onnx
+  tokenizer_path: ./models/pocket_tts_onnx/tokenizer.model
+  module_path: ./models/pocket_tts_onnx
+  precision: "int8"  # or "fp32"
+  device: "auto"     # "cpu" | "cuda"
+```
 
 ### Higgs Audio V2 Setup
 
@@ -411,7 +552,7 @@ vibevoice:
 
 ## Voice Cloning Setup
 
-Voice cloning allows you to synthesize speech using a reference voice from an audio sample. Three providers support this feature: Higgs, Chatterbox, and VibeVoice.
+Voice cloning allows you to synthesize speech using a reference voice from an audio sample. Providers include PocketTTS, Higgs, Chatterbox, and VibeVoice.
 
 ### Preparing Voice Reference Audio
 
@@ -419,6 +560,7 @@ Voice cloning allows you to synthesize speech using a reference voice from an au
 
 | Provider | Min Duration | Max Duration | Sample Rate | Format | Quality Requirements |
 |----------|-------------|--------------|-------------|---------|---------------------|
+| **PocketTTS** | 1 second | 60 seconds | 24kHz | WAV/MP3/FLAC/OGG | Clear speech, single speaker |
 | **Higgs** | 3 seconds | 10 seconds | 24kHz | WAV/MP3/FLAC | Clear speech, single speaker |
 | **Chatterbox** | 5 seconds | 20 seconds | 24kHz | WAV/MP3 | No background noise/music |
 | **VibeVoice** | 3 seconds | 30 seconds | 22.05kHz | WAV/MP3 | Can handle some background |

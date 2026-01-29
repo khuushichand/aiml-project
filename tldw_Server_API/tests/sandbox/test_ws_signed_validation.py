@@ -11,6 +11,8 @@ from fastapi.testclient import TestClient
 from tldw_Server_API.app.core.config import clear_config_cache
 
 
+pytestmark = pytest.mark.sandbox_ws_signed
+
 def _client_signed(secret: str) -> TestClient:
     # Enable test mode and WS signing
     os.environ.setdefault("TEST_MODE", "1")

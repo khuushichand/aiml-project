@@ -27,7 +27,11 @@ class HTTPMetricsMiddleware(BaseHTTPMiddleware):
             duration = monotonic() - start
             # Try to get a stable route template; fallback to path
             route = request.scope.get("route")
-            endpoint = getattr(route, "path", request.url.path)
+            endpoint = getattr(route, "path", None)
+            if not endpoint:
+                endpoint = getattr(request.scope.get("endpoint"), "__name__", None)
+            if not endpoint:
+                endpoint = "unmatched"
             # Record metrics
             self.registry.increment(
                 "http_requests_total",

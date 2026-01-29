@@ -40,8 +40,25 @@ class JWTService:
         "refresh",
         "password_reset",
         "email_verification",
+        "magic_link",
         "service",
     })
+
+    @staticmethod
+    def _filter_additional_claims(
+        additional_claims: Optional[Dict[str, Any]],
+        *,
+        reserved: set[str],
+    ) -> Optional[Dict[str, Any]]:
+        """Strip reserved claim keys from additional_claims to prevent overrides."""
+        if not additional_claims:
+            return None
+        filtered = {
+            key: value
+            for key, value in additional_claims.items()
+            if key not in reserved
+        }
+        return filtered or None
 
     def __init__(self, settings: Optional[Settings] = None):
         """Initialize JWT service"""
@@ -138,9 +155,13 @@ class JWTService:
         if self.settings.JWT_AUDIENCE:
             payload["aud"] = self.settings.JWT_AUDIENCE
 
-        # Add any additional claims
-        if additional_claims:
-            payload.update(additional_claims)
+        # Add any additional claims (excluding reserved JWT fields)
+        extra_claims = self._filter_additional_claims(
+            additional_claims,
+            reserved=set(payload.keys()) | {"iss", "aud"},
+        )
+        if extra_claims:
+            payload.update(extra_claims)
 
         # Encode the token
         try:
@@ -189,9 +210,13 @@ class JWTService:
         if self.settings.JWT_AUDIENCE:
             payload["aud"] = self.settings.JWT_AUDIENCE
 
-        # Add any additional claims
-        if additional_claims:
-            payload.update(additional_claims)
+        # Add any additional claims (excluding reserved JWT fields)
+        extra_claims = self._filter_additional_claims(
+            additional_claims,
+            reserved=set(payload.keys()) | {"iss", "aud"},
+        )
+        if extra_claims:
+            payload.update(extra_claims)
 
         # Encode the token
         try:
@@ -204,6 +229,62 @@ class JWTService:
 
         except Exception as e:
             logger.error(f"Failed to create refresh token: {e}")
+            raise InvalidTokenError(f"Failed to create token: {e}")
+
+    def create_magic_link_token(
+        self,
+        *,
+        email: str,
+        user_id: Optional[int] = None,
+        expires_in_minutes: Optional[int] = None,
+        additional_claims: Optional[Dict[str, Any]] = None
+    ) -> str:
+        """
+        Create a short-lived magic link token for passwordless login.
+
+        Args:
+            email: User email address
+            user_id: Optional existing user ID
+            expires_in_minutes: Optional override for token expiry
+            additional_claims: Additional claims to include in token
+
+        Returns:
+            Encoded JWT magic link token
+        """
+        ttl_minutes = expires_in_minutes or int(getattr(self.settings, "MAGIC_LINK_EXPIRE_MINUTES", 15))
+        expire = datetime.now(timezone.utc) + timedelta(minutes=ttl_minutes)
+
+        payload: Dict[str, Any] = {
+            "sub": str(user_id) if user_id is not None else str(email),
+            "email": str(email).strip().lower(),
+            "exp": expire,
+            "iat": datetime.now(timezone.utc),
+            "jti": str(uuid4()),
+            "type": "magic_link",
+        }
+        if user_id is not None:
+            payload["user_id"] = int(user_id)
+        if self.settings.JWT_ISSUER:
+            payload["iss"] = self.settings.JWT_ISSUER
+        if self.settings.JWT_AUDIENCE:
+            payload["aud"] = self.settings.JWT_AUDIENCE
+
+        extra_claims = self._filter_additional_claims(
+            additional_claims,
+            reserved=set(payload.keys()) | {"iss", "aud"},
+        )
+        if extra_claims:
+            payload.update(extra_claims)
+
+        try:
+            token = jwt.encode(payload, self._encode_key, algorithm=self.algorithm)
+            if self.settings.PII_REDACT_LOGS:
+                logger.debug("Created magic link token for authenticated user (details redacted)")
+            else:
+                logger.debug(f"Created magic link token for {email}")
+            return token
+        except Exception as e:
+            logger.error(f"Failed to create magic link token: {e}")
             raise InvalidTokenError(f"Failed to create token: {e}")
 
     async def verify_token_async(self, token: str, token_type: Optional[str] = None) -> Dict[str, Any]:
@@ -374,7 +455,11 @@ class JWTService:
 
     def decode_access_token(self, token: str) -> Dict[str, Any]:
         """
-        Decode and verify an access token
+        Decode and verify an access token (SYNC, NO BLACKLIST CHECK).
+
+        SECURITY NOTE: This uses the sync verify_token() which does NOT check
+        the token blacklist. Use verify_token_async() for authorization decisions
+        where blacklist enforcement is required.
 
         Args:
             token: Access token to decode
@@ -390,7 +475,11 @@ class JWTService:
 
     def decode_refresh_token(self, token: str) -> Dict[str, Any]:
         """
-        Decode and verify a refresh token
+        Decode and verify a refresh token (SYNC, NO BLACKLIST CHECK).
+
+        SECURITY NOTE: This uses the sync verify_token() which does NOT check
+        the token blacklist. For refresh token flows, prefer refresh_access_token_async()
+        or the /auth/refresh endpoint which enforce blacklist checks.
 
         Args:
             token: Refresh token to decode
@@ -406,7 +495,11 @@ class JWTService:
 
     def verify_password_reset_token(self, token: str) -> Dict[str, Any]:
         """
-        Verify and decode a password reset token.
+        Verify and decode a password reset token (SYNC).
+
+        NOTE: Uses sync verify_token() without blacklist check. This is acceptable
+        for password reset tokens because they are single-use tokens with additional
+        database-level validation (token hash lookup, used_at check) that prevents reuse.
 
         Args:
             token: Password reset token to verify
@@ -422,7 +515,11 @@ class JWTService:
 
     def verify_email_verification_token(self, token: str) -> Dict[str, Any]:
         """
-        Verify and decode an email verification token.
+        Verify and decode an email verification token (SYNC).
+
+        NOTE: Uses sync verify_token() without blacklist check. This is acceptable
+        for email verification tokens because they are single-use tokens - the user's
+        is_verified flag is set on first use, making subsequent uses ineffective.
 
         Args:
             token: Email verification token to verify
@@ -438,7 +535,12 @@ class JWTService:
 
     def verify_service_token(self, token: str) -> Dict[str, Any]:
         """
-        Verify and decode a service account token.
+        Verify and decode a service account token (SYNC, NO BLACKLIST CHECK).
+
+        SECURITY NOTE: This uses the sync verify_token() which does NOT check
+        the token blacklist. Service tokens are typically long-lived. If service
+        token revocation is required, use verify_token_async() instead or implement
+        additional validation at the service level.
 
         Args:
             token: Service account token to verify
@@ -499,8 +601,12 @@ class JWTService:
             payload["iss"] = self.settings.JWT_ISSUER
         if self.settings.JWT_AUDIENCE:
             payload["aud"] = self.settings.JWT_AUDIENCE
-        if additional_claims:
-            payload.update(additional_claims)
+        extra_claims = self._filter_additional_claims(
+            additional_claims,
+            reserved=set(payload.keys()) | {"iss", "aud"},
+        )
+        if extra_claims:
+            payload.update(extra_claims)
         try:
             token = jwt.encode(payload, self._encode_key, algorithm=self.algorithm)
             logger.debug(
@@ -594,7 +700,17 @@ class JWTService:
 
     def extract_jti(self, token: str) -> Optional[str]:
         """
-        Extract the JTI (JWT ID) from a token without full verification
+        Extract the JTI (JWT ID) from a token without full verification.
+
+        SECURITY NOTE: This method decodes the token WITHOUT signature verification.
+        It should ONLY be used for:
+        - Logging/debugging purposes
+        - Token revocation operations (where the JTI is needed to blacklist)
+        - Cases where full verification happens separately
+
+        DO NOT use the extracted JTI for authorization decisions without
+        first calling verify_token() or verify_token_async() to validate
+        the token's signature and expiry.
 
         Args:
             token: JWT token
@@ -605,8 +721,16 @@ class JWTService:
         try:
             # Decode without verification to get JTI
             unverified = jwt.get_unverified_claims(token)
-            return unverified.get("jti")
-        except Exception:
+            jti = unverified.get("jti")
+            # Log usage at debug level for security auditing
+            if jti:
+                logger.debug(
+                    "extract_jti called (unverified token decode) - "
+                    "ensure token is verified separately for authorization"
+                )
+            return jti
+        except Exception as e:
+            logger.debug(f"extract_jti failed to decode token: {e}")
             return None
 
 
@@ -763,39 +887,26 @@ class JWTService:
         # Verify the refresh token (stateless by default; see note above)
         payload = self.verify_token(refresh_token, token_type="refresh")
 
-        # Optional guard: best-effort blacklist enforcement for the presented refresh token
-        # SECURITY: Always check blacklist regardless of async context
+        # Optional guard: enforce blacklist check for the presented refresh token.
+        # Fail closed if this sync helper is invoked inside a running event loop.
         try:
+            import asyncio as _asyncio
+
+            try:
+                _asyncio.get_running_loop()
+                # If we're already in an event loop, we cannot safely run the async blacklist check.
+                raise InvalidTokenError(
+                    "refresh_access_token cannot run inside an event loop; "
+                    "use refresh_access_token_async or /auth/refresh instead"
+                )
+            except RuntimeError:
+                pass
+
             jti = payload.get("jti")
             if jti:
-                import asyncio as _asyncio
                 from tldw_Server_API.app.core.AuthNZ.token_blacklist import is_token_blacklisted as _is_bl
-                # Check if we're in an event loop
-                try:
-                    loop = _asyncio.get_running_loop()
-                    in_loop = True
-                except RuntimeError:
-                    loop = None
-                    in_loop = False
-
-                if not in_loop:
-                    # Not in event loop - run synchronously
-                    if _asyncio.run(_is_bl(jti)):
-                        raise InvalidTokenError("Token has been revoked")
-                else:
-                    # In event loop - we need to check synchronously using the blacklist cache
-                    # The blacklist has an in-memory hint cache that can be checked without async
-                    from tldw_Server_API.app.core.AuthNZ.token_blacklist import get_token_blacklist as _get_bl
-                    bl = _get_bl()
-                    # Check in-memory cache first (synchronous)
-                    if hasattr(bl, '_hint_cache') and jti in getattr(bl, '_hint_cache', {}):
-                        raise InvalidTokenError("Token has been revoked")
-                    # Log warning that full async check cannot be performed in sync context
-                    # Callers in async context should use the async-aware /auth/refresh endpoint
-                    logger.warning(
-                        "refresh_access_token called in sync context within event loop; "
-                        "full blacklist check deferred. Prefer /auth/refresh endpoint for complete revocation enforcement."
-                    )
+                if _asyncio.run(_is_bl(jti)):
+                    raise InvalidTokenError("Token has been revoked")
         except InvalidTokenError:
             raise
         except Exception as _guard_e:
@@ -901,6 +1012,86 @@ class JWTService:
             logger.info(f"Refreshed access token for user {username}")
         return new_access_token, refresh_out
 
+    async def refresh_access_token_async(self, refresh_token: str) -> tuple[str, str]:
+        """
+        Async-safe refresh helper with blacklist enforcement.
+
+        This method performs cryptographic validation, blacklist checks, and
+        token rotation in an async context. Prefer this helper (or the
+        /auth/refresh endpoint) when running inside an event loop.
+        """
+        # Verify the refresh token and enforce blacklist via async path
+        payload = await self.verify_token_async(refresh_token, token_type="refresh")
+
+        # Extract user information
+        user_id = int(payload["sub"])
+        username = payload.get("username", "")
+
+        # Fetch role from the configured user database for correctness
+        role = payload.get("role", "user")
+        try:
+            from tldw_Server_API.app.core.AuthNZ.db_config import get_configured_user_database
+            user_db = get_configured_user_database(client_id="jwt_service")
+            roles = []
+            try:
+                roles = user_db.get_user_roles(user_id)
+            except Exception:
+                user = user_db.get_user(user_id=user_id)
+                roles = (user or {}).get("roles", []) if isinstance(user, dict) else []
+            if roles:
+                role = "admin" if "admin" in roles else roles[0]
+        except Exception as e:
+            logger.debug(f"JWTService: failed to fetch user role on refresh (async); using fallback: {e}")
+
+        # Create new access token
+        new_access_token = self.create_access_token(
+            user_id=user_id,
+            username=username,
+            role=role
+        )
+
+        # Handle optional refresh rotation based on settings
+        refresh_out = refresh_token
+        try:
+            if getattr(self.settings, "ROTATE_REFRESH_TOKENS", False):
+                refresh_out = self.create_refresh_token(
+                    user_id=user_id,
+                    username=username,
+                    additional_claims={k: v for k, v in (payload.items()) if k in {"session_id"}}
+                )
+                # Best-effort: attempt to blacklist old refresh JTI
+                try:
+                    old_jti = payload.get("jti")
+                    old_exp = payload.get("exp")
+                    if old_jti and isinstance(old_exp, (int, float)):
+                        from datetime import datetime as _dt, timezone as _tz
+                        exp_dt = _dt.fromtimestamp(old_exp, tz=_tz.utc)
+                        from tldw_Server_API.app.core.AuthNZ.token_blacklist import get_token_blacklist as _get_bl
+                        bl = _get_bl()
+                        try:
+                            bl.hint_blacklisted(old_jti, exp_dt)
+                        except Exception as _hint_e:
+                            logger.debug(f"Refresh rotation: hint cache failed: {_hint_e}")
+                        await bl.revoke_token(
+                            jti=old_jti,
+                            expires_at=exp_dt,
+                            user_id=user_id,
+                            token_type="refresh",
+                            reason="refresh-rotated",
+                            revoked_by=None,
+                            ip_address=None,
+                        )
+                except Exception as _e:
+                    logger.debug(f"Refresh rotation: best-effort blacklist failed (async): {_e}")
+        except Exception as _rot_err:
+            logger.debug(f"Refresh rotation not applied (async): {_rot_err}")
+
+        if self.settings.PII_REDACT_LOGS:
+            logger.info("Refreshed access token for authenticated user (details redacted)")
+        else:
+            logger.info(f"Refreshed access token for user {username}")
+        return new_access_token, refresh_out
+
     def get_token_remaining_time(self, token: str) -> Optional[int]:
         """
         Get remaining time before token expires
@@ -965,7 +1156,19 @@ def create_refresh_token(user_id: int, username: str) -> str:
 
 
 def verify_token(token: str, token_type: Optional[str] = None) -> Dict[str, Any]:
-    """Convenience function to verify a token"""
+    """
+    Convenience function to verify a token (SYNC, NO BLACKLIST CHECK).
+
+    SECURITY NOTE: This calls the sync verify_token() method which does NOT
+    check the token blacklist. Revoked tokens will still pass validation.
+    For security-critical authorization decisions, use verify_token_async()
+    or the async verify methods in auth dependencies instead.
+
+    Appropriate uses:
+    - Token introspection/debugging
+    - Extracting claims for non-authorization purposes (e.g., logout cleanup)
+    - One-time tokens (password_reset, email_verification) with additional validation
+    """
     return get_jwt_service().verify_token(token, token_type)
 
 

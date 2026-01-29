@@ -5,7 +5,7 @@ from functools import partial
 from typing import Dict, List, Any, Optional, Tuple
 from urllib.parse import urlparse, urljoin
 import os
-from fastapi import APIRouter, HTTPException, Depends
+from fastapi import APIRouter, HTTPException, Depends, Query
 from loguru import logger
 from tldw_Server_API.app.core.config import load_comprehensive_config
 from tldw_Server_API.app.core.http_client import fetch as _http_fetch, RetryPolicy as _RetryPolicy
@@ -20,6 +20,7 @@ from tldw_Server_API.app.api.v1.schemas.chat_request_schemas import get_api_keys
 from tldw_Server_API.app.core.Chat.provider_manager import get_provider_manager
 from tldw_Server_API.app.core.Usage.pricing_catalog import list_provider_models
 import tldw_Server_API.app.core.LLM_Calls.adapter_registry as llm_adapter_registry
+from tldw_Server_API.app.core.Image_Generation.listing import list_image_models_for_catalog
 
 #######################################################################################################################
 #
@@ -159,6 +160,61 @@ MODEL_METADATA: Dict[str, Dict[str, Dict[str, Any]]] = {
         }
     },
     "google": {
+        "gemini-3-pro-preview": {
+            "context_window": None,
+            "max_output_tokens": None,
+            "capabilities": {
+                "vision": True,
+                "audio_input": True,
+                "audio_output": False,
+                "tool_use": True,
+                "json_mode": False,
+                "function_calling": True,
+                "streaming": True,
+                "thinking": False,
+            },
+            "modalities": {"input": ["text", "image", "audio", "video", "file"], "output": ["text"]},
+            "notes": "Gemini 3 Pro Preview (Gemini API).",
+            "source_url": "https://ai.google.dev/gemini-api/docs/pricing",
+            "last_verified": None,
+        },
+        "gemini-3-flash-preview": {
+            "context_window": None,
+            "max_output_tokens": None,
+            "capabilities": {
+                "vision": True,
+                "audio_input": True,
+                "audio_output": False,
+                "tool_use": True,
+                "json_mode": False,
+                "function_calling": True,
+                "streaming": True,
+                "thinking": False,
+            },
+            "modalities": {"input": ["text", "image", "audio", "video", "file"], "output": ["text"]},
+            "notes": "Gemini 3 Flash Preview (Gemini API).",
+            "source_url": "https://ai.google.dev/gemini-api/docs/pricing",
+            "last_verified": None,
+        },
+        "gemini-3-pro-image-preview": {
+            "type": "image",
+            "context_window": None,
+            "max_output_tokens": None,
+            "capabilities": {
+                "vision": True,
+                "audio_input": False,
+                "audio_output": False,
+                "tool_use": False,
+                "json_mode": False,
+                "function_calling": False,
+                "streaming": False,
+                "thinking": False,
+            },
+            "modalities": {"input": ["text", "image"], "output": ["image"]},
+            "notes": "Gemini 3 Pro Image Preview (image generation).",
+            "source_url": "https://ai.google.dev/gemini-api/docs/pricing",
+            "last_verified": None,
+        },
         "gemini-2.5-pro": {
             "context_window": 1_048_576,
             "max_output_tokens": None,
@@ -172,9 +228,63 @@ MODEL_METADATA: Dict[str, Dict[str, Dict[str, Any]]] = {
                 "streaming": True,
                 "thinking": False,
             },
-            "modalities": {"input": ["text", "image", "audio", "file"], "output": ["text"]},
+            "modalities": {"input": ["text", "image", "audio", "video", "file"], "output": ["text"]},
             "notes": "Gemini 2.5 Pro on Vertex AI; 1,048,576 max input tokens per docs.",
             "source_url": "https://cloud.google.com/vertex-ai/generative-ai/docs/models/gemini/2-5-pro",
+            "last_verified": None,
+        },
+        "gemini-2.5-flash": {
+            "context_window": None,
+            "max_output_tokens": None,
+            "capabilities": {
+                "vision": True,
+                "audio_input": True,
+                "audio_output": False,
+                "tool_use": True,
+                "json_mode": False,
+                "function_calling": True,
+                "streaming": True,
+                "thinking": False,
+            },
+            "modalities": {"input": ["text", "image", "audio", "video", "file"], "output": ["text"]},
+            "notes": "Gemini 2.5 Flash (Gemini API).",
+            "source_url": "https://ai.google.dev/gemini-api/docs/pricing",
+            "last_verified": None,
+        },
+        "gemini-2.5-flash-preview": {
+            "context_window": None,
+            "max_output_tokens": None,
+            "capabilities": {
+                "vision": True,
+                "audio_input": True,
+                "audio_output": False,
+                "tool_use": True,
+                "json_mode": False,
+                "function_calling": True,
+                "streaming": True,
+                "thinking": False,
+            },
+            "modalities": {"input": ["text", "image", "audio", "video", "file"], "output": ["text"]},
+            "notes": "Gemini 2.5 Flash Preview (Gemini API).",
+            "source_url": "https://ai.google.dev/gemini-api/docs/pricing",
+            "last_verified": None,
+        },
+        "gemini-2.5-flash-preview-09-2025": {
+            "context_window": None,
+            "max_output_tokens": None,
+            "capabilities": {
+                "vision": True,
+                "audio_input": True,
+                "audio_output": False,
+                "tool_use": True,
+                "json_mode": False,
+                "function_calling": True,
+                "streaming": True,
+                "thinking": False,
+            },
+            "modalities": {"input": ["text", "image", "audio", "video", "file"], "output": ["text"]},
+            "notes": "Gemini 2.5 Flash Preview (09-2025).",
+            "source_url": "https://ai.google.dev/gemini-api/docs/pricing",
             "last_verified": None,
         },
         "gemini-2.5-flash-lite": {
@@ -190,9 +300,139 @@ MODEL_METADATA: Dict[str, Dict[str, Dict[str, Any]]] = {
                 "streaming": True,
                 "thinking": False,
             },
-            "modalities": {"input": ["text", "image", "audio", "file"], "output": ["text"]},
+            "modalities": {"input": ["text", "image", "audio", "video", "file"], "output": ["text"]},
             "notes": "Gemini 2.5 Flash Lite on Vertex AI; large context window per docs.",
             "source_url": "https://cloud.google.com/vertex-ai/generative-ai/docs/models/gemini/2-5-flash-lite",
+            "last_verified": None,
+        },
+        "gemini-2.5-flash-lite-preview": {
+            "context_window": None,
+            "max_output_tokens": None,
+            "capabilities": {
+                "vision": True,
+                "audio_input": True,
+                "audio_output": False,
+                "tool_use": True,
+                "json_mode": False,
+                "function_calling": True,
+                "streaming": True,
+                "thinking": False,
+            },
+            "modalities": {"input": ["text", "image", "audio", "video", "file"], "output": ["text"]},
+            "notes": "Gemini 2.5 Flash-Lite Preview (Gemini API).",
+            "source_url": "https://ai.google.dev/gemini-api/docs/pricing",
+            "last_verified": None,
+        },
+        "gemini-2.5-flash-lite-preview-09-2025": {
+            "context_window": None,
+            "max_output_tokens": None,
+            "capabilities": {
+                "vision": True,
+                "audio_input": True,
+                "audio_output": False,
+                "tool_use": True,
+                "json_mode": False,
+                "function_calling": True,
+                "streaming": True,
+                "thinking": False,
+            },
+            "modalities": {"input": ["text", "image", "audio", "video", "file"], "output": ["text"]},
+            "notes": "Gemini 2.5 Flash-Lite Preview (09-2025).",
+            "source_url": "https://ai.google.dev/gemini-api/docs/pricing",
+            "last_verified": None,
+        },
+        "gemini-2.5-flash-native-audio-preview-12-2025": {
+            "type": "audio",
+            "context_window": None,
+            "max_output_tokens": None,
+            "capabilities": {
+                "vision": False,
+                "audio_input": True,
+                "audio_output": True,
+                "tool_use": False,
+                "json_mode": False,
+                "function_calling": False,
+                "streaming": True,
+                "thinking": False,
+            },
+            "modalities": {"input": ["text", "audio", "video"], "output": ["audio", "text"]},
+            "notes": "Gemini 2.5 Flash Native Audio (Live API).",
+            "source_url": "https://ai.google.dev/gemini-api/docs/pricing",
+            "last_verified": None,
+        },
+        "gemini-2.5-flash-image": {
+            "type": "image",
+            "context_window": None,
+            "max_output_tokens": None,
+            "capabilities": {
+                "vision": True,
+                "audio_input": False,
+                "audio_output": False,
+                "tool_use": False,
+                "json_mode": False,
+                "function_calling": False,
+                "streaming": False,
+                "thinking": False,
+            },
+            "modalities": {"input": ["text", "image"], "output": ["image"]},
+            "notes": "Gemini 2.5 Flash Image (image generation).",
+            "source_url": "https://ai.google.dev/gemini-api/docs/pricing",
+            "last_verified": None,
+        },
+        "gemini-2.5-flash-preview-tts": {
+            "type": "audio",
+            "context_window": None,
+            "max_output_tokens": None,
+            "capabilities": {
+                "vision": False,
+                "audio_input": False,
+                "audio_output": True,
+                "tool_use": False,
+                "json_mode": False,
+                "function_calling": False,
+                "streaming": False,
+                "thinking": False,
+            },
+            "modalities": {"input": ["text"], "output": ["audio"]},
+            "notes": "Gemini 2.5 Flash Preview TTS.",
+            "source_url": "https://ai.google.dev/gemini-api/docs/pricing",
+            "last_verified": None,
+        },
+        "gemini-2.5-pro-preview-tts": {
+            "type": "audio",
+            "context_window": None,
+            "max_output_tokens": None,
+            "capabilities": {
+                "vision": False,
+                "audio_input": False,
+                "audio_output": True,
+                "tool_use": False,
+                "json_mode": False,
+                "function_calling": False,
+                "streaming": False,
+                "thinking": False,
+            },
+            "modalities": {"input": ["text"], "output": ["audio"]},
+            "notes": "Gemini 2.5 Pro Preview TTS.",
+            "source_url": "https://ai.google.dev/gemini-api/docs/pricing",
+            "last_verified": None,
+        },
+        "gemini-2.5-computer-use-preview-10-2025": {
+            "context_window": None,
+            "max_output_tokens": None,
+            "capabilities": {
+                "vision": True,
+                "audio_input": False,
+                "audio_output": False,
+                "tool_use": True,
+                "json_mode": False,
+                "function_calling": True,
+                "streaming": True,
+                "thinking": True,
+            },
+            "modalities": {"input": ["text", "image"], "output": ["text"]},
+            "notes": "Gemini 2.5 Computer Use Preview (Gemini API).",
+            "source_url": "https://ai.google.dev/gemini-api/docs/pricing",
             "last_verified": None,
         },
         "gemini-1.5-pro": {
@@ -227,6 +467,24 @@ MODEL_METADATA: Dict[str, Dict[str, Dict[str, Any]]] = {
             "modalities": {"input": ["text", "image", "audio"], "output": ["text"]},
             "notes": "Fast multimodal Gemini variant.",
         },
+        "gemini-2.0-flash": {
+            "context_window": None,
+            "max_output_tokens": None,
+            "capabilities": {
+                "vision": True,
+                "audio_input": True,
+                "audio_output": False,
+                "tool_use": True,
+                "json_mode": False,
+                "function_calling": True,
+                "streaming": True,
+                "thinking": False,
+            },
+            "modalities": {"input": ["text", "image", "audio"], "output": ["text"]},
+            "notes": "Gemini 2.0 Flash (Gemini API).",
+            "source_url": "https://ai.google.dev/gemini-api/docs/pricing",
+            "last_verified": None,
+        },
         "gemini-2.0-flash-exp": {
             "context_window": None,
             "max_output_tokens": None,
@@ -242,6 +500,215 @@ MODEL_METADATA: Dict[str, Dict[str, Dict[str, Any]]] = {
             },
             "modalities": {"input": ["text", "image", "audio"], "output": ["text"]},
             "notes": "Experimental Gemini variant.",
+        },
+        "gemini-2.0-flash-lite": {
+            "context_window": None,
+            "max_output_tokens": None,
+            "capabilities": {
+                "vision": True,
+                "audio_input": True,
+                "audio_output": False,
+                "tool_use": True,
+                "json_mode": False,
+                "function_calling": True,
+                "streaming": True,
+                "thinking": False,
+            },
+            "modalities": {"input": ["text", "image", "audio"], "output": ["text"]},
+            "notes": "Gemini 2.0 Flash-Lite (Gemini API).",
+            "source_url": "https://ai.google.dev/gemini-api/docs/pricing",
+            "last_verified": None,
+        },
+        "imagen-4.0-generate-001": {
+            "type": "image",
+            "context_window": None,
+            "max_output_tokens": None,
+            "capabilities": {
+                "vision": False,
+                "audio_input": False,
+                "audio_output": False,
+                "tool_use": False,
+                "json_mode": False,
+                "function_calling": False,
+                "streaming": False,
+                "thinking": False,
+            },
+            "modalities": {"input": ["text"], "output": ["image"]},
+            "notes": "Imagen 4 (standard) image generation; priced per image.",
+            "source_url": "https://ai.google.dev/gemini-api/docs/pricing",
+            "last_verified": None,
+        },
+        "imagen-4.0-ultra-generate-001": {
+            "type": "image",
+            "context_window": None,
+            "max_output_tokens": None,
+            "capabilities": {
+                "vision": False,
+                "audio_input": False,
+                "audio_output": False,
+                "tool_use": False,
+                "json_mode": False,
+                "function_calling": False,
+                "streaming": False,
+                "thinking": False,
+            },
+            "modalities": {"input": ["text"], "output": ["image"]},
+            "notes": "Imagen 4 Ultra image generation; priced per image.",
+            "source_url": "https://ai.google.dev/gemini-api/docs/pricing",
+            "last_verified": None,
+        },
+        "imagen-4.0-fast-generate-001": {
+            "type": "image",
+            "context_window": None,
+            "max_output_tokens": None,
+            "capabilities": {
+                "vision": False,
+                "audio_input": False,
+                "audio_output": False,
+                "tool_use": False,
+                "json_mode": False,
+                "function_calling": False,
+                "streaming": False,
+                "thinking": False,
+            },
+            "modalities": {"input": ["text"], "output": ["image"]},
+            "notes": "Imagen 4 Fast image generation; priced per image.",
+            "source_url": "https://ai.google.dev/gemini-api/docs/pricing",
+            "last_verified": None,
+        },
+        "veo-3.1-generate-preview": {
+            "type": "video",
+            "context_window": None,
+            "max_output_tokens": None,
+            "capabilities": {
+                "vision": False,
+                "audio_input": False,
+                "audio_output": False,
+                "tool_use": False,
+                "json_mode": False,
+                "function_calling": False,
+                "streaming": False,
+                "thinking": False,
+            },
+            "modalities": {"input": ["text", "image"], "output": ["video"]},
+            "notes": "Veo 3.1 preview video generation; priced per second.",
+            "source_url": "https://ai.google.dev/gemini-api/docs/pricing",
+            "last_verified": None,
+        },
+        "veo-3.1-fast-generate-preview": {
+            "type": "video",
+            "context_window": None,
+            "max_output_tokens": None,
+            "capabilities": {
+                "vision": False,
+                "audio_input": False,
+                "audio_output": False,
+                "tool_use": False,
+                "json_mode": False,
+                "function_calling": False,
+                "streaming": False,
+                "thinking": False,
+            },
+            "modalities": {"input": ["text", "image"], "output": ["video"]},
+            "notes": "Veo 3.1 Fast preview video generation; priced per second.",
+            "source_url": "https://ai.google.dev/gemini-api/docs/pricing",
+            "last_verified": None,
+        },
+        "veo-3.0-generate-001": {
+            "type": "video",
+            "context_window": None,
+            "max_output_tokens": None,
+            "capabilities": {
+                "vision": False,
+                "audio_input": False,
+                "audio_output": False,
+                "tool_use": False,
+                "json_mode": False,
+                "function_calling": False,
+                "streaming": False,
+                "thinking": False,
+            },
+            "modalities": {"input": ["text", "image"], "output": ["video"]},
+            "notes": "Veo 3 video generation; priced per second.",
+            "source_url": "https://ai.google.dev/gemini-api/docs/pricing",
+            "last_verified": None,
+        },
+        "veo-3.0-fast-generate-001": {
+            "type": "video",
+            "context_window": None,
+            "max_output_tokens": None,
+            "capabilities": {
+                "vision": False,
+                "audio_input": False,
+                "audio_output": False,
+                "tool_use": False,
+                "json_mode": False,
+                "function_calling": False,
+                "streaming": False,
+                "thinking": False,
+            },
+            "modalities": {"input": ["text", "image"], "output": ["video"]},
+            "notes": "Veo 3 Fast video generation; priced per second.",
+            "source_url": "https://ai.google.dev/gemini-api/docs/pricing",
+            "last_verified": None,
+        },
+        "veo-2.0-generate-001": {
+            "type": "video",
+            "context_window": None,
+            "max_output_tokens": None,
+            "capabilities": {
+                "vision": False,
+                "audio_input": False,
+                "audio_output": False,
+                "tool_use": False,
+                "json_mode": False,
+                "function_calling": False,
+                "streaming": False,
+                "thinking": False,
+            },
+            "modalities": {"input": ["text", "image"], "output": ["video"]},
+            "notes": "Veo 2 video generation; priced per second.",
+            "source_url": "https://ai.google.dev/gemini-api/docs/pricing",
+            "last_verified": None,
+        },
+        "gemini-embedding-001": {
+            "type": "embedding",
+            "context_window": None,
+            "max_output_tokens": None,
+            "capabilities": {
+                "embedding": True,
+                "vision": False,
+                "audio_input": False,
+                "audio_output": False,
+                "tool_use": False,
+                "json_mode": False,
+                "function_calling": False,
+                "streaming": False,
+                "thinking": False,
+            },
+            "modalities": {"input": ["text"], "output": ["embedding"]},
+            "notes": "Gemini Embedding model.",
+            "source_url": "https://ai.google.dev/gemini-api/docs/pricing",
+            "last_verified": None,
+        },
+        "gemini-robotics-er-1.5-preview": {
+            "type": "other",
+            "context_window": None,
+            "max_output_tokens": None,
+            "capabilities": {
+                "vision": True,
+                "audio_input": False,
+                "audio_output": False,
+                "tool_use": False,
+                "json_mode": False,
+                "function_calling": False,
+                "streaming": False,
+                "thinking": False,
+            },
+            "modalities": {"input": ["text", "image", "video"], "output": ["text"]},
+            "notes": "Gemini Robotics-ER 1.5 Preview; pricing follows token-based tiers.",
+            "source_url": "https://ai.google.dev/gemini-api/docs/pricing",
+            "last_verified": None,
         },
     },
     "mistral": {
@@ -1135,6 +1602,69 @@ def get_all_available_models() -> List[str]:
 
     return models
 
+
+def _normalize_filter_values(values: Optional[List[str]]) -> Optional[set[str]]:
+    if not values:
+        return None
+    normalized = {str(v).strip().lower() for v in values if v and str(v).strip()}
+    return normalized or None
+
+
+def _infer_model_type(model_info: Dict[str, Any]) -> str:
+    declared = model_info.get("type")
+    if declared:
+        return str(declared).strip().lower()
+    name = str(model_info.get("name") or model_info.get("id") or "").lower()
+    if "embed" in name or "embedding" in name:
+        return "embedding"
+    caps = model_info.get("capabilities")
+    if isinstance(caps, dict) and caps.get("embedding"):
+        return "embedding"
+    return "chat"
+
+
+def _normalize_modalities(value: Any) -> List[str]:
+    if not value:
+        return []
+    if isinstance(value, (list, tuple, set)):
+        return [str(v).strip().lower() for v in value if v and str(v).strip()]
+    return [str(value).strip().lower()]
+
+
+def _model_matches_filters(
+    model_info: Dict[str, Any],
+    *,
+    type_filters: Optional[set[str]],
+    input_filters: Optional[set[str]],
+    output_filters: Optional[set[str]],
+) -> bool:
+    model_type = _infer_model_type(model_info)
+    if type_filters and model_type not in type_filters:
+        return False
+
+    modalities = model_info.get("modalities")
+    input_mods: List[str] = []
+    output_mods: List[str] = []
+    if isinstance(modalities, dict):
+        input_mods = _normalize_modalities(modalities.get("input"))
+        output_mods = _normalize_modalities(modalities.get("output"))
+
+    if not input_mods:
+        input_mods = ["text"]
+    if not output_mods:
+        if model_type == "image":
+            output_mods = ["image"]
+        elif model_type == "embedding":
+            output_mods = ["embedding"]
+        else:
+            output_mods = ["text"]
+
+    if input_filters and not set(input_mods).intersection(input_filters):
+        return False
+    if output_filters and not set(output_mods).intersection(output_filters):
+        return False
+    return True
+
 #######################################################################################################################
 #
 # Endpoints:
@@ -1209,19 +1739,63 @@ async def get_llm_providers(include_deprecated: bool = False):
 
 @router.get("/llm/models/metadata",
     summary="Get model metadata across providers",
-    description="Returns flattened model metadata for all providers",
+    description=(
+        "Returns flattened model metadata for all providers (chat, embeddings, image). "
+        "Image backends appear with type=image and modalities output=image."
+    ),
     response_model=Dict[str, Any])
-async def get_models_metadata(include_deprecated: bool = False):
+async def get_models_metadata(
+    include_deprecated: bool = False,
+    model_type: Optional[List[str]] = Query(
+        None,
+        alias="type",
+        description="Optional model type filter (repeatable).",
+    ),
+    input_modality: Optional[List[str]] = Query(
+        None,
+        description="Optional input modality filter (repeatable).",
+    ),
+    output_modality: Optional[List[str]] = Query(
+        None,
+        description="Optional output modality filter (repeatable).",
+    ),
+):
     try:
+        type_filters = _normalize_filter_values(model_type)
+        input_filters = _normalize_filter_values(input_modality)
+        output_filters = _normalize_filter_values(output_modality)
         result = await get_configured_providers_async(include_deprecated=include_deprecated)
         result = apply_llm_provider_overrides_to_listing(result)
         flattened: List[Dict[str, Any]] = []
         for provider in result.get('providers', []):
             for mi in provider.get('models_info', []):
-                flattened.append({
+                entry = {
                     'provider': provider.get('name'),
                     **mi,
-                })
+                }
+                if not _model_matches_filters(
+                    entry,
+                    type_filters=type_filters,
+                    input_filters=input_filters,
+                    output_filters=output_filters,
+                ):
+                    continue
+                flattened.append(entry)
+        # Append image generation backends to the catalog
+        try:
+            image_models = list_image_models_for_catalog()
+        except Exception as exc:
+            logger.warning(f"Failed to list image generation models: {exc}")
+            image_models = []
+        for entry in image_models:
+            if not _model_matches_filters(
+                entry,
+                type_filters=type_filters,
+                input_filters=input_filters,
+                output_filters=output_filters,
+            ):
+                continue
+            flattened.append(entry)
         return {
             'models': flattened,
             'total': len(flattened)
@@ -1273,9 +1847,27 @@ async def get_provider_details(provider_name: str, include_deprecated: bool = Fa
 
 @router.get("/llm/models",
     summary="Get all available models",
-    description="Returns a flat list of all available models across all providers",
+    description=(
+        "Returns a flat list of all available models across all providers. "
+        "Includes image backends as image/<backend> entries."
+    ),
     response_model=List[str])
-async def get_all_models(include_deprecated: bool = False):
+async def get_all_models(
+    include_deprecated: bool = False,
+    model_type: Optional[List[str]] = Query(
+        None,
+        alias="type",
+        description="Optional model type filter (repeatable).",
+    ),
+    input_modality: Optional[List[str]] = Query(
+        None,
+        description="Optional input modality filter (repeatable).",
+    ),
+    output_modality: Optional[List[str]] = Query(
+        None,
+        description="Optional output modality filter (repeatable).",
+    ),
+):
     """
     Get all available models from all configured providers.
 
@@ -1283,11 +1875,43 @@ async def get_all_models(include_deprecated: bool = False):
         List of model names with provider prefix
     """
     try:
+        type_filters = _normalize_filter_values(model_type)
+        input_filters = _normalize_filter_values(input_modality)
+        output_filters = _normalize_filter_values(output_modality)
         result = await get_configured_providers_async(include_deprecated=include_deprecated)
         models: List[str] = []
         for provider in result.get('providers', []):
+            provider_name = provider.get('name') or "unknown"
             for model in provider.get('models', []):
-                models.append(f"{provider['name']}/{model}")
+                entry = {
+                    "provider": provider_name,
+                    **get_model_metadata(provider_name, model),
+                }
+                if not _model_matches_filters(
+                    entry,
+                    type_filters=type_filters,
+                    input_filters=input_filters,
+                    output_filters=output_filters,
+                ):
+                    continue
+                models.append(f"{provider_name}/{model}")
+        # Append image generation backends to the flat list
+        try:
+            image_models = list_image_models_for_catalog()
+        except Exception as exc:
+            logger.warning(f"Failed to list image generation models: {exc}")
+            image_models = []
+        for entry in image_models:
+            if not _model_matches_filters(
+                entry,
+                type_filters=type_filters,
+                input_filters=input_filters,
+                output_filters=output_filters,
+            ):
+                continue
+            model_id = entry.get("id") or f"image/{entry.get('name') or ''}"
+            if model_id and model_id != "image/":
+                models.append(str(model_id))
         logger.info(f"Found {len(models)} total models across all providers")
         return models
     except Exception as e:

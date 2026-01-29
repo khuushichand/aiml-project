@@ -1,3 +1,6 @@
+import os
+import stat
+
 import pytest
 from cryptography.fernet import Fernet
 
@@ -114,17 +117,35 @@ async def test_session_manager_rejects_symlink_persistence(monkeypatch, tmp_path
     monkeypatch.setenv("JWT_SECRET_KEY", "symlink-test-secret-key-0123456789abcdef0123456789abcdef")
     reset_settings()
 
+
+@pytest.mark.asyncio
+async def test_session_manager_rejects_insecure_key_permissions(monkeypatch, tmp_path):
+    if os.name == "nt":
+        pytest.skip("File permission enforcement is not reliable on Windows")
+    if not hasattr(os, "getuid"):
+        pytest.skip("OS does not expose uid/gid for permission enforcement")
+
+    monkeypatch.setitem(core_settings, "PROJECT_ROOT", tmp_path)
+    monkeypatch.setenv("AUTH_MODE", "multi_user")
+    monkeypatch.setenv("DATABASE_URL", f"sqlite:///{tmp_path}/auth.db")
+    monkeypatch.setenv("JWT_SECRET_KEY", "perm-test-secret-key-0123456789abcdef0123456789abcdef")
+    reset_settings()
+
+    key_path = tmp_path / "Config_Files" / "session_encryption.key"
+    key_path.parent.mkdir(parents=True, exist_ok=True)
+    insecure_key = Fernet.generate_key().decode("utf-8")
+    key_path.write_text(insecure_key, encoding="utf-8")
+    os.chmod(key_path, 0o644)
+
     try:
         manager = SessionManager()
-        assert key_path.is_symlink()
-        # Session manager resolves the symlink before persisting; ensure it landed on the target file.
-        assert manager._persisted_key_path == target.resolve()
-        persisted_payload = target.read_text(encoding="utf-8").strip()
-        assert persisted_payload and persisted_payload != "stealme"
+        assert manager.cipher_suite is not None
+        repaired_key = key_path.read_text(encoding="utf-8").strip()
+        assert repaired_key and repaired_key != insecure_key
+        mode = stat.S_IMODE(os.stat(key_path, follow_symlinks=False).st_mode)
+        assert mode & (stat.S_IRWXG | stat.S_IRWXO) == 0
     finally:
         await reset_session_manager()
         for env_key in ("AUTH_MODE", "DATABASE_URL", "JWT_SECRET_KEY"):
             monkeypatch.delenv(env_key, raising=False)
-        key_path.unlink(missing_ok=True)
-        target.unlink(missing_ok=True)
-    reset_settings()
+        reset_settings()

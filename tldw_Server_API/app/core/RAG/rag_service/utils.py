@@ -3,6 +3,7 @@ Utility functions for the RAG service.
 """
 
 import hashlib
+import os
 import re
 from typing import List, Dict, Any, Optional, Tuple
 import tiktoken
@@ -44,6 +45,14 @@ class TokenCounter:
 
         truncated_tokens = tokens[:max_tokens]
         return self.encoding.decode(truncated_tokens)
+
+
+def get_float_env(name: str, default: float) -> float:
+    """Return a float from the environment, falling back to the default."""
+    try:
+        return float(os.getenv(name, str(default)))
+    except Exception:
+        return float(default)
 
 
 def create_document_id(content: str, metadata: Dict[str, Any]) -> str:

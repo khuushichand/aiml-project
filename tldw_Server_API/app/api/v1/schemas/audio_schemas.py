@@ -53,14 +53,14 @@ class OpenAISpeechRequest(BaseModel):
         default="af_heart",
         description="The voice to use for generation. Can be a base voice or a combined voice name.",
     )
-    response_format: Literal["mp3", "opus", "aac", "flac", "wav", "pcm"] = Field(
+    response_format: Literal["mp3", "opus", "aac", "flac", "wav", "pcm", "ogg", "webm", "ulaw"] = Field(
         default="mp3",
         description=(
-            "The format to return audio in. Supported formats: mp3, opus, aac, flac, wav, pcm. "
+            "The format to return audio in. Supported formats: mp3, opus, aac, flac, wav, pcm, ogg, webm, ulaw. "
             "PCM format returns raw 16-bit samples without headers."
         ),
     )
-    download_format: Optional[Literal["mp3", "opus", "aac", "flac", "wav", "pcm"]] = (
+    download_format: Optional[Literal["mp3", "opus", "aac", "flac", "wav", "pcm", "ogg", "webm", "ulaw"]] = (
         Field(
             default=None,
             description=(
@@ -92,7 +92,10 @@ class OpenAISpeechRequest(BaseModel):
     )
     voice_reference: Optional[str] = Field(
         default=None,
-        description="Base64-encoded audio data for voice cloning/reference. Supported by NeuTTS, Higgs (3-10s), Chatterbox (5-20s), and VibeVoice models.",
+        description=(
+            "Base64-encoded audio data for voice cloning/reference. Supported by PocketTTS, NeuTTS, "
+            "Higgs (3-10s), Chatterbox (5-20s), VibeVoice, and IndexTTS2 models."
+        ),
     )
     reference_duration_min: Optional[float] = Field(
         default=None,
@@ -129,6 +132,52 @@ class VoiceEncodeResponse(BaseModel):
     reference_text: Optional[str] = None
 
 
+class AudioTokenizerEncodeRequest(BaseModel):
+    """Request schema for audio tokenizer encode endpoint (JSON body)."""
+    audio_base64: str = Field(
+        ...,
+        description="Base64-encoded audio payload (no data URI prefix).",
+    )
+    tokenizer_model: Optional[str] = Field(
+        default=None,
+        description="Tokenizer model identifier (defaults to configured Qwen3 tokenizer).",
+    )
+    sample_rate: Optional[int] = Field(
+        default=None,
+        description="Optional sample rate hint when audio format does not encode it.",
+    )
+    token_format: Optional[Literal["list", "base64"]] = Field(
+        default="list",
+        description="Output token encoding: list of ints or base64-encoded bytes.",
+    )
+
+
+class AudioTokenizerEncodeResponse(BaseModel):
+    """Response schema for audio tokenizer encode endpoint."""
+    tokens: Any
+    token_format: Literal["list", "base64"]
+    sample_rate: int
+    frame_rate: Optional[float] = None
+    tokenizer_model: str
+    duration_seconds: float
+
+
+class AudioTokenizerDecodeRequest(BaseModel):
+    """Request schema for audio tokenizer decode endpoint."""
+    tokens: Any = Field(
+        ...,
+        description="Token payload (list[int] or base64-encoded bytes).",
+    )
+    tokenizer_model: Optional[str] = Field(
+        default=None,
+        description="Tokenizer model identifier (defaults to configured Qwen3 tokenizer).",
+    )
+    response_format: Literal["wav", "pcm"] = Field(
+        default="wav",
+        description="Desired audio output format.",
+    )
+
+
 class OpenAITranscriptionRequest(BaseModel):
     """Request schema for OpenAI-compatible transcription endpoint"""
 
@@ -147,6 +196,13 @@ class OpenAITranscriptionRequest(BaseModel):
     prompt: Optional[str] = Field(
         default=None,
         description="An optional text to guide the model's style or continue a previous audio segment. The prompt should match the audio language."
+    )
+    hotwords: Optional[list[str]] = Field(
+        default=None,
+        description=(
+            "Optional hotwords to guide recognition. Primarily used by "
+            "VibeVoice-ASR; other providers may ignore this field."
+        ),
     )
     response_format: Literal["json", "text", "srt", "verbose_json", "vtt"] = Field(
         default="json",

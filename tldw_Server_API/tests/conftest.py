@@ -93,8 +93,8 @@ def _install_aiosqlite_tracking() -> None:
         return
     _AIOSQLITE_ORIG_CONNECT = aiosqlite.connect
 
-    async def _tracked_connect(*args, **kwargs):
-        conn = await _AIOSQLITE_ORIG_CONNECT(*args, **kwargs)
+    def _tracked_connect(*args, **kwargs):
+        conn = _AIOSQLITE_ORIG_CONNECT(*args, **kwargs)
         try:
             _AIOSQLITE_CONNECTIONS.add(conn)
         except Exception:
@@ -162,6 +162,13 @@ _AUTH_ENV_BASELINE_KEYS = (
 )
 
 _AUTH_ENV_BASELINE = {k: os.environ.get(k) for k in _AUTH_ENV_BASELINE_KEYS}
+
+_USER_DB_ENV_KEYS = (
+    # Per-test DB base directory often overridden in Character Chat/Streaming tests.
+    "USER_DB_BASE_DIR",
+    # Legacy alias still honored in a few paths.
+    "USER_DB_BASE",
+)
 
 _RISKY_ENV_KEYS = (
     "JOBS_DB_URL",
@@ -268,6 +275,41 @@ def _restore_auth_env_and_singletons():
 
 
 @pytest.fixture(autouse=True)
+def _restore_user_db_env_and_chacha_cache():
+    """Restore USER_DB_BASE_DIR/USER_DB_BASE and clear ChaChaNotes DB cache per test."""
+    baseline = {k: os.environ.get(k) for k in _USER_DB_ENV_KEYS}
+    yield
+
+    for key, baseline_value in baseline.items():
+        if baseline_value is None:
+            os.environ.pop(key, None)
+        else:
+            os.environ[key] = baseline_value
+
+    # Clear config/Auth settings so restored env is honored next test.
+    try:
+        from tldw_Server_API.app.core.config import clear_config_cache
+
+        clear_config_cache()
+    except Exception:
+        pass
+    try:
+        from tldw_Server_API.app.core.AuthNZ.settings import reset_settings
+
+        reset_settings()
+    except Exception:
+        pass
+
+    # Drop cached ChaChaNotes DB instances to avoid stale file handles.
+    try:
+        from tldw_Server_API.app.api.v1.API_Deps.ChaCha_Notes_DB_Deps import close_all_chacha_db_instances
+
+        close_all_chacha_db_instances()
+    except Exception:
+        pass
+
+
+@pytest.fixture(autouse=True)
 def _reset_character_chat_complete_windows():
     """Ensure legacy /complete throttle cache is rebound per test loop."""
     try:
@@ -343,6 +385,12 @@ def _cleanup_lingering_threads(log: logging.Logger, context: str = "teardown") -
             if t is current or t.daemon:
                 continue
             try:
+                # Cancel timers so they don't keep the interpreter alive
+                if isinstance(t, threading.Timer):
+                    try:
+                        t.cancel()
+                    except Exception:
+                        pass
                 t.join(timeout=1.0)
             except Exception:
                 pass
@@ -362,6 +410,12 @@ def _cleanup_lingering_threads(log: logging.Logger, context: str = "teardown") -
             print(msg, file=sys.stderr)
             try:
                 log.warning("%s stack=%s", msg, stack)
+            except Exception:
+                pass
+            try:
+                if isinstance(t, threading.Timer):
+                    t.cancel()
+                    t.join(timeout=1.0)
             except Exception:
                 pass
             try:
@@ -589,6 +643,12 @@ def pytest_sessionfinish(session, exitstatus):  # pragma: no cover - diagnostics
                             t.join(timeout=2.0)
                         except Exception:
                             pass
+                except Exception:
+                    pass
+                try:
+                    if isinstance(t, threading.Timer):
+                        t.cancel()
+                        t.join(timeout=1.0)
                 except Exception:
                     pass
             # Re-check after stopping attempts; only log remaining threads

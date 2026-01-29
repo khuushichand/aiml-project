@@ -116,7 +116,7 @@ Restart the server. On startup, the MCP server loads modules from this YAML. The
 
 If you later enable Chat auto-execution:
 - Chat can call your tool through the server executor and record a `role=tool` message.
-- The legacy WebUI now renders tool calls and tool results under assistant messages for transparency.
+- The WebUI renders tool calls and tool results under assistant messages for transparency.
 
 ## References
 

@@ -148,6 +148,12 @@ class MediaDetailResponse(BaseModel):
     )
 
 
+class MediaKeywordsResponse(BaseModel):
+    """Response model for media keyword updates."""
+    media_id: int = Field(..., description="Media item ID")
+    keywords: List[str] = Field(default_factory=list, description="Updated keyword list")
+
+
 # --- /api/v1/media/{media_id}/versions ---
 
 # class VersionDetailResponse(BaseModel):

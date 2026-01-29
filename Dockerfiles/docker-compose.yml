@@ -15,7 +15,7 @@ services:
       - AUTH_MODE=${AUTH_MODE:-single_user}
       # Provide a secure API key in single_user mode
       - SINGLE_USER_API_KEY=${SINGLE_USER_API_KEY:-change-me}
-      # In production set: tldw_production=true (masks API key in logs and omits it from /webui/config.json)
+      # In production set: tldw_production=true (masks API key in logs and docs-info responses)
       - tldw_production=${tldw_production:-false}
       # Database URL: use Postgres in multi_user
       - DATABASE_URL=${DATABASE_URL:-sqlite:///./Databases/users.db}

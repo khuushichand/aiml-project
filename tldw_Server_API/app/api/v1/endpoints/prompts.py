@@ -112,7 +112,7 @@ def _get_single_user_api_key() -> Optional[str]:
 
 
 async def _resolve_prompts_auth_user(
-    request: Request = None,
+    request: Request,
     Token: Optional[str] = Header(None, alias="Token"),
     x_api_key: Optional[str] = Header(None, alias="X-API-KEY"),
     Authorization: Optional[str] = Header(None, alias="Authorization"),
@@ -196,7 +196,7 @@ async def _resolve_prompts_auth_user(
     return user
 
 async def verify_prompts_auth(
-    request: Request = None,
+    request: Request,
     Token: Optional[str] = Header(None, alias="Token"),
     x_api_key: Optional[str] = Header(None, alias="X-API-KEY"),
     Authorization: Optional[str] = Header(None, alias="Authorization"),
@@ -228,7 +228,7 @@ async def verify_prompts_auth(
     return True
 
 async def verify_prompts_user(
-    request: Request = None,
+    request: Request,
     Token: Optional[str] = Header(None, alias="Token"),
     x_api_key: Optional[str] = Header(None, alias="X-API-KEY"),
     Authorization: Optional[str] = Header(None, alias="Authorization"),

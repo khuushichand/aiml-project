@@ -760,3 +760,20 @@ async def test_batch_length_mismatch_raises(monkeypatch):
         )
 
     assert exc.value.status_code == 502
+
+
+@pytest.mark.unit
+def test_resolve_model_and_provider_strips_prefix():
+    import tldw_Server_API.app.api.v1.endpoints.embeddings_v5_production_enhanced as mod
+
+    model, provider = mod._resolve_model_and_provider("openai:text-embedding-3-small", None)
+    assert model == "text-embedding-3-small"
+    assert provider == "openai"
+
+
+@pytest.mark.unit
+def test_resolve_model_and_provider_rejects_mismatch():
+    import tldw_Server_API.app.api.v1.endpoints.embeddings_v5_production_enhanced as mod
+
+    with pytest.raises(HTTPException):
+        mod._resolve_model_and_provider("openai:text-embedding-3-small", "huggingface")

@@ -45,10 +45,15 @@ class TTSProvider(Enum):
     CHATTERBOX = "chatterbox"
     ELEVENLABS = "elevenlabs"
     VIBEVOICE = "vibevoice"
+    VIBEVOICE_REALTIME = "vibevoice_realtime"
     NEUTTS = "neutts"
     INDEX_TTS = "index_tts"
     SUPERTONIC = "supertonic"
     SUPERTONIC2 = "supertonic2"
+    POCKET_TTS = "pocket_tts"
+    ECHO_TTS = "echo_tts"
+    QWEN3_TTS = "qwen3_tts"
+    LUX_TTS = "lux_tts"
     # Additional providers
     ALLTALK = "alltalk"  # TODO: Implement AllTalk adapter
     MOCK = "mock"  # Mock provider for testing
@@ -69,10 +74,15 @@ class TTSAdapterRegistry:
         TTSProvider.CHATTERBOX: "tldw_Server_API.app.core.TTS.adapters.chatterbox_adapter.ChatterboxAdapter",
         TTSProvider.ELEVENLABS: "tldw_Server_API.app.core.TTS.adapters.elevenlabs_adapter.ElevenLabsTTSAdapter",
         TTSProvider.VIBEVOICE: "tldw_Server_API.app.core.TTS.adapters.vibevoice_adapter.VibeVoiceAdapter",
+        TTSProvider.VIBEVOICE_REALTIME: "tldw_Server_API.app.core.TTS.adapters.vibevoice_realtime_adapter.VibeVoiceRealtimeAdapter",
         TTSProvider.NEUTTS: "tldw_Server_API.app.core.TTS.adapters.neutts_adapter.NeuTTSAdapter",
         TTSProvider.INDEX_TTS: "tldw_Server_API.app.core.TTS.adapters.index_tts_adapter.IndexTTS2Adapter",
         TTSProvider.SUPERTONIC: "tldw_Server_API.app.core.TTS.adapters.supertonic_adapter.SupertonicOnnxAdapter",
         TTSProvider.SUPERTONIC2: "tldw_Server_API.app.core.TTS.adapters.supertonic2_adapter.Supertonic2OnnxAdapter",
+        TTSProvider.POCKET_TTS: "tldw_Server_API.app.core.TTS.adapters.pocket_tts_adapter.PocketTTSOnnxAdapter",
+        TTSProvider.ECHO_TTS: "tldw_Server_API.app.core.TTS.adapters.echo_tts_adapter.EchoTTSAdapter",
+        TTSProvider.QWEN3_TTS: "tldw_Server_API.app.core.TTS.adapters.qwen3_tts_adapter.Qwen3TTSAdapter",
+        TTSProvider.LUX_TTS: "tldw_Server_API.app.core.TTS.adapters.luxtts_adapter.LuxTTSAdapter",
     }
 
     def __init__(self, config: Optional[Dict[str, Any]] = None):
@@ -499,6 +509,28 @@ class TTSAdapterRegistry:
                     alias('more_segment_before', 'index_tts_more_segment_before')
                     alias('verbose', 'index_tts_verbose')
                     alias('sample_rate', 'sample_rate')
+                elif p == 'pocket_tts':
+                    alias('model_path', 'pocket_tts_model_path')
+                    alias('tokenizer_path', 'pocket_tts_tokenizer_path')
+                    alias('precision', 'pocket_tts_precision')
+                    alias('device', 'pocket_tts_device')
+                    alias('temperature', 'pocket_tts_temperature')
+                    alias('lsd_steps', 'pocket_tts_lsd_steps')
+                    alias('max_frames', 'pocket_tts_max_frames')
+                    alias('stream_first_chunk_frames', 'pocket_tts_stream_first_chunk_frames')
+                    alias('stream_target_buffer_sec', 'pocket_tts_stream_target_buffer_sec')
+                    alias('stream_max_chunk_frames', 'pocket_tts_stream_max_chunk_frames')
+                elif p == 'echo_tts':
+                    alias('model', 'echo_tts_model')
+                    alias('model_path', 'echo_tts_model_path')
+                    alias('device', 'echo_tts_device')
+                    alias('module_path', 'echo_tts_module_path')
+                    alias('sample_rate', 'echo_tts_sample_rate')
+                    alias('cache_size', 'echo_tts_cache_size')
+                    alias('cache_ttl_sec', 'echo_tts_cache_ttl_sec')
+                    alias('cache_on_device', 'echo_tts_cache_on_device')
+                    alias('fish_ae_repo', 'echo_tts_fish_ae_repo')
+                    alias('pca_state_file', 'echo_tts_pca_state_file')
 
                 # Generic target latency for local providers
                 if p == 'chatterbox':
@@ -531,7 +563,31 @@ class TTSAdapterRegistry:
         """
         capabilities = {}
 
+        def _get_enabled_flag(provider: TTSProvider) -> Optional[bool]:
+            if self.config_manager:
+                provider_cfg = self.config_manager.get_provider_config(provider.value)
+                if provider_cfg is not None:
+                    return provider_cfg.enabled
+                return None
+            if isinstance(self.config, dict):
+                providers_cfg = self.config.get("providers")
+                if isinstance(providers_cfg, dict):
+                    provider_cfg = providers_cfg.get(provider.value)
+                    if isinstance(provider_cfg, dict) and "enabled" in provider_cfg:
+                        return parse_bool(provider_cfg.get("enabled"), default=None)
+                enabled_key = f"{provider.value}_enabled"
+                if enabled_key in self.config:
+                    return parse_bool(self.config.get(enabled_key), default=None)
+            return None
+
         for provider in TTSProvider:
+            if provider not in self._adapter_specs:
+                continue
+
+            enabled_flag = _get_enabled_flag(provider)
+            if enabled_flag is False:
+                continue
+
             # Skip providers that are disabled or have failed
             retry_after = self._failed_providers.get(provider)
             if retry_after:
@@ -544,16 +600,11 @@ class TTSAdapterRegistry:
             # Only try to get adapters that are likely to work quickly
             # Skip local model providers in testing unless explicitly enabled
             if provider in [TTSProvider.KOKORO, TTSProvider.HIGGS, TTSProvider.DIA,
-                           TTSProvider.CHATTERBOX, TTSProvider.VIBEVOICE, TTSProvider.SUPERTONIC,
-                           TTSProvider.SUPERTONIC2]:
-                # Check if explicitly enabled in config
-                if self.config_manager:
-                    if not self.config_manager.is_provider_enabled(provider.value):
-                        continue
-                else:
-                    enabled_key = f"{provider.value}_enabled"
-                    if not self.config.get(enabled_key, False):
-                        continue
+                           TTSProvider.CHATTERBOX, TTSProvider.VIBEVOICE, TTSProvider.VIBEVOICE_REALTIME,
+                           TTSProvider.SUPERTONIC, TTSProvider.SUPERTONIC2, TTSProvider.POCKET_TTS,
+                           TTSProvider.QWEN3_TTS]:
+                if enabled_flag is not True:
+                    continue
 
             try:
                 # Try to get adapter with a timeout to avoid hanging
@@ -795,6 +846,11 @@ class TTSAdapterFactory:
         "vibevoice/vibevoice-7b": TTSProvider.VIBEVOICE,
         # Community 8-bit quantized 7B variant
         "fabiosarracino/vibevoice-large-q8": TTSProvider.VIBEVOICE,
+        # VibeVoice Realtime models
+        "vibevoice_realtime": TTSProvider.VIBEVOICE_REALTIME,
+        "vibevoice-realtime": TTSProvider.VIBEVOICE_REALTIME,
+        "vibevoice-realtime-0.5b": TTSProvider.VIBEVOICE_REALTIME,
+        "microsoft/vibevoice-realtime-0.5b": TTSProvider.VIBEVOICE_REALTIME,
 
         # NeuTTS models
         "neutts": TTSProvider.NEUTTS,
@@ -820,6 +876,28 @@ class TTSAdapterFactory:
         "supertonic2": TTSProvider.SUPERTONIC2,
         "supertonic-2": TTSProvider.SUPERTONIC2,
         "supertonic2-onnx": TTSProvider.SUPERTONIC2,
+
+        # PocketTTS ONNX models
+        "pocket-tts": TTSProvider.POCKET_TTS,
+        "pocket-tts-onnx": TTSProvider.POCKET_TTS,
+        "pocket_tts": TTSProvider.POCKET_TTS,
+        "pockettts": TTSProvider.POCKET_TTS,
+        "pockettts-onnx": TTSProvider.POCKET_TTS,
+        "kevinahm/pocket-tts-onnx": TTSProvider.POCKET_TTS,
+
+        # Echo-TTS models
+        "echo-tts": TTSProvider.ECHO_TTS,
+        "echo_tts": TTSProvider.ECHO_TTS,
+        "jordand/echo-tts-base": TTSProvider.ECHO_TTS,
+
+        # Qwen3-TTS models
+        "qwen3-tts": TTSProvider.QWEN3_TTS,
+        "qwen3_tts": TTSProvider.QWEN3_TTS,
+        "qwen/qwen3-tts-12hz-1.7b-customvoice": TTSProvider.QWEN3_TTS,
+        "qwen/qwen3-tts-12hz-0.6b-customvoice": TTSProvider.QWEN3_TTS,
+        "qwen/qwen3-tts-12hz-1.7b-voicedesign": TTSProvider.QWEN3_TTS,
+        "qwen/qwen3-tts-12hz-1.7b-base": TTSProvider.QWEN3_TTS,
+        "qwen/qwen3-tts-12hz-0.6b-base": TTSProvider.QWEN3_TTS,
     }
 
     def __init__(self, config: Optional[Dict[str, Any]] = None):

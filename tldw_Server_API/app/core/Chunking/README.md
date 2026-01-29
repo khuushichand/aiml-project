@@ -36,9 +36,11 @@ This module provides robust, extensible text chunking for ingestion, RAG, embedd
   - Supports `options` keys (see “Options” below). Handles adaptive sizing, hierarchical paragraph detection, timecode mapping, and content hashing.
 - `chunk_text(text, method=None, max_size=None, overlap=None, language=None, **options) -> List[str]`
   - Thin wrapper around a single strategy. Returns plain strings.
-  - Note: For some strategies (e.g., `words`), this path reconstructs output by joining tokens; spacing around punctuation may differ from the original source. When you require exact source fidelity and offsets, prefer `chunk_text_with_metadata` (or `process_text`) which returns spans and is normalized back to original slices.
+  - Note: For some strategies (e.g., `words`), this path reconstructs output by joining tokens; spacing around punctuation may differ from the original source.
 - `chunk_text_with_metadata(...) -> List[ChunkResult]`
   - Strategy-level chunking with `ChunkResult` metadata (indices/offsets, counts).
+  - By default, the returned `text` is strategy-produced (e.g., structure-aware headers or JSON/XML formatting).
+    To force text slices to match the original source spans, pass `align_text_to_source=True`.
 - `chunk_text_hierarchical_tree(text, method=None, max_size=None, overlap=None, language=None, template=None) -> Dict`
   - Computes a section/block tree with paragraph kinds (`header_atx`, `code_fence`, `list_*`, `table_md`, `paragraph`, …) and attaches per-block chunks with offsets.
 - `flatten_hierarchical(tree) -> List[Dict]`
@@ -157,6 +159,7 @@ Add a simple classifier (top-level or under `chunking.config`) for `/chunking/te
 - Core: `method`, `max_size`, `overlap`, `language` (defaults from `ChunkerConfig`: `words`, `400`, `200`, `en`).
 - Sizing: `adaptive` (bool), `adaptive_overlap` (bool), `base_adaptive_chunk_size`, `min_adaptive_chunk_size`, `max_adaptive_chunk_size`, `base_overlap`, `max_adaptive_overlap`.
 - Structure: `hierarchical` (bool), `hierarchical_template` (dict of `boundaries`), `multi_level` (paragraph-aware mode for words/sentences).
+- Output: `align_text_to_source` (bool) to force `chunk_text_with_metadata` (and `process_text` multi_level) to return source-aligned slices; `sanitize_output` (bool, default `true`) to emit sanitized text for hierarchical outputs (set `false` for raw text fidelity).
 - Code: `code_mode` (`auto|ast|heuristic`), `language` (e.g., `python`, `typescript`).
 - JSON/XML: method-specific knobs (see strategies files).
 - Media: `timecode_map` → list of `{start_offset,end_offset,start_time,end_time}` to project times onto chunks.
@@ -204,7 +207,7 @@ Behavior by method and overlap:
   - overlap > 0: emits all chunks for each buffer, then carries the trailing `overlap` tokens from the last chunk forward. The first chunk of the next buffer may repeat those tokens. When reconstructing, drop a matching prefix (up to `overlap` tokens) from the first chunk after each boundary.
   - overlap == 0: emits all chunks except the last during a buffer read and carries the full last chunk into the next buffer.
 - sentences and other methods
-  - overlap > 0: emits all but the last chunk for each buffer and carries that last chunk forward so the overlap happens at the buffer boundary (deduplicate by removing a matching prefix on boundary).
+  - overlap > 0: emits all but the last chunk for each buffer and carries that last chunk forward so the overlap happens at the buffer boundary (deduplicate by removing a matching prefix on boundary). Note: the carried overlap is the full last chunk (not capped to the configured overlap size).
   - overlap == 0: same withholding of the final chunk per buffer as above.
 
 In both cases, the boundary join uses a method-aware separator to avoid token fragmentation (a space for `words`, newlines for structure-heavy kinds). If you need exact source fidelity, prefer `chunk_text_with_metadata` or `process_text`, which normalize returned text to original spans by `start_offset`/`end_offset`.
@@ -242,6 +245,7 @@ Behavior (JSON):
   - `{ "__meta_ref__": "<id>", "metadata": { ... } }`
   - Subsequent chunks include `{ "data": [...], "__meta_ref__": "<id>" }` (for a list) or the analogous dict form.
   - When `output_format = 'text'`, these objects are rendered via `_json_to_text`.
+- `JSONChunkingStrategy.chunk_with_metadata(...)` always returns chunk text sliced from the original JSON string to preserve offsets; `output_format` is recorded in metadata but does not change the returned chunk text.
 
 ### Strategies (Built-in)
 - `words`, `sentences`, `paragraphs`, `fixed_size`, `tokens`, `semantic`, `json`, `xml`, `ebook_chapters`, `propositions`, `rolling_summarize`, `structure_aware`, `code` (Python AST / heuristic based on `code_mode`), `code_ast` (force AST).

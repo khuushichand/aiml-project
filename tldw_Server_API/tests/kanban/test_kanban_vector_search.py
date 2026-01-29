@@ -162,6 +162,17 @@ class TestKanbanVectorSearchHelpers:
         assert "Labels: Bug" in result
         # Should only include "Bug" since others have no valid name
 
+    def test_build_document_with_checklist_items(self, vector_search_instance):
+
+        """Test _build_document includes checklist item names."""
+        card = {
+            "title": "Test Card",
+            "checklist_items": ["First task", "", "Second task"]
+        }
+        result = vector_search_instance._build_document(card)
+        assert "Test Card" in result
+        assert "Checklist: First task; Second task" in result
+
     def test_build_metadata_basic(self, vector_search_instance):
 
         """Test _build_metadata with basic card data."""
@@ -192,6 +203,22 @@ class TestKanbanVectorSearchHelpers:
         assert result["due_date"] == "2024-12-31"
         assert result["created_at"] == "2024-01-01T00:00:00"
 
+    def test_build_metadata_with_labels(self, vector_search_instance):
+
+        """Test _build_metadata includes label names when present."""
+        card = {
+            "id": 123,
+            "board_id": 1,
+            "list_id": 5,
+            "labels": [
+                {"id": 1, "name": "Bug"},
+                {"id": 2, "name": "Urgent"},
+                {"id": 3, "name": ""}
+            ]
+        }
+        result = vector_search_instance._build_metadata(card)
+        assert result["labels"] == ["Bug", "Urgent"]
+
     def test_build_metadata_without_optional_fields(self, vector_search_instance):
 
         """Test _build_metadata doesn't include missing optional fields."""
@@ -210,6 +237,49 @@ class TestKanbanVectorSearchHelpers:
         """Test that search returns empty list when vector search is unavailable."""
         result = vector_search_instance.search(query="test")
         assert result == []
+
+    def test_index_card_enqueues_embeddings_job(self, monkeypatch):
+        from tldw_Server_API.app.core.DB_Management import kanban_vector_search as kvs
+
+        instance = kvs.KanbanVectorSearch(
+            user_id="1",
+            embedding_config={"embedding_model": "test-model", "embedding_provider": "test-provider"},
+        )
+        instance._available = True
+        instance._manager = object()
+
+        captured: dict[str, object] = {}
+
+        class _StubJobManager:
+            def create_job(self, **kwargs):
+                captured["root_payload"] = kwargs.get("payload")
+                return {"id": 1, "uuid": "root-uuid"}
+
+        def _fake_enqueue_content_job(*, payload, root_job_uuid, **_kwargs):
+            captured["stage_payload"] = payload
+            captured["root_uuid"] = root_job_uuid
+            return "stream-id"
+
+        monkeypatch.setattr(kvs, "_jobs_manager", lambda: _StubJobManager())
+        monkeypatch.setattr(kvs.redis_pipeline, "enqueue_content_job", _fake_enqueue_content_job)
+        monkeypatch.setattr(kvs.redis_pipeline, "allow_stub", lambda: True)
+        monkeypatch.delenv("TEST_MODE", raising=False)
+
+        card = {
+            "id": 10,
+            "title": "Queue Test",
+            "description": "Queue content",
+            "board_id": 1,
+            "list_id": 2,
+            "version": 7,
+        }
+        assert instance.index_card(card) is True
+
+        stage_payload = captured["stage_payload"]
+        assert stage_payload["collection_name"] == instance._collection_name
+        assert stage_payload["document_id"] == "card_10"
+        assert stage_payload["card_id"] == 10
+        assert stage_payload["card_version"] == 7
 
     def test_index_card_returns_false_when_unavailable(self, vector_search_instance):
 

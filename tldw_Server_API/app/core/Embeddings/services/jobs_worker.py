@@ -39,6 +39,7 @@ from typing import Any, Dict, List, Optional, Tuple
 from loguru import logger
 
 from tldw_Server_API.app.core.DB_Management.DB_Manager import create_media_database
+from tldw_Server_API.app.core.DB_Management.Kanban_DB import _kanban_card_indexable
 from tldw_Server_API.app.core.DB_Management.db_path_utils import (
     DatabasePaths,
     get_user_media_db_path,
@@ -644,8 +645,11 @@ async def _handle_storage_job(
 
     try:
         invalidate_rag_caches(None, namespaces=[user_id], media_id=int(media_id))
-    except Exception:
-        pass
+    except Exception as exc:
+        logger.warning(
+            f"Failed to invalidate RAG caches after embeddings storage "
+            f"(user_id={user_id}, media_id={media_id}): {exc}"
+        )
 
     result = {
         "embedding_count": len(embeddings),
@@ -670,6 +674,26 @@ async def _handle_content_job(
     chunk_overlap: int,
     root_uuid: Optional[str],
 ) -> Dict[str, Any]:
+    collection_name = payload.get("collection_name")
+    document_id = payload.get("document_id")
+    has_collection_name = bool(collection_name)
+    has_document_id = bool(document_id)
+    if has_collection_name != has_document_id:
+        missing = "collection_name" if not has_collection_name else "document_id"
+        raise EmbeddingsJobError(
+            f"Custom content job requires both collection_name and document_id; missing {missing}",
+            retryable=False,
+        )
+    if has_collection_name and has_document_id:
+        return await _handle_custom_content_job(
+            job=job,
+            payload=payload,
+            media_id=media_id,
+            user_id=user_id,
+            embedding_model=embedding_model,
+            embedding_provider=embedding_provider,
+            root_uuid=root_uuid,
+        )
     raw_content = payload.get("content") or payload.get("text")
     if not raw_content or not str(raw_content).strip():
         raise EmbeddingsJobError("Missing content for content_embeddings job", retryable=False)
@@ -710,8 +734,11 @@ async def _handle_content_job(
 
     try:
         invalidate_rag_caches(None, namespaces=[user_id], media_id=int(media_id))
-    except Exception:
-        pass
+    except Exception as exc:
+        logger.warning(
+            f"Failed to invalidate RAG caches after content embeddings "
+            f"(user_id={user_id}, media_id={media_id}): {exc}"
+        )
 
     payload_result = {
         "embedding_count": result.get("embedding_count"),
@@ -721,6 +748,137 @@ async def _handle_content_job(
     }
     _update_root_job(root_uuid, status="completed", result=payload_result)
     return payload_result
+
+
+async def _handle_custom_content_job(
+    job: Dict[str, Any],
+    payload: Dict[str, Any],
+    *,
+    media_id: int,
+    user_id: str,
+    embedding_model: str,
+    embedding_provider: str,
+    root_uuid: Optional[str],
+) -> Dict[str, Any]:
+    """Generate embeddings for a single custom content payload and store in Chroma."""
+    del job, media_id  # kept for signature compatibility; intentionally unused
+    raw_content = payload.get("content") or payload.get("text")
+    if not raw_content or not str(raw_content).strip():
+        raise EmbeddingsJobError("Missing content for content_embeddings job", retryable=False)
+    collection_name = payload.get("collection_name")
+    document_id = payload.get("document_id")
+    if not collection_name or not document_id:
+        raise EmbeddingsJobError(
+            "Custom content job missing collection_name or document_id",
+            retryable=False,
+        )
+
+    meta = payload.get("metadata")
+    if not isinstance(meta, dict):
+        meta = {}
+
+    if payload.get("request_source") == "kanban":
+        card_id = payload.get("card_id") or meta.get("card_id")
+        expected_version = payload.get("card_version")
+        int_card_id = None
+        if card_id is not None:
+            try:
+                int_card_id = int(card_id)
+            except (TypeError, ValueError):
+                logger.warning(
+                    "Kanban content job has non-numeric card_id; skipping indexability check "
+                    f"(user_id={user_id}, card_id={card_id})"
+                )
+        if card_id is not None and int_card_id is None:
+            result = {
+                "embedding_count": 0,
+                "chunks_processed": 0,
+                "embedding_model": embedding_model,
+                "embedding_provider": embedding_provider,
+                "skipped": True,
+                "skip_reason": "card_not_indexable",
+            }
+            _update_root_job(root_uuid, status="completed", result=result)
+            return result
+        if int_card_id is not None and not _kanban_card_indexable(
+            user_id=str(user_id),
+            card_id=int_card_id,
+            expected_version=expected_version,
+        ):
+            result = {
+                "embedding_count": 0,
+                "chunks_processed": 0,
+                "embedding_model": embedding_model,
+                "embedding_provider": embedding_provider,
+                "skipped": True,
+                "skip_reason": "card_not_indexable",
+            }
+            _update_root_job(root_uuid, status="completed", result=result)
+            return result
+
+    request_metadata = {"user_id": str(user_id)}
+    try:
+        from tldw_Server_API.app.api.v1.endpoints.embeddings_v5_production_enhanced import (
+            create_embeddings_batch_async,
+        )
+
+        embeddings = await create_embeddings_batch_async(
+            texts=[str(raw_content)],
+            provider=embedding_provider,
+            model_id=embedding_model,
+            metadata=request_metadata,
+        )
+        validation_error = _validate_embeddings_result(embeddings, 1)
+        if validation_error:
+            raise EmbeddingsJobError(validation_error, retryable=False)
+    except EmbeddingsJobError:
+        raise
+    except Exception as exc:
+        if embedding_model != FALLBACK_EMBEDDING_MODEL:
+            logger.warning(f"Failed with {embedding_model}, trying fallback {FALLBACK_EMBEDDING_MODEL}")
+            try:
+                embeddings = await create_embeddings_batch_async(
+                    texts=[str(raw_content)],
+                    provider="huggingface",
+                    model_id=FALLBACK_EMBEDDING_MODEL,
+                    metadata=request_metadata,
+                )
+            except Exception as fallback_exc:
+                raise EmbeddingsJobError(str(fallback_exc), retryable=True) from fallback_exc
+            validation_error = _validate_embeddings_result(embeddings, 1)
+            if validation_error:
+                raise EmbeddingsJobError(validation_error, retryable=False)
+            embedding_model = FALLBACK_EMBEDDING_MODEL
+            embedding_provider = "huggingface"
+        else:
+            raise EmbeddingsJobError(str(exc), retryable=True) from exc
+
+    embeddings_list = _normalize_embeddings(embeddings)
+    metadata = dict(meta)
+    metadata["embedding_model"] = embedding_model
+    metadata["embedding_provider"] = embedding_provider
+
+    store_in_chroma(
+        texts=[str(raw_content)],
+        embeddings=embeddings_list,
+        ids=[str(document_id)],
+        metadatas=[metadata],
+        collection_name=str(collection_name),
+    )
+
+    try:
+        invalidate_rag_caches(None, namespaces=[user_id])
+    except Exception as exc:
+        logger.warning(f"Failed to invalidate RAG caches for custom content (user={user_id}): {exc}")
+
+    result = {
+        "embedding_count": len(embeddings_list),
+        "chunks_processed": len(embeddings_list),
+        "embedding_model": embedding_model,
+        "embedding_provider": embedding_provider,
+    }
+    _update_root_job(root_uuid, status="completed", result=result)
+    return result
 
 
 async def _handle_job(job: Dict[str, Any]) -> Dict[str, Any]:
@@ -868,6 +1026,7 @@ async def _handle_job(job: Dict[str, Any]) -> Dict[str, Any]:
 
 
 async def main() -> None:
+    """Run the legacy embeddings jobs worker loop."""
     worker_id = (os.getenv("EMBEDDINGS_JOBS_WORKER_ID") or f"embeddings-jobs-{os.getpid()}").strip()
     queue = (os.getenv("EMBEDDINGS_JOBS_QUEUE") or "default").strip() or "default"
 

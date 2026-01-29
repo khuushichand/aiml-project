@@ -36,7 +36,7 @@ Success metrics:
 - Performance meets defined throughput/latency targets compared to baseline (see Testing Plan).
 
 ## 5. Non-Goals
-- UI changes (no Admin UI or `tldw-frontend`).
+- UI changes (no Admin UI or Next.js WebUI).
 - Rewriting the embeddings pipeline logic; only the orchestration layer changes.
 - Replacing Redis Streams for embeddings stage transport.
 

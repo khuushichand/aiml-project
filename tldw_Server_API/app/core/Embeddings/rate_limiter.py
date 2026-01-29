@@ -68,7 +68,7 @@ class UserRateLimiter:
         self.premium_limit = premium_limit
         self.burst_allowance = burst_allowance
 
-        # Track requests per user: user_id -> deque of timestamps
+        # Track requests per user: user_id -> deque of (timestamp, cost)
         self.user_requests: Dict[str, deque] = defaultdict(lambda: deque())
         # Shadow-only request history used for RG comparisons. This is kept
         # separate from the enforcement queue so that enabling RG does not
@@ -137,6 +137,9 @@ class UserRateLimiter:
         Returns:
             Tuple of (allowed, retry_after_seconds)
         """
+        cost = int(cost) if cost is not None else 1
+        if cost <= 0:
+            cost = 1
         with self._lock:
             current_time = time.time()
             window_start = current_time - self.window_seconds
@@ -145,7 +148,7 @@ class UserRateLimiter:
             user_queue = self.user_requests[user_id]
 
             # Remove old requests outside the window
-            while user_queue and user_queue[0] < window_start:
+            while user_queue and user_queue[0][0] < window_start:
                 user_queue.popleft()
 
             # Get user's limit
@@ -153,7 +156,7 @@ class UserRateLimiter:
             burst_limit = int(limit * self.burst_allowance)
 
             # Check if adding this request would exceed the limit
-            current_count = len(user_queue)
+            current_count = sum(entry[1] for entry in user_queue)
 
             if current_count + cost > burst_limit:
                 # Rate limit exceeded
@@ -161,7 +164,7 @@ class UserRateLimiter:
 
                 # Calculate when the oldest request will expire
                 if user_queue:
-                    retry_after = int(user_queue[0] + self.window_seconds - current_time) + 1
+                    retry_after = int(user_queue[0][0] + self.window_seconds - current_time) + 1
                 else:
                     retry_after = 1
 
@@ -190,8 +193,7 @@ class UserRateLimiter:
                 return False, retry_after
 
             # Request allowed - record it
-            for _ in range(cost):
-                user_queue.append(current_time)
+            user_queue.append((current_time, cost))
 
             self.total_requests += cost
 
@@ -217,21 +219,24 @@ class UserRateLimiter:
 
         This method evaluates the primary (enforcement) in-memory state.
         """
+        cost = int(cost) if cost is not None else 1
+        if cost <= 0:
+            cost = 1
         with self._lock:
             current_time = time.time()
             window_start = current_time - self.window_seconds
 
             user_queue = self.user_requests[user_id]
-            while user_queue and user_queue[0] < window_start:
+            while user_queue and user_queue[0][0] < window_start:
                 user_queue.popleft()
 
             limit = self.get_user_limit(user_id)
             burst_limit = int(limit * self.burst_allowance)
-            current_count = len(user_queue)
+            current_count = sum(entry[1] for entry in user_queue)
 
             if current_count + cost > burst_limit:
                 if user_queue:
-                    retry_after = int(user_queue[0] + self.window_seconds - current_time) + 1
+                    retry_after = int(user_queue[0][0] + self.window_seconds - current_time) + 1
                 else:
                     retry_after = 1
                 return False, retry_after
@@ -250,21 +255,24 @@ class UserRateLimiter:
         *would* allow a request given the shadow traffic pattern, without
         recording a new request when RG denies.
         """
+        cost = int(cost) if cost is not None else 1
+        if cost <= 0:
+            cost = 1
         with self._lock:
             current_time = time.time()
             window_start = current_time - self.window_seconds
 
             user_queue = self._shadow_user_requests[user_id]
-            while user_queue and user_queue[0] < window_start:
+            while user_queue and user_queue[0][0] < window_start:
                 user_queue.popleft()
 
             limit = self.get_user_limit(user_id)
             burst_limit = int(limit * self.burst_allowance)
-            current_count = len(user_queue)
+            current_count = sum(entry[1] for entry in user_queue)
 
             if current_count + cost > burst_limit:
                 if user_queue:
-                    retry_after = int(user_queue[0] + self.window_seconds - current_time) + 1
+                    retry_after = int(user_queue[0][0] + self.window_seconds - current_time) + 1
                 else:
                     retry_after = 1
                 return False, retry_after
@@ -284,27 +292,29 @@ class UserRateLimiter:
         repeated comparisons reflect the traffic pattern being simulated
         without mutating the primary enforcement limiter state.
         """
+        cost = int(cost) if cost is not None else 1
+        if cost <= 0:
+            cost = 1
         with self._lock:
             current_time = time.time()
             window_start = current_time - self.window_seconds
 
             user_queue = self._shadow_user_requests[user_id]
-            while user_queue and user_queue[0] < window_start:
+            while user_queue and user_queue[0][0] < window_start:
                 user_queue.popleft()
 
             limit = self.get_user_limit(user_id)
             burst_limit = int(limit * self.burst_allowance)
-            current_count = len(user_queue)
+            current_count = sum(entry[1] for entry in user_queue)
 
             if current_count + cost > burst_limit:
                 if user_queue:
-                    retry_after = int(user_queue[0] + self.window_seconds - current_time) + 1
+                    retry_after = int(user_queue[0][0] + self.window_seconds - current_time) + 1
                 else:
                     retry_after = 1
                 return False, retry_after
 
-            for _ in range(cost):
-                user_queue.append(current_time)
+            user_queue.append((current_time, cost))
 
             return True, None
 
@@ -325,11 +335,11 @@ class UserRateLimiter:
             user_queue = self.user_requests[user_id]
 
             # Clean old requests
-            while user_queue and user_queue[0] < window_start:
+            while user_queue and user_queue[0][0] < window_start:
                 user_queue.popleft()
 
             limit = self.get_user_limit(user_id)
-            current_count = len(user_queue)
+            current_count = sum(entry[1] for entry in user_queue)
 
             return {
                 "user_id": user_id,
@@ -391,7 +401,7 @@ class UserRateLimiter:
 
             users_to_remove = []
             for user_id, queue in self.user_requests.items():
-                if not queue or (queue and queue[-1] < cutoff_time):
+                if not queue or (queue and queue[-1][0] < cutoff_time):
                     users_to_remove.append(user_id)
 
             for user_id in users_to_remove:
@@ -401,7 +411,7 @@ class UserRateLimiter:
             # Also clean up shadow request history to prevent memory leak
             shadow_users_to_remove = []
             for user_id, queue in self._shadow_user_requests.items():
-                if not queue or (queue and queue[-1] < cutoff_time):
+                if not queue or (queue and queue[-1][0] < cutoff_time):
                     shadow_users_to_remove.append(user_id)
 
             for user_id in shadow_users_to_remove:
@@ -588,11 +598,18 @@ class AsyncRateLimiter:
         Returns:
             Tuple of (allowed, retry_after_seconds)
         """
+        mode = _rate_limit_mode()
+        legacy_cost = cost
+        if mode == "tokens":
+            legacy_cost = int(tokens_units or 0)
+            if legacy_cost <= 0:
+                legacy_cost = cost
+
         if not _rg_embeddings_enabled():
             if self.rate_limiter is None:
                 self.rate_limiter = get_rate_limiter()
             # RG disabled: fall back to legacy limiter behavior.
-            return await self._legacy_check_rate_limit(user_id, cost, ip_address)
+            return await self._legacy_check_rate_limit(user_id, legacy_cost, ip_address)
 
         # Prefer Resource Governor when configured; use the legacy limiter only
         # as a fallback when RG is unavailable.
@@ -615,14 +632,14 @@ class AsyncRateLimiter:
                             self.executor,
                             self.rate_limiter.shadow_check_rate_limit,
                             user_id,
-                            cost,
+                            legacy_cost,
                         )
                     else:
                         legacy_allowed, _legacy_retry = await loop.run_in_executor(
                             self.executor,
                             self.rate_limiter.peek_shadow_rate_limit,
                             user_id,
-                            cost,
+                            legacy_cost,
                         )
 
                     legacy_dec = "allow" if legacy_allowed else "deny"
@@ -642,7 +659,7 @@ class AsyncRateLimiter:
             return rg_allowed, rg_decision.get("retry_after")
 
         _log_rg_embeddings_fallback("rg_decision_unavailable")
-        return await self._legacy_check_rate_limit(user_id, cost, ip_address)
+        return await self._legacy_check_rate_limit(user_id, legacy_cost, ip_address)
 
     async def record_usage_async(self, user_id: str, cost: int = 1):
         """Record usage asynchronously (for post-processing)"""
@@ -680,6 +697,26 @@ _rg_embeddings_lock = asyncio.Lock()
 _rg_embeddings_init_error: Optional[str] = None
 _rg_embeddings_init_error_logged = False
 _rg_embeddings_fallback_logged = False
+
+_rate_limit_mode_warned = False
+
+
+def _rate_limit_mode() -> str:
+    """Return the embeddings rate limit mode ('tokens' or 'requests')."""
+    raw = os.getenv("EMBEDDINGS_RATE_LIMIT_MODE", "tokens")
+    mode = str(raw or "").strip().lower()
+    if mode in {"token", "tokens", "tok"}:
+        return "tokens"
+    if mode in {"request", "requests", "req"}:
+        return "requests"
+    global _rate_limit_mode_warned
+    if not _rate_limit_mode_warned:
+        _rate_limit_mode_warned = True
+        logger.warning(
+            "Unknown EMBEDDINGS_RATE_LIMIT_MODE=%r; defaulting to 'tokens'.",
+            raw,
+        )
+    return "tokens"
 
 
 def _rg_embeddings_context() -> Dict[str, str]:

@@ -7,6 +7,8 @@ import os
 import base64
 import json
 import secrets
+import string
+import re
 from datetime import datetime, timezone, timedelta
 from importlib import import_module
 #
@@ -30,6 +32,8 @@ from tldw_Server_API.app.api.v1.schemas.auth_schemas import (
     DeprecatedUserResponse,
     SessionResponse,
     MFAChallengeResponse,
+    MagicLinkRequest,
+    MagicLinkVerifyRequest,
 )
 from tldw_Server_API.app.api.v1.API_Deps.auth_deps import (
     get_db_transaction,
@@ -53,6 +57,7 @@ from tldw_Server_API.app.core.AuthNZ.rate_limiter import RateLimiter
 from tldw_Server_API.app.core.AuthNZ.input_validation import get_input_validator
 from tldw_Server_API.app.core.AuthNZ.token_blacklist import get_token_blacklist
 from tldw_Server_API.app.core.AuthNZ.orgs_teams import list_memberships_for_user
+from tldw_Server_API.app.core.AuthNZ.exceptions import DuplicateOrganizationError
 from tldw_Server_API.app.services.registration_service import RegistrationService
 from tldw_Server_API.app.core.AuthNZ.auth_governor import get_auth_governor
 from tldw_Server_API.app.core.AuthNZ.settings import Settings, get_settings, get_profile
@@ -65,10 +70,6 @@ from tldw_Server_API.app.api.v1.API_Deps.Audit_DB_Deps import (
     get_or_create_audit_service_for_user_id,
 )
 from tldw_Server_API.app.core.AuthNZ.exceptions import (
-    AuthenticationError,
-    InvalidCredentialsError,
-    UserNotFoundError,
-    AccountInactiveError,
     InvalidTokenError,
     TokenExpiredError,
     RegistrationError,
@@ -171,6 +172,117 @@ def _get_mfa_login_ttl_seconds() -> int:
     except (TypeError, ValueError):
         ttl = 600
     return max(ttl, 60)
+
+
+def _normalize_magic_email(email: str) -> str:
+    return str(email or "").strip().lower()
+
+
+def _derive_username_from_email(email: str) -> str:
+    local = email.split("@", 1)[0].strip().lower()
+    local = re.sub(r"[^a-z0-9_-]+", "-", local).strip("-")
+    if len(local) < 3:
+        local = f"user-{secrets.token_hex(2)}"
+    return local[:32]
+
+
+def _generate_magic_password(length: int = 16) -> str:
+    # Ensure a mix of upper, lower, digit, and special characters.
+    specials = "!@#$%^&*"
+    choices = string.ascii_letters + string.digits + specials
+    base = [
+        secrets.choice(string.ascii_lowercase),
+        secrets.choice(string.ascii_uppercase),
+        secrets.choice(string.digits),
+        secrets.choice(specials),
+    ]
+    remaining = max(length - len(base), 0)
+    base.extend(secrets.choice(choices) for _ in range(remaining))
+    secrets.SystemRandom().shuffle(base)
+    return "".join(base)
+
+async def _ensure_user_org_membership(user_id: int, username: Optional[str] = None) -> None:
+    """Ensure a user has at least one org membership; create a personal org if not."""
+    try:
+        memberships = await list_memberships_for_user(int(user_id))
+    except Exception:
+        memberships = []
+    if memberships:
+        return
+
+    base_name = f"{username or 'Personal'} Workspace"
+    base_name = base_name.strip() or "Personal Workspace"
+
+    try:
+        from tldw_Server_API.app.core.AuthNZ.orgs_teams import create_organization
+        from tldw_Server_API.app.core.AuthNZ.repos.orgs_teams_repo import AuthnzOrgsTeamsRepo
+        from tldw_Server_API.app.core.AuthNZ.database import get_db_pool
+
+        org = None
+        for attempt in range(3):
+            name = base_name if attempt == 0 else f"{base_name}-{secrets.token_hex(2)}"
+            try:
+                org = await create_organization(name=name, owner_user_id=int(user_id))
+                break
+            except DuplicateOrganizationError:
+                continue
+
+        if not org:
+            return
+
+        pool = await get_db_pool()
+        repo = AuthnzOrgsTeamsRepo(db_pool=pool)
+        await repo.add_org_member(org_id=org["id"], user_id=int(user_id), role="owner")
+    except Exception as exc:
+        logger.warning("Org bootstrap failed for user {}: {}", user_id, exc)
+
+def _is_pytest_context() -> bool:
+    """Return True when running under pytest or explicit test-mode flags."""
+    try:
+        if os.getenv("PYTEST_CURRENT_TEST") is not None:
+            return True
+        for flag in ("TEST_MODE", "TLDW_TEST_MODE", "TESTING"):
+            raw = os.getenv(flag, "")
+            if str(raw).strip().lower() in {"1", "true", "yes", "on"}:
+                return True
+    except Exception:
+        return False
+    return False
+
+
+async def _ensure_mfa_cache_available(session_manager: SessionManager, settings: Settings) -> None:
+    """Ensure MFA ephemeral storage is backed by Redis (mandatory for MFA flows)."""
+    test_context = _is_pytest_context()
+
+    def _supports_ephemeral_stub(sm: SessionManager) -> bool:
+        return callable(getattr(sm, "store_ephemeral_value", None)) and callable(
+            getattr(sm, "get_ephemeral_value", None)
+        )
+
+    if not settings.REDIS_URL:
+        if test_context and _supports_ephemeral_stub(session_manager):
+            return
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="MFA requires Redis-backed ephemeral storage",
+        )
+    try:
+        if not getattr(session_manager, "_initialized", False):
+            await session_manager.initialize()
+    except Exception:
+        # If initialization fails, we'll fall through to the redis_client check below.
+        logger.debug(
+            "MFA cache init: session_manager.initialize() failed (redis_url={}); continuing to redis_client check.",
+            settings.REDIS_URL,
+            exc_info=True,
+        )
+    if getattr(session_manager, "redis_client", None) is None:
+        if test_context and _supports_ephemeral_stub(session_manager):
+            return
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="MFA requires Redis-backed ephemeral storage",
+        )
 
 
 #######################################################################################################################
@@ -551,6 +663,33 @@ async def login(
                 pass
         # user already normalized to dict in service
 
+        # Enforce username lockout before password verification (true lockout).
+        if getattr(rate_limiter, 'enabled', False):
+            user_locked, user_lockout_expires = await auth_gov.check_lockout(
+                user['username'],
+                attempt_type="login",
+                rate_limiter=rate_limiter,
+            )
+            if user_locked:
+                logger.warning(f"Login attempt for locked account: {user['username']}")
+                log_counter("auth_login_locked_user")
+                retry_after_seconds = 900
+                if isinstance(user_lockout_expires, datetime):
+                    try:
+                        from datetime import timezone as _tz
+
+                        now = datetime.now(user_lockout_expires.tzinfo or _tz.utc)
+                        retry_after_seconds = max(0, int((user_lockout_expires - now).total_seconds()))
+                    except Exception as exc:
+                        logger.debug(
+                            f"login: failed to compute user lockout expiry; using default Retry-After: {exc}"
+                        )
+                raise HTTPException(
+                    status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+                    detail="Too many failed login attempts. Account temporarily locked.",
+                    headers={"Retry-After": str(retry_after_seconds)},
+                )
+
         # Verify password
         is_test_mode = os.getenv("TEST_MODE", "").lower() in ("1", "true", "yes")
         is_valid, needs_rehash = password_service.verify_password(form_data.password, user['password_hash'])
@@ -646,6 +785,12 @@ async def login(
             await update_user_password_hash(db, int(user['id']), new_hash)
             logger.info(f"Updated password hash for user {user['username']} with new parameters")
 
+        # Attach user_id for downstream middleware (e.g., CSRF binding) on successful auth.
+        try:
+            request.state.user_id = int(user["id"])
+        except Exception as exc:
+            logger.debug("Failed to set request.state.user_id during login: {}", exc)
+
         # Determine whether MFA is required (multi-user + PostgreSQL only).
         mfa_required = False
         if settings.AUTH_MODE == "multi_user":
@@ -670,9 +815,19 @@ async def login(
 
         # Generate tokens based on auth mode
         if settings.AUTH_MODE == "single_user":
-            # For single-user mode, return simple tokens
-            access_token = f"single-user-token-{user['id']}"
-            refresh_token = f"single-user-refresh-{user['id']}"
+            # For single-user mode, return the configured API key as the access token.
+            single_user_key = (
+                settings.SINGLE_USER_API_KEY
+                or os.getenv("SINGLE_USER_API_KEY")
+                or os.getenv("API_KEY")
+            )
+            if not single_user_key:
+                raise HTTPException(
+                    status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                    detail="Single-user API key is not configured",
+                )
+            access_token = single_user_key
+            refresh_token = single_user_key
 
             # Create session with tokens
             session_info = await session_manager.create_session(
@@ -699,6 +854,7 @@ async def login(
             session_id = temp_session_info['session_id']
 
             if mfa_required:
+                await _ensure_mfa_cache_available(session_manager, settings)
                 session_token = secrets.token_urlsafe(32)
                 ttl_seconds = _get_mfa_login_ttl_seconds()
                 payload = {
@@ -729,6 +885,10 @@ async def login(
                     expires_in=ttl_seconds,
                     message="MFA required. Submit your TOTP or backup code.",
                 )
+
+            # Ensure org membership before issuing tokens (so claims include org_id)
+            if settings.AUTH_MODE == "multi_user":
+                await _ensure_user_org_membership(int(user["id"]), user.get("username"))
 
             # Create JWT tokens with session_id
             scope_claims = await _build_scope_claims(int(user["id"]))
@@ -827,8 +987,8 @@ async def login(
 
 @router.post("/logout", response_model=MessageResponse)
 async def logout(
+    request: Request,
     data: Optional[LogoutRequest] = None,
-    request: Request = None,
     current_user: Dict[str, Any] = Depends(get_current_user),
     session_manager: SessionManager = Depends(get_session_manager_dep),
     jwt_service: JWTService = Depends(get_jwt_service_dep),
@@ -857,6 +1017,9 @@ async def logout(
         payload = {}
         if token:
             try:
+                # NOTE: Using sync verify_token() here is acceptable - we're extracting
+                # claims for revocation cleanup, not making authorization decisions.
+                # The user has already been authenticated via the current_user dependency.
                 payload = jwt_service.verify_token(token)
             except Exception:
                 payload = {}
@@ -1100,7 +1263,14 @@ async def refresh_token(
         # Handle based on auth mode
         if settings.AUTH_MODE == "single_user":
             # Simple token validation for single-user mode
-            if not request.refresh_token.startswith("single-user-refresh-"):
+            single_user_key = (
+                settings.SINGLE_USER_API_KEY
+                or os.getenv("SINGLE_USER_API_KEY")
+                or os.getenv("API_KEY")
+            )
+            if single_user_key and request.refresh_token == single_user_key:
+                user_id = int(getattr(settings, "SINGLE_USER_FIXED_ID", 1))
+            else:
                 if os.getenv("TEST_MODE", "").lower() in ("1","true","yes"):
                     try:
                         response.headers["X-TLDW-Refresh-Stage"] = "validate"
@@ -1108,7 +1278,6 @@ async def refresh_token(
                     except Exception:
                         pass
                 raise InvalidTokenError("Invalid refresh token format")
-            user_id = int(request.refresh_token.split("-")[-1])
         else:
             # JWT validation for multi-user mode
             try:
@@ -1167,7 +1336,7 @@ async def refresh_token(
                     response.headers["X-TLDW-Refresh-Reason"] = "user-not-found"
                 except Exception:
                     pass
-            raise UserNotFoundError(f"User {user_id}")
+            raise InvalidTokenError("Invalid or expired refresh token")
 
         # Convert to dict
         if not isinstance(user, dict):
@@ -1177,10 +1346,23 @@ async def refresh_token(
                 columns = ['id', 'uuid', 'username', 'email', 'password_hash', 'role']
                 user = dict(zip(columns[:len(user)], user))
 
+        # Attach user_id for middleware that binds CSRF tokens on refresh responses.
+        try:
+            request.state.user_id = int(user.get("id")) if isinstance(user, dict) else None
+        except Exception as exc:
+            logger.debug("Failed to set request.state.user_id during refresh: {}", exc)
+
         # Generate new tokens based on auth mode and session linkage
         if settings.AUTH_MODE == "single_user":
-            new_access_token = f"single-user-token-{user['id']}"
-            new_refresh_token = request.refresh_token  # no rotation in single-user mode
+            single_user_key = (
+                settings.SINGLE_USER_API_KEY
+                or os.getenv("SINGLE_USER_API_KEY")
+                or os.getenv("API_KEY")
+            )
+            if not single_user_key:
+                raise InvalidTokenError("Single-user API key is not configured")
+            new_access_token = single_user_key
+            new_refresh_token = single_user_key
         else:
             # Access token always refreshed; preserve session_id claim when available
             scope_claims = await _build_scope_claims(int(user["id"]))
@@ -1420,10 +1602,10 @@ async def forgot_password(
 @router.post("/reset-password", status_code=status.HTTP_200_OK)
 async def reset_password(
     data: ResetPasswordRequest,
+    request: Request,
     db=Depends(get_db_transaction),
     jwt_service: JWTService = Depends(get_jwt_service_dep),
     password_service: PasswordService = Depends(get_password_service_dep),
-    request: Request = None,
     rate_limiter=Depends(get_rate_limiter_dep),
 ) -> Dict[str, str]:
     """
@@ -1435,12 +1617,23 @@ async def reset_password(
         # Optional per-IP throttling
         try:
             ip_addr = request.client.host if request and getattr(request, "client", None) else "unknown"
-            await rate_limiter.check_rate_limit(
+            allowed, _ = await rate_limiter.check_rate_limit(
                 identifier=f"ip:{ip_addr}", endpoint="auth:reset_password", limit=20, window_minutes=5
             )
+            if not allowed:
+                raise HTTPException(
+                    status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+                    detail="Too many password reset attempts. Please try again later.",
+                )
+        except HTTPException:
+            raise
         except Exception:
             pass
-        # Verify token
+        # Verify token cryptographically
+        # NOTE: Using sync verify_token() is acceptable for password_reset tokens because:
+        # 1. These are single-use tokens with additional database validation below
+        # 2. The token hash is verified against password_reset_tokens table
+        # 3. used_at check prevents token reuse even if not blacklisted
         try:
             payload = jwt_service.verify_token(data.token, token_type="password_reset")
         except Exception:
@@ -1590,7 +1783,10 @@ async def verify_email(
     Marks the user's email as verified.
     """
     try:
-        # Verify token
+        # Verify token cryptographically
+        # NOTE: Using sync verify_token() is acceptable for email_verification tokens because:
+        # 1. These are effectively single-use - once is_verified is set, the token is useless
+        # 2. Replaying the token just re-sets is_verified=true, which is idempotent
         try:
             payload = jwt_service.verify_token(token, token_type="email_verification")
         except Exception:
@@ -1639,8 +1835,10 @@ async def verify_email(
 @router.post("/resend-verification", status_code=status.HTTP_200_OK)
 async def resend_verification(
     data: ResendVerificationRequest,
+    request: Request,
     db=Depends(get_db_transaction),
     jwt_service: JWTService = Depends(get_jwt_service_dep),
+    rate_limiter=Depends(get_rate_limiter_dep),
 ) -> Dict[str, str]:
     """
     Resend email verification link.
@@ -1648,6 +1846,16 @@ async def resend_verification(
     Sends a new verification email if the account exists and is not verified.
     """
     try:
+        # Simple per-IP throttling to mitigate email spam
+        try:
+            client_ip = request.client.host if request.client else "unknown"
+            allowed, _ = await rate_limiter.check_rate_limit(
+                identifier=f"ip:{client_ip}", endpoint="auth:resend_verification", limit=10, window_minutes=1
+            )
+            if not allowed:
+                return {"message": "If the account exists and needs verification, an email has been sent"}
+        except Exception as exc:
+            logger.debug("resend_verification rate limit check failed: {}", exc)
         # Check if user exists and needs verification
         is_pg = await is_postgres_backend()
         if is_pg:
@@ -1697,6 +1905,309 @@ async def resend_verification(
         return {"message": "If the account exists and needs verification, an email has been sent"}
 
 
+@router.post(
+    "/magic-link/request",
+    response_model=MessageResponse,
+    status_code=status.HTTP_200_OK,
+    dependencies=[Depends(check_auth_rate_limit)],
+)
+async def request_magic_link(
+    data: MagicLinkRequest,
+    request: Request,
+    db=Depends(get_db_transaction),
+    jwt_service: JWTService = Depends(get_jwt_service_dep),
+    rate_limiter=Depends(get_rate_limiter_dep),
+) -> MessageResponse:
+    """
+    Request a magic link sign-in email.
+
+    Always returns a generic success message to avoid user enumeration.
+    """
+    settings = get_settings()
+    if settings.AUTH_MODE != "multi_user":
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Magic link sign-in is only available in multi-user mode",
+        )
+
+    email = _normalize_magic_email(data.email)
+    if not email:
+        return MessageResponse(message="If the account exists, a sign-in link has been sent")
+    try:
+        validator = get_input_validator()
+        is_valid, _error_msg = validator.validate_email(email)
+        if not is_valid:
+            return MessageResponse(message="If the account exists, a sign-in link has been sent")
+    except Exception:
+        # Never fail the request on validation errors; keep response generic
+        pass
+
+    # Rate limit by IP and email (best-effort)
+    try:
+        client_ip = request.client.host if request.client else "unknown"
+        allowed, _ = await rate_limiter.check_rate_limit(
+            identifier=f"ip:{client_ip}",
+            endpoint="auth:magic_link",
+            limit=10,
+            window_minutes=1,
+        )
+        if not allowed:
+            return MessageResponse(message="If the account exists, a sign-in link has been sent")
+        allowed, _ = await rate_limiter.check_rate_limit(
+            identifier=f"email:{email}",
+            endpoint="auth:magic_link",
+            limit=3,
+            window_minutes=10,
+        )
+        if not allowed:
+            return MessageResponse(message="If the account exists, a sign-in link has been sent")
+    except Exception as exc:
+        logger.debug("magic link rate limit check failed: {}", exc)
+
+    user = await fetch_user_by_login_identifier(db, email)
+    user_id = int(user["id"]) if user and user.get("id") is not None else None
+
+    # If registration is disabled and user doesn't exist, do not send an email.
+    if not user and not settings.ENABLE_REGISTRATION:
+        return MessageResponse(message="If the account exists, a sign-in link has been sent")
+
+    try:
+        token = jwt_service.create_magic_link_token(
+            email=email,
+            user_id=user_id,
+            expires_in_minutes=settings.MAGIC_LINK_EXPIRE_MINUTES,
+        )
+
+        email_service = _get_email_service()
+        await email_service.send_magic_link_email(
+            to_email=email,
+            magic_token=token,
+            expires_in_minutes=settings.MAGIC_LINK_EXPIRE_MINUTES,
+            username=user.get("username") if user else None,
+        )
+    except Exception as exc:
+        logger.error("Failed to send magic link email: {}", exc)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Failed to send magic link email",
+        ) from exc
+
+    return MessageResponse(message="If the account exists, a sign-in link has been sent")
+
+
+@router.post(
+    "/magic-link/verify",
+    response_model=TokenResponse,
+    status_code=status.HTTP_200_OK,
+)
+async def verify_magic_link(
+    data: MagicLinkVerifyRequest,
+    request: Request,
+    db=Depends(get_db_transaction),
+    jwt_service: JWTService = Depends(get_jwt_service_dep),
+    session_manager: SessionManager = Depends(get_session_manager_dep),
+    registration_service: RegistrationService = Depends(get_registration_service_dep),
+) -> TokenResponse:
+    """Verify a magic link token and return access/refresh tokens."""
+    settings = get_settings()
+    if settings.AUTH_MODE != "multi_user":
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Magic link sign-in is only available in multi-user mode",
+        )
+
+    try:
+        payload = await jwt_service.verify_token_async(data.token, token_type="magic_link")
+    except TokenExpiredError:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Magic link token has expired",
+        )
+    except InvalidTokenError:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Invalid magic link token",
+        )
+    except Exception as exc:
+        logger.error("Magic link verification failed: {}", exc)
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Invalid magic link token",
+        )
+
+    email = _normalize_magic_email(payload.get("email") or "")
+    user_id: Optional[int] = None
+    raw_user_id = payload.get("user_id")
+    if isinstance(raw_user_id, int):
+        user_id = raw_user_id
+    elif isinstance(raw_user_id, str) and raw_user_id.isdigit():
+        user_id = int(raw_user_id)
+    else:
+        sub = payload.get("sub")
+        if isinstance(sub, int):
+            user_id = sub
+        elif isinstance(sub, str) and sub.isdigit():
+            user_id = int(sub)
+        elif not email and isinstance(sub, str) and "@" in sub:
+            email = _normalize_magic_email(sub)
+
+    user: Optional[Dict[str, Any]] = None
+    if user_id is not None:
+        user = await fetch_active_user_by_id(db, int(user_id))
+    if not user and email:
+        user = await fetch_user_by_login_identifier(db, email)
+
+    if not user:
+        if not settings.ENABLE_REGISTRATION:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Registration is disabled",
+            )
+
+        # Create a new user on first magic-link sign-in
+        username_base = _derive_username_from_email(email or "user")
+        password = _generate_magic_password()
+        user_info: Optional[Dict[str, Any]] = None
+        for attempt in range(5):
+            username = username_base if attempt == 0 else f"{username_base}-{secrets.token_hex(2)}"
+            try:
+                user_info = await registration_service.register_user(
+                    username=username,
+                    email=email,
+                    password=password,
+                    registration_code=None,
+                )
+                break
+            except DuplicateUserError as dupe:
+                if getattr(dupe, "field", None) == "email":
+                    user = await fetch_user_by_login_identifier(db, email)
+                    break
+            except Exception as exc:
+                logger.error("Magic link registration failed: {}", exc)
+                raise HTTPException(
+                    status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                    detail="Failed to register user",
+                ) from exc
+
+        if not user and user_info:
+            user_id = int(user_info["user_id"])
+            # Mark user verified (magic link serves as email verification)
+            is_pg = await is_postgres_backend()
+            if is_pg:
+                await db.execute(
+                    "UPDATE users SET is_verified = true, updated_at = $1 WHERE id = $2",
+                    datetime.utcnow(),
+                    user_id,
+                )
+            else:
+                await db.execute(
+                    "UPDATE users SET is_verified = 1, updated_at = ? WHERE id = ?",
+                    (datetime.utcnow().isoformat(), user_id),
+                )
+                await db.commit()
+            user = await fetch_active_user_by_id(db, user_id)
+
+    if not user:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid or inactive user",
+        )
+    if user.get("is_active") is False:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid or inactive user",
+        )
+
+    # If an existing account wasn't verified, magic link serves as verification
+    try:
+        if user.get("is_verified") is False:
+            is_pg = await is_postgres_backend()
+            if is_pg:
+                await db.execute(
+                    "UPDATE users SET is_verified = true, updated_at = $1 WHERE id = $2",
+                    datetime.utcnow(),
+                    int(user["id"]),
+                )
+            else:
+                await db.execute(
+                    "UPDATE users SET is_verified = 1, updated_at = ? WHERE id = ?",
+                    (datetime.utcnow().isoformat(), int(user["id"])),
+                )
+                await db.commit()
+            user["is_verified"] = True
+    except Exception as exc:
+        logger.debug("Magic link verification: failed to mark user verified: {}", exc)
+
+    if settings.AUTH_MODE == "multi_user":
+        await _ensure_user_org_membership(int(user["id"]), user.get("username"))
+
+    # Create a session and issue tokens (similar to login flow)
+    user_agent = request.headers.get("User-Agent", "Unknown")
+    temp_access = f"temp_access_{secrets.token_urlsafe(16)}"
+    temp_refresh = f"temp_refresh_{secrets.token_urlsafe(16)}"
+    temp_session_info = await session_manager.create_session(
+        user_id=user["id"],
+        access_token=temp_access,
+        refresh_token=temp_refresh,
+        ip_address=request.client.host if request.client else "unknown",
+        user_agent=user_agent,
+    )
+    session_id = temp_session_info["session_id"]
+
+    scope_claims = await _build_scope_claims(int(user["id"]))
+    add_claims = dict(scope_claims)
+    add_claims["session_id"] = session_id
+    access_token = jwt_service.create_access_token(
+        user_id=user["id"],
+        username=user["username"],
+        role=user["role"],
+        additional_claims=add_claims,
+    )
+    refresh_token = jwt_service.create_refresh_token(
+        user_id=user["id"],
+        username=user["username"],
+        additional_claims=add_claims,
+    )
+    await session_manager.update_session_tokens(
+        session_id=session_id,
+        access_token=access_token,
+        refresh_token=refresh_token,
+    )
+
+    await update_user_last_login(db, int(user["id"]), datetime.utcnow())
+
+    # Blacklist the magic link token after use (one-time)
+    try:
+        jti = payload.get("jti")
+        raw_exp = payload.get("exp")
+        exp_dt = None
+        if isinstance(raw_exp, (int, float)):
+            exp_dt = datetime.fromtimestamp(raw_exp, tz=timezone.utc)
+        elif isinstance(raw_exp, datetime):
+            exp_dt = raw_exp
+        if jti and exp_dt:
+            from tldw_Server_API.app.core.AuthNZ.token_blacklist import get_token_blacklist
+            bl = get_token_blacklist()
+            await bl.revoke_token(
+                jti=jti,
+                expires_at=exp_dt,
+                user_id=int(user["id"]),
+                token_type="magic_link",
+                reason="magic_link_used",
+                revoked_by=int(user["id"]),
+                ip_address=request.client.host if request.client else None,
+            )
+    except Exception as exc:
+        logger.debug("Magic link token blacklist failed: {}", exc)
+
+    return TokenResponse(
+        access_token=access_token,
+        refresh_token=refresh_token,
+        token_type="bearer",
+        expires_in=settings.ACCESS_TOKEN_EXPIRE_MINUTES * 60,
+    )
+
+
 # MFA Endpoints
 
 @router.post("/mfa/setup", response_model=MFASetupResponse)
@@ -1713,6 +2224,7 @@ async def setup_mfa(
     """
     try:
         await _ensure_mfa_available()
+        await _ensure_mfa_cache_available(session_manager, get_settings())
         mfa_service = _get_mfa_service()
 
         # Check if MFA is already enabled
@@ -1739,9 +2251,13 @@ async def setup_mfa(
         backup_codes = mfa_service.generate_backup_codes()
 
         try:
+            payload = json.dumps({
+                "secret": secret,
+                "backup_codes": backup_codes,
+            })
             await session_manager.store_ephemeral_value(
                 _mfa_setup_cache_key(current_user.id),
-                secret,
+                payload,
                 _get_mfa_setup_ttl_seconds(),
             )
         except Exception as exc:
@@ -1782,14 +2298,27 @@ async def verify_mfa_setup(
     """
     try:
         await _ensure_mfa_available()
+        await _ensure_mfa_cache_available(session_manager, get_settings())
         mfa_service = _get_mfa_service()
 
-        secret = await session_manager.get_ephemeral_value(_mfa_setup_cache_key(current_user.id))
-        if not secret:
+        cached = await session_manager.get_ephemeral_value(_mfa_setup_cache_key(current_user.id))
+        if not cached:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail="MFA setup not found or expired. Please restart setup.",
             )
+        secret = None
+        backup_codes = None
+        try:
+            parsed = json.loads(cached)
+            if isinstance(parsed, dict):
+                secret = parsed.get("secret")
+                backup_codes = parsed.get("backup_codes")
+        except Exception:
+            secret = None
+            backup_codes = None
+        if not secret:
+            secret = cached
 
         # Basic per-user rate limit for MFA verification attempts
         try:
@@ -1807,8 +2336,9 @@ async def verify_mfa_setup(
                 detail="Invalid TOTP token",
             )
 
-        # Generate final backup codes
-        backup_codes = mfa_service.generate_backup_codes()
+        # Generate final backup codes if none were staged during setup
+        if not isinstance(backup_codes, list) or not backup_codes:
+            backup_codes = mfa_service.generate_backup_codes()
 
         # Enable MFA
         success = await mfa_service.enable_mfa(
@@ -1930,6 +2460,7 @@ async def mfa_login(
     log_counter("auth_mfa_login_attempt")
     try:
         await _ensure_mfa_available()
+        await _ensure_mfa_cache_available(session_manager, settings)
 
         cache_key = _mfa_login_cache_key(data.session_token)
         payload_raw = await session_manager.get_ephemeral_value(cache_key)
@@ -2001,6 +2532,9 @@ async def mfa_login(
                 detail="Invalid MFA token",
                 headers={"WWW-Authenticate": "Bearer"},
             )
+
+        if settings.AUTH_MODE == "multi_user":
+            await _ensure_user_org_membership(user_id, user.get("username"))
 
         scope_claims = await _build_scope_claims(user_id)
         add_claims = dict(scope_claims)
@@ -2239,7 +2773,7 @@ async def register(
         if payload.registration_code:
             detail = (
                 "Username or email already exists. If you're joining an organization, "
-                "log in and accept the invite at /webui/accept-invite.html "
+                "log in and accept the invite in the WebUI "
                 "or POST /api/v1/orgs/invites/accept."
             )
         raise HTTPException(

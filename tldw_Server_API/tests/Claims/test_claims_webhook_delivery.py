@@ -1,4 +1,5 @@
 import json
+import types
 
 from tldw_Server_API.app.core.Claims_Extraction import claims_service
 from tldw_Server_API.app.core.DB_Management.Media_DB_v2 import MediaDatabase
@@ -45,8 +46,12 @@ def test_claims_webhook_delivery_retries_and_records(monkeypatch, tmp_path):
         fake_fetch,
     )
     monkeypatch.setattr(claims_service, "record_claims_webhook_delivery", fake_record_delivery)
-    monkeypatch.setattr(claims_service.time, "sleep", lambda *_args, **_kwargs: None)
     monkeypatch.setattr(claims_service.random, "uniform", lambda *_args, **_kwargs: 1.0)
+    proxy_time = types.SimpleNamespace(
+        time=claims_service.time.time,
+        sleep=lambda *_args, **_kwargs: None,
+    )
+    monkeypatch.setattr(claims_service, "time", proxy_time)
 
     claims_service._deliver_claims_alert_webhook(
         url="https://example.com/webhook",
@@ -108,7 +113,11 @@ def test_claims_webhook_backoff_schedule(monkeypatch, tmp_path):
     )
     monkeypatch.setattr(claims_service, "record_claims_webhook_delivery", lambda **_kwargs: None)
     monkeypatch.setattr(claims_service.random, "uniform", lambda *_args, **_kwargs: 1.0)
-    monkeypatch.setattr(claims_service.time, "sleep", lambda delay: sleeps.append(delay))
+    proxy_time = types.SimpleNamespace(
+        time=claims_service.time.time,
+        sleep=lambda delay: sleeps.append(delay),
+    )
+    monkeypatch.setattr(claims_service, "time", proxy_time)
 
     claims_service._deliver_claims_alert_webhook(
         url="https://example.com/webhook",

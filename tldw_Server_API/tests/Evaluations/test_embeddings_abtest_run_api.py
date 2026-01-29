@@ -34,6 +34,8 @@ def test_run_embeddings_abtest_synchronous_success(evals_client, monkeypatch):
 
     # Patch evaluation service and runner to no-op
     class _DBStub:
+        def get_abtest(self, test_id, created_by=None):
+            return {"test_id": test_id, "created_by": created_by or "tester"}
         def lookup_idempotency(self, *a, **kw):
             return None
         def record_idempotency(self, *a, **kw):

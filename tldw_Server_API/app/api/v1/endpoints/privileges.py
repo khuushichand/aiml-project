@@ -386,7 +386,7 @@ async def create_privilege_snapshot(
     current_user: Dict[str, Any] = Depends(require_privilege_admin),
     service: PrivilegeMapService = Depends(get_privilege_map_service),
     store: PrivilegeSnapshotStore = Depends(get_privilege_snapshot_store),
-    request: Request = None,
+    request: Request,
 ):
     generated_by = str(current_user.get("id") or "system")
     user_ids = list(payload.user_ids or [])

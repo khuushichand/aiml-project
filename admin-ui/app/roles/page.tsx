@@ -15,7 +15,7 @@ import { useToast } from '@/components/ui/toast';
 import { useConfirm } from '@/components/ui/confirm-dialog';
 import { TableSkeleton } from '@/components/ui/skeleton';
 import { Form, FormInput } from '@/components/ui/form';
-import { Shield, Plus, Trash2, Lock, Settings } from 'lucide-react';
+import { Shield, Plus, RefreshCw, Trash2, Lock, Settings } from 'lucide-react';
 import { api } from '@/lib/api-client';
 import { Role, Permission } from '@/types';
 import Link from 'next/link';
@@ -43,6 +43,7 @@ export default function RolesPage() {
   // Create role dialog
   const [showCreateRole, setShowCreateRole] = useState(false);
   const [creatingRole, setCreatingRole] = useState(false);
+  const [deletingRoleIds, setDeletingRoleIds] = useState<Set<string>>(() => new Set());
   const roleForm = useForm<RoleFormData>({
     resolver: zodResolver(roleSchema),
     defaultValues: {
@@ -54,6 +55,7 @@ export default function RolesPage() {
   // Create permission dialog
   const [showCreatePermission, setShowCreatePermission] = useState(false);
   const [creatingPermission, setCreatingPermission] = useState(false);
+  const [deletingPermissionIds, setDeletingPermissionIds] = useState<Set<string>>(() => new Set());
   const permissionForm = useForm<PermissionFormData>({
     resolver: zodResolver(permissionSchema),
     defaultValues: {
@@ -119,6 +121,8 @@ export default function RolesPage() {
       showError('Cannot Delete', 'System roles cannot be deleted');
       return;
     }
+    const roleId = role.id.toString();
+    if (deletingRoleIds.has(roleId)) return;
 
     const confirmed = await confirm({
       title: 'Delete Role',
@@ -130,12 +134,20 @@ export default function RolesPage() {
     if (!confirmed) return;
 
     try {
-      await api.deleteRole(role.id.toString());
+      setDeletingRoleIds((prev) => new Set(prev).add(roleId));
+      await api.deleteRole(roleId);
       success('Role Deleted', `Role "${role.name}" has been deleted`);
       loadData();
     } catch (err: unknown) {
       console.error('Failed to delete role:', err);
       showError('Failed to delete role', err instanceof Error ? err.message : 'Please try again.');
+    } finally {
+      setDeletingRoleIds((prev) => {
+        if (!prev.has(roleId)) return prev;
+        const next = new Set(prev);
+        next.delete(roleId);
+        return next;
+      });
     }
   };
 
@@ -159,6 +171,8 @@ export default function RolesPage() {
   });
 
   const handleDeletePermission = async (perm: Permission) => {
+    const permissionId = perm.id.toString();
+    if (deletingPermissionIds.has(permissionId)) return;
     const confirmed = await confirm({
       title: 'Delete Permission',
       message: `Are you sure you want to delete the permission "${perm.name}"?`,
@@ -169,12 +183,20 @@ export default function RolesPage() {
     if (!confirmed) return;
 
     try {
-      await api.deletePermission(perm.id.toString());
+      setDeletingPermissionIds((prev) => new Set(prev).add(permissionId));
+      await api.deletePermission(permissionId);
       success('Permission Deleted', `Permission "${perm.name}" has been deleted`);
       loadData();
     } catch (err: unknown) {
       console.error('Failed to delete permission:', err);
       showError('Failed to delete permission', err instanceof Error ? err.message : 'Please try again.');
+    } finally {
+      setDeletingPermissionIds((prev) => {
+        if (!prev.has(permissionId)) return prev;
+        const next = new Set(prev);
+        next.delete(permissionId);
+        return next;
+      });
     }
   };
 
@@ -274,7 +296,10 @@ export default function RolesPage() {
                         </TableRow>
                       </TableHeader>
                       <TableBody>
-                        {roles.map((role) => (
+                        {roles.map((role) => {
+                          const roleId = role.id.toString();
+                          const isDeleting = deletingRoleIds.has(roleId);
+                          return (
                           <TableRow key={role.id}>
                             <TableCell>
                               <div>
@@ -310,15 +335,33 @@ export default function RolesPage() {
                                   variant="ghost"
                                   size="sm"
                                   onClick={() => handleDeleteRole(role)}
-                                  disabled={role.is_system}
-                                  title={role.is_system ? 'Cannot delete system roles' : 'Delete role'}
+                                  disabled={role.is_system || isDeleting}
+                                  title={
+                                    role.is_system
+                                      ? 'Cannot delete system roles'
+                                      : isDeleting
+                                        ? 'Deleting role'
+                                        : 'Delete role'
+                                  }
+                                  aria-label={
+                                    role.is_system
+                                      ? 'Cannot delete system roles'
+                                      : isDeleting
+                                        ? 'Deleting role'
+                                        : 'Delete role'
+                                  }
                                 >
-                                  <Trash2 className={`h-4 w-4 ${role.is_system ? 'text-muted' : 'text-red-500'}`} />
+                                  {isDeleting ? (
+                                    <RefreshCw className="h-4 w-4 text-red-500 animate-spin" />
+                                  ) : (
+                                    <Trash2 className={`h-4 w-4 ${role.is_system ? 'text-muted' : 'text-red-500'}`} />
+                                  )}
                                 </Button>
                               </div>
                             </TableCell>
                           </TableRow>
-                        ))}
+                          );
+                        })}
                       </TableBody>
                     </Table>
                   )}
@@ -392,7 +435,10 @@ export default function RolesPage() {
                         </TableRow>
                       </TableHeader>
                       <TableBody>
-                        {permissions.map((perm) => (
+                        {permissions.map((perm) => {
+                          const permissionId = perm.id.toString();
+                          const isDeleting = deletingPermissionIds.has(permissionId);
+                          return (
                           <TableRow key={perm.id}>
                             <TableCell>
                               <div>
@@ -407,13 +453,20 @@ export default function RolesPage() {
                                 variant="ghost"
                                 size="sm"
                                 onClick={() => handleDeletePermission(perm)}
-                                title="Delete permission"
+                                title={isDeleting ? 'Deleting permission' : 'Delete permission'}
+                                aria-label={isDeleting ? 'Deleting permission' : 'Delete permission'}
+                                disabled={isDeleting}
                               >
-                                <Trash2 className="h-4 w-4 text-red-500" />
+                                {isDeleting ? (
+                                  <RefreshCw className="h-4 w-4 text-red-500 animate-spin" />
+                                ) : (
+                                  <Trash2 className="h-4 w-4 text-red-500" />
+                                )}
                               </Button>
                             </TableCell>
                           </TableRow>
-                        ))}
+                          );
+                        })}
                       </TableBody>
                     </Table>
                   )}

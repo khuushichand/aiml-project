@@ -63,6 +63,15 @@ class MediaUpdateRequest(BaseModel):
     prompt: Optional[str] = Field(None, max_length=10000, description="Prompt (max 10KB)")
     keywords: Optional[List[str]] = Field(None, max_length=50, description="Keywords (max 50)")
 
+
+class MediaKeywordsUpdateRequest(BaseModel):
+    """Request payload for updating media keywords (add/remove/set)."""
+    keywords: List[str] = Field(..., description="Keywords to apply")
+    mode: Literal["add", "remove", "set"] = Field(
+        "add",
+        description="Update mode: add/remove/set (set replaces all keywords).",
+    )
+
 # Make prompt and analysis_content REQUIRED so missing them yields 422
 class VersionCreateRequest(BaseModel):
     content: str = Field(..., max_length=5000000, description="Content (max 5MB)")
@@ -256,12 +265,21 @@ class TranscriptionModel(str, Enum):
     PARAKEET_MLX = "parakeet-mlx"
     PARAKEET_ONNX = "parakeet-onnx"
 
+    # VibeVoice-ASR
+    VIBEVOICE = "vibevoice"
+    VIBEVOICE_ASR = "vibevoice-asr"
+    VIBEVOICE_HF = "microsoft/VibeVoice-ASR"
+
 TRANSCRIPTION_MODEL_ENUM = [m.value for m in TranscriptionModel]
 
 class AudioVideoOptions(BaseModel):
     """Pydantic model for Audio/Video specific options"""
     transcription_model: str = Field("deepdml/faster-distil-whisper-large-v3.5", description="Model ID for audio/video transcription")
     transcription_language: str = Field("en", description="Language for audio/video transcription (ISO 639-1 code)")
+    hotwords: Optional[str] = Field(
+        None,
+        description="Optional hotwords to guide transcription (CSV or JSON list). Primarily used by VibeVoice-ASR.",
+    )
     diarize: bool = Field(False, description="Enable speaker diarization (audio/video)")
     timestamp_option: bool = Field(True, description="Include timestamps in the transcription (audio/video)")
     vad_use: bool = Field(False, description="Enable Voice Activity Detection filter during transcription (audio/video)")
@@ -276,6 +294,14 @@ class PdfOptions(BaseModel):
     ocr_dpi: int = Field(300, ge=72, le=600, description="DPI for page rendering before OCR (72-600)")
     ocr_mode: Optional[OcrMode] = Field("fallback", description="'always' to force OCR, 'fallback' when no text")
     ocr_min_page_text_chars: int = Field(40, ge=0, description="Threshold to treat a page as 'no text' for OCR fallback")
+    ocr_output_format: Optional[str] = Field(
+        None,
+        description="OCR output format: text|markdown|json (structured outputs persisted in analysis_details)",
+    )
+    ocr_prompt_preset: Optional[str] = Field(
+        None,
+        description="OCR prompt preset (e.g., 'general', 'doc', 'table', 'spotting', 'json')",
+    )
 
 class AddMediaForm(ChunkingOptions, AudioVideoOptions, PdfOptions):
     """

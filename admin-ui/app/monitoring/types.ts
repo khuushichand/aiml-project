@@ -51,3 +51,27 @@ export interface WatchlistDraft {
   type: string;
   threshold: number;
 }
+
+export interface NotificationChannel {
+  type: 'email' | 'webhook' | 'slack' | 'discord';
+  enabled: boolean;
+  config: Record<string, string>;
+  clientId?: string;
+}
+
+export interface NotificationSettings {
+  id?: string;
+  channels: NotificationChannel[];
+  alert_threshold: 'info' | 'warning' | 'error' | 'critical';
+  digest_enabled: boolean;
+  digest_frequency: 'hourly' | 'daily' | 'weekly';
+}
+
+export interface RecentNotification {
+  id: string;
+  channel: string;
+  message: string;
+  status: 'sent' | 'failed' | 'pending';
+  timestamp: string;
+  error?: string;
+}

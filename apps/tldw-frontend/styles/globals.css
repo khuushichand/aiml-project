@@ -1,0 +1,6 @@
+@config "../tailwind.config.js";
+@source "../../packages/ui/src/**/*.{ts,tsx}";
+@source "./pages/**/*.{ts,tsx}";
+@source "./components/**/*.{ts,tsx}";
+@import "tailwindcss";
+@import "../../packages/ui/src/assets/tailwind-shared.css";

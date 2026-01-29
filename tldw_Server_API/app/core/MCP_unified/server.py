@@ -132,6 +132,7 @@ class WebSocketConnection:
 class SessionData:
     """Lightweight in-memory session state for HTTP/WS MCP sessions."""
     session_id: str
+    user_id: Optional[str] = None
     created_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
     last_activity: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
     uris_seen: Deque[str] = field(default_factory=lambda: deque(maxlen=500))
@@ -248,10 +249,11 @@ class MCPServer:
             await self.module_registry.start_health_monitoring()
 
             # Start metrics collection
-            try:
-                await get_metrics_collector().start_collection()
-            except Exception as e:
-                logger.warning(f"MCP metrics collector start failed: {self._mask_secrets(str(e))}")
+            if self.config.metrics_enabled:
+                try:
+                    await get_metrics_collector().start_collection()
+                except Exception as e:
+                    logger.warning(f"MCP metrics collector start failed: {self._mask_secrets(str(e))}")
 
             # Register default modules (will be implemented when migrating modules)
             await self._register_default_modules()
@@ -466,10 +468,11 @@ class MCPServer:
         self.background_tasks.add(task)
         task.add_done_callback(self.background_tasks.discard)
 
-        # Metrics collection task
-        task = asyncio.create_task(self._metrics_collection_loop())
-        self.background_tasks.add(task)
-        task.add_done_callback(self.background_tasks.discard)
+        # Metrics collection task (optional)
+        if self.config.metrics_enabled:
+            task = asyncio.create_task(self._metrics_collection_loop())
+            self.background_tasks.add(task)
+            task.add_done_callback(self.background_tasks.discard)
 
         # Session cleanup task
         task = asyncio.create_task(self._session_cleanup_loop())
@@ -547,7 +550,7 @@ class MCPServer:
             for sid in to_delete:
                 self.sessions.pop(sid, None)
 
-    async def _get_or_create_session(self, session_id: str) -> SessionData:
+    async def _get_or_create_session(self, session_id: str, user_id: Optional[str] = None) -> SessionData:
         async with self.session_lock:
             s = self.sessions.get(session_id)
             if s is None:
@@ -556,10 +559,18 @@ class MCPServer:
                     # Evict oldest
                     oldest_id = min(self.sessions, key=lambda k: self.sessions[k].last_activity)
                     self.sessions.pop(oldest_id, None)
-                s = SessionData(session_id=session_id)
+                s = SessionData(session_id=session_id, user_id=user_id)
                 # Respect configured max URIs per session
                 s.uris_seen = deque(maxlen=max(1, int(self.config.max_session_uris)))
                 self.sessions[session_id] = s
+            else:
+                # Enforce session ownership binding
+                if s.user_id is None:
+                    if user_id is not None:
+                        s.user_id = user_id
+                else:
+                    if user_id is None or str(s.user_id) != str(user_id):
+                        raise PermissionError("Session is bound to a different user")
             s.touch()
             return s
 
@@ -705,6 +716,7 @@ class MCPServer:
         # Authenticate if token provided (prefer AuthNZ JWT, then MCP JWT)
         if auth_token:
             ok = False
+            authnz_token_failed = False
             try:
                 # Try AuthNZ JWT first for consistency with HTTP endpoints
                 from starlette.requests import Request as _Request
@@ -743,9 +755,12 @@ class MCPServer:
             except Exception as e:
                 logger.debug(f"AuthNZ JWT auth failed: {self._mask_secrets(str(e))}")
                 if _is_authnz_access_token(auth_token):
-                    await websocket.close(code=1008, reason="Authentication failed")
-                    return
-                # Try MCP JWT
+                    authnz_token_failed = True
+                    if not api_key:
+                        await websocket.close(code=1008, reason="Authentication failed")
+                        return
+            # Try MCP JWT only when the token is not an AuthNZ access token
+            if not ok and not authnz_token_failed:
                 try:
                     token_data = self.jwt_manager.verify_token(auth_token)
                     user_id = token_data.sub
@@ -757,7 +772,7 @@ class MCPServer:
                         metadata["permissions"] = token_data.permissions
                 except Exception as _e:
                     logger.debug(f"MCP JWT auth failed: {self._mask_secrets(str(_e))}")
-            if auth_token and not ok:
+            if auth_token and not ok and not api_key:
                 await websocket.close(code=1008, reason="Authentication failed")
                 return
 
@@ -987,7 +1002,7 @@ class MCPServer:
 
             # Ensure session exists and update with client/safe config if applicable
             try:
-                sess = await self._get_or_create_session(connection.connection_id)
+                sess = await self._get_or_create_session(connection.connection_id, connection.user_id)
                 # If this is initialize, capture clientInfo and optional config
                 if isinstance(data, dict) and data.get("method") == "initialize":
                     try:
@@ -1012,6 +1027,24 @@ class MCPServer:
                     except Exception:
                         pass
                 sess.touch()
+            except PermissionError:
+                # Session ownership mismatch - return authorization error and close
+                try:
+                    await stream.send_json({
+                        "jsonrpc": "2.0",
+                        "error": {
+                            "code": -32001,
+                            "message": "Session is bound to a different user"
+                        },
+                        "id": data.get("id") if isinstance(data, dict) else None
+                    })
+                except Exception:
+                    pass
+                try:
+                    await stream.ws.close(code=1008, reason="Session ownership mismatch")
+                except Exception:
+                    pass
+                break
             except Exception:
                 pass
 
@@ -1124,12 +1157,18 @@ class MCPServer:
         except Exception:
             session_id = None
             safe_cfg = {}
+        # Always clamp safe_config with allowlist, even without a session.
+        try:
+            if safe_cfg:
+                safe_cfg = self._merge_safe_config({}, safe_cfg)
+        except Exception:
+            safe_cfg = {}
 
         # If we have a session id, ensure session exists and merge safe config
         sess: Optional[SessionData] = None
         try:
             if session_id:
-                sess = await self._get_or_create_session(session_id)
+                sess = await self._get_or_create_session(session_id, user_id)
                 if safe_cfg:
                     sess.safe_config = self._merge_safe_config(sess.safe_config, safe_cfg)
                 # If initialize, capture clientInfo
@@ -1138,6 +1177,8 @@ class MCPServer:
                     if isinstance(ci, dict):
                         sess.client_info.update(ci)
                 sess.touch()
+        except PermissionError as e:
+            raise HTTPException(status_code=403, detail=str(e))
         except Exception:
             pass
 
@@ -1184,6 +1225,108 @@ class MCPServer:
             )
         except Exception as e:
             logger.error(f"Error processing HTTP request: {self._mask_secrets(str(e))}")
+            raise HTTPException(status_code=500, detail="Internal server error")
+
+    async def handle_http_batch(
+        self,
+        requests: List[MCPRequest],
+        client_id: Optional[str] = None,
+        user_id: Optional[str] = None,
+        metadata: Optional[Dict[str, Any]] = None
+    ) -> Optional[List[MCPResponse]]:
+        """
+        Handle a batch of HTTP MCP requests with consistent session semantics.
+        """
+        # Pull session_id and safe_config from metadata when present
+        session_id: Optional[str] = None
+        safe_cfg: Dict[str, Any] = {}
+        try:
+            if metadata:
+                raw_sid = metadata.get("session_id")
+                if isinstance(raw_sid, str) and raw_sid:
+                    session_id = raw_sid
+                sc = metadata.get("safe_config")
+                if isinstance(sc, dict):
+                    safe_cfg = sc
+        except Exception:
+            session_id = None
+            safe_cfg = {}
+        # Clamp safe_config with allowlist
+        try:
+            if safe_cfg:
+                safe_cfg = self._merge_safe_config({}, safe_cfg)
+        except Exception:
+            safe_cfg = {}
+
+        # If we have a session id, ensure session exists and merge safe config
+        sess: Optional[SessionData] = None
+        try:
+            if session_id:
+                sess = await self._get_or_create_session(session_id, user_id)
+                if safe_cfg:
+                    sess.safe_config = self._merge_safe_config(sess.safe_config, safe_cfg)
+                # Capture clientInfo from any initialize request in the batch
+                for req in requests:
+                    try:
+                        if req.method == "initialize" and isinstance(req.params, dict):
+                            ci = (req.params or {}).get("clientInfo")
+                            if isinstance(ci, dict):
+                                sess.client_info.update(ci)
+                    except Exception:
+                        continue
+                sess.touch()
+        except PermissionError as e:
+            raise HTTPException(status_code=403, detail=str(e))
+        except Exception:
+            pass
+
+        # Create request context
+        metadata_map = dict(metadata or {})
+        try:
+            if sess and sess.safe_config:
+                metadata_map["safe_config"] = dict(sess.safe_config)
+            elif safe_cfg:
+                metadata_map["safe_config"] = safe_cfg
+            if sess:
+                metadata_map["seen_uris"] = list(sess.uris_seen)
+        except Exception:
+            pass
+        context = RequestContext(
+            request_id="http_batch",
+            user_id=user_id,
+            client_id=client_id,
+            session_id=session_id,
+            metadata=metadata_map
+        )
+
+        # Process batch request
+        try:
+            response = await self.protocol.process_request(requests, context)
+            try:
+                if sess and isinstance(context.metadata, dict):
+                    seen = context.metadata.get("seen_uris")
+                    if isinstance(seen, list):
+                        max_len = max(1, int(self.config.max_session_uris))
+                        for uri in seen:
+                            if isinstance(uri, str) and uri:
+                                sess.add_seen_uri(uri, max_len)
+            except Exception:
+                pass
+            if response is None:
+                return None
+            if isinstance(response, MCPResponse):
+                return [response]
+            return response
+        except RateLimitExceeded as e:
+            raise HTTPException(
+                status_code=429,
+                detail={
+                    "message": f"Rate limit exceeded. Retry after {e.retry_after} seconds",
+                    "hint": "Throttle tool calls or wait for the cooldown before retrying."
+                }
+            )
+        except Exception as e:
+            logger.error(f"Error processing HTTP batch request: {self._mask_secrets(str(e))}")
             raise HTTPException(status_code=500, detail="Internal server error")
 
     async def _close_all_connections(self):

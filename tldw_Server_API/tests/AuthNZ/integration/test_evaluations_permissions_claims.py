@@ -200,6 +200,21 @@ def _build_app_with_admin_cleanup(principal: AuthPrincipal):
 
     app.dependency_overrides[auth_deps.get_auth_principal] = _fake_get_auth_principal
 
+    async def _fake_admin_principal_if_needed(request: Request) -> AuthPrincipal:
+        _ = request  # required by dependency signature
+        ctx = AuthContext(
+            principal=principal,
+            ip=request.client.host if request.client else None,
+            user_agent=request.headers.get("User-Agent") if request.headers else None,
+            request_id=request.headers.get("X-Request-ID") if request.headers else None,
+        )
+        request.state.auth = ctx
+        return principal
+
+    # evaluations_unified calls get_auth_principal directly inside this helper,
+    # so overriding the helper itself is the most reliable test bypass.
+    app.dependency_overrides[eval_unified._get_admin_principal_if_needed] = _fake_admin_principal_if_needed
+
     async def _fake_verify_api_key() -> str:
         return "vk-test"
 

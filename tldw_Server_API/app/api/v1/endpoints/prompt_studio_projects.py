@@ -535,11 +535,11 @@ async def delete_project(
     }
 })
 async def archive_project(
+    request: Request,
     project_id: int = Path(..., description="Project ID"),
     _: bool = Depends(require_project_write_access),
     db: PromptStudioDatabase = Depends(get_prompt_studio_db),
     user_context: Dict = Depends(get_prompt_studio_user),
-    request: Request = None,
 ) -> StandardResponse:
     """
     Archive a project (set status to archived).
@@ -586,11 +586,11 @@ async def archive_project(
     }
 })
 async def unarchive_project(
+    request: Request,
     project_id: int = Path(..., description="Project ID"),
     _: bool = Depends(require_project_write_access),
     db: PromptStudioDatabase = Depends(get_prompt_studio_db),
     user_context: Dict = Depends(get_prompt_studio_user),
-    request: Request = None,
 ) -> StandardResponse:
     """
     Unarchive a project (set status to active).

@@ -74,6 +74,7 @@ from tldw_Server_API.app.core.TTS.tts_service_v2 import TTSServiceV2
 from tldw_Server_API.app.core.TTS.tts_exceptions import (
     TTSError,
     TTSValidationError,
+    TTSInvalidVoiceReferenceError,
     TTSProviderNotConfiguredError,
     TTSAuthenticationError,
     TTSRateLimitError,
@@ -323,6 +324,9 @@ def _strip_whisper_metadata_header_from_text(text: str) -> str:
 
 def _map_tts_exception(exc: Exception) -> HTTPException:
     """Map TTS exceptions to HTTPException consistent with /audio/speech."""
+    if isinstance(exc, TTSInvalidVoiceReferenceError):
+        logger.warning(f"TTS voice reference error in speech chat: {exc}")
+        return HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc))
     if isinstance(exc, TTSValidationError):
         logger.warning(f"TTS validation error in speech chat: {exc}")
         return HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc))

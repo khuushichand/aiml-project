@@ -1,0 +1,8 @@
+export { LandingLayout } from "./LandingLayout"
+export { LandingHero } from "./LandingHero"
+export { LandingProblem } from "./LandingProblem"
+export { LandingFeatures } from "./LandingFeatures"
+export { LandingTestimonials } from "./LandingTestimonials"
+export { LandingComparison } from "./LandingComparison"
+export { LandingPricing } from "./LandingPricing"
+export { LandingCTA } from "./LandingCTA"

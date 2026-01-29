@@ -56,8 +56,8 @@ class UnifiedRAGRequest(BaseModel):
     # ========== DATA SOURCES ==========
     sources: Optional[List[str]] = Field(
         default=["media_db"],
-        description="Databases to search: media_db, notes, characters, chats",
-        example=["media_db", "notes"]
+        description="Databases to search: media_db, notes, characters, chats, kanban",
+        example=["media_db", "notes", "kanban"]
     )
 
     # ========== STRATEGY SELECTION ==========
@@ -92,8 +92,8 @@ class UnifiedRAGRequest(BaseModel):
     @field_validator("sources", mode="before")
     @classmethod
     def _validate_sources(cls, v):
-        allowed = {"media_db", "notes", "characters", "chats"}
-        alias_map = {"media": "media_db", "character_cards": "characters"}
+        allowed = {"media_db", "notes", "characters", "chats", "kanban"}
+        alias_map = {"media": "media_db", "character_cards": "characters", "kanban_db": "kanban"}
         if v is None:
             return ["media_db"]
         if not isinstance(v, list):
@@ -1119,11 +1119,18 @@ class UnifiedRAGRequest(BaseModel):
     @field_validator('sources')
     @classmethod
     def validate_sources(cls, v):
-        valid_sources = {"media_db", "media", "notes", "characters", "chats"}
+        valid_sources = {"media_db", "notes", "characters", "chats", "kanban"}
+        alias_map = {"media": "media_db", "character_cards": "characters", "kanban_db": "kanban"}
         if v:
-            invalid = set(v) - valid_sources
-            if invalid:
-                raise ValueError(f"Invalid sources: {invalid}. Valid options: {valid_sources}")
+            normalized = []
+            for source in v:
+                if not isinstance(source, str):
+                    raise ValueError("sources entries must be strings")
+                key = alias_map.get(source.strip().lower(), source.strip().lower())
+                if key not in valid_sources:
+                    raise ValueError(f"Invalid source '{source}'. Valid options: {sorted(valid_sources)}")
+                normalized.append(key)
+            return normalized
         return v
 
     @field_validator('expansion_strategies')
@@ -1290,7 +1297,7 @@ class UnifiedBatchRequest(BaseModel):
     # Data Sources
     sources: Optional[List[str]] = Field(
         default=["media_db", "notes", "characters"],
-        description="Databases to search",
+        description="Databases to search (media_db, notes, characters, chats, kanban)",
     )
     # Indexing / Namespace
     corpus: Optional[str] = Field(default=None, description="Alias for index_namespace")
@@ -1336,7 +1343,7 @@ class UnifiedBatchRequest(BaseModel):
     vlm_late_chunk_top_k_docs: int = Field(default=3, ge=1, le=50)
 
     # Chunking & Context
-    enable_enhanced_chunking: bool = Field(default=False)
+    enable_enhanced_chunking: bool = Field(default=_DEF_ENH_CHUNK)
     chunk_type_filter: Optional[List[str]] = Field(default=None)
     enable_parent_expansion: bool = Field(default=False)
     parent_context_size: int = Field(default=500, ge=100, le=2000)

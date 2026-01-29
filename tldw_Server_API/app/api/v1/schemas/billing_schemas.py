@@ -5,6 +5,7 @@ Pydantic schemas for billing and subscription endpoints.
 """
 from __future__ import annotations
 
+from datetime import datetime
 from typing import Any, Dict, List, Optional
 
 from pydantic import BaseModel, Field, HttpUrl, computed_field
@@ -154,7 +155,7 @@ class InvoiceResponse(BaseModel):
     status: str  # succeeded, failed, pending
     description: Optional[str] = None
     invoice_pdf_url: Optional[str] = None
-    created_at: Optional[str] = None
+    created_at: Optional[datetime] = None
 
     @computed_field
     @property

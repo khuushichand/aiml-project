@@ -15,6 +15,7 @@ import io
 import json
 import os
 import time
+import zlib
 import yaml
 
 #
@@ -63,6 +64,7 @@ from tldw_Server_API.app.core.Character_Chat.Character_Chat_Lib_facade import (
     remove_message_from_conversation,
     find_messages_in_conversation,
 )
+from tldw_Server_API.app.core.Character_Chat.constants import MAX_PNG_METADATA_BYTES
 from tldw_Server_API.app.core.DB_Management.ChaChaNotes_DB import (
     CharactersRAGDB,
     CharactersRAGDBError,
@@ -301,6 +303,11 @@ def test_map_sender_to_role_handles_tool_prefix():
     assert map_sender_to_role("assistant_tool:call", "Botty") == "tool"
 
 
+def test_map_sender_to_role_respects_default_role():
+    assert map_sender_to_role("mystery", "Botty", default_role="user") == "user"
+    assert map_sender_to_role("", "Botty", default_role="system") == "system"
+
+
 def test_process_db_messages_to_ui_history_handles_additional_alias():
     char_name = "RenamedBot"
     user_name = "Human"
@@ -461,6 +468,28 @@ def test_process_db_messages_to_rich_ui_history_handles_non_character_roles():
     assert turn["non_character"]["content"] == "[system] Maintenance window in effect."
 
 
+@pytest.mark.parametrize("sender_override", ["system:Chrony", "tool:Chrony"])
+def test_process_db_messages_to_rich_ui_history_allows_reserved_prefix_char(sender_override):
+    db_messages = [
+        {"id": "user-1", "sender": "User", "content": "Hi {{char}}"},
+        {"id": "char-1", "sender": sender_override, "content": "Hello {{user}}"},
+    ]
+
+    history = process_db_messages_to_rich_ui_history(
+        db_messages,
+        "Chrony",
+        "Admin",
+        actual_char_sender_id_in_db=sender_override,
+    )
+
+    assert len(history) == 1
+    turn = history[0]
+    assert turn["user"]["content"] == "Hi Chrony"
+    assert turn["character"] is not None
+    assert turn["character"]["sender"] == sender_override
+    assert turn["character"]["content"] == "Hello Admin"
+    assert turn["non_character"] is None
+
 def test_chat_history_import_handles_structured_content_and_roles(db):
     char_payload = {
         "name": "Test Character",
@@ -512,6 +541,7 @@ def test_chat_history_import_handles_structured_content_and_roles(db):
 
     assert senders == ["system", "Test Character", "tool:lookup", "User"]
     assert contents[0] == "You are in a simulation."
+    assert contents[1] == "Hello there, {{user}}."
     assert "Tool output" in contents[2]
     assert contents[3] == "Thanks!"
 
@@ -624,6 +654,24 @@ def test_import_alpaca_instruction_input():
     assert parsed["personality"] == "Be concise."
     assert parsed["first_message"] == "Understood."
     assert parsed["message_example"] == "Understood."
+
+
+def test_import_pygmalion_card_fields():
+    payload = {
+        "char_name": "PygmalionChar",
+        "char_persona": "Pygmalion persona",
+        "world_scenario": "Pygmalion scenario",
+        "char_greeting": "Hello from Pygmalion",
+        "example_dialogue": "User: Hi\nBot: Hello",
+    }
+    parsed = import_character_card_from_json_string(json.dumps(payload))
+    assert parsed is not None
+    assert parsed["name"] == "PygmalionChar"
+    assert parsed["description"] == "Pygmalion persona"
+    assert parsed["personality"] == "Pygmalion persona"
+    assert parsed["scenario"] == "Pygmalion scenario"
+    assert parsed["first_message"] == "Hello from Pygmalion"
+    assert parsed["message_example"] == "User: Hi\nBot: Hello"
 
 
 def test_prepare_character_data_preserves_transparency():
@@ -754,6 +802,12 @@ def test_validate_v2_card_unit():
     assert not is_valid_ns and "Missing 'spec' field" in errors_ns[0]
 
 
+def test_validate_v2_card_allows_implicit_spec():
+    card_no_spec = {"data": MINIMAL_V2_DATA_NODE_UNIT.copy()}
+    is_valid, errors = validate_v2_card(card_no_spec, strict_spec=False)
+    assert is_valid and not errors
+
+
 def test_validate_v2_card_accepts_newer_minor_version():
     card = copy.deepcopy(MINIMAL_V2_CARD_UNIT)
     card["spec_version"] = "2.3"
@@ -785,6 +839,13 @@ def test_import_character_card_from_json_string_unit(mock_parse_v1, mock_parse_v
     mock_parse_v1.return_value = {"name": "ParsedV1"}
     v1_str = json.dumps(MINIMAL_V1_CARD_UNIT)
     assert import_character_card_from_json_string(v1_str)["name"] == "ParsedV1"
+
+
+def test_import_character_card_from_json_string_implicit_v2():
+    implicit_v2 = {"data": MINIMAL_V2_DATA_NODE_UNIT.copy()}
+    parsed = import_character_card_from_json_string(json.dumps(implicit_v2))
+    assert parsed is not None
+    assert parsed.get("name") == MINIMAL_V2_DATA_NODE_UNIT["name"]
 
 
 @mock.patch(f"{MODULE_PATH_PREFIX}.character_io.import_character_card_from_json_string")
@@ -954,6 +1015,40 @@ def test_extract_json_from_image_file_unit(
     MockPILImageModule.open.side_effect = None
     MockPILImageModule.open.return_value = mock_img_instance
     caplog_handler.clear()
+
+
+def test_extract_json_from_image_file_rejects_oversized_ztxt(tmp_path):
+    def _build_png_with_ztxt(keyword: bytes, text_bytes: bytes) -> bytes:
+        base_png = (
+            b"\x89PNG\r\n\x1a\n"
+            b"\x00\x00\x00\rIHDR\x00\x00\x00\x01\x00\x00\x00\x01\x08\x06\x00\x00\x00\x1f\x15\xc4\x89"
+        )
+        idat_chunk = b"\x00\x00\x00\x0cIDAT\x08\xd7c`\x00\x00\x00\x02\x00\x01\xe2!\xbc\x33"
+        iend_chunk = b"\x00\x00\x00\x00IEND\xaeB`\x82"
+
+        compressed_text = zlib.compress(text_bytes)
+        chunk_type = b"zTXt"
+        chunk_data = keyword + b"\x00" + b"\x00" + compressed_text
+        chunk_len_bytes = len(chunk_data).to_bytes(4, "big")
+        crc_val = binascii.crc32(chunk_type + chunk_data) & 0xFFFFFFFF
+        crc_bytes = crc_val.to_bytes(4, "big")
+        ztxt_chunk = chunk_len_bytes + chunk_type + chunk_data + crc_bytes
+        return base_png + ztxt_chunk + idat_chunk + iend_chunk
+
+    oversized_json = {
+        "name": "Oversized",
+        "description": "x" * (MAX_PNG_METADATA_BYTES),
+    }
+    json_bytes = json.dumps(oversized_json).encode("utf-8")
+    b64_payload = base64.b64encode(json_bytes)
+    if len(b64_payload) <= MAX_PNG_METADATA_BYTES:
+        b64_payload += b"A" * (MAX_PNG_METADATA_BYTES - len(b64_payload) + 1)
+
+    png_bytes = _build_png_with_ztxt(b"chara", b64_payload)
+    dummy_png_path = tmp_path / "oversized.png"
+    dummy_png_path.write_bytes(png_bytes)
+
+    assert extract_json_from_image_file(str(dummy_png_path)) is None
 
 
 # --- Property Tests (using Hypothesis) ---
@@ -1416,9 +1511,9 @@ def test_load_chat_history_from_file_and_save_to_db_integration(
     assert len(msgs) == 3
     assert "Skipping malformed message pair" in caplog_handler.text  # Should pass now
 
-    assert msgs[0]["content"] == f"U: {log_user}"
+    assert msgs[0]["content"] == "U: {{user}}"
     assert msgs[0]["sender"] == "User"
-    assert msgs[1]["content"] == f"C: {char_name_in_db}"
+    assert msgs[1]["content"] == "C: {{char}}"
     assert msgs[1]["sender"] == char_name_in_db
     assert msgs[2]["content"] == "User only"
     assert msgs[2]["sender"] == "User"
@@ -1439,7 +1534,7 @@ def test_load_chat_history_plain_text_fallback(mock_strftime, db):
     messages = db.get_messages_for_conversation(conv_id)
     assert len(messages) == 1
     assert messages[0]["sender"] == "User"
-    assert messages[0]["content"] == "User says hello to PlainChar"
+    assert messages[0]["content"] == "User says hello to {{char}}"
 
 
 @mock.patch(f"{MODULE_PATH_PREFIX}.character_io.time.strftime", return_value=MOCK_TIME_STRFTIME)
@@ -1464,9 +1559,9 @@ def test_load_chat_history_yaml_sequence(mock_strftime, db):
     messages = db.get_messages_for_conversation(conv_id)
     assert len(messages) == 2
     assert messages[0]["sender"] == char_name
-    assert messages[0]["content"] == "Greetings YamlUser"
+    assert messages[0]["content"] == "Greetings {{user}}"
     assert messages[1]["sender"] == "User"
-    assert messages[1]["content"] == "Hello YamlChar"
+    assert messages[1]["content"] == "Hello {{char}}"
 
 
 def test_load_chat_history_cleanup_on_failure(db):
@@ -1514,6 +1609,30 @@ def test_load_chat_and_character_handles_legacy_you_sender(db):
     char_data, history, _ = load_chat_and_character(db, conv_id, "Friend")
     assert char_data and char_data["name"] == "Botty"
     assert history == [("Hi Botty", "Hello Friend")]
+
+
+def test_start_new_chat_session_decodes_alternate_greeting_bytes(db):
+    char_id = db.add_character_card({"name": "ByteGreeter", "first_message": "Default {{user}}"})
+    raw_char = {
+        "id": char_id,
+        "name": "ByteGreeter",
+        "first_message": "Default {{user}}",
+        "alternate_greetings": [b"Bytes hi {{user}}"],
+    }
+
+    with mock.patch.object(db, "get_character_card_by_id", return_value=raw_char):
+        conv_id, _, init_hist, _ = start_new_chat_session(
+            db,
+            char_id,
+            "Alice",
+            greeting_strategy="alternate_index",
+            alternate_index=0,
+        )
+
+    assert conv_id is not None
+    assert init_hist == [(None, "Bytes hi Alice")]
+    stored_messages = db.get_messages_for_conversation(conv_id, limit=1)
+    assert stored_messages[0]["content"] == "Bytes hi {{user}}"
 
 
 @mock.patch(f"{MODULE_PATH_PREFIX}.character_chat.time.strftime", return_value=MOCK_TIME_STRFTIME)
@@ -1654,7 +1773,7 @@ def test_retrieve_conversation_messages_for_ui_rich_output(db):
     assert turn["character"]["attachments"]
 
 
-def test_retrieve_conversation_messages_for_ui_rich_output_drops_trailing_user(db):
+def test_retrieve_conversation_messages_for_ui_rich_output_keeps_trailing_user(db):
     char_id = db.add_character_card({"name": "Chrony"})
     conv_id = db.add_conversation({"character_id": char_id, "title": "Chrony Chat"})
 
@@ -1670,15 +1789,11 @@ def test_retrieve_conversation_messages_for_ui_rich_output_drops_trailing_user(d
         rich_output=True,
     )
 
-    assert len(history) == 1
+    assert len(history) == 2
     assert history[0]["user"]["content"] == "Hello"
     assert history[0]["character"]["content"] == "Hi"
-    all_contents = []
-    for turn in history:
-        for role in ("user", "character", "non_character"):
-            if turn.get(role) and turn[role].get("content"):
-                all_contents.append(turn[role]["content"])
-    assert "Trailing" not in all_contents
+    assert history[1]["user"]["content"] == "Trailing"
+    assert history[1]["character"] is None
 
 
 def test_sender_override_is_treated_as_user(db):
@@ -1802,6 +1917,71 @@ def test_ambiguous_sender_lookahead_next_is_user():
 
     # The history should correctly pair messages
     assert len(history) >= 1, "History should have at least one turn"
+
+
+def test_compute_additional_char_aliases_no_user_inference_for_character_clusters():
+    from tldw_Server_API.app.core.Character_Chat.modules.character_chat import _compute_additional_char_aliases
+
+    db_messages = [
+        {"sender": "Bob", "content": "Hey"},
+        {"sender": "Charlie", "content": "Hi"},
+        {"sender": "Bob", "content": "Back again"},
+        {"sender": "Charlie", "content": "Still here"},
+    ]
+
+    additional_char_aliases, inferred_user_aliases = _compute_additional_char_aliases(
+        db_messages=db_messages,
+        char_name_from_card="Alice",
+        user_name_for_placeholders="User",
+        actual_user_sender_id_in_db="User",
+    )
+
+    assert set(additional_char_aliases) >= {"Bob", "Charlie"}
+    assert inferred_user_aliases == []
+
+
+def test_post_message_rejects_oversized_content(db, monkeypatch):
+    from tldw_Server_API.app.core.config import settings
+
+    monkeypatch.setitem(settings, "MAX_PERSIST_CONTENT_LENGTH", 5)
+    char_id = db.add_character_card({"name": "LengthChar"})
+    conv_id = db.add_conversation({"character_id": char_id, "title": "Length Chat"})
+
+    with pytest.raises(InputError):
+        post_message_to_conversation(
+            db,
+            conv_id,
+            "LengthChar",
+            "123456",
+            is_user_message=False,
+        )
+
+
+def test_load_chat_history_respects_message_limit(db, monkeypatch):
+    from tldw_Server_API.app.core.Character_Chat import character_limits as limits
+
+    monkeypatch.setenv("MAX_MESSAGES_PER_CHAT", "1")
+    monkeypatch.setattr(limits, "_limits", None)
+
+    char_id = db.add_character_card({"name": "LimitChar", "first_message": "Hi"})
+    payload = json.dumps(
+        {
+            "messages": [
+                {"role": "user", "content": "One"},
+                {"role": "assistant", "content": "Two"},
+            ]
+        }
+    )
+
+    result = load_chat_history_from_file_and_save_to_db(
+        db,
+        char_id,
+        file_content=payload,
+        user_name_for_placeholders="Tester",
+    )
+
+    assert result == (None, None)
+    assert db.get_conversations_for_character(char_id) == []
 
 
 #

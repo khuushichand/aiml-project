@@ -290,6 +290,7 @@ route_map:
     prompt-studio: prompt_studio.default
     prompts: prompt_studio.default
     notes: core.default
+    writing: core.default
     notes-graph: core.default
     personalization: core.default
     chatbooks: core.default

@@ -79,6 +79,12 @@ try:
 except Exception:
     _HAS_FCNTL = False
 
+try:
+    import msvcrt  # type: ignore
+    _HAS_MSVCRT = True
+except Exception:
+    _HAS_MSVCRT = False
+
 _FALLBACK_LOCKS: Dict[str, threading.Lock] = {}
 _FALLBACK_LOCKS_LOCK = threading.Lock()
 
@@ -120,6 +126,32 @@ async def _fallback_queue_lock(path: Path) -> AsyncGenerator[None, None]:
         finally:
             try:
                 await asyncio.to_thread(fcntl.flock, handle.fileno(), fcntl.LOCK_UN)
+            except Exception:
+                pass
+            try:
+                await asyncio.to_thread(handle.close)
+            except Exception:
+                pass
+    elif _HAS_MSVCRT:
+        def _open_and_lock() -> Any:
+            fh = lock_path.open("a+b")
+            try:
+                fh.seek(0)
+            except Exception:
+                pass
+            msvcrt.locking(fh.fileno(), msvcrt.LK_LOCK, 1)
+            return fh
+
+        handle = await asyncio.to_thread(_open_and_lock)
+        try:
+            yield
+        finally:
+            try:
+                await asyncio.to_thread(handle.seek, 0)
+            except Exception:
+                pass
+            try:
+                await asyncio.to_thread(msvcrt.locking, handle.fileno(), msvcrt.LK_UNLCK, 1)
             except Exception:
                 pass
             try:
@@ -268,6 +300,17 @@ def _normalize_datetime_filter(value: Optional[datetime]) -> Optional[str]:
             return None
 
 
+def _normalize_result(value: Any, default: str = "success") -> str:
+    """Normalize result values to lowercase canonical strings."""
+    if value is None:
+        return default
+    try:
+        s = str(value).strip().lower()
+    except Exception:
+        return default
+    return s or default
+
+
 # ============================================================================
 # Event Types
 # ============================================================================
@@ -346,6 +389,7 @@ class AuditEventType(Enum):
     SYSTEM_ERROR = "system.error"
     CONFIG_CHANGED = "config.changed"
     MIGRATION_RUN = "migration.run"
+    OPS_INCIDENT = "ops.incident"
 
 
 class AuditSeverity(Enum):
@@ -742,10 +786,11 @@ class RiskScorer:
         ]:
             score += 30
 
-        # Failed operations
-        if event.result == "failure":
+        # Failed operations (case-insensitive)
+        result_norm = _normalize_result(event.result)
+        if result_norm == "failure":
             score += 20
-        elif event.result == "error":
+        elif result_norm == "error":
             score += 10
 
         # High-risk operations
@@ -875,6 +920,14 @@ class UnifiedAuditService:
                 db_path = db_dir / "unified_audit.db"
 
         self.db_path = Path(db_path)
+        try:
+            self.db_path.parent.mkdir(parents=True, exist_ok=True)
+        except Exception as e:
+            logger.warning(
+                "Failed to ensure audit DB directory {}: {}",
+                self.db_path.parent,
+                e,
+            )
         self.retention_days = retention_days
         self.enable_pii_detection = enable_pii_detection
         self.enable_risk_scoring = enable_risk_scoring
@@ -896,6 +949,7 @@ class UnifiedAuditService:
                 max_db_mb = None
         self.max_db_mb = max_db_mb
         self._owner_loop: Optional[asyncio.AbstractEventLoop] = None
+        self._last_used_ts = time.monotonic()
 
         # Detect test environments to avoid spawning busy background loops when
         # tests monkeypatch asyncio.sleep globally (common in our Workflows tests).
@@ -1342,6 +1396,19 @@ class UnifiedAuditService:
         """Migrate legacy audit_events tables to the unified schema."""
         logger.warning("Legacy audit_events schema detected; migrating to unified schema.")
 
+        async def _drop_legacy_audit_objects() -> None:
+            """Drop legacy audit views/triggers that reference old columns."""
+            legacy_objects = [
+                "DROP VIEW IF EXISTS security_alerts",
+                "DROP VIEW IF EXISTS audit_statistics",
+                "DROP TRIGGER IF EXISTS audit_rate_limit_changes",
+            ]
+            for sql in legacy_objects:
+                try:
+                    await db.execute(sql)
+                except Exception:
+                    pass
+
         await db.execute("ALTER TABLE audit_events RENAME TO audit_events_legacy")
         if self._shared_mode:
             await db.execute(
@@ -1533,6 +1600,7 @@ class UnifiedAuditService:
         try:
             await _copy_rows()
             await db.execute("DROP TABLE audit_events_legacy")
+            await _drop_legacy_audit_objects()
         except Exception as exc:
             logger.error(f"Failed to migrate legacy audit_events schema: {exc}")
             # Attempt to roll back to the legacy table if possible.
@@ -1598,7 +1666,11 @@ class UnifiedAuditService:
                 raise ValueError("unidentified tenant id is reserved")
             return self.unidentified_tenant_id
         if not tenant_id.isdigit():
-            raise ValueError("tenant_user_id must be numeric in shared mode")
+            logger.warning(
+                "Non-numeric tenant_user_id '{}' in shared audit; storing as-is.",
+                tenant_id,
+            )
+            return tenant_id
         return tenant_id
 
     def _resolve_tenant_id_for_write(
@@ -1621,7 +1693,17 @@ class UnifiedAuditService:
 
         lowered = normalized.lower()
         if lowered == self.system_tenant_id:
-            raise ValueError("system tenant id is reserved for system events only")
+            # Allow explicit system tenant usage for non-system events (e.g., background jobs).
+            if context_user_id is not None:
+                try:
+                    ctx_val = str(context_user_id).strip().lower()
+                except Exception:
+                    ctx_val = ""
+                if ctx_val and ctx_val != self.system_tenant_id:
+                    logger.warning(
+                        "System tenant id provided while context_user_id is non-system; storing as system tenant."
+                    )
+            return self.system_tenant_id
         if lowered == self.unidentified_tenant_id:
             if context_user_id is not None and str(context_user_id).strip() != "":
                 raise ValueError("unidentified tenant id cannot be assigned to a user")
@@ -1671,6 +1753,142 @@ class UnifiedAuditService:
             params.append(user_id)
         return query, params
 
+    def _build_events_query(
+        self,
+        *,
+        start_time: Optional[datetime] = None,
+        end_time: Optional[datetime] = None,
+        event_types: Optional[List[AuditEventType]] = None,
+        categories: Optional[List[AuditEventCategory]] = None,
+        user_id: Optional[str] = None,
+        request_id: Optional[str] = None,
+        correlation_id: Optional[str] = None,
+        ip_address: Optional[str] = None,
+        session_id: Optional[str] = None,
+        endpoint: Optional[str] = None,
+        method: Optional[str] = None,
+        min_risk_score: Optional[int] = None,
+        allow_cross_tenant: bool = False,
+    ) -> tuple[str, List[Any]]:
+        """Build the core WHERE clause and params for audit event queries."""
+        query = "FROM audit_events WHERE 1=1"
+        params: List[Any] = []
+
+        start_iso = _normalize_datetime_filter(start_time)
+        if start_iso:
+            query += " AND timestamp >= ?"
+            params.append(start_iso)
+
+        end_iso = _normalize_datetime_filter(end_time)
+        if end_iso:
+            query += " AND timestamp <= ?"
+            params.append(end_iso)
+
+        if event_types:
+            placeholders = ",".join("?" * len(event_types))
+            query += f" AND event_type IN ({placeholders})"
+            params.extend([et.value for et in event_types])
+
+        if categories:
+            placeholders = ",".join("?" * len(categories))
+            query += f" AND category IN ({placeholders})"
+            params.extend([c.value for c in categories])
+
+        query, params = self._apply_user_filter(query, params, user_id, allow_cross_tenant)
+
+        if request_id:
+            query += " AND context_request_id = ?"
+            params.append(request_id)
+
+        if correlation_id:
+            query += " AND context_correlation_id = ?"
+            params.append(correlation_id)
+
+        if ip_address:
+            query += " AND context_ip_address = ?"
+            params.append(ip_address)
+        if session_id:
+            query += " AND context_session_id = ?"
+            params.append(session_id)
+        if endpoint:
+            query += " AND context_endpoint = ?"
+            params.append(endpoint)
+        if method:
+            query += " AND context_method = ?"
+            params.append(method)
+
+        if min_risk_score is not None:
+            query += " AND risk_score >= ?"
+            params.append(min_risk_score)
+
+        return query, params
+
+    def _cursor_from_row(self, row: Dict[str, Any]) -> tuple[Optional[str], Optional[str]]:
+        """Extract keyset cursor values from a row dict."""
+        ts_val = row.get("timestamp")
+        if isinstance(ts_val, datetime):
+            ts = _normalize_timestamp(ts_val).isoformat()
+        elif ts_val is None:
+            ts = None
+        else:
+            ts = str(ts_val)
+        ev_id = row.get("event_id")
+        ev_id_str = str(ev_id) if ev_id is not None else None
+        return ts, ev_id_str
+
+    async def _query_events_keyset(
+        self,
+        *,
+        start_time: Optional[datetime] = None,
+        end_time: Optional[datetime] = None,
+        event_types: Optional[List[AuditEventType]] = None,
+        categories: Optional[List[AuditEventCategory]] = None,
+        user_id: Optional[str] = None,
+        request_id: Optional[str] = None,
+        correlation_id: Optional[str] = None,
+        ip_address: Optional[str] = None,
+        session_id: Optional[str] = None,
+        endpoint: Optional[str] = None,
+        method: Optional[str] = None,
+        min_risk_score: Optional[int] = None,
+        allow_cross_tenant: bool = False,
+        limit: int = 100,
+        cursor_ts: Optional[str] = None,
+        cursor_event_id: Optional[str] = None,
+    ) -> List[Dict[str, Any]]:
+        """Query audit events using keyset pagination for stable exports."""
+        base_query, params = self._build_events_query(
+            start_time=start_time,
+            end_time=end_time,
+            event_types=event_types,
+            categories=categories,
+            user_id=user_id,
+            request_id=request_id,
+            correlation_id=correlation_id,
+            ip_address=ip_address,
+            session_id=session_id,
+            endpoint=endpoint,
+            method=method,
+            min_risk_score=min_risk_score,
+            allow_cross_tenant=allow_cross_tenant,
+        )
+
+        if cursor_ts and cursor_event_id:
+            base_query += " AND (timestamp < ? OR (timestamp = ? AND event_id < ?))"
+            params.extend([cursor_ts, cursor_ts, cursor_event_id])
+
+        query = "SELECT * " + base_query + " ORDER BY timestamp DESC, event_id DESC LIMIT ?"
+        params.append(limit)
+
+        try:
+            async with self._read_db() as db:
+                async with db.execute(query, params) as cursor:
+                    rows = await cursor.fetchall()
+                    return [dict(row) for row in rows]
+        except Exception as e:
+            logger.error(f"Failed to query audit events (keyset): {e}")
+            return []
+
     async def _ensure_db_pool(self) -> aiosqlite.Connection:
         """Ensure a persistent aiosqlite connection is available."""
         # In test mode, prefer ephemeral connections; callers of this method are
@@ -1680,11 +1898,14 @@ class UnifiedAuditService:
             if self._db_pool is None:
                 conn = await aiosqlite.connect(self.db_path)
                 try:
-                    await conn.execute("PRAGMA journal_mode=WAL;")
-                    await conn.execute("PRAGMA synchronous=NORMAL;")
-                    await conn.execute("PRAGMA temp_store=MEMORY;")
-                    await conn.execute("PRAGMA foreign_keys=ON;")
-                    await conn.execute("PRAGMA busy_timeout=5000;")
+                    try:
+                        await conn.execute("PRAGMA journal_mode=WAL;")
+                        await conn.execute("PRAGMA synchronous=NORMAL;")
+                        await conn.execute("PRAGMA temp_store=MEMORY;")
+                        await conn.execute("PRAGMA foreign_keys=ON;")
+                        await conn.execute("PRAGMA busy_timeout=5000;")
+                    except Exception as e:
+                        logger.warning(f"Failed to apply PRAGMAs on pooled audit DB connection: {e}")
                     # Return rows as mappings consistently across this service
                     conn.row_factory = aiosqlite.Row
                     await conn.commit()
@@ -1696,9 +1917,30 @@ class UnifiedAuditService:
                         await conn.close()
                     except Exception:
                         pass
-                    logger.warning(f"Failed to apply PRAGMAs on pooled audit DB connection: {e}")
+                    logger.warning(f"Failed to initialize pooled audit DB connection: {e}")
                     raise
         return self._db_pool  # type: ignore[return-value]
+
+    @asynccontextmanager
+    async def _read_db(self) -> AsyncGenerator[aiosqlite.Connection, None]:
+        """Open a dedicated read connection to avoid pooled cursor contention."""
+        conn = await aiosqlite.connect(self.db_path)
+        try:
+            conn.row_factory = aiosqlite.Row
+            try:
+                await conn.execute("PRAGMA query_only=ON;")
+            except Exception:
+                pass
+            try:
+                await conn.execute("PRAGMA busy_timeout=5000;")
+            except Exception:
+                pass
+            yield conn
+        finally:
+            try:
+                await conn.close()
+            except Exception:
+                pass
 
     async def start_background_tasks(self):
         """Start background flush and cleanup tasks"""
@@ -1714,7 +1956,13 @@ class UnifiedAuditService:
         current_loop = asyncio.get_running_loop()
         owner_closed = False
         try:
-            owner_closed = bool(self._owner_loop and self._owner_loop.is_closed())
+            if self._owner_loop:
+                owner_closed = bool(self._owner_loop.is_closed())
+                if not owner_closed:
+                    try:
+                        owner_closed = not self._owner_loop.is_running()
+                    except Exception:
+                        owner_closed = False
         except Exception:
             owner_closed = False
         # Enforce same-loop shutdown only when the owner loop is still alive.
@@ -1802,6 +2050,12 @@ class UnifiedAuditService:
     def owner_loop(self) -> Optional[asyncio.AbstractEventLoop]:
         return self._owner_loop
 
+    def _touch(self) -> None:
+        try:
+            self._last_used_ts = time.monotonic()
+        except Exception:
+            pass
+
     async def _flush_loop(self):
         """Background task to periodically flush events"""
         while True:
@@ -1865,13 +2119,17 @@ class UnifiedAuditService:
         Returns:
             Event ID of the logged event
         """
+        self._touch()
         # Auto-determine category if not provided
         if category is None:
             category = self._determine_category(event_type)
 
+        # Normalize result string early for consistent semantics
+        result_norm = _normalize_result(result)
+
         # Auto-determine severity if not provided
         if severity is None:
-            severity = self._determine_severity(event_type, result)
+            severity = self._determine_severity(event_type, result_norm)
 
         # Create context if not provided
         if context is None:
@@ -1901,7 +2159,7 @@ class UnifiedAuditService:
             resource_type=resource_type,
             resource_id=resource_id,
             action=action,
-            result=result,
+            result=result_norm,
             error_message=error_message,
             duration_ms=duration_ms,
             tokens_used=tokens_used,
@@ -2187,7 +2445,15 @@ class UnifiedAuditService:
         })
 
         for event in events:
-            date = event.timestamp.date()
+            ts = event.timestamp
+            try:
+                ts = _normalize_timestamp(ts)
+            except Exception:
+                pass
+            if isinstance(ts, datetime):
+                date = ts.date()
+            else:
+                date = event.timestamp.date()
             if self._shared_mode:
                 tenant_id = self._resolve_event_tenant_id(event)
                 key = (tenant_id, date, event.category.value)
@@ -2205,7 +2471,7 @@ class UnifiedAuditService:
                 stats[key]["cost"] += event.estimated_cost
             if event.tokens_used:
                 stats[key]["tokens"] += event.tokens_used
-            if event.duration_ms:
+            if event.duration_ms is not None:
                 stats[key]["durations"].append(event.duration_ms)
 
         # Update database
@@ -2689,68 +2955,28 @@ class UnifiedAuditService:
         allow_cross_tenant: bool = False,
     ) -> List[Dict[str, Any]]:
         """Query audit events with filters"""
-        query = "SELECT * FROM audit_events WHERE 1=1"
-        params = []
+        self._touch()
+        base_query, params = self._build_events_query(
+            start_time=start_time,
+            end_time=end_time,
+            event_types=event_types,
+            categories=categories,
+            user_id=user_id,
+            request_id=request_id,
+            correlation_id=correlation_id,
+            ip_address=ip_address,
+            session_id=session_id,
+            endpoint=endpoint,
+            method=method,
+            min_risk_score=min_risk_score,
+            allow_cross_tenant=allow_cross_tenant,
+        )
 
-        start_iso = _normalize_datetime_filter(start_time)
-        if start_iso:
-            query += " AND timestamp >= ?"
-            params.append(start_iso)
-
-        end_iso = _normalize_datetime_filter(end_time)
-        if end_iso:
-            query += " AND timestamp <= ?"
-            params.append(end_iso)
-
-        if event_types:
-            placeholders = ",".join("?" * len(event_types))
-            query += f" AND event_type IN ({placeholders})"
-            params.extend([et.value for et in event_types])
-
-        if categories:
-            placeholders = ",".join("?" * len(categories))
-            query += f" AND category IN ({placeholders})"
-            params.extend([c.value for c in categories])
-
-        query, params = self._apply_user_filter(query, params, user_id, allow_cross_tenant)
-
-        if request_id:
-            query += " AND context_request_id = ?"
-            params.append(request_id)
-
-        if correlation_id:
-            query += " AND context_correlation_id = ?"
-            params.append(correlation_id)
-
-        if ip_address:
-            query += " AND context_ip_address = ?"
-            params.append(ip_address)
-        if session_id:
-            query += " AND context_session_id = ?"
-            params.append(session_id)
-        if endpoint:
-            query += " AND context_endpoint = ?"
-            params.append(endpoint)
-        if method:
-            query += " AND context_method = ?"
-            params.append(method)
-
-        if min_risk_score is not None:
-            query += " AND risk_score >= ?"
-            params.append(min_risk_score)
-
-        query += " ORDER BY timestamp DESC, event_id DESC LIMIT ? OFFSET ?"
+        query = "SELECT * " + base_query + " ORDER BY timestamp DESC, event_id DESC LIMIT ? OFFSET ?"
         params.extend([limit, offset])
 
         try:
-            if self._test_mode:
-                async with aiosqlite.connect(self.db_path) as db:
-                    db.row_factory = aiosqlite.Row
-                    async with db.execute(query, params) as cursor:
-                        rows = await cursor.fetchall()
-                        return [dict(row) for row in rows]
-            else:
-                db = await self._ensure_db_pool()
+            async with self._read_db() as db:
                 async with db.execute(query, params) as cursor:
                     rows = await cursor.fetchall()
                     return [dict(row) for row in rows]
@@ -2775,55 +3001,25 @@ class UnifiedAuditService:
         allow_cross_tenant: bool = False,
     ) -> int:
         """Count audit events with filters."""
-        query = "SELECT COUNT(*) as cnt FROM audit_events WHERE 1=1"
-        params: List[Any] = []
-        start_iso = _normalize_datetime_filter(start_time)
-        if start_iso:
-            query += " AND timestamp >= ?"
-            params.append(start_iso)
-        end_iso = _normalize_datetime_filter(end_time)
-        if end_iso:
-            query += " AND timestamp <= ?"
-            params.append(end_iso)
-        if event_types:
-            placeholders = ",".join("?" * len(event_types))
-            query += f" AND event_type IN ({placeholders})"
-            params.extend([et.value for et in event_types])
-        if categories:
-            placeholders = ",".join("?" * len(categories))
-            query += f" AND category IN ({placeholders})"
-            params.extend([c.value for c in categories])
-        query, params = self._apply_user_filter(query, params, user_id, allow_cross_tenant)
-        if request_id:
-            query += " AND context_request_id = ?"
-            params.append(request_id)
-        if correlation_id:
-            query += " AND context_correlation_id = ?"
-            params.append(correlation_id)
-        if ip_address:
-            query += " AND context_ip_address = ?"
-            params.append(ip_address)
-        if session_id:
-            query += " AND context_session_id = ?"
-            params.append(session_id)
-        if endpoint:
-            query += " AND context_endpoint = ?"
-            params.append(endpoint)
-        if method:
-            query += " AND context_method = ?"
-            params.append(method)
-        if min_risk_score is not None:
-            query += " AND risk_score >= ?"
-            params.append(min_risk_score)
+        self._touch()
+        base_query, params = self._build_events_query(
+            start_time=start_time,
+            end_time=end_time,
+            event_types=event_types,
+            categories=categories,
+            user_id=user_id,
+            request_id=request_id,
+            correlation_id=correlation_id,
+            ip_address=ip_address,
+            session_id=session_id,
+            endpoint=endpoint,
+            method=method,
+            min_risk_score=min_risk_score,
+            allow_cross_tenant=allow_cross_tenant,
+        )
+        query = "SELECT COUNT(*) as cnt " + base_query
         try:
-            if self._test_mode:
-                async with aiosqlite.connect(self.db_path) as db:
-                    db.row_factory = aiosqlite.Row
-                    async with db.execute(query, params) as cursor:
-                        row = await cursor.fetchone()
-                        return int(row[0]) if row else 0
-            else:
-                db = await self._ensure_db_pool()
+            async with self._read_db() as db:
                 async with db.execute(query, params) as cursor:
                     row = await cursor.fetchone()
                     return int(row[0]) if row else 0
@@ -2875,6 +3071,7 @@ class UnifiedAuditService:
             If file_path is None: the exported content as a string
             If file_path is provided: the number of rows written
         """
+        self._touch()
         fmt = (format or "json").lower()
         if fmt not in {"json", "csv", "jsonl"}:
             raise ValueError("format must be 'json', 'csv', or 'jsonl'")
@@ -2904,6 +3101,31 @@ class UnifiedAuditService:
             out["compliance_flags"] = _maybe_load_json(out.get("compliance_flags"))
             return out
 
+        async def _fetch_chunk(
+            *,
+            limit: int,
+            cursor_ts: Optional[str],
+            cursor_event_id: Optional[str],
+        ) -> List[Dict[str, Any]]:
+            return await self._query_events_keyset(
+                start_time=start_time,
+                end_time=end_time,
+                event_types=event_types,
+                categories=categories,
+                user_id=user_id,
+                request_id=request_id,
+                correlation_id=correlation_id,
+                ip_address=ip_address,
+                session_id=session_id,
+                endpoint=endpoint,
+                method=method,
+                min_risk_score=min_risk_score,
+                allow_cross_tenant=allow_cross_tenant,
+                limit=limit,
+                cursor_ts=cursor_ts,
+                cursor_event_id=cursor_event_id,
+            )
+
         # Streaming CSV export when writing to a file to reduce memory usage
         if fmt == "csv" and file_path is not None:
             p = Path(file_path)
@@ -2913,7 +3135,8 @@ class UnifiedAuditService:
             with p.open("w", encoding="utf-8", newline="") as f:
                 writer = csv.DictWriter(f, fieldnames=CSV_HEADERS, extrasaction="ignore")
                 writer.writeheader()
-                offset = 0
+                cursor_ts = None
+                cursor_event_id = None
                 while True:
                     if max_rows is not None:
                         remaining = max_rows - rows_written
@@ -2922,22 +3145,10 @@ class UnifiedAuditService:
                         limit = min(chunk_size, remaining)
                     else:
                         limit = chunk_size
-                    chunk = await self.query_events(
-                        start_time=start_time,
-                        end_time=end_time,
-                        event_types=event_types,
-                        categories=categories,
-                        user_id=user_id,
-                        request_id=request_id,
-                        correlation_id=correlation_id,
-                        ip_address=ip_address,
-                        session_id=session_id,
-                        endpoint=endpoint,
-                        method=method,
-                        min_risk_score=min_risk_score,
-                        allow_cross_tenant=allow_cross_tenant,
+                    chunk = await _fetch_chunk(
                         limit=limit,
-                        offset=offset,
+                        cursor_ts=cursor_ts,
+                        cursor_event_id=cursor_event_id,
                     )
                     if not chunk:
                         break
@@ -2946,34 +3157,28 @@ class UnifiedAuditService:
                             break
                         writer.writerow(r)
                         rows_written += 1
-                    if len(chunk) < limit or (max_rows is not None and rows_written >= max_rows):
+                    cursor_ts, cursor_event_id = self._cursor_from_row(chunk[-1])
+                    if (
+                        len(chunk) < limit
+                        or cursor_ts is None
+                        or cursor_event_id is None
+                        or (max_rows is not None and rows_written >= max_rows)
+                    ):
                         break
-                    offset += len(chunk)
             return rows_written
 
         # Streaming CSV directly to the caller (no prefetch) when requested
         if fmt == "csv" and file_path is None and stream:
             async def _csv_streamer():
                 yield ",".join(CSV_HEADERS) + "\n"
-                offset = 0
+                cursor_ts = None
+                cursor_event_id = None
                 written = 0
                 while True:
-                    rows = await self.query_events(
-                        start_time=start_time,
-                        end_time=end_time,
-                        event_types=event_types,
-                        categories=categories,
-                        user_id=user_id,
-                        request_id=request_id,
-                        correlation_id=correlation_id,
-                        ip_address=ip_address,
-                        session_id=session_id,
-                        endpoint=endpoint,
-                        method=method,
-                        min_risk_score=min_risk_score,
-                        allow_cross_tenant=allow_cross_tenant,
+                    rows = await _fetch_chunk(
                         limit=chunk_size,
-                        offset=offset,
+                        cursor_ts=cursor_ts,
+                        cursor_event_id=cursor_event_id,
                     )
                     if not rows:
                         break
@@ -2987,9 +3192,14 @@ class UnifiedAuditService:
                     chunk_str = buf.getvalue()
                     if chunk_str:
                         yield chunk_str
-                    if len(rows) < chunk_size or (max_rows is not None and written >= max_rows):
+                    cursor_ts, cursor_event_id = self._cursor_from_row(rows[-1])
+                    if (
+                        len(rows) < chunk_size
+                        or cursor_ts is None
+                        or cursor_event_id is None
+                        or (max_rows is not None and written >= max_rows)
+                    ):
                         break
-                    offset += chunk_size
                     await asyncio.sleep(0)
             return _csv_streamer()
 
@@ -3000,25 +3210,14 @@ class UnifiedAuditService:
                 if not is_jsonl:
                     yield "["
                 first = True
-                offset = 0
+                cursor_ts = None
+                cursor_event_id = None
                 written = 0
                 while True:
-                    rows = await self.query_events(
-                        start_time=start_time,
-                        end_time=end_time,
-                        event_types=event_types,
-                        categories=categories,
-                        user_id=user_id,
-                        request_id=request_id,
-                        correlation_id=correlation_id,
-                        ip_address=ip_address,
-                        session_id=session_id,
-                        endpoint=endpoint,
-                        method=method,
-                        min_risk_score=min_risk_score,
-                        allow_cross_tenant=allow_cross_tenant,
+                    rows = await _fetch_chunk(
                         limit=chunk_size,
-                        offset=offset,
+                        cursor_ts=cursor_ts,
+                        cursor_event_id=cursor_event_id,
                     )
                     if not rows:
                         break
@@ -3038,9 +3237,9 @@ class UnifiedAuditService:
                     await asyncio.sleep(0)
                     if max_rows is not None and written >= max_rows:
                         break
-                    if len(rows) < chunk_size:
+                    cursor_ts, cursor_event_id = self._cursor_from_row(rows[-1])
+                    if len(rows) < chunk_size or cursor_ts is None or cursor_event_id is None:
                         break
-                    offset += chunk_size
                 if not is_jsonl:
                     yield "]"
             return _json_streamer()
@@ -3049,28 +3248,17 @@ class UnifiedAuditService:
         if fmt == "json" and file_path is not None:
             p = Path(file_path)
             p.parent.mkdir(parents=True, exist_ok=True)
-            offset = 0
+            cursor_ts = None
+            cursor_event_id = None
             written = 0
             with p.open("w", encoding="utf-8") as f:
                 f.write("[")
                 first = True
                 while True:
-                    rows = await self.query_events(
-                        start_time=start_time,
-                        end_time=end_time,
-                        event_types=event_types,
-                        categories=categories,
-                        user_id=user_id,
-                        request_id=request_id,
-                        correlation_id=correlation_id,
-                        ip_address=ip_address,
-                        session_id=session_id,
-                        endpoint=endpoint,
-                        method=method,
-                        min_risk_score=min_risk_score,
-                        allow_cross_tenant=allow_cross_tenant,
+                    rows = await _fetch_chunk(
                         limit=chunk_size,
-                        offset=offset,
+                        cursor_ts=cursor_ts,
+                        cursor_event_id=cursor_event_id,
                     )
                     if not rows:
                         break
@@ -3082,9 +3270,14 @@ class UnifiedAuditService:
                         f.write(json.dumps(_deserialize_row(r), ensure_ascii=False))
                         written += 1
                         first = False
-                    if len(rows) < chunk_size or (max_rows is not None and written >= max_rows):
+                    cursor_ts, cursor_event_id = self._cursor_from_row(rows[-1])
+                    if (
+                        len(rows) < chunk_size
+                        or cursor_ts is None
+                        or cursor_event_id is None
+                        or (max_rows is not None and written >= max_rows)
+                    ):
                         break
-                    offset += chunk_size
                 f.write("]")
             return written
 
@@ -3092,26 +3285,15 @@ class UnifiedAuditService:
         if fmt == "jsonl" and file_path is not None:
             p = Path(file_path)
             p.parent.mkdir(parents=True, exist_ok=True)
-            offset = 0
+            cursor_ts = None
+            cursor_event_id = None
             written = 0
             with p.open("w", encoding="utf-8") as f:
                 while True:
-                    rows = await self.query_events(
-                        start_time=start_time,
-                        end_time=end_time,
-                        event_types=event_types,
-                        categories=categories,
-                        user_id=user_id,
-                        request_id=request_id,
-                        correlation_id=correlation_id,
-                        ip_address=ip_address,
-                        session_id=session_id,
-                        endpoint=endpoint,
-                        method=method,
-                        min_risk_score=min_risk_score,
-                        allow_cross_tenant=allow_cross_tenant,
+                    rows = await _fetch_chunk(
                         limit=chunk_size,
-                        offset=offset,
+                        cursor_ts=cursor_ts,
+                        cursor_event_id=cursor_event_id,
                     )
                     if not rows:
                         break
@@ -3120,32 +3302,26 @@ class UnifiedAuditService:
                             break
                         f.write(json.dumps(_deserialize_row(r), ensure_ascii=False) + "\n")
                         written += 1
-                    if len(rows) < chunk_size or (max_rows is not None and written >= max_rows):
+                    cursor_ts, cursor_event_id = self._cursor_from_row(rows[-1])
+                    if (
+                        len(rows) < chunk_size
+                        or cursor_ts is None
+                        or cursor_event_id is None
+                        or (max_rows is not None and written >= max_rows)
+                    ):
                         break
-                    offset += chunk_size
             return written
 
         # Otherwise, gather rows in chunks to return content in-memory
         all_rows: List[Dict[str, Any]] = []
-        offset = 0
+        cursor_ts = None
+        cursor_event_id = None
         written = 0
         while True:
-            rows = await self.query_events(
-                start_time=start_time,
-                end_time=end_time,
-                event_types=event_types,
-                categories=categories,
-                user_id=user_id,
-                request_id=request_id,
-                correlation_id=correlation_id,
-                ip_address=ip_address,
-                session_id=session_id,
-                endpoint=endpoint,
-                method=method,
-                min_risk_score=min_risk_score,
-                allow_cross_tenant=allow_cross_tenant,
+            rows = await _fetch_chunk(
                 limit=chunk_size,
-                offset=offset,
+                cursor_ts=cursor_ts,
+                cursor_event_id=cursor_event_id,
             )
             if not rows:
                 break
@@ -3159,9 +3335,9 @@ class UnifiedAuditService:
             else:
                 all_rows.extend(rows)
                 written += len(rows)
-            if len(rows) < chunk_size:
+            cursor_ts, cursor_event_id = self._cursor_from_row(rows[-1])
+            if len(rows) < chunk_size or cursor_ts is None or cursor_event_id is None:
                 break
-            offset += chunk_size
 
         if fmt == "json":
             # If no file path, return JSON content as a single string
@@ -3242,6 +3418,7 @@ class UnifiedAuditService:
 
     def _determine_severity(self, event_type: AuditEventType, result: str) -> AuditSeverity:
         """Auto-determine severity from event type and result"""
+        result_norm = _normalize_result(result)
         # Critical events
         if event_type in [
             AuditEventType.SECURITY_VIOLATION,
@@ -3249,9 +3426,9 @@ class UnifiedAuditService:
         ]:
             return AuditSeverity.CRITICAL
 
-        if result == "error":
+        if result_norm == "error":
             return AuditSeverity.ERROR
-        elif result == "failure":
+        elif result_norm == "failure":
             return AuditSeverity.WARNING
 
         # Warning events
@@ -3292,7 +3469,7 @@ class UnifiedAuditService:
         hours: int = 24,
         *,
         user_id: Optional[str] = None,
-        allow_cross_tenant: bool = True,
+        allow_cross_tenant: bool = False,
     ) -> Dict[str, Any]:
         """Aggregate recent security-related audit stats for health checks.
 
@@ -3399,14 +3576,7 @@ class UnifiedAuditService:
                 "total_events": total_events,
             }
 
-        if self._test_mode:
-            async with aiosqlite.connect(self.db_path) as db:
-                db.row_factory = aiosqlite.Row
-                return await _summarize(db)
-
-        db = await self._ensure_db_pool()
-        # Use the same DB lock as writers to avoid concurrent cursor usage on a single pooled connection.
-        async with self._db_lock:
+        async with self._read_db() as db:
             return await _summarize(db)
 
     def decode_row_fields(self, row: Dict[str, Any]) -> Dict[str, Any]:
@@ -3447,40 +3617,46 @@ async def audit_operation(
     start_time = time.perf_counter()
     event_id = None
 
+    # Log start event when specified explicitly (fail-fast if audit is mandatory).
+    if start_event_type is not None:
+        event_id = await service.log_event(
+            event_type=start_event_type,
+            context=context,
+            result="started",
+            **kwargs,
+        )
+
     try:
-        # Log start event when specified explicitly
-        if start_event_type is not None:
-            event_id = await service.log_event(
-                event_type=start_event_type,
+        yield event_id
+    except Exception as exc:
+        # Log failure without masking the original exception.
+        duration_ms = (time.perf_counter() - start_time) * 1000
+        try:
+            await service.log_event(
+                event_type=(completed_event_type or event_type),
                 context=context,
-                result="started",
+                result="failure",
+                error_message=str(exc),
+                duration_ms=duration_ms,
                 **kwargs,
             )
-
-        yield event_id
-
-        # Log success
-        duration_ms = (time.perf_counter() - start_time) * 1000
-        await service.log_event(
-            event_type=(completed_event_type or event_type),
-            context=context,
-            result="success",
-            duration_ms=duration_ms,
-            **kwargs
-        )
-
-    except Exception as e:
-        # Log failure
-        duration_ms = (time.perf_counter() - start_time) * 1000
-        await service.log_event(
-            event_type=(completed_event_type or event_type),
-            context=context,
-            result="failure",
-            error_message=str(e),
-            duration_ms=duration_ms,
-            **kwargs
-        )
+        except Exception as log_exc:
+            logger.error(
+                "Audit failure logging failed for {}: {}",
+                event_type.value if isinstance(event_type, AuditEventType) else event_type,
+                log_exc,
+            )
         raise
+
+    # Log success (propagate logging failures since audit is mandatory).
+    duration_ms = (time.perf_counter() - start_time) * 1000
+    await service.log_event(
+        event_type=(completed_event_type or event_type),
+        context=context,
+        result="success",
+        duration_ms=duration_ms,
+        **kwargs,
+    )
 
 
 # ============================================================================

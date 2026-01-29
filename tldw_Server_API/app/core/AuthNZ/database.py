@@ -35,6 +35,91 @@ from tldw_Server_API.app.core.AuthNZ.exceptions import (
 )
 
 
+#######################################################################################################################
+#
+# SQL Query Helpers
+
+
+def build_sqlite_in_clause(values: list) -> tuple[str, tuple]:
+    """
+    Build a parameterized IN clause for SQLite queries.
+
+    This helper function generates safe SQL placeholders for IN clauses,
+    avoiding f-string interpolation patterns that could introduce SQL injection
+    vulnerabilities if modified incorrectly.
+
+    SECURITY NOTE: The returned placeholders contain ONLY '?' characters joined
+    by commas. This function does NOT include any user-provided values in the
+    SQL string itself - all values are returned as parameters to be bound safely
+    by the database driver.
+
+    Args:
+        values: List of values to include in the IN clause
+
+    Returns:
+        Tuple of (placeholders_string, values_tuple) where:
+        - placeholders_string: e.g., "?,?,?" for 3 values
+        - values_tuple: tuple of the values for parameter binding
+
+    Raises:
+        ValueError: If values list is empty
+
+    Example:
+        >>> placeholders, params = build_sqlite_in_clause(['a', 'b', 'c'])
+        >>> query = f"SELECT * FROM table WHERE col IN ({placeholders})"
+        >>> # query = "SELECT * FROM table WHERE col IN (?,?,?)"
+        >>> # params = ('a', 'b', 'c')
+        >>> cursor.execute(query, params)
+    """
+    if not values:
+        raise ValueError("Cannot build IN clause for empty values list")
+    # Generate only '?' placeholders - never include actual values in SQL string
+    placeholders = ",".join("?" for _ in values)
+    return placeholders, tuple(values)
+
+
+def build_postgres_in_clause(values: list, start_param: int = 1) -> tuple[str, list]:
+    """
+    Build a parameterized IN clause for PostgreSQL queries.
+
+    This helper function generates safe SQL placeholders for IN clauses using
+    PostgreSQL's $N placeholder syntax.
+
+    SECURITY NOTE: The returned placeholders contain ONLY '$N' patterns.
+    This function does NOT include any user-provided values in the SQL string
+    itself - all values are returned as parameters to be bound safely by the
+    database driver.
+
+    Args:
+        values: List of values to include in the IN clause
+        start_param: Starting parameter number (default 1)
+
+    Returns:
+        Tuple of (placeholders_string, values_list) where:
+        - placeholders_string: e.g., "$1,$2,$3" for 3 values starting at 1
+        - values_list: list of the values for parameter binding
+
+    Raises:
+        ValueError: If values list is empty
+
+    Example:
+        >>> placeholders, params = build_postgres_in_clause(['a', 'b', 'c'])
+        >>> query = f"SELECT * FROM table WHERE col IN ({placeholders})"
+        >>> # query = "SELECT * FROM table WHERE col IN ($1,$2,$3)"
+        >>> # params = ['a', 'b', 'c']
+        >>> conn.fetch(query, *params)
+
+        >>> # With offset for additional parameters
+        >>> placeholders, params = build_postgres_in_clause(['x', 'y'], start_param=3)
+        >>> # placeholders = "$3,$4", params = ['x', 'y']
+    """
+    if not values:
+        raise ValueError("Cannot build IN clause for empty values list")
+    # Generate only '$N' placeholders - never include actual values in SQL string
+    placeholders = ",".join(f"${i}" for i in range(start_param, start_param + len(values)))
+    return placeholders, list(values)
+
+
 def _apply_single_user_fallback(url: str, auth_mode: Optional[str] = None) -> str:
     """Apply single-user non-sqlite DATABASE_URL fallback to default SQLite path.
 
@@ -349,6 +434,7 @@ class DatabasePool:
                 conn = await aiosqlite.connect(self.db_path, uri=self._sqlite_uri)
                 await conn.execute("PRAGMA busy_timeout=5000")
                 await conn.execute("PRAGMA foreign_keys = ON")
+                conn.row_factory = aiosqlite.Row
                 await conn.execute("BEGIN")
 
                 try:

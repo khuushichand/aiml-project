@@ -11,6 +11,7 @@
   - Egress/SSRF policy checks for all outbound HTTP requests.
 - Inputs/Outputs:
   - Scrape result: Dict including `url`, `title`, `author`, `date`, `content`, `extraction_successful`, and `error` on failure.
+  - Optional preflight metadata (when enabled): `preflight_analysis` with `analysis` results and `advice` (backend/method/notes).
   - Web search result: Normalized `web_search_results_dict` with `results`, totals, and timing, or `processing_error` on failure.
 - Related Endpoints:
   - Web search: `POST /api/v1/research/websearch` (delegates to this module) — tldw_Server_API/app/api/v1/endpoints/research.py:279
@@ -30,6 +31,7 @@
   - Article scraping (standalone): `scrape_article` — tldw_Server_API/app/core/Web_Scraping/Article_Extractor_Lib.py:335
   - Enhanced scraper: `EnhancedWebScraper` with `RateLimiter`, `CookieManager`, `ContentDeduplicator`, and `ScrapingJobQueue` — tldw_Server_API/app/core/Web_Scraping/enhanced_web_scraping.py:1, :580
   - Service integration: `WebScrapingService` — tldw_Server_API/app/services/enhanced_web_scraping_service.py:1
+  - Scraper analyzers (advisory preflight): robots/tls/js/captcha/behavioral/rate-limit/waf/fingerprint/integrity — tldw_Server_API/app/core/Web_Scraping/scraper_analyzers/runner.py:25
 - Provider Adapters (selected)
   - Google: `search_web_google` — tldw_Server_API/app/core/Web_Scraping/WebSearch_APIs.py:1542; `parse_google_results` — :1713
   - Brave: `search_web_brave` — :1199; `parse_brave_results` — :1269
@@ -37,6 +39,8 @@
   - Kagi: `search_web_kagi` — :1820; `parse_kagi_results` — :1861
   - Searx: `search_web_searx` — :1925; `parse_searx_results` — :2021
   - Tavily: `search_web_tavily` — :2085; `parse_tavily_results` — :2134
+  - Exa: `search_web_exa` — :2140; `parse_exa_results` — :2191
+  - Firecrawl: `search_web_firecrawl` — :2220; `parse_firecrawl_results` — :2272
 - Dependencies
   - HTTP: `aiohttp`, `httpx`
   - Parsing/Extraction: `BeautifulSoup`, `trafilatura`, `lxml`
@@ -46,6 +50,7 @@
   - Web search: Provider keys/URLs under `search_engines` in `Config_Files/config.txt` (e.g., `google_search_api_key`, `google_search_engine_id`, `brave_search_api_key`, `searx_search_api_url`, `tavily_search_api_key`).
   - Relevance/aggregation tuning in `Web-Scraping` config section (e.g., `relevance_llm_timeout_s`, `relevance_jitter_ms`).
   - Enhanced scraper (section `web_scraper`): `max_rps`, `max_rpm`, `max_rph`, `connector_limit`, `connector_limit_per_host`, `web_scraper_respect_robots`, `web_crawl_max_pages`, `web_crawl_include_external`, `web_crawl_keywords`, `web_crawl_enable_keyword_scorer`, `web_crawl_allowed_domains`, `web_crawl_blocked_domains`.
+  - Preflight analyzers (optional): `web_scraper_preflight_analyzers`, `web_scraper_preflight_timeout_s`, `web_scraper_preflight_scan_depth`, `web_scraper_preflight_find_all_waf`, `web_scraper_preflight_impersonate`, `web_scraper_preflight_include_results`.
 - Concurrency & Performance
   - Web search Phase 1 is executed in a thread pool to avoid blocking the event loop — tldw_Server_API/app/api/v1/endpoints/research.py:321
   - Enhanced scraper maintains a bounded async worker pool with rate limiting and per-host connection caps — tldw_Server_API/app/core/Web_Scraping/enhanced_web_scraping.py:420
@@ -58,6 +63,19 @@
 - Observability
   - Scrape metrics are emitted via Metrics Manager (`scrape_fetch_total`, `scrape_fetch_latency_seconds`, `scrape_content_length_bytes`, `scrape_playwright_fallback_total`, `scrape_blocked_by_robots_total`) with backend/outcome labels.
   - JS-required heuristics (noscript prompts, anti-bot interstitials, SPA shells, domain hints) trigger early Playwright fallback when content is thin.
+
+- Scraper analyzer output schema (advisory preflight)
+  - `analysis.results.robots`: `{status, crawl_delay, scraping_disallowed}`
+  - `analysis.results.tls`: `{status, details}`
+  - `analysis.results.js`: `{status, js_required, is_spa, content_difference_%}`
+  - `analysis.results.behavioral`: `{status, honeypot_detected, links_checked, invisible_links}`
+  - `analysis.results.captcha`: `{status, captcha_detected, captcha_type, trigger_condition}`
+  - `analysis.results.rate_limit`: `{status, results: {requests_sent, blocking_code, details}}`
+  - `analysis.results.waf`: `{status, wafs}`
+  - `analysis.results.fingerprint`: `{status, detected_services, canvas_fingerprinting_signal, behavioral_listeners_detected}`
+  - `analysis.results.integrity`: `{status, modified_functions}`
+  - `analysis.score`: `{score, label}`
+  - `analysis.recommendations`: `{tools, strategy}`
 
 ## 3. Developer-Related/Relevant Information for Contributors
 

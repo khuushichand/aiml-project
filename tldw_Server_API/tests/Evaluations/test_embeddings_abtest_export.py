@@ -8,7 +8,10 @@ from tldw_Server_API.app.core.Evaluations.embeddings_abtest_repository import (
 
 
 class _StubDb:
-    def list_abtest_results(self, test_id, limit, offset):
+    def get_abtest(self, test_id, created_by=None):
+        return {"test_id": test_id, "created_by": created_by or "tester"}
+
+    def list_abtest_results(self, test_id, limit, offset, created_by=None):
         return (
             [
                 {

@@ -1,0 +1,169 @@
+import { test, expect } from '@playwright/test'
+import path from 'path'
+import { launchWithExtension } from './utils/extension'
+import { MockTldwServer } from './utils/mock-server'
+import { grantHostPermission } from './utils/permissions'
+
+test.describe('Server-backed chats UX', () => {
+  test('loads server chats into the playground transcript with assistant labels', async () => {
+    const server = new MockTldwServer()
+
+    // Extend the mock server with minimal /chats and /messages handlers
+    ;(server as any).setChatFixtures?.({
+      chats: [
+        {
+          id: 'chat-1',
+          character_id: 'char-1',
+          title: 'Server E2E Chat',
+          created_at: new Date().toISOString(),
+          last_modified: new Date().toISOString(),
+          message_count: 2,
+          version: 1
+        }
+      ],
+      characters: [
+        {
+          id: 'char-1',
+          name: 'Test Character',
+          version: 1
+        }
+      ],
+      messagesByChat: {
+        'chat-1': [
+          {
+            id: 'm1',
+            role: 'user',
+            content: 'Hello from server history',
+            created_at: new Date().toISOString(),
+            version: 1
+          },
+          {
+            id: 'm2',
+            role: 'assistant',
+            content: 'Hi there – loaded from server.',
+            created_at: new Date().toISOString(),
+            version: 1
+          }
+        ]
+      }
+    })
+
+    const port = await server.start(0)
+    const serverBaseUrl = `http://127.0.0.1:${port}`
+
+    const extPath = path.resolve('build/chrome-mv3')
+    const { context, page, extensionId } = (await launchWithExtension(extPath, {
+      seedConfig: {
+        tldwConfig: {
+          serverUrl: serverBaseUrl,
+          authMode: 'single-user',
+          apiKey: 'THIS-IS-A-SECURE-KEY-123-FAKE-KEY'
+        }
+      }
+    })) as any
+
+    const optionsUrl = `chrome-extension://${extensionId}/options.html`
+
+    const granted = await grantHostPermission(context, extensionId, `${serverBaseUrl}/*`)
+    if (!granted) {
+      test.skip(true, 'Host permission not granted for mock server; allow it in chrome://extensions > tldw Assistant > Site access, then re-run')
+    }
+
+    await page.goto(optionsUrl)
+    await page.waitForLoadState('networkidle')
+
+    // Open the sidebar
+    await page.getByRole('button', { name: /Open sidebar/i }).click()
+
+    // Server chats section should appear
+    await expect(page.getByText(/Server chats/i)).toBeVisible()
+
+    // Click the first server chat
+    const chatButton = page.getByRole('button', { name: /Server E2E Chat/i }).first()
+    await chatButton.click()
+
+    // The playground should show user + assistant messages
+    await expect(page.getByText(/Hello from server history/i)).toBeVisible()
+    await expect(page.getByText(/Hi there – loaded from server\./i)).toBeVisible()
+
+    // Assistant label should reflect the character name
+    const assistantLabel = await page.getByText(/Test Character/).first()
+    await expect(assistantLabel).toBeVisible()
+
+    // Persistence helper text and header pill should make it clear that this
+    // chat is saved both locally and on the server.
+    await expect(
+      page.getByText(/Saved Locally\+Server/i)
+    ).toBeVisible()
+    await expect(
+      page.getByText(/Server-backed chat/i)
+    ).toBeVisible()
+
+    await context.close()
+    await server.stop()
+  })
+
+  test('offers a guided fix when default assistant character creation fails', async () => {
+    const server = new MockTldwServer({
+      '/api/v1/characters/': (_req, res) => {
+        res.writeHead(500, { 'content-type': 'application/json' })
+        res.end(JSON.stringify({ detail: 'character error' }))
+      }
+    })
+
+    const port = await server.start(0)
+    const serverBaseUrl = `http://127.0.0.1:${port}`
+
+    const extPath = path.resolve('build/chrome-mv3')
+    const { context, page, extensionId } = (await launchWithExtension(extPath, {
+      seedConfig: {
+        tldwConfig: {
+          serverUrl: serverBaseUrl,
+          authMode: 'single-user',
+          apiKey: 'THIS-IS-A-SECURE-KEY-123-FAKE-KEY'
+        }
+      }
+    })) as any
+
+    const optionsUrl = `chrome-extension://${extensionId}/options.html`
+
+    const granted = await grantHostPermission(
+      context,
+      extensionId,
+      `${serverBaseUrl}/*`
+    )
+    if (!granted) {
+      test.skip(true, 'Host permission not granted for mock server')
+    }
+
+    await page.goto(optionsUrl + '#/playground')
+    await page.waitForLoadState('networkidle')
+
+    // Ensure we have at least one message so a title can be inferred.
+    const textarea = page.getByPlaceholder(/Type a message/i)
+    await textarea.fill('Test server-backed chat')
+
+    // Trigger server-backed save; mock server will fail character creation.
+    const saveToServerButton = page.getByRole('button', {
+      name: /Also save this chat to server/i
+    })
+    await saveToServerButton.click()
+
+    // Guided notification should offer a CTA to open Characters.
+    const charactersCta = page.getByRole('button', {
+      name: /Open Characters workspace/i
+    })
+    await expect(charactersCta).toBeVisible()
+
+    await charactersCta.click()
+
+    // Characters workspace should be visible with the helper hint.
+    await page.waitForURL(/#\/characters/)
+    await expect(
+      page.getByText(/Create a default assistant character/i)
+    ).toBeVisible()
+
+    await context.close()
+    await server.stop()
+  })
+})

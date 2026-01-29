@@ -69,6 +69,14 @@ then load them.
 mkdir -p ~/Library/LaunchAgents
 cp Docs/Deployment/launchd/com.tldw.worker.chatbooks.plist ~/Library/LaunchAgents/
 
+# Ensure launchd log directory exists and is writable by the service user.
+# For LaunchAgents, set SERVICE_USER/GROUP to your login user.
+SERVICE_USER="${SERVICE_USER:-tldw}"
+SERVICE_GROUP="${SERVICE_GROUP:-tldw}"
+sudo mkdir -p /opt/tldw_server/logs/launchd
+sudo chown "$SERVICE_USER":"$SERVICE_GROUP" /opt/tldw_server/logs/launchd
+sudo chmod 0755 /opt/tldw_server/logs/launchd
+
 # Modern macOS (10.11+)
 launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.tldw.worker.chatbooks.plist
 

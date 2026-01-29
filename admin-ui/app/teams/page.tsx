@@ -1,6 +1,6 @@
 'use client';
 
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useState, Suspense } from 'react';
 import { useForm, FormProvider } from 'react-hook-form';
 import { z } from 'zod';
 import { zodResolver } from '@hookform/resolvers/zod';
@@ -28,7 +28,7 @@ const teamSchema = z.object({
 
 type TeamFormData = z.infer<typeof teamSchema>;
 
-export default function TeamsPage() {
+function TeamsPageContent() {
   const [teams, setTeams] = useState<Team[]>([]);
   const [organizations, setOrganizations] = useState<Organization[]>([]);
   const [selectedOrgId, setSelectedOrgId] = useUrlState<string>('org');
@@ -318,5 +318,26 @@ export default function TeamsPage() {
           </div>
       </ResponsiveLayout>
     </PermissionGuard>
+  );
+}
+
+// Wrap with Suspense for useSearchParams
+export default function TeamsPage() {
+  return (
+    <Suspense fallback={
+      <PermissionGuard variant="route" requireAuth role="admin">
+        <ResponsiveLayout>
+          <div className="p-4 lg:p-8">
+            <div className="mb-8">
+              <div className="h-8 w-32 bg-muted rounded animate-pulse mb-2" />
+              <div className="h-4 w-64 bg-muted rounded animate-pulse" />
+            </div>
+            <div className="h-96 bg-muted rounded animate-pulse" />
+          </div>
+        </ResponsiveLayout>
+      </PermissionGuard>
+    }>
+      <TeamsPageContent />
+    </Suspense>
   );
 }

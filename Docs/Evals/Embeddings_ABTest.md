@@ -112,6 +112,7 @@ Idempotency:
 ## Storage & Audit
 - Per-arm collections stored under user namespace: `user_{user_id}_abtest_{test_id}_arm_{i}`
 - Collection metadata includes `embedding_model`, `embedding_provider`, `embedding_dim`, and when applicable, `hf_revision` or `onnx_sha`.
+- When `reuse_existing` is enabled, collections may be reused across tests created by the same actor; reused arms record `shared_collection=true` with `shared_origin_test_id` in metadata. Cleanup skips shared collections to avoid deleting active reuse targets.
 
 ## Exports
 - CSV export includes: `result_id, arm_id, query_id, ranked_ids, latency_ms, metrics_json`.

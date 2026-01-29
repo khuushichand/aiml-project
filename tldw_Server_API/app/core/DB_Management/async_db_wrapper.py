@@ -10,7 +10,7 @@ from loguru import logger
 
 from tldw_Server_API.app.core.Utils.executor_registry import register_executor
 
-from tldw_Server_API.app.core.DB_Management.ChaChaNotes_DB import CharactersRAGDB
+from tldw_Server_API.app.core.DB_Management.ChaChaNotes_DB import CharactersRAGDB, CharactersRAGDBError
 
 #######################################################################################################################
 #
@@ -193,12 +193,10 @@ class AsyncDatabaseWrapper:
             results = []
             with self.db.transaction():
                 for msg in messages:
-                    try:
-                        msg_id = self.db.add_message(msg)
-                        results.append(msg_id)
-                    except Exception as e:
-                        logger.error(f"Failed to insert message in batch: {e}")
-                        results.append(None)
+                    msg_id = self.db.add_message(msg)
+                    if not msg_id:
+                        raise CharactersRAGDBError("Failed to insert message in batch")
+                    results.append(msg_id)
             return results
 
         loop = asyncio.get_running_loop()

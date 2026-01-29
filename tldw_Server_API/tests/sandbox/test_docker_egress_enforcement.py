@@ -11,6 +11,7 @@ from tldw_Server_API.app.core.Sandbox.models import RunSpec, RuntimeType
 
 
 @pytest.mark.unit
+@pytest.mark.sandbox_real_docker
 def test_docker_runner_uses_network_none_when_allowlist_enforced_non_granular(monkeypatch):
      # Make docker appear available and ensure execution path is taken
     monkeypatch.setenv("TLDW_SANDBOX_DOCKER_AVAILABLE", "1")
@@ -54,6 +55,7 @@ def test_docker_runner_uses_network_none_when_allowlist_enforced_non_granular(mo
 
 
 @pytest.mark.unit
+@pytest.mark.sandbox_real_docker
 def test_docker_runner_creates_dedicated_network_when_granular_enabled(monkeypatch):
     monkeypatch.setenv("TLDW_SANDBOX_DOCKER_AVAILABLE", "1")
     spec = RunSpec(

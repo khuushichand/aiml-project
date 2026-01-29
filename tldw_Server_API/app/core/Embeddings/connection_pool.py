@@ -53,6 +53,8 @@ class ConnectionPool:
             'total_time': 0,
             'active_connections': 0
         }
+        self._semaphore: Optional[asyncio.BoundedSemaphore] = None
+        self._semaphore_loop: Optional[asyncio.AbstractEventLoop] = None
         self._breaker = CircuitBreaker(
             name=f"{self.provider}.api_request",
             failure_threshold=5,
@@ -76,6 +78,20 @@ class ConnectionPool:
 
         This class relies on http_client for actual connection reuse.
         """
+        try:
+            loop = asyncio.get_running_loop()
+        except RuntimeError:
+            loop = None
+
+        if self._semaphore is None or (loop and self._semaphore_loop is not loop):
+            # Bind semaphore to the current loop to avoid cross-loop issues.
+            self._semaphore = asyncio.BoundedSemaphore(self.max_connections)
+            self._semaphore_loop = loop
+
+        semaphore = self._semaphore
+        if semaphore is not None:
+            await semaphore.acquire()
+
         with self._lock:
             self._usage_stats['active_connections'] += 1
 
@@ -84,6 +100,11 @@ class ConnectionPool:
         finally:
             with self._lock:
                 self._usage_stats['active_connections'] -= 1
+            if semaphore is not None:
+                try:
+                    semaphore.release()
+                except Exception:
+                    pass
 
     async def request(
         self,

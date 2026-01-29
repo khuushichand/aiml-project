@@ -161,7 +161,7 @@ Quick commands:
   - `tldw_Server_API/app/main.py:1040` – ChaChaNotes warm-up scheduling for single-user default user.
   - `tldw_Server_API/app/main.py:1872` – startup banner + “show API key” behavior.
   - `tldw_Server_API/app/main.py:3031` – legacy lifespan startup banner helper.
-  - `tldw_Server_API/app/main.py:3355` – `/webui/config.json` mode hint + API key injection (non-prod).
+  - `tldw_Server_API/app/main.py`: startup banners and UX hints for auth mode (quickstart endpoint).
 
 - **Auth/guardrail**
   - (none) — remaining uses are coordination/UX or compatibility-only.

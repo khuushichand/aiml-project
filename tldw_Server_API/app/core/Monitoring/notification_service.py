@@ -38,6 +38,21 @@ from tldw_Server_API.app.core.config import load_and_log_configs
 _SEVERITY_ORDER = {"info": 0, "warning": 1, "critical": 2}
 
 
+def _find_project_root(start: Path) -> Path | None:
+    """Best-effort search for the repository root starting from a file/dir path."""
+    start_dir = start if start.is_dir() else start.parent
+    for candidate in (start_dir, *start_dir.parents):
+        if (candidate / ".git").exists():
+            return candidate
+        if (candidate / "pyproject.toml").is_file() and (candidate / "tldw_Server_API").is_dir():
+            return candidate
+        if (candidate / "AGENTS.md").is_file() and (candidate / "tldw_Server_API").is_dir():
+            return candidate
+        if candidate.name != "tldw_Server_API" and (candidate / "tldw_Server_API").is_dir():
+            return candidate
+    return None
+
+
 class NotificationService:
     def __init__(self) -> None:
         cfg = load_and_log_configs() or {}
@@ -79,13 +94,17 @@ class NotificationService:
             if not fp.is_absolute():
                 try:
                     from tldw_Server_API.app.core.Utils.Utils import get_project_root as _gpr
-                    fp = Path(_gpr()) / fp
+                    root = Path(_gpr()).resolve()
+                    fp = root / fp
                 except Exception:
-                    # Last resort: anchor relative to package root to avoid CWD effects
-                    fp = Path(__file__).resolve().parents[5] / fp
+                    root = _find_project_root(Path(__file__).resolve())
+                    if root is None:
+                        root = Path(__file__).resolve().parent
+                    fp = root / fp
             return str(fp)
         except Exception:
-            return str(Path(__file__).resolve().parents[5] / str(raw_file))
+            fallback_root = _find_project_root(Path(__file__).resolve()) or Path(__file__).resolve().parent
+            return str(fallback_root / str(raw_file))
 
     @staticmethod
     def _parse_email_recipients(raw: Optional[str]) -> list[str]:

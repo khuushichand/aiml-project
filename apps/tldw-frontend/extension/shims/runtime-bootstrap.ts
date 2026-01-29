@@ -1,0 +1,166 @@
+import { browser } from "./wxt-browser"
+import { createSafeStorage } from "@/utils/safe-storage"
+import type { TldwConfig } from "@/services/tldw/TldwApiClient"
+import { FEATURE_FLAGS } from "@/hooks/useFeatureFlags"
+import {
+  DEFAULT_HEADER_SHORTCUT_SELECTION,
+  DEFAULT_SIDEBAR_SHORTCUT_SELECTION,
+  HEADER_SHORTCUTS_EXPANDED_SETTING,
+  HEADER_SHORTCUT_SELECTION_SETTING,
+  SIDEBAR_ACTIVE_TAB_SETTING,
+  SIDEBAR_SHORTCUTS_COLLAPSED_SETTING,
+  SIDEBAR_SHORTCUT_SELECTION_SETTING,
+  THEME_SETTING,
+  UI_MODE_SETTING
+} from "@/services/settings/ui-settings"
+
+if (typeof globalThis !== "undefined") {
+  const globalScope = globalThis as typeof globalThis & {
+    browser?: typeof browser
+    chrome?: typeof browser
+  }
+  if (!globalScope.browser) {
+    globalScope.browser = browser
+  }
+  if (!globalScope.chrome) {
+    globalScope.chrome = browser
+  }
+}
+
+const normalizeBaseUrl = (value?: string | null): string | null => {
+  const raw = (value || "").trim()
+  if (!raw) return null
+  return raw.replace(/\/$/, "")
+}
+
+const seedTldwConfigFromEnv = async (): Promise<void> => {
+  if (typeof window === "undefined") return
+
+  const serverUrl = normalizeBaseUrl(process.env.NEXT_PUBLIC_API_URL)
+  const apiKey = (process.env.NEXT_PUBLIC_X_API_KEY || "").trim() || null
+  const apiBearer = (process.env.NEXT_PUBLIC_API_BEARER || "").trim() || null
+
+  if (!serverUrl && !apiKey && !apiBearer) return
+
+  try {
+    const storage = createSafeStorage()
+    const existing = (await storage.get<TldwConfig>("tldwConfig").catch(() => null)) || null
+
+    const next: TldwConfig = {
+      ...(existing || {}),
+      authMode: existing?.authMode || "single-user",
+      serverUrl: existing?.serverUrl || ""
+    }
+
+    let changed = false
+
+    if (!next.serverUrl && serverUrl) {
+      next.serverUrl = serverUrl
+      changed = true
+    }
+
+    if (!next.apiKey && !next.accessToken) {
+      if (apiKey) {
+        next.authMode = "single-user"
+        next.apiKey = apiKey
+        changed = true
+      } else if (apiBearer) {
+        next.authMode = "multi-user"
+        next.accessToken = apiBearer
+        changed = true
+      }
+    }
+
+    if (changed) {
+      await storage.set("tldwConfig", next)
+      if (next.serverUrl) {
+        await storage.set("tldwServerUrl", next.serverUrl)
+      }
+    }
+  } catch {
+    // Best-effort only; ignore storage failures in web contexts.
+  }
+}
+
+void seedTldwConfigFromEnv()
+
+const WEB_DEFAULTS_MIRRORED_KEY = "tldw:web-defaults:mirrored"
+
+const isWebRuntime = () => {
+  if (typeof window === "undefined") return false
+  const protocol = window.location.protocol
+  return protocol !== "chrome-extension:" && protocol !== "moz-extension:"
+}
+
+const writeLocalStorageValue = (key: string, value: unknown) => {
+  if (typeof window === "undefined") return
+  try {
+    const serialized =
+      typeof value === "string" ? value : JSON.stringify(value)
+    window.localStorage.setItem(key, serialized)
+  } catch {
+    // ignore storage failures
+  }
+}
+
+const getLocalStorageValue = (key: string) => {
+  if (typeof window === "undefined") return null
+  try {
+    return window.localStorage.getItem(key)
+  } catch {
+    return null
+  }
+}
+
+const setDefault = (key: string, value: unknown, force = false) => {
+  const existing = getLocalStorageValue(key)
+  if (!force && existing !== null) return
+  writeLocalStorageValue(key, value)
+}
+
+const mirrorWebDefaultsFromExtension = () => {
+  if (!isWebRuntime()) return
+  const force = getLocalStorageValue(WEB_DEFAULTS_MIRRORED_KEY) !== "true"
+
+  // Theme + UI mode defaults
+  setDefault(THEME_SETTING.key, THEME_SETTING.defaultValue, force)
+  setDefault(UI_MODE_SETTING.key, UI_MODE_SETTING.defaultValue, force)
+  setDefault("tldw-ui-mode", "casual", force)
+
+  // Feature flags (default true, compare mode default false)
+  Object.values(FEATURE_FLAGS).forEach((flag) => {
+    const isCompareMode = flag === FEATURE_FLAGS.COMPARE_MODE
+    setDefault(flag, isCompareMode ? false : true, force)
+  })
+
+  // Sidebar + header shortcuts defaults
+  setDefault(
+    SIDEBAR_ACTIVE_TAB_SETTING.key,
+    SIDEBAR_ACTIVE_TAB_SETTING.defaultValue,
+    force
+  )
+  setDefault(
+    SIDEBAR_SHORTCUTS_COLLAPSED_SETTING.key,
+    SIDEBAR_SHORTCUTS_COLLAPSED_SETTING.defaultValue,
+    force
+  )
+  setDefault(
+    SIDEBAR_SHORTCUT_SELECTION_SETTING.key,
+    DEFAULT_SIDEBAR_SHORTCUT_SELECTION,
+    force
+  )
+  setDefault(
+    HEADER_SHORTCUT_SELECTION_SETTING.key,
+    DEFAULT_HEADER_SHORTCUT_SELECTION,
+    force
+  )
+  setDefault(
+    HEADER_SHORTCUTS_EXPANDED_SETTING.key,
+    HEADER_SHORTCUTS_EXPANDED_SETTING.defaultValue,
+    force
+  )
+
+  writeLocalStorageValue(WEB_DEFAULTS_MIRRORED_KEY, "true")
+}
+
+mirrorWebDefaultsFromExtension()

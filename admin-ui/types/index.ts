@@ -58,6 +58,13 @@ export interface RegistrationSettings {
   self_registration_allowed?: boolean;
 }
 
+export interface WatchlistSettings {
+  watchlists_enabled?: boolean;
+  default_threshold?: number;
+  notification_email?: string;
+  alert_on_breach?: boolean;
+}
+
 export interface OrgMember {
   org_id: number;
   user_id: number;
@@ -172,11 +179,83 @@ export interface DashboardStats {
   storageUsedMb: number;
 }
 
+export type SecurityHealthData = {
+  risk_score?: number;
+  recent_security_events?: number;
+  failed_logins_24h?: number;
+  suspicious_activity?: number;
+  mfa_adoption_rate?: number;
+  active_sessions?: number;
+  api_keys_active?: number;
+  last_security_scan?: string;
+};
+
 export interface AuthContextType {
   user: User | null;
   login: (username: string, password: string) => Promise<boolean>;
   logout: () => void;
   isAuthenticated: boolean;
+}
+
+// Voice Commands
+export type VoiceActionType = 'mcp_tool' | 'workflow' | 'custom' | 'llm_chat';
+
+export interface VoiceCommand {
+  id: string;
+  user_id: number;
+  name: string;
+  phrases: string[];
+  action_type: VoiceActionType;
+  action_config: Record<string, unknown>;
+  priority: number;
+  enabled: boolean;
+  requires_confirmation: boolean;
+  description?: string;
+  created_at?: string;
+  updated_at?: string;
+}
+
+export interface VoiceSession {
+  session_id: string;
+  user_id: number;
+  state: string;
+  created_at: string;
+  last_activity: string;
+  turn_count: number;
+}
+
+export interface VoiceCommandUsage {
+  command_id: string;
+  command_name: string;
+  total_invocations: number;
+  success_count: number;
+  error_count: number;
+  avg_response_time_ms: number;
+  last_used?: string;
+}
+
+export interface VoiceAnalytics {
+  date: string;
+  total_commands: number;
+  unique_users: number;
+  success_rate: number;
+  avg_response_time_ms: number;
+  top_commands: Array<{
+    command_id: string;
+    command_name: string;
+    count: number;
+  }>;
+}
+
+export interface VoiceAnalyticsSummary {
+  total_commands_processed: number;
+  active_sessions: number;
+  total_voice_commands: number;
+  enabled_commands: number;
+  success_rate: number;
+  avg_response_time_ms: number;
+  top_commands: VoiceCommandUsage[];
+  usage_by_day: VoiceAnalytics[];
 }
 
 export type { IncidentEvent, IncidentItem, IncidentsResponse } from './incidents';

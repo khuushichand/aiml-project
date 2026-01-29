@@ -414,7 +414,7 @@ def auth_headers():
     """Authentication headers for API requests."""
     api_key = os.getenv("SINGLE_USER_API_KEY", "test-api-key-12345")
     return {
-        "Token": f"Bearer {api_key}",
+        "Authorization": f"Bearer {api_key}",
         "X-API-KEY": api_key,
         "Content-Type": "application/json"
     }

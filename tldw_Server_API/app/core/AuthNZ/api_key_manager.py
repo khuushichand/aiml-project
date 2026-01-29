@@ -6,6 +6,9 @@ import hashlib
 import hmac
 import json
 import asyncio
+import ipaddress
+import threading
+from weakref import WeakKeyDictionary
 from datetime import datetime, timedelta, timezone
 from typing import Optional, Dict, Any, List, Set, Union, TYPE_CHECKING
 from enum import Enum
@@ -145,6 +148,70 @@ def has_scope(key_scopes: Set[str], required_scope: str) -> bool:
 
     # Explicit scope matching
     return required_scope.lower() in key_scopes
+
+
+_READ_METHODS = frozenset({"GET", "HEAD", "OPTIONS"})
+_WRITE_ENDPOINT_HINTS = (
+    "chat.",
+    "rag.",
+    "embeddings",
+    "audio.",
+    "evaluations.",
+    "research.",
+    "media.",
+    "mcp.",
+)
+
+
+def _serialize_scope_value(scope: Optional[Union[str, List[str]]]) -> Optional[str]:
+    """Serialize an optional scope value for storage."""
+    if scope is None:
+        return None
+    if isinstance(scope, (list, tuple, set)):
+        values = [
+            str(s).strip().lower()
+            for s in scope
+            if s is not None and str(s).strip()
+        ]
+        return json.dumps(values) if values else None
+    scope_str = str(scope).strip().lower()
+    return scope_str or None
+
+
+def _infer_virtual_key_scope(
+    *,
+    scope: Optional[Union[str, List[str]]],
+    allowed_methods: Optional[List[str]],
+    allowed_endpoints: Optional[List[str]],
+) -> str:
+    """
+    Infer a safe default scope for virtual keys.
+
+    - Explicit `scope` always wins.
+    - Non-read HTTP methods imply write scope.
+    - Known write-style endpoint hints imply write scope.
+    - Otherwise default to read scope to preserve legacy behavior.
+    """
+    explicit = _serialize_scope_value(scope)
+    if explicit:
+        return explicit
+
+    if allowed_methods:
+        methods_upper = [str(m).strip().upper() for m in allowed_methods if str(m).strip()]
+        if any(m not in _READ_METHODS for m in methods_upper):
+            return "write"
+        return "read"
+
+    if allowed_endpoints:
+        for endpoint_id in allowed_endpoints:
+            ep = str(endpoint_id or "").strip().lower()
+            if not ep:
+                continue
+            if any(ep.startswith(hint) for hint in _WRITE_ENDPOINT_HINTS):
+                return "write"
+        return "read"
+
+    return "read"
 
 
 #######################################################################################################################
@@ -508,6 +575,7 @@ class APIKeyManager:
         expires_in_days: Optional[int] = 30,
         org_id: Optional[int] = None,
         team_id: Optional[int] = None,
+        scope: Optional[Union[str, List[str]]] = None,
         allowed_endpoints: Optional[List[str]] = None,
         allowed_providers: Optional[List[str]] = None,
         allowed_models: Optional[List[str]] = None,
@@ -532,6 +600,12 @@ class APIKeyManager:
         if expires_in_days is not None:
             expires_at = datetime.now(timezone.utc) + timedelta(days=expires_in_days)
 
+        effective_scope = _infer_virtual_key_scope(
+            scope=scope,
+            allowed_methods=allowed_methods,
+            allowed_endpoints=allowed_endpoints,
+        )
+
         try:
             repo = self._get_repo()
             key_id = await repo.create_virtual_key_row(
@@ -544,6 +618,7 @@ class APIKeyManager:
                 expires_at=expires_at,
                 org_id=org_id,
                 team_id=team_id,
+                scope=effective_scope,
                 allowed_endpoints=allowed_endpoints,
                 allowed_providers=allowed_providers,
                 allowed_models=allowed_models,
@@ -565,7 +640,8 @@ class APIKeyManager:
                     "day_usd": budget_day_usd,
                     "month_usd": budget_month_usd,
                 },
-                "allowed_endpoints": allowed_endpoints or []
+                "allowed_endpoints": allowed_endpoints or [],
+                "scope": effective_scope,
             })
 
             return {
@@ -573,7 +649,7 @@ class APIKeyManager:
                 "key": full_key,
                 "key_prefix": key_prefix,
                 "name": name,
-                "scope": 'read',
+                "scope": effective_scope,
                 "expires_at": expires_at.isoformat() if expires_at else None,
                 "created_at": datetime.now(timezone.utc).isoformat(),
                 "message": "Store this key securely - it will not be shown again"
@@ -589,7 +665,8 @@ class APIKeyManager:
         self,
         api_key: str,
         required_scope: Optional[str] = None,
-        ip_address: Optional[str] = None
+        ip_address: Optional[str] = None,
+        record_usage: bool = True,
     ) -> Optional[Dict[str, Any]]:
         """
         Validate an API key and return its information
@@ -598,6 +675,7 @@ class APIKeyManager:
             api_key: The API key to validate
             required_scope: Required permission scope
             ip_address: Client IP address for validation and logging
+            record_usage: Whether to record usage/audit side effects
 
         Returns:
             Key information if valid, None if invalid
@@ -649,7 +727,7 @@ class APIKeyManager:
                         raise TypeError("API key allowlist must be stored as JSON array")
                     if not isinstance(allowed_ips_raw, list):
                         raise TypeError("API key allowlist must be stored as JSON array")
-                    allowed_ips = {str(ip).strip() for ip in allowed_ips_raw if str(ip).strip()}
+                    allowed_ips = [str(ip).strip() for ip in allowed_ips_raw if str(ip).strip()]
                 except (TypeError, ValueError, json.JSONDecodeError) as decode_error:
                     if self.settings.PII_REDACT_LOGS:
                         logger.error("API key allowlist could not be decoded; denying access (details redacted)")
@@ -668,7 +746,38 @@ class APIKeyManager:
                                 f"API key {key_info.get('id')} requires client IP but none was supplied; denying access"
                             )
                         return None
-                    if normalized_ip not in allowed_ips:
+                    try:
+                        ip_obj = ipaddress.ip_address(normalized_ip)
+                    except ValueError:
+                        if self.settings.PII_REDACT_LOGS:
+                            logger.warning("API key client IP is invalid; denying access (details redacted)")
+                        else:
+                            logger.warning(
+                                f"API key {key_info.get('id')} client IP is invalid: {normalized_ip}"
+                            )
+                        return None
+                    matched = False
+                    for entry in allowed_ips:
+                        token = entry.strip()
+                        if not token:
+                            continue
+                        try:
+                            if "/" in token:
+                                if ip_obj in ipaddress.ip_network(token, strict=False):
+                                    matched = True
+                                    break
+                            else:
+                                if ip_obj == ipaddress.ip_address(token):
+                                    matched = True
+                                    break
+                        except ValueError as parse_exc:
+                            logger.debug(
+                                "API key allowlist entry invalid; ignoring (entry={}, error={})",
+                                token,
+                                parse_exc,
+                            )
+                            continue
+                    if not matched:
                         if self.settings.PII_REDACT_LOGS:
                             logger.warning("API key used from unauthorized IP; denying access (details redacted)")
                         else:
@@ -698,16 +807,17 @@ class APIKeyManager:
                 if not self._has_scope(key_scope, required_scope):
                     return None
 
-            # Update usage statistics
-            await self._update_usage(key_info['id'], ip_address)
+            if record_usage:
+                # Update usage statistics
+                await self._update_usage(key_info['id'], ip_address)
 
-            # Optional lightweight audit of usage
-            try:
-                if self.settings.API_KEY_AUDIT_LOG_USAGE:
-                    await self._log_action(key_info['id'], "used", key_info.get('user_id'))
-            except Exception as _e:
-                # Do not fail request on audit write
-                logger.debug(f"API key usage audit skipped/failed: {_e}")
+                # Optional lightweight audit of usage
+                try:
+                    if self.settings.API_KEY_AUDIT_LOG_USAGE:
+                        await self._log_action(key_info['id'], "used", key_info.get('user_id'))
+                except Exception as _e:
+                    # Do not fail request on audit write
+                    logger.debug(f"API key usage audit skipped/failed: {_e}")
 
             return key_info
 
@@ -993,7 +1103,27 @@ class APIKeyManager:
 
 # Global instance
 _api_key_manager: Optional[APIKeyManager] = None
-_api_key_manager_lock = asyncio.Lock()
+_api_key_manager_lock_guard = threading.Lock()
+_api_key_manager_locks: "WeakKeyDictionary[asyncio.AbstractEventLoop, asyncio.Lock]" = WeakKeyDictionary()
+
+
+def _get_api_key_manager_lock() -> asyncio.Lock:
+    """Return a per-event-loop asyncio.Lock to avoid cross-loop binding issues."""
+    try:
+        loop = asyncio.get_running_loop()
+    except RuntimeError:
+        try:
+            loop = asyncio.get_event_loop()
+        except RuntimeError:
+            loop = None
+    if loop is None:
+        return asyncio.Lock()
+    with _api_key_manager_lock_guard:
+        lock = _api_key_manager_locks.get(loop)
+        if lock is None:
+            lock = asyncio.Lock()
+            _api_key_manager_locks[loop] = lock
+        return lock
 
 async def get_api_key_manager() -> APIKeyManager:
     """Get APIKeyManager singleton instance"""
@@ -1006,7 +1136,7 @@ async def get_api_key_manager() -> APIKeyManager:
         logger.debug("Failed to compute HMAC fingerprint; will recreate manager: {}", exc)
         current_fp = ""
 
-    async with _api_key_manager_lock:
+    async with _get_api_key_manager_lock():
         if _api_key_manager is not None:
             try:
                 if getattr(_api_key_manager, "_hmac_key_fingerprint", None) != current_fp:
@@ -1025,7 +1155,7 @@ async def get_api_key_manager() -> APIKeyManager:
 async def reset_api_key_manager() -> None:
     """Reset the APIKeyManager singleton (mainly for testing)."""
     global _api_key_manager
-    async with _api_key_manager_lock:
+    async with _get_api_key_manager_lock():
         _api_key_manager = None
 
 #

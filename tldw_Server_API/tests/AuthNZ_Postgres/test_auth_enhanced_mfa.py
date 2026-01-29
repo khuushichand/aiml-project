@@ -46,6 +46,26 @@ async def test_mfa_setup_and_verify_roundtrip_pg(monkeypatch, setup_test_databas
         async def send_mfa_enabled_email(self, to_email: str, username: str, backup_codes, ip_address: str):
             return True
 
+    class _StubSessionManager:
+        """Minimal ephemeral storage stub to satisfy MFA cache requirements."""
+
+        def __init__(self) -> None:
+            # Non-None redis_client signals cache availability to the guard.
+            self.redis_client = object()
+            self._values: dict[str, str] = {}
+
+        async def initialize(self) -> None:  # pragma: no cover - defensive parity
+            return None
+
+        async def store_ephemeral_value(self, key: str, value: str, ttl_seconds: int) -> None:
+            self._values[key] = value
+
+        async def get_ephemeral_value(self, key: str):
+            return self._values.get(key)
+
+        async def delete_ephemeral_value(self, key: str) -> None:
+            self._values.pop(key, None)
+
     import sys, types
 
     mfa_stub = types.ModuleType("mfa_service")
@@ -57,10 +77,13 @@ async def test_mfa_setup_and_verify_roundtrip_pg(monkeypatch, setup_test_databas
 
     import tldw_Server_API.app.api.v1.endpoints.auth as auth
 
+    session_manager = _StubSessionManager()
+
     # Unit-style call: setup_mfa (allowed only because PG is real)
     res = await auth.setup_mfa(
         current_user=User(id=1, username="alice", email="alice@example.com", is_active=True),
         db=SimpleNamespace(),
+        session_manager=session_manager,
     )
     assert res.secret == "SECRETPAD"
     assert res.qr_code.startswith("data:image/png;base64,")
@@ -72,6 +95,7 @@ async def test_mfa_setup_and_verify_roundtrip_pg(monkeypatch, setup_test_databas
         data=auth.MFAVerifyRequest(token="000000"),
         request=req,
         current_user=User(id=1, username="alice", email="alice@example.com", is_active=True),
+        session_manager=session_manager,
     )
     assert out.get("message")
     assert len(out.get("backup_codes", [])) >= 2

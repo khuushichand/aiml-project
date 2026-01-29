@@ -211,7 +211,7 @@ class TestChatUnit:
         # Make request without auth token
         response = client.post("/api/v1/chat/completions", json=request_data, headers={"X-CSRF-Token": csrf_token})
 
-        # In single-user mode, should require Token header
+        # In single-user mode, should require Authorization/X-API-KEY header
         assert response.status_code == status.HTTP_401_UNAUTHORIZED
 
         # Restore overrides
@@ -245,7 +245,7 @@ class TestChatUnit:
         response = client.post(
             "/api/v1/chat/completions",
             json=request_data,
-            headers={"X-CSRF-Token": csrf_token, "Token": "Bearer invalid-token-xyz"},
+            headers={"X-CSRF-Token": csrf_token, "Authorization": "Bearer invalid-token-xyz"},
         )
 
         assert response.status_code == status.HTTP_401_UNAUTHORIZED

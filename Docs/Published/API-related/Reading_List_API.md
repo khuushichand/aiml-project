@@ -11,8 +11,17 @@ Reading List endpoints support capture, extraction, organization, import/export,
 - `DELETE /api/v1/reading/items/{id}` - soft delete (archived) or hard delete
 - `POST /api/v1/reading/items/{id}/summarize` - summarize an item
 - `POST /api/v1/reading/items/{id}/tts` - generate TTS audio for an item
-- `POST /api/v1/reading/import` - Pocket/Instapaper import (multipart)
+- `POST /api/v1/reading/items/{id}/archive` - create an archive snapshot (HTML/MD)
+- `POST /api/v1/reading/import` - Pocket/Instapaper import (multipart, async job)
+- `GET /api/v1/reading/import/jobs` - list reading import jobs
+- `GET /api/v1/reading/import/jobs/{job_id}` - get reading import job status
 - `GET /api/v1/reading/export` - JSONL or ZIP export
+- `POST /api/v1/reading/digests/schedules` - create a digest schedule
+- `GET /api/v1/reading/digests/schedules` - list digest schedules
+- `GET /api/v1/reading/digests/schedules/{schedule_id}` - get schedule
+- `PATCH /api/v1/reading/digests/schedules/{schedule_id}` - update schedule
+- `DELETE /api/v1/reading/digests/schedules/{schedule_id}` - delete schedule
+- `GET /api/v1/reading/digests/outputs` - list digest output artifacts
 
 ## Core object: ReadingItem
 
@@ -173,7 +182,7 @@ Response:
 - Streaming audio bytes (Content-Type based on `response_format`)
 - Non-streaming mode returns raw bytes in the response body
 
-## Import
+## Import (Async)
 
 `POST /api/v1/reading/import` (multipart)
 
@@ -183,11 +192,200 @@ Form fields:
 - `merge_tags`: `true|false`
 
 Example:
-```
+```text
 multipart form
   file = (pocket.json)
   source = pocket
   merge_tags = true
+```
+
+Response (202 Accepted):
+```json
+{
+  "job_id": 42,
+  "job_uuid": "b7fbd5a0-3b37-4a2d-b6c2-0d0b9d3a6c1c",
+  "status": "queued"
+}
+```
+
+## Reading Digests
+
+### Create schedule
+
+`POST /api/v1/reading/digests/schedules`
+
+Request:
+```json
+{
+  "name": "Morning Digest",
+  "cron": "0 8 * * *",
+  "timezone": "UTC",
+  "format": "md",
+  "filters": {
+    "status": ["saved", "reading"],
+    "tags": ["ai"],
+    "limit": 50
+  }
+}
+```
+
+Optional suggestions block:
+```json
+{
+  "filters": {
+    "status": ["saved"],
+    "tags": ["ai"],
+    "limit": 50,
+    "suggestions": {
+      "enabled": true,
+      "limit": 5,
+      "status": ["saved", "reading"],
+      "exclude_tags": ["ignore"],
+      "max_age_days": 90,
+      "include_read": false,
+      "include_archived": false
+    }
+  }
+}
+```
+
+Response:
+```json
+{ "id": "5a6f0e9d3d1b4b2f8c3d5a9c7b1a2e3f" }
+```
+
+### List schedules
+
+`GET /api/v1/reading/digests/schedules`
+
+Response:
+```json
+[
+  {
+    "id": "5a6f0e9d3d1b4b2f8c3d5a9c7b1a2e3f",
+    "name": "Morning Digest",
+    "cron": "0 8 * * *",
+    "timezone": "UTC",
+    "enabled": true,
+    "require_online": false,
+    "format": "md",
+    "filters": {
+      "status": ["saved", "reading"],
+      "tags": ["ai"],
+      "limit": 50
+    },
+    "last_run_at": null,
+    "next_run_at": "2025-10-20T08:00:00+00:00"
+  }
+]
+```
+
+### Digest suggestions (optional)
+
+If `filters.suggestions.enabled` is true, the digest job adds a `suggestions` list to the template context.
+
+Fields:
+- `enabled`: turn suggestions on/off.
+- `limit`: max suggestions (default 5).
+- `status`: candidate statuses (default `["saved", "reading"]`).
+- `exclude_tags`: tags to exclude from suggestions.
+- `max_age_days`: drop items older than N days.
+- `include_read`: allow `read` items even if status list excludes them.
+- `include_archived`: allow `archived` items even if status list excludes them.
+
+### Digest template context
+
+The output template receives:
+- `items`: digest items.
+- `item_count`: number of digest items.
+- `filters`: the schedule filters.
+- `suggestions`: suggestion items (optional).
+- `suggestions_meta`: `{count, scores, reasons}` keyed by item id (optional).
+
+Sample template snippet:
+```jinja
+{% if suggestions %}
+## Suggested reads
+{% for item in suggestions %}
+- {{ item.title }} ({{ item.url }})
+{% endfor %}
+{% endif %}
+```
+
+### List digest outputs
+
+`GET /api/v1/reading/digests/outputs`
+
+Response:
+```json
+{
+  "items": [
+    {
+      "output_id": 11,
+      "title": "Morning Digest",
+      "format": "md",
+      "created_at": "2025-10-20T08:00:01Z",
+      "download_url": "/api/v1/outputs/11/download",
+      "schedule_id": "5a6f0e9d3d1b4b2f8c3d5a9c7b1a2e3f",
+      "item_count": 42
+    }
+  ],
+  "total": 1,
+  "limit": 50,
+  "offset": 0
+}
+```
+
+Notes:
+- Output metadata includes `suggestions_count`, `suggestions_item_ids`, and `suggestions_config` when enabled.
+
+## Import Jobs
+
+`GET /api/v1/reading/import/jobs`
+
+Response:
+```json
+{
+  "jobs": [
+    {
+      "job_id": 42,
+      "job_uuid": "b7fbd5a0-3b37-4a2d-b6c2-0d0b9d3a6c1c",
+      "status": "completed",
+      "created_at": "2025-10-19T09:15:00Z",
+      "completed_at": "2025-10-19T09:15:05Z",
+      "result": {
+        "source": "pocket",
+        "imported": 12,
+        "updated": 3,
+        "skipped": 1,
+        "errors": []
+      }
+    }
+  ],
+  "total": 1,
+  "limit": 50,
+  "offset": 0
+}
+```
+
+`GET /api/v1/reading/import/jobs/{job_id}`
+
+Response:
+```json
+{
+  "job_id": 42,
+  "job_uuid": "b7fbd5a0-3b37-4a2d-b6c2-0d0b9d3a6c1c",
+  "status": "completed",
+  "created_at": "2025-10-19T09:15:00Z",
+  "completed_at": "2025-10-19T09:15:05Z",
+  "result": {
+    "source": "pocket",
+    "imported": 12,
+    "updated": 3,
+    "skipped": 1,
+    "errors": []
+  }
+}
 ```
 
 ## Export
@@ -197,8 +395,35 @@ multipart form
 Query params:
 - `format`: `jsonl` (default) or `zip`
 - filters: `status`, `tags`, `favorite`, `q`, `domain`
+- optional flags: `include_metadata`, `include_clean_html`, `include_text`, `include_highlights`
 
 JSONL line example:
-```
+```json
 {"id":123,"url":"https://example.com/article","canonical_url":"https://example.com/article","domain":"example.com","title":"Example Article","summary":"...","notes":null,"status":"saved","favorite":0,"tags":["ai"],"created_at":"2025-10-19T09:15:00Z","updated_at":"2025-10-19T09:15:00Z","read_at":null,"published_at":null,"origin_type":"manual","metadata":{"import_source":"pocket"}}
+```
+
+## Archive
+
+`POST /api/v1/reading/items/{id}/archive`
+
+Request:
+```json
+{
+  "format": "html",
+  "source": "auto",
+  "retention_days": 30
+}
+```
+
+Response:
+```json
+{
+  "output_id": 101,
+  "title": "Example Article (archive 20251021_120000)",
+  "format": "html",
+  "storage_path": "reading_archive_123_example_article_20251021_120000.html",
+  "created_at": "2025-10-21T12:00:00+00:00",
+  "retention_until": "2025-11-20T12:00:00+00:00",
+  "download_url": "/api/v1/outputs/101/download"
+}
 ```

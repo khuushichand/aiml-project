@@ -201,78 +201,45 @@ class WorkflowsSchedulerDB:
         except Exception:
             pass
         with self.backend.transaction() as conn:
-            # Heuristically detect backend type by a capability
-            try:
-                self.backend.create_tables(SCHED_POSTGRES_SCHEMA, connection=conn)
-            except Exception:
-                # Fallback to SQLite schema if PG path fails
-                self.backend.create_tables(SCHED_SQLITE_SCHEMA, connection=conn)
-            # Idempotent column ensures for forward-additions (both backends)
-            # PostgreSQL
-            try:
-                self.backend.execute(
-                    "ALTER TABLE workflow_schedules ADD COLUMN IF NOT EXISTS concurrency_mode TEXT DEFAULT 'skip'",
-                    connection=conn,
-                )
-                self.backend.execute(
-                    "ALTER TABLE workflow_schedules ADD COLUMN IF NOT EXISTS misfire_grace_sec INTEGER DEFAULT 300",
-                    connection=conn,
-                )
-                self.backend.execute(
-                    "ALTER TABLE workflow_schedules ADD COLUMN IF NOT EXISTS coalesce BOOLEAN DEFAULT TRUE",
-                    connection=conn,
-                )
-                self.backend.execute(
-                    "ALTER TABLE workflow_schedules ADD COLUMN IF NOT EXISTS require_online BOOLEAN DEFAULT FALSE",
-                    connection=conn,
-                )
-                self.backend.execute(
-                    "ALTER TABLE workflow_schedules ADD COLUMN IF NOT EXISTS last_run_at TIMESTAMPTZ",
-                    connection=conn,
-                )
-                self.backend.execute(
-                    "ALTER TABLE workflow_schedules ADD COLUMN IF NOT EXISTS next_run_at TIMESTAMPTZ",
-                    connection=conn,
-                )
-                self.backend.execute(
-                    "ALTER TABLE workflow_schedules ADD COLUMN IF NOT EXISTS last_status TEXT",
-                    connection=conn,
-                )
-            except Exception:
-                # SQLite path: ALTER TABLE ADD COLUMN without IF NOT EXISTS; ignore failures
-                try:
-                    self.backend.execute("ALTER TABLE workflow_schedules ADD COLUMN concurrency_mode TEXT", connection=conn)
-                except Exception:
-                    pass
-                try:
-                    self.backend.execute("ALTER TABLE workflow_schedules ADD COLUMN misfire_grace_sec INTEGER", connection=conn)
-                except Exception:
-                    pass
-                try:
-                    self.backend.execute("ALTER TABLE workflow_schedules ADD COLUMN coalesce INTEGER", connection=conn)
-                except Exception:
-                    pass
-                try:
-                    self.backend.execute("ALTER TABLE workflow_schedules ADD COLUMN require_online INTEGER", connection=conn)
-                except Exception:
-                    pass
-                try:
-                    self.backend.execute("ALTER TABLE workflow_schedules ADD COLUMN last_run_at TEXT", connection=conn)
-                except Exception:
-                    pass
-                try:
-                    self.backend.execute("ALTER TABLE workflow_schedules ADD COLUMN next_run_at TEXT", connection=conn)
-                except Exception:
-                    pass
-                try:
-                    self.backend.execute("ALTER TABLE workflow_schedules ADD COLUMN last_status TEXT", connection=conn)
-                except Exception:
-                    pass
-                # Forward-add jitter_sec for pre-existing tables
-                try:
-                    self.backend.execute("ALTER TABLE workflow_schedules ADD COLUMN jitter_sec INTEGER DEFAULT 0", connection=conn)
-                except Exception:
-                    pass
+            backend_type = getattr(getattr(self.backend, "config", None), "backend_type", None)
+            if backend_type == BackendType.POSTGRESQL:
+                schema = SCHED_POSTGRES_SCHEMA
+            else:
+                schema = SCHED_SQLITE_SCHEMA
+            self.backend.create_tables(schema, connection=conn)
+
+            existing_columns = {
+                col.get("name")
+                for col in self.backend.get_table_info("workflow_schedules", connection=conn)
+                if isinstance(col, dict)
+            }
+
+            if backend_type == BackendType.POSTGRESQL:
+                column_sql = {
+                    "concurrency_mode": "ALTER TABLE workflow_schedules ADD COLUMN concurrency_mode TEXT NOT NULL DEFAULT 'skip'",
+                    "misfire_grace_sec": "ALTER TABLE workflow_schedules ADD COLUMN misfire_grace_sec INTEGER DEFAULT 300",
+                    "coalesce": "ALTER TABLE workflow_schedules ADD COLUMN coalesce BOOLEAN NOT NULL DEFAULT TRUE",
+                    "require_online": "ALTER TABLE workflow_schedules ADD COLUMN require_online BOOLEAN NOT NULL DEFAULT FALSE",
+                    "last_run_at": "ALTER TABLE workflow_schedules ADD COLUMN last_run_at TIMESTAMPTZ",
+                    "next_run_at": "ALTER TABLE workflow_schedules ADD COLUMN next_run_at TIMESTAMPTZ",
+                    "last_status": "ALTER TABLE workflow_schedules ADD COLUMN last_status TEXT",
+                    "jitter_sec": "ALTER TABLE workflow_schedules ADD COLUMN jitter_sec INTEGER NOT NULL DEFAULT 0",
+                }
+            else:
+                column_sql = {
+                    "concurrency_mode": "ALTER TABLE workflow_schedules ADD COLUMN concurrency_mode TEXT NOT NULL DEFAULT 'skip'",
+                    "misfire_grace_sec": "ALTER TABLE workflow_schedules ADD COLUMN misfire_grace_sec INTEGER DEFAULT 300",
+                    "coalesce": "ALTER TABLE workflow_schedules ADD COLUMN coalesce INTEGER NOT NULL DEFAULT 1",
+                    "require_online": "ALTER TABLE workflow_schedules ADD COLUMN require_online INTEGER NOT NULL DEFAULT 0",
+                    "last_run_at": "ALTER TABLE workflow_schedules ADD COLUMN last_run_at TEXT",
+                    "next_run_at": "ALTER TABLE workflow_schedules ADD COLUMN next_run_at TEXT",
+                    "last_status": "ALTER TABLE workflow_schedules ADD COLUMN last_status TEXT",
+                    "jitter_sec": "ALTER TABLE workflow_schedules ADD COLUMN jitter_sec INTEGER NOT NULL DEFAULT 0",
+                }
+
+            for column, statement in column_sql.items():
+                if column not in existing_columns:
+                    self.backend.execute(statement, connection=conn)
 
     def _rows(self, result: QueryResult) -> List[Dict[str, Any]]:
         cols = [c[0] for c in (result.description or [])]

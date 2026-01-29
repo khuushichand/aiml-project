@@ -3,17 +3,63 @@ enable_first_time_setup = false
 setup_completed = true
 # When true, bypasses the local-only guard for setup API requests.
 allow_remote_setup_access = false
+# Optional: restrict which remote clients can access /setup
+# Provide CIDR ranges or individual IPs, comma-separated
+setup_ip_allowlist =
+setup_ip_denylist =
+
+[UI]
+# Optional quickstart URL (absolute or /path). If blank, /api/v1/config/quickstart defaults to /docs.
+quickstart_url =
 
 [Server]
 disable_cors = false
-allow_remote_webui_access = false
-# Optional: restrict which remote clients can access /webui
-# Provide CIDR ranges or individual IPs, comma-separated
-webui_ip_allowlist =
 
 [Files]
 # Max inline export size (bytes) for file artifacts. Default: 262144 (256KB).
 inline_max_bytes = 262144
+
+[Image-Generation]
+# Default image backend when payload.backend is omitted.
+default_backend = stable_diffusion_cpp
+# JSON array of enabled image backends (empty disables image generation).
+enabled_backends = ["stable_diffusion_cpp"]
+# Limits (pixels = width * height).
+max_width = 4096
+max_height = 4096
+max_pixels = 16777216
+max_steps = 50
+max_prompt_length = 2500
+# Override Files.inline_max_bytes for image outputs (bytes).
+inline_max_bytes = 4000000
+
+# stable-diffusion.cpp backend settings
+sd_cpp_binary_path =
+sd_cpp_diffusion_model_path =
+sd_cpp_model_path =
+sd_cpp_llm_path =
+sd_cpp_vae_path =
+sd_cpp_lora_paths = []
+# Optional allowlist for extra_params keys (JSON array or comma-separated).
+# Empty list disables extra_params passthrough.
+sd_cpp_allowed_extra_params = []
+sd_cpp_default_steps = 25
+sd_cpp_default_cfg_scale = 7.5
+sd_cpp_default_sampler = euler_a
+sd_cpp_device = auto
+sd_cpp_timeout_seconds = 120
+
+# SwarmUI backend settings
+# Base URL for SwarmUI (eg http://localhost:7801)
+swarmui_base_url =
+# Optional default model to use when payload.model is omitted.
+swarmui_default_model =
+# Optional swarm_token cookie value for authenticated SwarmUI instances.
+swarmui_swarm_token =
+# Optional allowlist for extra_params keys (JSON array or comma-separated).
+# Empty list disables extra_params passthrough.
+swarmui_allowed_extra_params = []
+swarmui_timeout_seconds = 120
 
 [ACP]
 # Command used to launch the ACP runner (tldw-agent-acp).
@@ -93,6 +139,8 @@ conversation_creation_max_retries = 3
 db_transaction_max_retries = 3
 rate_limit_per_minute = 60
 rate_limit_per_conversation_per_minute = 20
+# Per-user token budget (legacy limiter). Default is 10000 if omitted.
+rate_limit_tokens_per_minute = 100000
 # Controls how much historical context is loaded for each chat request.
 # Accepts 1-500; values outside range are clamped. Default: 20.
 history_messages_limit = 20
@@ -145,9 +193,9 @@ random_seed =
 [Character-Chat]
 CHARACTER_RATE_LIMIT_OPS = 100
 CHARACTER_RATE_LIMIT_WINDOW = 3600
-MAX_CHARACTERS_PER_USER = 1000
+MAX_CHARACTERS_PER_USER = 10000
 MAX_CHARACTER_IMPORT_SIZE_MB = 10
-MAX_CHATS_PER_USER = 100
+MAX_CHATS_PER_USER = 100000
 MAX_MESSAGES_PER_CHAT = 1000
 MAX_MESSAGES_PER_CHAT_SOFT = 1000
 MAX_CHAT_COMPLETIONS_PER_MINUTE = 20
@@ -299,6 +347,8 @@ rate_limit_per_minute = 60
 rate_limit_burst = 10
 access_token_expire_minutes = 30
 refresh_token_expire_days = 7
+# Optional allowlist for service tokens (comma-separated). Empty = loopback-only.
+service_token_allowed_ips =
 byok_enabled = false
 byok_allowed_providers =
 byok_allowed_base_url_providers = openai,anthropic,zai,moonshot,openrouter,bedrock
@@ -1021,7 +1071,7 @@ TTS_VOICE_STRICT_DURATION = false
 #
 # Known route keys include (not exhaustive):
 #   health, moderation, monitoring, audit, auth, auth-enhanced, users, privileges,
-#   admin, mcp-catalogs, media, audio, audio-jobs, audio-websocket, chat, characters,
+#   admin, mcp-catalogs, media, audio, audio-jobs, audio-websocket, audiobooks, chat, characters,
 #   character-chat-sessions, character-messages, metrics, chunking, chunking-templates,
 #   outputs-templates, outputs, embeddings, vector-stores, connectors, claims,
 #   media-embeddings, items, reading, watchlists, subscriptions-deprecated, notes, prompts,
@@ -1032,7 +1082,7 @@ TTS_VOICE_STRICT_DURATION = false
 
 [API-Routes]
 # When true, disables a curated set of in-development (experimental) routes unless explicitly enabled.
-stable_only = true
+stable_only = false
 
 # Comma-separated list of route keys to disable regardless of stability
 disable =
@@ -1083,6 +1133,10 @@ google_sort_results_by =
 search_engine_api_key_kagi = <kagi_api_key>>
 search_engine_searx_api = https://search.rhscz.eu/
 search_engine_api_key_tavily = <tavily_api_key>
+search_engine_api_key_exa = <exa_api_key>
+search_engine_api_url_exa = https://api.exa.ai/search
+search_engine_api_key_firecrawl = <firecrawl_api_key>
+search_engine_api_url_firecrawl = https://api.firecrawl.dev/v2/search
 search_engine_api_key_yandex = 1e1b1b1b1b1b1b1b1
 search_engine_id_yandex = 1e1b1b1b1b1b1b1b1
 
@@ -1098,6 +1152,12 @@ custom_scrapers_yaml_path = tldw_Server_API/Config_Files/custom_scrapers.yaml
 web_scraper_default_backend = auto
 web_scraper_ua_mode = fixed
 web_scraper_respect_robots = True
+web_scraper_preflight_analyzers = False
+web_scraper_preflight_timeout_s = 0
+web_scraper_preflight_scan_depth = default
+web_scraper_preflight_find_all_waf = False
+web_scraper_preflight_impersonate = False
+web_scraper_preflight_include_results = False
 
 [Logging]
 log_level = INFO

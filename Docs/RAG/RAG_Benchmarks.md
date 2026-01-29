@@ -10,6 +10,9 @@
 - [Acknowledgements](#acknowledgements)
 - [Contact](#contact)
 
+## Quick Links
+- Benchmark corpus workflow: `Docs/RAG/Benchmarks/Benchmark_Corpus_Workflow.md`
+
 
 Ranking metrics
     Recall@K

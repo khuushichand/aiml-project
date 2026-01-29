@@ -493,6 +493,8 @@ class IngestBatchRequest(BaseModel):
     ocr_dpi: int = 300
     ocr_mode: Optional[str] = "fallback"
     ocr_min_page_text_chars: int = 40
+    ocr_output_format: Optional[str] = None
+    ocr_prompt_preset: Optional[str] = None
 
 
 class IngestBatchResultItem(BaseModel):

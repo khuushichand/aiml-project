@@ -190,7 +190,7 @@ def get_available_templates() -> List[str]:
 DEFAULT_RAW_PASSTHROUGH_TEMPLATE = PromptTemplate(
     name="raw_passthrough",
     description="Default template that makes no changes to the prompts.",
-    system_message_template="{{original_system_message_from_request}}",
+    system_message_template="{{system_messages_combined or original_system_message_from_request}}",
     user_message_content_template="{{message_content}}",
     assistant_message_content_template="{{message_content}}"
 )

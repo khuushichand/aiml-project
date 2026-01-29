@@ -43,6 +43,7 @@ from tldw_Server_API.app.core.DB_Management.DB_Manager import (
 from tldw_Server_API.app.core.DB_Management.Workflows_DB import WorkflowsDatabase
 from tldw_Server_API.app.core.Workflows import WorkflowEngine, RunMode, WorkflowScheduler
 from tldw_Server_API.app.core.Workflows.registry import StepTypeRegistry
+from tldw_Server_API.app.core.Workflows.constants import MAP_SUBSTEP_TYPES
 from tldw_Server_API.app.core.MCP_unified.auth.jwt_manager import get_jwt_manager
 from tldw_Server_API.app.core.AuthNZ.permissions import (
     WORKFLOWS_RUNS_READ,
@@ -146,6 +147,83 @@ def _pydantic_error_detail(exc: ValidationError) -> str:
         msg = err.get("msg") or "invalid"
         parts.append(f"{loc}: {msg}" if loc else msg)
     return "; ".join(parts) or "invalid config"
+
+
+def _find_api_key_path(value: Any, path: str = "") -> Optional[str]:
+    if isinstance(value, dict):
+        for key, child in value.items():
+            next_path = f"{path}.{key}" if path else str(key)
+            if key == "api_key":
+                return next_path
+            found = _find_api_key_path(child, next_path)
+            if found:
+                return found
+    elif isinstance(value, list):
+        for idx, child in enumerate(value):
+            next_path = f"{path}[{idx}]"
+            found = _find_api_key_path(child, next_path)
+            if found:
+                return found
+    return None
+
+
+def _find_signing_secret_path(value: Any, path: str = "") -> Optional[str]:
+    if isinstance(value, dict):
+        for key, child in value.items():
+            next_path = f"{path}.{key}" if path else str(key)
+            if key == "signing" and isinstance(child, dict) and "secret" in child:
+                return f"{next_path}.secret"
+            found = _find_signing_secret_path(child, next_path)
+            if found:
+                return found
+    elif isinstance(value, list):
+        for idx, child in enumerate(value):
+            next_path = f"{path}[{idx}]"
+            found = _find_signing_secret_path(child, next_path)
+            if found:
+                return found
+    return None
+
+
+def _llm_step_schema_base() -> Dict[str, Any]:
+    return {
+        "type": "object",
+        "description": (
+            "LLM step config. Provide provider API keys via runtime secret refs; "
+            "api_key is not stored in workflow definitions."
+        ),
+        "properties": {
+            "provider": {"type": "string"},
+            "api_provider": {"type": "string"},
+            "api_endpoint": {"type": "string"},
+            "model": {"type": "string"},
+            "model_id": {"type": "string"},
+            "prompt": {"type": "string"},
+            "input": {"type": "string"},
+            "template": {"type": "string"},
+            "messages": {"type": ["array", "string"]},
+            "messages_payload": {"type": ["array", "string"]},
+            "system_message": {"type": "string"},
+            "system": {"type": "string"},
+            "system_prompt": {"type": "string"},
+            "temperature": {"type": "number"},
+            "top_p": {"type": "number"},
+            "max_tokens": {"type": "integer", "minimum": 1},
+            "max_completion_tokens": {"type": "integer", "minimum": 1},
+            "stop": {"type": ["string", "array"]},
+            "tools": {"type": "array"},
+            "tool_choice": {},
+            "response_format": {"type": "object"},
+            "seed": {"type": "integer"},
+            "stream": {"type": "boolean"},
+            "include_response": {"type": "boolean"},
+            "n": {"type": "integer", "minimum": 1},
+            "logit_bias": {"type": "object"},
+            "user": {"type": ["string", "integer"]},
+        },
+        "required": [],
+        "additionalProperties": True,
+    }
 
 
 def _rag_search_schema_base() -> Dict[str, Any]:
@@ -327,6 +405,21 @@ def _validate_definition_payload(defn: Dict[str, Any]) -> None:
     size = len(json.dumps(defn, separators=(",", ":")))
     if size > MAX_DEFINITION_BYTES:
         raise HTTPException(status_code=413, detail="Workflow definition too large")
+    api_key_path = _find_api_key_path(defn)
+    if api_key_path:
+        raise HTTPException(
+            status_code=422,
+            detail=f"api_key not allowed in workflow definitions at '{api_key_path}'; use runtime secret refs",
+        )
+    signing_secret_path = _find_signing_secret_path(defn)
+    if signing_secret_path:
+        raise HTTPException(
+            status_code=422,
+            detail=(
+                "signing.secret not allowed in workflow definitions at "
+                f"'{signing_secret_path}'; use secret_ref or environment variables"
+            ),
+        )
     # steps
     steps = defn.get("steps") or []
     if not isinstance(steps, list):
@@ -334,19 +427,19 @@ def _validate_definition_payload(defn: Dict[str, Any]) -> None:
     if len(steps) > MAX_STEPS:
         raise HTTPException(status_code=422, detail="Too many steps")
     reg = StepTypeRegistry()
-    # Build a schema map (keep in sync with list_step_types())
+    # Build a schema map (LLM schema shared with list_step_types()).
     step_schemas: Dict[str, Dict[str, Any]] = {
         "prompt": {
             "type": "object",
             "properties": {
                 "template": {"type": "string"},
-                "model": {"type": "string"},
                 "timeout_seconds": {"type": "integer", "minimum": 1, "default": 300},
                 "retry": {"type": "integer", "minimum": 0, "default": 0},
             },
             "required": ["template"],
             "additionalProperties": True,
         },
+        "llm": _llm_step_schema_base(),
         "branch": {
             "type": "object",
             "properties": {
@@ -368,6 +461,14 @@ def _validate_definition_payload(defn: Dict[str, Any]) -> None:
             "additionalProperties": True,
         },
         "rag_search": _rag_search_schema_base(),
+        "kanban": {
+            "type": "object",
+            "properties": {
+                "action": {"type": "string"},
+            },
+            "required": ["action"],
+            "additionalProperties": True,
+        },
         "webhook": {
             "type": "object",
             "properties": {
@@ -377,6 +478,27 @@ def _validate_definition_payload(defn: Dict[str, Any]) -> None:
                 "body": {"type": ["object", "array", "string", "number", "boolean", "null"]},
                 "include_outputs": {"type": "boolean", "default": True},
                 "timeout_seconds": {"type": "integer", "minimum": 1, "default": 10},
+                "follow_redirects": {"type": "boolean", "default": False},
+                "max_redirects": {"type": "integer", "minimum": 0},
+                "max_bytes": {"type": "integer", "minimum": 1},
+                "egress_policy": {
+                    "type": "object",
+                    "properties": {
+                        "allowlist": {"type": "array", "items": {"type": "string"}},
+                        "denylist": {"type": "array", "items": {"type": "string"}},
+                        "block_private": {"type": "boolean"},
+                    },
+                    "additionalProperties": True,
+                },
+                "signing": {
+                    "type": "object",
+                    "properties": {
+                        "type": {"type": "string"},
+                        "secret_ref": {"type": "string"},
+                        "secret": {"type": "string"},
+                    },
+                    "additionalProperties": True,
+                },
             },
             "required": [],
             "additionalProperties": True,
@@ -460,20 +582,30 @@ def _validate_definition_payload(defn: Dict[str, Any]) -> None:
                 raise HTTPException(status_code=422, detail=f"Step '{sid}' requires assigned_to_user_id")
             if isinstance(assigned, str) and not assigned.strip():
                 raise HTTPException(status_code=422, detail=f"Step '{sid}' requires assigned_to_user_id")
+        if t == "llm":
+            has_prompt = bool(cfg.get("prompt") or cfg.get("input") or cfg.get("template"))
+            has_messages = bool(cfg.get("messages") or cfg.get("messages_payload"))
+            if not (has_prompt or has_messages):
+                raise HTTPException(status_code=422, detail=f"Step '{sid}' requires prompt or messages")
         if t == "rag_search":
             _validate_rag_search_config(cfg, step_id=sid)
         if t == "media_ingest":
             _validate_chunking_contract(cfg, step_id=sid)
         if t == "map":
             sub = cfg.get("step") if isinstance(cfg, dict) else None
-            if isinstance(sub, dict):
-                sub_type = str(sub.get("type") or "").strip()
-                sub_cfg = sub.get("config") or {}
-                sub_id = f"{sid}.step"
-                if sub_type == "rag_search":
-                    _validate_rag_search_config(sub_cfg, step_id=sub_id)
-                if sub_type == "media_ingest":
-                    _validate_chunking_contract(sub_cfg, step_id=sub_id)
+            if not isinstance(sub, dict):
+                raise HTTPException(status_code=422, detail=f"Step '{sid}' requires map step config")
+            sub_type = str(sub.get("type") or "").strip()
+            if not sub_type:
+                raise HTTPException(status_code=422, detail=f"Step '{sid}' requires map step type")
+            if sub_type not in MAP_SUBSTEP_TYPES:
+                raise HTTPException(status_code=422, detail=f"Step '{sid}' has unsupported map step type '{sub_type}'")
+            sub_cfg = sub.get("config") or {}
+            sub_id = f"{sid}.step"
+            if sub_type == "rag_search":
+                _validate_rag_search_config(sub_cfg, step_id=sub_id)
+            if sub_type == "media_ingest":
+                _validate_chunking_contract(sub_cfg, step_id=sub_id)
         # Optional schema validation when jsonschema is available
         if jsonschema is not None:
             schema = step_schemas.get(t)
@@ -492,6 +624,42 @@ def _validate_definition_payload(defn: Dict[str, Any]) -> None:
                         status_code=422,
                         detail=f"Invalid config for step '{sid}': {detail}",
                     ) from e
+
+    # Optional MCP policy validation (per-workflow allowlist/scopes)
+    raw_policy = None
+    allowlist = None
+    scopes = None
+    try:
+        meta = defn.get("metadata") if isinstance(defn, dict) else None
+        if isinstance(meta, dict):
+            raw_policy = meta.get("mcp") or meta.get("mcp_policy")
+        if raw_policy is None and isinstance(defn, dict):
+            raw_policy = defn.get("mcp") or defn.get("mcp_policy")
+        if raw_policy is not None:
+            if not isinstance(raw_policy, dict):
+                raise HTTPException(status_code=422, detail="Invalid mcp policy format")
+            allowlist = raw_policy.get("allowlist") or raw_policy.get("allowed_tools")
+            if allowlist is not None and not isinstance(allowlist, (list, tuple, set, str)):
+                raise HTTPException(status_code=422, detail="Invalid mcp allowlist format")
+            scopes = raw_policy.get("scopes") or raw_policy.get("allow_scopes") or raw_policy.get("capabilities")
+            if scopes is not None and not isinstance(scopes, (list, tuple, set, str)):
+                raise HTTPException(status_code=422, detail="Invalid mcp scopes format")
+    except HTTPException:
+        logger.exception(
+            "Workflows validation: invalid mcp policy. raw_policy={} allowlist={} scopes={}",
+            raw_policy,
+            allowlist,
+            scopes,
+        )
+        raise
+    except Exception as e:
+        logger.exception(
+            "Workflows validation: unexpected mcp policy error. raw_policy={} allowlist={} scopes={}",
+            raw_policy,
+            allowlist,
+            scopes,
+        )
+        raise HTTPException(status_code=422, detail="Invalid mcp policy") from e
 
     # Graph/DAG robustness checks (detect explicit cycles and unknown targets)
     _validate_dag(defn)
@@ -1265,8 +1433,8 @@ async def run_saved(
         # Ensure status is always a string for response validation
         if run and not getattr(run, "status", None):
             run.status = "queued"
-    except Exception:
-        pass
+    except Exception as exc:
+        logger.debug(f"workflows: status normalization failed for run_id={run_id}: {exc}")
     try:
         _logger.debug(f"Workflows endpoint: post-submit status={run.status if run else 'missing'} run_id={run_id}")
     except Exception as e:
@@ -2774,14 +2942,25 @@ async def list_step_types():
             "type": "object",
             "properties": {
                 "template": {"type": "string"},
-                "model": {"type": "string"},
                 "timeout_seconds": {"type": "integer", "minimum": 1, "default": 300},
                 "retry": {"type": "integer", "minimum": 0, "default": 0},
             },
             "required": ["template"],
             "additionalProperties": True,
-            "example": {"template": "Hello {{inputs.name}}", "model": "gpt-4o-mini"},
+            "example": {"template": "Hello {{inputs.name}}"},
             "min_engine_version": "0.1.0",
+        },
+        "llm": {
+            **_llm_step_schema_base(),
+            "example": {
+                "provider": "openai",
+                "model": "gpt-4o-mini",
+                "prompt": "Summarize {{ inputs.topic }}",
+                "system": "You are a concise assistant.",
+                "seed": 42,
+                "max_completion_tokens": 256,
+            },
+            "min_engine_version": "0.1.1",
         },
         "branch": {
             "type": "object",
@@ -2812,16 +2991,50 @@ async def list_step_types():
             "example": {"query": "large language models safety", "top_k": 8},
             "min_engine_version": "0.1.0",
         },
+        "kanban": {
+            "type": "object",
+            "properties": {
+                "action": {"type": "string"},
+                "board_id": {"type": ["integer", "string"]},
+                "list_id": {"type": ["integer", "string"]},
+                "card_id": {"type": ["integer", "string"]},
+            },
+            "required": ["action"],
+            "additionalProperties": True,
+            "example": {"action": "card.create", "list_id": 123, "title": "Review {{ inputs.topic }}", "client_id": "wf-card-1"},
+            "min_engine_version": "0.1.4",
+        },
         "webhook": {
             "type": "object",
             "properties": {
                 "url": {"type": "string"},
                 "include_outputs": {"type": "boolean", "default": True},
                 "timeout_seconds": {"type": "integer", "minimum": 1, "default": 10},
+                "follow_redirects": {"type": "boolean", "default": False},
+                "max_redirects": {"type": "integer", "minimum": 0},
+                "max_bytes": {"type": "integer", "minimum": 1},
+                "egress_policy": {
+                    "type": "object",
+                    "properties": {
+                        "allowlist": {"type": "array", "items": {"type": "string"}},
+                        "denylist": {"type": "array", "items": {"type": "string"}},
+                        "block_private": {"type": "boolean"},
+                    },
+                    "additionalProperties": True,
+                },
+                "signing": {
+                    "type": "object",
+                    "properties": {
+                        "type": {"type": "string"},
+                        "secret_ref": {"type": "string"},
+                        "secret": {"type": "string"},
+                    },
+                    "additionalProperties": True,
+                },
             },
             "required": [],
             "additionalProperties": True,
-            "example": {"url": "https://example.com/hooks/workflow"},
+            "example": {"url": "https://example.com/hooks/workflow", "follow_redirects": False, "max_bytes": 1048576},
             "min_engine_version": "0.1.0",
         },
         "tts": {
@@ -3391,7 +3604,6 @@ async def approve_step(
     current_user: User = Depends(get_request_user),
     db: WorkflowsDatabase = Depends(_get_db),
 ):
-    # Owner/admin check for the run
     run = db.get_run(run_id)
     if not run:
         raise HTTPException(status_code=404, detail="Run not found")
@@ -3399,8 +3611,14 @@ async def approve_step(
     if run.tenant_id != tenant_id:
         raise HTTPException(status_code=404, detail="Run not found")
     is_admin = bool(getattr(current_user, "is_admin", False))
-    if str(run.user_id) != str(current_user.id) and not is_admin:
-        raise HTTPException(status_code=404, detail="Run not found")
+    step_run = db.get_latest_step_run(run_id=run_id, step_id=step_id)
+    if not step_run:
+        raise HTTPException(status_code=404, detail="Step run not found")
+    assigned_to = step_run.get("assigned_to")
+    user_id = str(current_user.id)
+    if not is_admin:
+        if not assigned_to or str(assigned_to) != user_id:
+            raise HTTPException(status_code=404, detail="Run not found")
     # Update step decision via DB adapter
     try:
         db.approve_step_decision(run_id=run_id, step_id=step_id, approved_by=str(current_user.id), comment=payload.comment or "")
@@ -3467,10 +3685,7 @@ async def reject_step(
     assigned_to = step_run.get("assigned_to")
     user_id = str(current_user.id)
     if not is_admin:
-        if assigned_to:
-            if str(assigned_to) != user_id:
-                raise HTTPException(status_code=404, detail="Run not found")
-        elif str(run.user_id) != user_id:
+        if not assigned_to or str(assigned_to) != user_id:
             raise HTTPException(status_code=404, detail="Run not found")
     failure_next = None
     try:

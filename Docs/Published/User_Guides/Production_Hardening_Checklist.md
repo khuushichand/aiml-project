@@ -15,7 +15,6 @@ Authentication & Secrets
   - Startup fails in production if the secret is missing/weak/default.
 - Masking:
   - In production, the API key is masked in startup logs.
-  - `/webui/config.json` omits `apiKey` when `tldw_production=true`.
 
 Database & Storage
 - Multi-user production: Use PostgreSQL. SQLite is not supported when `tldw_production=true`.
@@ -29,7 +28,7 @@ Reverse Proxy & TLS
   - `/api/v1/audio/stream/transcribe`
   - `/api/v1/mcp/*` (if using MCP)
 - Set appropriate timeouts and keep-alive settings for long-running requests.
-- If exposing the WebUI, prefer serving the WebUI from the same origin as the API to avoid CORS complexity.
+- If exposing the Next.js WebUI, prefer serving it from the same origin as the API to avoid CORS complexity.
  - See reverse proxy examples: `../Deployment/Reverse_Proxy_Examples.md`
 
 CORS & CSRF

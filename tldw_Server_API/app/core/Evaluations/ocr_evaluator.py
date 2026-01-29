@@ -140,6 +140,8 @@ class OCREvaluator:
                         # Prefer direct per-page OCR for detailed metrics
                         lang = (ocr_options or {}).get("ocr_lang", "eng")
                         dpi = int((ocr_options or {}).get("ocr_dpi", 300))
+                        output_format = (ocr_options or {}).get("ocr_output_format")
+                        prompt_preset = (ocr_options or {}).get("ocr_prompt_preset")
                         backend = get_ocr_backend((ocr_options or {}).get("ocr_backend"))
                         if backend is None:
                             logger.warning("No OCR backend available; falling back to PDF processor content")
@@ -154,6 +156,8 @@ class OCREvaluator:
                                 ocr_dpi=dpi,
                                 ocr_mode=(ocr_options or {}).get("ocr_mode", "fallback"),
                                 ocr_min_page_text_chars=int((ocr_options or {}).get("ocr_min_page_text_chars", 40)),
+                                ocr_output_format=output_format,
+                                ocr_prompt_preset=prompt_preset,
                                 perform_chunking=False,
                                 perform_analysis=False,
                                 keywords=[],
@@ -187,12 +191,34 @@ class OCREvaluator:
                                         mat = pymupdf.Matrix(scale, scale)
                                         pix = page.get_pixmap(matrix=mat, alpha=False)
                                         img_bytes = pix.tobytes("png")
-                                        fut = pool.submit(backend.ocr_image, img_bytes, lang)
+                                        if output_format or prompt_preset:
+                                            def _call_structured(b: bytes) -> Any:
+                                                try:
+                                                    return backend.ocr_image_structured(b, lang, output_format, prompt_preset)
+                                                except TypeError:
+                                                    return backend.ocr_image_structured(b, lang)
+
+                                            fut = pool.submit(_call_structured, img_bytes)
+                                        else:
+                                            fut = pool.submit(backend.ocr_image, img_bytes, lang)
                                         futures.append(fut)
                                         idx_map[fut] = i
                                     ordered = [""] * total_pages
                                     for fut in as_completed(futures):
-                                        text = fut.result() or ""
+                                        res = fut.result()
+                                        if output_format or prompt_preset:
+                                            try:
+                                                text = getattr(res, "text", None) if res is not None else None
+                                                if text is None and isinstance(res, dict):
+                                                    text = res.get("text")
+                                                if text is None and isinstance(res, tuple) and len(res) == 2:
+                                                    text = res[0]
+                                                if text is None:
+                                                    text = res or ""
+                                            except Exception:
+                                                text = res or ""
+                                        else:
+                                            text = res or ""
                                         i = idx_map[fut]
                                         if text.strip():
                                             ocr_pages += 1

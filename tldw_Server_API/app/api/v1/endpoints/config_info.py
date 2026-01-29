@@ -339,14 +339,14 @@ async def get_quickstart_redirect():
 
     Precedence:
     1) Environment variable QUICKSTART_URL
-    2) Config [WebUI] quickstart_url
+    2) Config [UI] quickstart_url
     3) Config [Docs] quickstart_url
-    4) Default: /webui/
+    4) Default: /docs
 
     Behavior:
     - If the target starts with http(s)://, redirect there.
     - If the target starts with '/', redirect to that path (same origin).
-    - Otherwise, treat as WebUI-relative file and redirect to /webui/<target>.
+    - Otherwise, treat as same-origin path and redirect to /<target>.
     """
     try:
         # 1) Environment override
@@ -356,8 +356,8 @@ async def get_quickstart_redirect():
         if not url:
             try:
                 cfg = load_comprehensive_config()
-                if cfg.has_section('WebUI') and cfg.has_option('WebUI', 'quickstart_url'):
-                    url = cfg.get('WebUI', 'quickstart_url').strip()
+                if cfg.has_section('UI') and cfg.has_option('UI', 'quickstart_url'):
+                    url = cfg.get('UI', 'quickstart_url').strip()
                 elif cfg.has_section('Docs') and cfg.has_option('Docs', 'quickstart_url'):
                     url = cfg.get('Docs', 'quickstart_url').strip()
             except Exception as e:
@@ -365,7 +365,7 @@ async def get_quickstart_redirect():
 
         # 4) Default
         if not url:
-            url = "/webui/"
+            url = "/docs"
 
         # Normalize
         if url.startswith("http://") or url.startswith("https://"):
@@ -373,20 +373,20 @@ async def get_quickstart_redirect():
         elif url.startswith("/"):
             target = url
         else:
-            # Treat as WebUI-relative file
-            target = f"/webui/{url}"
+            # Treat as same-origin path
+            target = f"/{url}"
 
         logger.info(f"Redirecting /api/v1/config/quickstart to: {target}")
         return RedirectResponse(url=target, status_code=307)
     except Exception as e:
         logger.error(f"Quickstart redirect failed: {e}")
-        # Fallback to a minimal built-in HTML page with a link to /webui/
+        # Fallback to a minimal built-in HTML page with a link to /docs
         fallback_html = """
         <!DOCTYPE html>
         <html><head><meta charset='utf-8'><title>Quickstart</title></head>
         <body>
-          <p>Quickstart is not configured. Continue to the WebUI:</p>
-          <a href="/webui/">Open WebUI</a>
+          <p>Quickstart is not configured. Continue to the API docs:</p>
+          <a href="/docs">Open API docs</a>
         </body></nhtml>
         """
         return HTMLResponse(content=fallback_html, status_code=200)

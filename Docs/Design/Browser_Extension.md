@@ -133,6 +133,7 @@ Endpoint Mapping (server truth)
   - GET /api/v1/llm/models
   - GET /api/v1/llm/models/metadata
   - GET /api/v1/llm/providers
+  - Note: `/api/v1/llm/models` includes image backends (`image/<backend>`). Use `type=chat` or `output_modality=text` when building chat-only lists.
 - Chats (resource model; optional v1 scope)
   - /api/v1/chats/* (create/list/get/update/delete sessions; messages CRUD; complete/stream where available)
 

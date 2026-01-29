@@ -1,5 +1,5 @@
 version: 1.0.0
-updated_at: 2025-01-15T10:00:00Z
+updated_at: 2026-01-23T10:00:00Z
 scopes:
   - id: media.ingest
     description: Ingest new media assets via upload, URL fetch, or pipeline triggers.
@@ -195,6 +195,57 @@ scopes:
     ownership_predicates:
       - same_org
     doc_url: https://docs.example.com/privileges/chat-analytics
+  - id: chat.messages.rag_context
+    description: Persist and retrieve RAG context (citations, retrieved docs, settings) for chat messages.
+    resource_tags:
+      - chat
+      - rag
+      - messages
+    sensitivity_tier: moderate
+    rate_limit_class: standard
+    default_roles:
+      - admin
+      - analyst
+      - developer
+      - viewer
+    feature_flag_id: null
+    ownership_predicates:
+      - same_org
+    doc_url: https://docs.example.com/privileges/chat-messages-rag-context
+  - id: chat.conversations.messages
+    description: Retrieve conversation messages with optional RAG context.
+    resource_tags:
+      - chat
+      - conversations
+      - rag
+    sensitivity_tier: low
+    rate_limit_class: standard
+    default_roles:
+      - admin
+      - analyst
+      - developer
+      - viewer
+    feature_flag_id: null
+    ownership_predicates:
+      - same_org
+    doc_url: https://docs.example.com/privileges/chat-conversations-messages
+  - id: chat.conversations.citations
+    description: Retrieve aggregated citations for a conversation.
+    resource_tags:
+      - chat
+      - conversations
+      - rag
+    sensitivity_tier: low
+    rate_limit_class: standard
+    default_roles:
+      - admin
+      - analyst
+      - developer
+      - viewer
+    feature_flag_id: null
+    ownership_predicates:
+      - same_org
+    doc_url: https://docs.example.com/privileges/chat-conversations-citations
   - id: audio.speech
     description: Generate speech audio from text using TTS providers.
     resource_tags:
@@ -210,6 +261,51 @@ scopes:
     ownership_predicates:
       - same_org
     doc_url: https://docs.example.com/privileges/audio-speech
+  - id: audio.tokenizer
+    description: Encode/decode audio tokens for debugging and tooling.
+    resource_tags:
+      - audio
+      - tokenizer
+    sensitivity_tier: moderate
+    rate_limit_class: elevated
+    default_roles:
+      - admin
+      - analyst
+      - developer
+    feature_flag_id: null
+    ownership_predicates:
+      - same_org
+    doc_url: https://docs.example.com/privileges/audio-tokenizer
+  - id: audio.tokenizer.encode
+    description: Encode audio tokens for debugging and tooling.
+    resource_tags:
+      - audio
+      - tokenizer
+    sensitivity_tier: moderate
+    rate_limit_class: elevated
+    default_roles:
+      - admin
+      - analyst
+      - developer
+    feature_flag_id: null
+    ownership_predicates:
+      - same_org
+    doc_url: https://docs.example.com/privileges/audio-tokenizer-encode
+  - id: audio.tokenizer.decode
+    description: Decode audio tokens for debugging and tooling.
+    resource_tags:
+      - audio
+      - tokenizer
+    sensitivity_tier: moderate
+    rate_limit_class: elevated
+    default_roles:
+      - admin
+      - analyst
+      - developer
+    feature_flag_id: null
+    ownership_predicates:
+      - same_org
+    doc_url: https://docs.example.com/privileges/audio-tokenizer-decode
   - id: audio.transcriptions
     description: Submit audio for transcription or translation.
     resource_tags:
@@ -273,6 +369,22 @@ scopes:
     ownership_predicates:
       - same_org
     doc_url: https://docs.example.com/privileges/audio-stream-tts
+  - id: audio.stream.tts.realtime
+    description: Realtime streaming text-to-speech with incremental text input.
+    resource_tags:
+      - audio
+      - tts
+      - websocket
+    sensitivity_tier: moderate
+    rate_limit_class: elevated
+    default_roles:
+      - admin
+      - analyst
+      - developer
+    feature_flag_id: null
+    ownership_predicates:
+      - same_org
+    doc_url: https://docs.example.com/privileges/audio-stream-tts-realtime
   - id: audio.chat
     description: Non-streaming speech-to-speech chat (STT → LLM → TTS).
     resource_tags:

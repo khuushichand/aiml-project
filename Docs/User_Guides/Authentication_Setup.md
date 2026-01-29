@@ -13,6 +13,7 @@ cp .env.authnz.template .env
 # 2. Generate a secure API key (new format)
 python -m tldw_Server_API.app.core.AuthNZ.initialize
 # Choose "Generate secure keys" and copy SINGLE_USER_API_KEY
+# This also generates MCP_JWT_SECRET and MCP_API_KEY_SALT if missing.
 
 # 3. Add the generated key to your .env file
 # Edit .env and replace SINGLE_USER_API_KEY value
@@ -50,11 +51,15 @@ cp .env.authnz.template .env
 # 2. Generate secure keys
 python -c "import secrets; print('JWT_SECRET_KEY=' + secrets.token_urlsafe(32))"
 python -c "from cryptography.fernet import Fernet; print('SESSION_ENCRYPTION_KEY=' + Fernet.generate_key().decode())"
+# MCP Unified secrets (required in production; initializer can generate if missing)
+python -c "import secrets; print('MCP_JWT_SECRET=' + secrets.token_urlsafe(32))"
+python -c "import secrets; print('MCP_API_KEY_SALT=' + secrets.token_urlsafe(32))"
 
 # 3. Edit .env file:
 #    - Set AUTH_MODE=multi_user
 #    - Add generated JWT_SECRET_KEY
 #    - Add generated SESSION_ENCRYPTION_KEY
+#    - Add MCP_JWT_SECRET and MCP_API_KEY_SALT (required for MCP Unified in production)
 #      (the server writes Config_Files/session_encryption.key with 0600 permissions; keep manual copies owner-readable only)
 #    - Configure database settings
 
@@ -88,6 +93,8 @@ Key settings in `.env`:
 | `AUTH_MODE` | `single_user` or `multi_user` | `multi_user` |
 | `JWT_SECRET_KEY` | Secret for JWT signing (multi-user) | Required for multi-user |
 | `SINGLE_USER_API_KEY` | API key for single-user mode | Required for single-user |
+| `MCP_JWT_SECRET` | MCP Unified JWT signing secret | Required for MCP in production |
+| `MCP_API_KEY_SALT` | MCP API key hashing salt | Required for MCP in production |
 | `ENABLE_REGISTRATION` | Allow new user registration | `false` |
 | `DATABASE_URL` | User database location | `sqlite:///./Databases/users.db` |
 | `ROTATE_REFRESH_TOKENS` | Rotate refresh tokens on use | `true` |
@@ -112,8 +119,7 @@ Key settings in `.env`:
     ```bash
     docker compose exec app printenv SINGLE_USER_API_KEY
     ```
-- WebUI convenience (dev): `GET /webui/config.json` returns the key in single-user mode so the WebUI can auto-configure. Avoid relying on this in production.
-  - In production (`tldw_production=true`), `/webui/config.json` omits the `apiKey` field for security.
+- Frontend clients: supply the API key via their own config (for the Next.js client, use `NEXT_PUBLIC_X_API_KEY` in `.env.local`).
 - Important: Always set a secure `SINGLE_USER_API_KEY` in production. If unset, the server may use a deterministic test key for convenience during development/testing.
   - When `tldw_production=true`, the server refuses to start if `SINGLE_USER_API_KEY` is missing, a default/test value, or shorter than 24 characters.
 
@@ -154,7 +160,7 @@ Rotation guidance: see `Docs/Operations/JWT_Rotation_Runbook.md`.
 
 ### Security Controls (env)
 
-- `tldw_production`: Set to `true` in production to enable stricter guards (secrets validation, DB checks, masked logs, WebUI config hardening).
+- `tldw_production`: Set to `true` in production to enable stricter guards (secrets validation, DB checks, masked logs).
 - `ENABLE_OPENAPI`: Set `false` to hide docs/Redoc/OpenAPI; defaults to `false` in production when unspecified.
 - `ALLOWED_ORIGINS`: Comma-separated list or JSON array to restrict CORS in production.
 -, `ENABLE_SECURITY_HEADERS`: Enable/disable security headers middleware (defaults to `true` in production).
@@ -191,14 +197,14 @@ python -m tldw_Server_API.app.core.AuthNZ.initialize
 # 3) Start the server
 uvicorn tldw_Server_API.app.main:app --reload
 
-# 4) Open the simple auth page to register/login and get a JWT
-open http://127.0.0.1:8000/webui/auth.html   # macOS
+# 4) Open the Next.js WebUI login page to register/login and get a JWT
+open http://localhost:8080/login   # macOS (run the Next.js client separately)
 # xdg-open on Linux, or just paste the URL in a browser
 ```
 
 Notes
 - This is suitable for development and light testing. For production multi-user, use PostgreSQL for `DATABASE_URL`.
-- The auth page posts to `/api/v1/auth/register` and `/api/v1/auth/login` and shows the access token.
+- The login flow posts to `/api/v1/auth/register` and `/api/v1/auth/login` and shows the access token.
 
 ## Using config.txt for AuthNZ
 

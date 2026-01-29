@@ -12,7 +12,7 @@ import {
   DialogTitle,
   DialogTrigger,
 } from '@/components/ui/dialog';
-import { AlertTriangle, CheckCircle, Clock, Eye, Plus, Trash2 } from 'lucide-react';
+import { AlertTriangle, CheckCircle, Clock, Eye, Plus, RefreshCw, Trash2 } from 'lucide-react';
 import type { Watchlist, WatchlistDraft } from '../types';
 
 type WatchlistsPanelProps = {
@@ -24,6 +24,7 @@ type WatchlistsPanelProps = {
   setNewWatchlist: (next: WatchlistDraft) => void;
   onCreate: () => void;
   onDelete: (watchlist: Watchlist) => void;
+  deletingWatchlistId?: string | null;
 };
 
 const getStatusIcon = (status?: string) => {
@@ -55,6 +56,7 @@ export default function WatchlistsPanel({
   setNewWatchlist,
   onCreate,
   onDelete,
+  deletingWatchlistId,
 }: WatchlistsPanelProps) {
   return (
     <Card>
@@ -174,36 +176,45 @@ export default function WatchlistsPanel({
           </div>
         ) : (
           <div className="space-y-3">
-            {watchlists.map((watchlist) => (
-              <div
-                key={watchlist.id}
-                className="flex items-start justify-between p-3 rounded-lg border"
-              >
-                <div className="flex-1 min-w-0">
-                  <div className="flex items-center gap-2 mb-1">
-                    {getStatusIcon(watchlist.status)}
-                    <span className="font-medium">{watchlist.name}</span>
-                    <Badge variant="outline" className="text-xs">{watchlist.type}</Badge>
-                  </div>
-                  <p className="text-sm text-muted-foreground truncate">
-                    Target: <code className="bg-muted px-1 rounded">{watchlist.target}</code>
-                  </p>
-                  {watchlist.last_checked && (
-                    <p className="text-xs text-muted-foreground">
-                      Last checked: {formatTimestamp(watchlist.last_checked)}
-                    </p>
-                  )}
-                </div>
-                <Button
-                  variant="ghost"
-                  size="sm"
-                  onClick={() => onDelete(watchlist)}
-                  title="Delete watchlist"
+            {watchlists.map((watchlist) => {
+              const isDeleting = deletingWatchlistId === String(watchlist.id);
+              return (
+                <div
+                  key={watchlist.id}
+                  className="flex items-start justify-between p-3 rounded-lg border"
                 >
-                  <Trash2 className="h-4 w-4 text-red-500" />
-                </Button>
-              </div>
-            ))}
+                  <div className="flex-1 min-w-0">
+                    <div className="flex items-center gap-2 mb-1">
+                      {getStatusIcon(watchlist.status)}
+                      <span className="font-medium">{watchlist.name}</span>
+                      <Badge variant="outline" className="text-xs">{watchlist.type}</Badge>
+                    </div>
+                    <p className="text-sm text-muted-foreground truncate">
+                      Target: <code className="bg-muted px-1 rounded">{watchlist.target}</code>
+                    </p>
+                    {watchlist.last_checked && (
+                      <p className="text-xs text-muted-foreground">
+                        Last checked: {formatTimestamp(watchlist.last_checked)}
+                      </p>
+                    )}
+                  </div>
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    onClick={() => onDelete(watchlist)}
+                    title={isDeleting ? 'Deleting watchlist' : 'Delete watchlist'}
+                    aria-label={isDeleting ? 'Deleting watchlist' : 'Delete watchlist'}
+                    disabled={isDeleting}
+                  >
+                    {isDeleting ? (
+                      <RefreshCw className="h-4 w-4 text-red-500 animate-spin" />
+                    ) : (
+                      <Trash2 className="h-4 w-4 text-red-500" />
+                    )}
+                  </Button>
+                </div>
+              );
+            })}
           </div>
         )}
       </CardContent>

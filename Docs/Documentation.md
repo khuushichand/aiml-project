@@ -56,6 +56,7 @@
   - Evaluations: `Docs/Code_Documentation/Evaluations_Developer_Guide.md`
   - Chatbook: `Docs/Code_Documentation/Chatbook_Developer_Guide.md`
   - Code Map: `Docs/Code_Documentation/Code_Map.md`
+  - Voice Assistant Module: `Docs/Code_Documentation/VoiceAssistant_Module.md`
 
 - Subsystem Developer Guides
   - AuthNZ: `Docs/Code_Documentation/AuthNZ-Developer-Guide.md`
@@ -65,6 +66,9 @@
   - Embeddings: `Docs/Embeddings/Embeddings-Developer-Guide.md`
   - Providers API: `Docs/API-related/Providers_API_Documentation.md`
   - OCR: `Docs/API-related/OCR_API_Documentation.md`
+  - Voice Assistant API: `Docs/API/Voice_Assistant.md`
+  - Storage API: `Docs/API-related/Storage_API_Documentation.md`
+  - Generated Files Storage Guide: `Docs/Code_Documentation/Guides/Generated_Files_Storage_Code_Guide.md`
 
 ------------------------------------------------------------------------------------------------------------------------
 
@@ -81,7 +85,13 @@
 ------------------------------------------------------------------------------------------------------------------------
 
 ------------------------------------------------------------------------------------------------------------------------
-### Acknowledgements](#acknowledgements)
+### <a name="contact"></a> Contact
+-
+
+------------------------------------------------------------------------------------------------------------------------
+
+------------------------------------------------------------------------------------------------------------------------
+### <a name="acknowledgements"></a> Acknowledgements
 -
 
 ------------------------------------------------------------------------------------------------------------------------

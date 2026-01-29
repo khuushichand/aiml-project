@@ -19,7 +19,19 @@ from loguru import logger
 from pydantic import BaseModel, Field, field_validator
 #
 # Local Imports
-from tldw_Server_API.app.core.DB_Management.db_path_utils import DatabasePaths
+from tldw_Server_API.app.core.DB_Management.db_path_utils import (
+    DatabasePaths,
+    _normalize_user_db_base_dir,
+)
+from tldw_Server_API.app.core.AuthNZ.exceptions import QuotaExceededError, StorageError
+from tldw_Server_API.app.core.AuthNZ.repos.generated_files_repo import (
+    FILE_CATEGORY_VOICE_CLONE,
+    SOURCE_FEATURE_VOICE_STUDIO,
+)
+from tldw_Server_API.app.core.Storage.generated_file_helpers import AUDIO_MIME_TYPES
+from tldw_Server_API.app.services.storage_quota_service import get_storage_service
+from tldw_Server_API.app.core.config import settings
+from tldw_Server_API.app.core.testing import is_test_mode
 from tldw_Server_API.app.core.Utils.pydantic_compat import model_dump_compat
 from .tts_exceptions import (
     TTSError,
@@ -68,6 +80,21 @@ PROVIDER_REQUIREMENTS = {
         "duration": {"min": 3, "max": 15},
         "sample_rate": 16000,
         "convert_to": "wav"
+    },
+    "pocket_tts": {
+        "formats": [".wav", ".mp3", ".flac", ".ogg", ".m4a"],
+        "max_size_mb": 20,
+        "duration": {"min": 1, "max": 60},
+        "sample_rate": 24000,
+        "convert_to": "wav"
+    },
+    "qwen3_tts": {
+        "formats": [".wav", ".mp3", ".flac", ".ogg", ".m4a", ".opus"],
+        "max_size_mb": 50,
+        # Qwen3-TTS highlights rapid voice cloning from ~3s references in the README.
+        "duration": {"min": 3, "max": 30},
+        "sample_rate": 24000,
+        "convert_to": "wav"
     }
 }
 
@@ -82,7 +109,7 @@ VOICE_RATE_LIMITS = {
 DEFAULT_NEUTTS_VOICE_ID = "default"
 _REPO_ROOT = Path(__file__).resolve().parents[4]
 DEFAULT_NEUTTS_VOICE_PATH = (
-    _REPO_ROOT / "Helper_Scripts" / "Audio" / "Sample_Voices" / "Sample_Voice_1.mp3"
+    _REPO_ROOT / "Helper_Scripts" / "Audio" / "Sample_Voices" / "Sample_Voice_1.wav"
 )
 DEFAULT_NEUTTS_VOICE_TEXT_PATH = DEFAULT_NEUTTS_VOICE_PATH.with_suffix(".txt")
 
@@ -138,6 +165,8 @@ class VoiceReferenceMetadata(BaseModel):
     """Stored metadata and provider artifacts for a voice reference."""
     voice_id: str
     reference_text: Optional[str] = None
+    voice_clone_prompt_b64: Optional[str] = None
+    voice_clone_prompt_format: Optional[str] = None
     provider_artifacts: Dict[str, Dict[str, Any]] = Field(default_factory=dict)
     created_at: datetime = Field(default_factory=datetime.utcnow)
     updated_at: datetime = Field(default_factory=datetime.utcnow)
@@ -295,7 +324,35 @@ class VoiceManager:
 
         Uses DatabasePaths to resolve `<USER_DB_BASE_DIR>/<user_id>/voices`.
         """
-        return DatabasePaths.get_user_voices_dir(user_id)
+        sample_root = DEFAULT_NEUTTS_VOICE_PATH.parent.resolve()
+        env_user_db_base = os.getenv("USER_DB_BASE_DIR")
+        settings_user_db_base = settings.get("USER_DB_BASE_DIR")
+        test_context = bool(os.getenv("PYTEST_CURRENT_TEST")) or is_test_mode()
+        if test_context and env_user_db_base:
+            user_db_base = env_user_db_base
+        else:
+            user_db_base = settings_user_db_base or env_user_db_base
+        if user_db_base:
+            base_dir = _normalize_user_db_base_dir(Path(user_db_base))
+        else:
+            if test_context:
+                base_dir = (Path.cwd() / "Databases" / "user_databases").resolve()
+            else:
+                base_dir = (_REPO_ROOT / "Databases" / "user_databases").resolve()
+        candidate_dir = (base_dir / str(user_id) / DatabasePaths.VOICES_SUBDIR).resolve()
+        try:
+            candidate_dir.relative_to(sample_root)
+        except ValueError:
+            return DatabasePaths.get_user_voices_dir(user_id)
+        fallback_base = (_REPO_ROOT / "Databases" / "user_databases").resolve()
+        logger.warning(
+            "Voices directory resolved under Sample_Voices; falling back to {}",
+            fallback_base,
+        )
+        return DatabasePaths.get_user_voices_dir(
+            user_id,
+            base_dir_override=fallback_base,
+        )
 
     def get_user_voice_metadata_path(self, user_id: int, voice_id: str) -> Path:
         """Get the metadata path for a stored voice reference."""
@@ -580,6 +637,32 @@ class VoiceManager:
                 request.provider
             )
 
+            # Register voice clone with storage tracking (quota + generated files)
+            try:
+                storage_service = await get_storage_service()
+                storage_path = str(processed_path.relative_to(voices_path))
+                mime_type = AUDIO_MIME_TYPES.get(processed_path.suffix.lstrip(".").lower(), "application/octet-stream")
+                tags = [f"voice:{request.name}"]
+                if request.provider:
+                    tags.append(f"provider:{request.provider}")
+                await storage_service.register_generated_file(
+                    user_id=user_id,
+                    filename=processed_path.name,
+                    storage_path=storage_path,
+                    file_category=FILE_CATEGORY_VOICE_CLONE,
+                    source_feature=SOURCE_FEATURE_VOICE_STUDIO,
+                    file_size_bytes=processed_path.stat().st_size,
+                    original_filename=filename,
+                    mime_type=mime_type,
+                    source_ref=f"provider:{request.provider}" if request.provider else None,
+                    tags=tags,
+                    check_quota=True,
+                )
+            except QuotaExceededError as exc:
+                raise VoiceQuotaExceededError(str(exc)) from exc
+            except StorageError as exc:
+                raise VoiceProcessingError(f"Failed to register voice with storage: {exc}") from exc
+
             # Create voice info
             voice_info = VoiceInfo(
                 voice_id=voice_id,
@@ -637,11 +720,15 @@ class VoiceManager:
             # distinguish between validation and generic failures.
             if upload_path.exists():
                 upload_path.unlink()
+            if "processed_path" in locals() and processed_path.exists():
+                processed_path.unlink()
             raise
         except Exception as e:
             # Clean up on error
             if upload_path.exists():
                 upload_path.unlink()
+            if "processed_path" in locals() and processed_path.exists():
+                processed_path.unlink()
             logger.error(f"Failed to upload voice: {e}")
             raise VoiceProcessingError(f"Failed to process voice upload: {str(e)}")
 

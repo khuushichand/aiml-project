@@ -3,6 +3,7 @@ Simplified chat endpoint tests using real database and authentication.
 """
 
 import pytest
+from typing import Optional
 from fastapi import status
 from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
@@ -162,6 +163,70 @@ def test_chat_completion_invalid_model(authenticated_client, mock_chacha_db, set
 
         # Should return an error status
         assert response.status_code >= 400
+
+
+def test_chat_completion_revalidates_default_model(authenticated_client, mock_chacha_db, setup_dependencies):
+    """Ensure default model selection is revalidated against provider overrides."""
+
+    request_data = ChatCompletionRequest(
+        api_provider="openai",
+        messages=[ChatCompletionUserMessageParam(role="user", content="Hello")],
+    )
+
+    def _fake_validate(provider: str, model: Optional[str]):
+        if model == "bad-model":
+            return {"error_code": "model_not_allowed", "message": "Model not allowed"}
+        return None
+
+    with (
+        patch("tldw_Server_API.app.api.v1.endpoints.chat.perform_chat_api_call") as mock_llm,
+        patch("tldw_Server_API.app.api.v1.endpoints.chat.API_KEYS", {"openai": "test-key"}),
+        patch("tldw_Server_API.app.api.v1.endpoints.chat.get_override_default_model", return_value="bad-model"),
+        patch("tldw_Server_API.app.api.v1.endpoints.chat.validate_provider_override", side_effect=_fake_validate),
+    ):
+        mock_llm.return_value = {
+            "id": "chatcmpl-test",
+            "choices": [
+                {"message": {"role": "assistant", "content": "Should not be returned"}, "finish_reason": "stop"}
+            ],
+        }
+
+        response = authenticated_client.post("/api/v1/chat/completions", json=request_data.model_dump())
+
+        assert response.status_code == status.HTTP_403_FORBIDDEN
+        detail = response.json().get("detail", {})
+        assert detail.get("error_code") == "model_not_allowed"
+
+
+def test_chat_completion_default_model_tracks_model(authenticated_client, mock_chacha_db, setup_dependencies):
+    """Ensure default model injection updates downstream model tracking."""
+
+    request_data = ChatCompletionRequest(
+        api_provider="openai",
+        messages=[ChatCompletionUserMessageParam(role="user", content="Hello")],
+    )
+
+    captured = {}
+
+    async def fake_execute_non_stream_call(**kwargs):
+        captured["model"] = kwargs.get("model")
+        return {
+            "id": "chatcmpl-test",
+            "choices": [
+                {"message": {"role": "assistant", "content": "ok"}, "finish_reason": "stop"}
+            ],
+        }
+
+    with (
+        patch("tldw_Server_API.app.api.v1.endpoints.chat.execute_non_stream_call", side_effect=fake_execute_non_stream_call),
+        patch("tldw_Server_API.app.api.v1.endpoints.chat.API_KEYS", {"openai": "test-key"}),
+        patch("tldw_Server_API.app.api.v1.endpoints.chat.get_override_default_model", return_value="default-model"),
+        patch("tldw_Server_API.app.api.v1.endpoints.chat.validate_provider_override", return_value=None),
+    ):
+        response = authenticated_client.post("/api/v1/chat/completions", json=request_data.model_dump())
+
+        assert response.status_code == status.HTTP_200_OK
+        assert captured.get("model") == "default-model"
 
 
 def test_chat_completion_with_conversation_history(authenticated_client, mock_chacha_db, setup_dependencies):

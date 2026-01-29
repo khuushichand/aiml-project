@@ -9,13 +9,26 @@ type SystemStatusPanelProps = {
 const getSystemStatusIcon = (status: SystemHealthStatus) => {
   switch (status) {
     case 'healthy':
-      return <CheckCircle className="h-8 w-8 text-green-500" />;
+      return <CheckCircle className="h-8 w-8 text-green-500" aria-hidden="true" />;
     case 'warning':
-      return <AlertTriangle className="h-8 w-8 text-yellow-500" />;
+      return <AlertTriangle className="h-8 w-8 text-yellow-500" aria-hidden="true" />;
     case 'critical':
-      return <AlertTriangle className="h-8 w-8 text-red-500" />;
+      return <AlertTriangle className="h-8 w-8 text-red-500" aria-hidden="true" />;
     default:
-      return <Clock className="h-8 w-8 text-muted-foreground" />;
+      return <Clock className="h-8 w-8 text-muted-foreground" aria-hidden="true" />;
+  }
+};
+
+const getStatusLabel = (status: SystemHealthStatus) => {
+  switch (status) {
+    case 'healthy':
+      return 'Healthy';
+    case 'warning':
+      return 'Warning';
+    case 'critical':
+      return 'Critical';
+    default:
+      return 'Unknown';
   }
 };
 
@@ -31,7 +44,12 @@ export default function SystemStatusPanel({ systemStatus }: SystemStatusPanelPro
       <CardContent>
         <div className="grid gap-4 md:grid-cols-4">
           {systemStatus.map((item) => (
-            <div key={item.key} className="flex items-center gap-3 p-4 rounded-lg bg-muted/50">
+            <div
+              key={item.key}
+              className="flex items-center gap-3 p-4 rounded-lg bg-muted/50"
+              role="status"
+              aria-label={`${item.label}: ${getStatusLabel(item.status)} - ${item.detail}`}
+            >
               {getSystemStatusIcon(item.status)}
               <div>
                 <div className="font-semibold">{item.label}</div>

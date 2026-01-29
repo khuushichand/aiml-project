@@ -9,11 +9,20 @@ import hashlib
 
 from tldw_Server_API.app.api.v1.API_Deps.DB_Deps import get_media_db_for_user
 from tldw_Server_API.app.api.v1.API_Deps.auth_deps import rbac_rate_limit, require_permissions
-from tldw_Server_API.app.api.v1.schemas.media_request_models import MediaUpdateRequest
-from tldw_Server_API.app.api.v1.schemas.media_response_models import MediaDetailResponse
+from tldw_Server_API.app.api.v1.schemas.media_request_models import (
+    MediaKeywordsUpdateRequest,
+    MediaUpdateRequest,
+)
+from tldw_Server_API.app.api.v1.schemas.media_response_models import (
+    MediaDetailResponse,
+    MediaKeywordsResponse,
+)
 from tldw_Server_API.app.api.v1.utils.cache import generate_etag, is_not_modified
-from tldw_Server_API.app.api.v1.utils.rag_cache import invalidate_rag_caches
-from tldw_Server_API.app.core.AuthNZ.permissions import MEDIA_DELETE
+from tldw_Server_API.app.api.v1.utils.rag_cache import (
+    delete_media_vectors,
+    invalidate_rag_caches,
+)
+from tldw_Server_API.app.core.AuthNZ.permissions import MEDIA_DELETE, MEDIA_UPDATE
 from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import User, get_request_user
 from tldw_Server_API.app.core.DB_Management.DB_Manager import get_full_media_details_rich2
 from tldw_Server_API.app.core.DB_Management.Media_DB_v2 import (
@@ -21,6 +30,7 @@ from tldw_Server_API.app.core.DB_Management.Media_DB_v2 import (
     DatabaseError,
     InputError,
     MediaDatabase,
+    fetch_keywords_for_media,
     permanently_delete_item,
 )
 
@@ -182,6 +192,8 @@ async def delete_media_item(
                 status_code=status.HTTP_409_CONFLICT,
                 detail="Media could not be moved to trash",
             )
+        invalidate_rag_caches(current_user, media_id=media_id)
+        await delete_media_vectors(current_user, media_id=media_id)
         logger.info(
             "User {} moved media {} to trash",
             getattr(current_user, "id", "?"),
@@ -368,6 +380,8 @@ async def permanently_delete_media_item(
                 status_code=status.HTTP_404_NOT_FOUND,
                 detail="Media not found or already deleted",
             )
+        invalidate_rag_caches(current_user, media_id=media_id)
+        await delete_media_vectors(current_user, media_id=media_id)
         logger.warning(
             "User {} permanently deleted media {}",
             getattr(current_user, "id", "?"),
@@ -670,6 +684,7 @@ async def update_media_item(
                 status_code=status.HTTP_404_NOT_FOUND,
                 detail="Media not found after update",
             )
+        invalidate_rag_caches(current_user, media_id=media_id)
         return MediaDetailResponse(**details)
     except HTTPException:
         raise
@@ -706,6 +721,45 @@ async def update_media_item(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="An unexpected error occurred",
         ) from exc
+
+
+@router.patch(
+    "/{media_id:int}/keywords",
+    response_model=MediaKeywordsResponse,
+    summary="Update media keywords (add/remove/set)",
+    dependencies=[
+        Depends(require_permissions(MEDIA_UPDATE)),
+        Depends(rbac_rate_limit("media.update")),
+    ],
+)
+async def update_media_keywords(
+    payload: MediaKeywordsUpdateRequest,
+    media_id: int = Path(..., description="The ID of the media item"),
+    db: MediaDatabase = Depends(get_media_db_for_user),
+    _current_user: User = Depends(get_request_user),
+) -> MediaKeywordsResponse:
+    """Update media keywords without altering other media fields."""
+    mode = payload.mode
+    target_keywords = [k.strip() for k in payload.keywords if k and k.strip()]
+    try:
+        current_keywords = fetch_keywords_for_media(media_id=media_id, db_instance=db)
+        if mode == "set":
+            desired = target_keywords
+        elif mode == "remove":
+            to_remove = {k.lower() for k in target_keywords}
+            desired = [k for k in current_keywords if k.lower() not in to_remove]
+        else:
+            # add (default)
+            existing = {k.lower() for k in current_keywords}
+            desired = current_keywords + [k for k in target_keywords if k.lower() not in existing]
+        db.update_keywords_for_media(media_id=media_id, keywords=desired)
+        updated_keywords = fetch_keywords_for_media(media_id=media_id, db_instance=db)
+        return MediaKeywordsResponse(media_id=media_id, keywords=updated_keywords)
+    except InputError as exc:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
+    except DatabaseError as exc:
+        logger.error(f"Failed to update keywords for media {media_id}: {exc}")
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="keywords_update_failed") from exc
 
 
 __all__ = ["router"]

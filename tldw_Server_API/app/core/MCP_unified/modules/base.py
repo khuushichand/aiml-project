@@ -210,6 +210,7 @@ class BaseModule(ABC):
 
             # Perform health check
             checks = await self.check_health()
+            now = datetime.utcnow()
 
             # Determine overall status
             if all(checks.values()):
@@ -226,14 +227,16 @@ class BaseModule(ABC):
             self._health = ModuleHealth(
                 status=status,
                 message=message,
-                checks=checks
+                checks=checks,
+                last_check=now,
             )
 
         except Exception as e:
             logger.error(f"Health check failed for {self.name}: {str(e)}")
             self._health = ModuleHealth(
                 status=HealthStatus.UNHEALTHY,
-                message=f"Health check error: {str(e)}"
+                message=f"Health check error: {str(e)}",
+                last_check=datetime.utcnow(),
             )
 
         return self._health

@@ -83,7 +83,10 @@ def test_pdfs_process_usage_event_logged(client_with_single_user, quota_service_
 
     import tldw_Server_API.app.api.v1.endpoints.media as media_mod
 
+    captured_kwargs = {}
+
     async def _stub_process_pdf_task(**kwargs):
+        captured_kwargs.update(kwargs)
         return {
             "status": "Success",
             "content": "",
@@ -96,6 +99,16 @@ def test_pdfs_process_usage_event_logged(client_with_single_user, quota_service_
         ("files", ("paper.pdf", b"%PDF-1.4\n", "application/pdf")),
     ]
 
-    r = client.post("/api/v1/media/process-pdfs", files=files)
+    data = {
+        "enable_ocr": "true",
+        "ocr_backend": "hunyuan",
+        "ocr_output_format": "json",
+        "ocr_prompt_preset": "json",
+    }
+    r = client.post("/api/v1/media/process-pdfs", data=data, files=files)
     assert r.status_code == 200, r.text
     assert any(e[0] == "media.process.pdf" for e in usage_logger.events)
+    assert captured_kwargs.get("enable_ocr") is True
+    assert captured_kwargs.get("ocr_backend") == "hunyuan"
+    assert captured_kwargs.get("ocr_output_format") == "json"
+    assert captured_kwargs.get("ocr_prompt_preset") == "json"

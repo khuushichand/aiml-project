@@ -38,6 +38,7 @@ import threading
 import time
 import uuid  # For UUID generation
 from contextlib import contextmanager, nullcontext
+from contextvars import ContextVar
 from configparser import ConfigParser
 from datetime import datetime, timezone, timedelta  # Use timezone-aware UTC
 from math import ceil
@@ -124,6 +125,9 @@ class ConflictError(DatabaseError):
         if self.identifier:
             details.append(f"ID: {self.identifier}")
         return f"{base} ({', '.join(details)})" if details else base
+
+
+_SAFE_IDENTIFIER_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 
 
 class _RowAdapter:
@@ -226,7 +230,7 @@ class MediaDatabase:
     handling sync metadata and FTS updates internally via Python code.
     Requires client_id on initialization. Includes schema versioning.
     """
-    _CURRENT_SCHEMA_VERSION = 9  # Add visibility and owner_user_id columns
+    _CURRENT_SCHEMA_VERSION = 19  # Latest sqlite migrations (workspace_tag for data tables)
 
     # <<< Schema Definition (Version 1) >>>
 
@@ -951,6 +955,7 @@ class MediaDatabase:
         uuid TEXT UNIQUE NOT NULL,
         name TEXT NOT NULL,
         description TEXT,
+        workspace_tag TEXT,
         prompt TEXT NOT NULL,
         column_hints_json TEXT,
         status TEXT NOT NULL DEFAULT 'queued',
@@ -969,6 +974,7 @@ class MediaDatabase:
     CREATE INDEX IF NOT EXISTS idx_data_tables_status ON data_tables(status);
     CREATE INDEX IF NOT EXISTS idx_data_tables_updated ON data_tables(updated_at DESC);
     CREATE INDEX IF NOT EXISTS idx_data_tables_deleted ON data_tables(deleted);
+    CREATE INDEX IF NOT EXISTS idx_data_tables_workspace_tag ON data_tables(workspace_tag);
 
     CREATE TABLE IF NOT EXISTS data_table_columns (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -1098,10 +1104,21 @@ class MediaDatabase:
         self.default_org_id = default_org_id
         self.default_team_id = default_team_id
 
-        # Transaction-scoped connection and depth (no per-thread caching)
-        self._txn_conn = None
-        self._tx_depth = 0
-        # Persistent non-transaction connection (PostgreSQL) to mimic previous per-thread behavior
+        # Transaction-scoped connection and depth (context-local for async safety)
+        self._txn_conn_var: ContextVar[Optional[Any]] = ContextVar(
+            f"media_db_txn_conn_{id(self)}",
+            default=None,
+        )
+        self._tx_depth_var: ContextVar[int] = ContextVar(
+            f"media_db_tx_depth_{id(self)}",
+            default=0,
+        )
+        # Persistent non-transaction connection (PostgreSQL) is context-local; SQLite in-memory
+        # uses a single persistent connection on the instance.
+        self._persistent_conn_var: ContextVar[Optional[Any]] = ContextVar(
+            f"media_db_persistent_conn_{id(self)}",
+            default=None,
+        )
         self._persistent_conn = None
         # For SQLite in-memory databases, maintain a persistent connection so state persists
         if self.backend_type == BackendType.SQLITE and self.is_memory_db:
@@ -1377,6 +1394,41 @@ class MediaDatabase:
         rows = cursor.fetchall() or []
         return [dict(r) for r in rows]
 
+    def _get_txn_conn(self):
+        return self._txn_conn_var.get()
+
+    def _set_txn_conn(self, conn) -> None:
+        self._txn_conn_var.set(conn)
+
+    def _get_tx_depth(self) -> int:
+        return int(self._tx_depth_var.get() or 0)
+
+    def _set_tx_depth(self, depth: int) -> None:
+        self._tx_depth_var.set(int(depth))
+
+    def _inc_tx_depth(self) -> int:
+        depth = self._get_tx_depth() + 1
+        self._set_tx_depth(depth)
+        return depth
+
+    def _dec_tx_depth(self) -> int:
+        depth = self._get_tx_depth() - 1
+        if depth < 0:
+            depth = 0
+        self._set_tx_depth(depth)
+        return depth
+
+    def _get_persistent_conn(self):
+        if self.backend_type == BackendType.POSTGRESQL:
+            return self._persistent_conn_var.get()
+        return self._persistent_conn
+
+    def _set_persistent_conn(self, conn) -> None:
+        if self.backend_type == BackendType.POSTGRESQL:
+            self._persistent_conn_var.set(conn)
+        else:
+            self._persistent_conn = conn
+
     # --- Connection Management ---
     def get_connection(self):
         """Compatibility shim to return a usable connection.
@@ -1386,30 +1438,47 @@ class MediaDatabase:
         - For PostgreSQL, returns a persistent connection grabbed from the pool
           on first use (released by close_connection()).
         """
-        if self._txn_conn is not None:
-            return self._txn_conn
+        txn_conn = self._get_txn_conn()
+        if txn_conn is not None:
+            return txn_conn
         if self.backend_type == BackendType.SQLITE:
             if self.is_memory_db and self._persistent_conn is not None:
                 return self._persistent_conn
             return self.backend.get_pool().get_connection()
         # PostgreSQL: reuse a single persistent connection outside transactions
-        if self._persistent_conn is None:
-            self._persistent_conn = self.backend.get_pool().get_connection()
+        conn = self._get_persistent_conn()
+        if conn is None:
+            conn = self.backend.get_pool().get_connection()
+            self._set_persistent_conn(conn)
         try:
-            self.backend.apply_scope(self._persistent_conn)
+            self.backend.apply_scope(conn)
         except Exception:
             pass
-        return self._persistent_conn
+        return conn
 
     def close_connection(self):
         """Release persistent non-transaction connection if present."""
-        if self._txn_conn is not None:
+        if self._get_txn_conn() is not None:
             return
         try:
-            if self._persistent_conn is not None:
-                self.backend.get_pool().return_connection(self._persistent_conn)
+            conn = self._get_persistent_conn()
+            if conn is not None:
+                self.backend.get_pool().return_connection(conn)
         finally:
-            self._persistent_conn = None
+            self._set_persistent_conn(None)
+
+    def release_context_connection(self) -> None:
+        """Return context-scoped Postgres connection to the pool (no-op for SQLite)."""
+        if self.backend_type != BackendType.POSTGRESQL:
+            return
+        if self._get_txn_conn() is not None:
+            return
+        try:
+            conn = self._get_persistent_conn()
+            if conn is not None:
+                self.backend.get_pool().return_connection(conn)
+        finally:
+            self._set_persistent_conn(None)
 
     def _ensure_sqlite_backend(self) -> None:
         if self.backend_type != BackendType.SQLITE:
@@ -1466,7 +1535,7 @@ class MediaDatabase:
          """
         prepared_query, prepared_params = self._prepare_backend_statement(query, params)
 
-        eff_conn = connection or self._txn_conn
+        eff_conn = connection or self._get_txn_conn()
 
         if self.backend_type == BackendType.SQLITE:
             try:
@@ -1577,7 +1646,7 @@ class MediaDatabase:
 
         prepared_query, prepared_params_list = self._prepare_backend_many_statement(query, params_list)
 
-        eff_conn = connection or self._txn_conn
+        eff_conn = connection or self._get_txn_conn()
 
         if self.backend_type == BackendType.SQLITE:
             try:
@@ -2146,7 +2215,7 @@ class MediaDatabase:
 
         if self.backend_type == BackendType.SQLITE:
             # Nest-aware transaction handling for SQLite
-            outermost = self._txn_conn is None
+            outermost = self._get_txn_conn() is None
             if outermost:
                 # Dedicated connection for this transaction
                 conn = self._persistent_conn or self.backend.connect()
@@ -2160,13 +2229,13 @@ class MediaDatabase:
                 except sqlite3.Error:
                     pass
             else:
-                conn = self._txn_conn
+                conn = self._get_txn_conn()
 
-            self._tx_depth += 1
+            self._inc_tx_depth()
             try:
                 if outermost:
                     conn.execute("BEGIN")
-                    self._txn_conn = conn
+                    self._set_txn_conn(conn)
                     logging.debug("Started SQLite transaction.")
                 yield conn
                 if outermost:
@@ -2181,9 +2250,9 @@ class MediaDatabase:
                         pass
                 raise
             finally:
-                self._tx_depth -= 1
+                self._dec_tx_depth()
                 if outermost:
-                    self._txn_conn = None
+                    self._set_txn_conn(None)
                     if self._persistent_conn is None:
                         try:
                             conn.close()
@@ -2192,23 +2261,23 @@ class MediaDatabase:
             return
 
         # PostgreSQL and others: reuse a single connection for nested transactions
-        manages_backend_conn = self._txn_conn is None
+        manages_backend_conn = self._get_txn_conn() is None
         if manages_backend_conn:
             conn = self.backend.get_pool().get_connection()
         else:
-            conn = self._txn_conn
+            conn = self._get_txn_conn()
 
-        manages_backend_tx = self._tx_depth == 0
-        self._tx_depth += 1
+        manages_backend_tx = self._get_tx_depth() == 0
+        self._inc_tx_depth()
         ctx = self.backend.transaction(conn) if manages_backend_tx else nullcontext(conn)
         try:
             with ctx as inner_conn:
-                self._txn_conn = inner_conn
+                self._set_txn_conn(inner_conn)
                 yield inner_conn
         finally:
-            self._tx_depth -= 1
-            if self._tx_depth == 0:
-                self._txn_conn = None
+            depth = self._dec_tx_depth()
+            if depth == 0:
+                self._set_txn_conn(None)
             if manages_backend_conn:
                 try:
                     self.backend.get_pool().return_connection(conn)
@@ -3184,6 +3253,16 @@ class MediaDatabase:
             7: self._postgres_migrate_to_v7,
             8: self._postgres_migrate_to_v8,
             9: self._postgres_migrate_to_v9,
+            10: self._postgres_migrate_to_v10,
+            11: self._postgres_migrate_to_v11,
+            12: self._postgres_migrate_to_v12,
+            13: self._postgres_migrate_to_v13,
+            14: self._postgres_migrate_to_v14,
+            15: self._postgres_migrate_to_v15,
+            16: self._postgres_migrate_to_v16,
+            17: self._postgres_migrate_to_v17,
+            18: self._postgres_migrate_to_v18,
+            19: self._postgres_migrate_to_v19,
         }
 
     def _postgres_migrate_to_v5(self, conn) -> None:
@@ -3380,6 +3459,72 @@ class MediaDatabase:
             f"CREATE INDEX IF NOT EXISTS idx_media_owner_user_id ON {ident('media')}({ident('owner_user_id')})",
             connection=conn,
         )
+
+    def _postgres_migrate_to_v10(self, conn) -> None:
+        """Ensure Claims tables and review extensions exist (PostgreSQL)."""
+
+        self._ensure_postgres_claims_tables(conn)
+        self._ensure_postgres_claims_extensions(conn)
+
+    def _postgres_migrate_to_v11(self, conn) -> None:
+        """Ensure MediaFiles table exists for artifact storage (PostgreSQL)."""
+
+        try:
+            statements = self._convert_sqlite_sql_to_postgres_statements(
+                self._MEDIA_FILES_TABLE_SQL
+            )
+            for stmt in statements:
+                try:
+                    self.backend.execute(stmt, connection=conn)
+                except BackendDatabaseError as exc:
+                    logger.warning(
+                        "Could not apply MediaFiles migration statement on PostgreSQL: %s",
+                        exc,
+                    )
+        except Exception as exc:  # pragma: no cover - defensive
+            logger.warning("MediaFiles Postgres migration v11 failed: %s", exc)
+
+    def _postgres_migrate_to_v12(self, conn) -> None:
+        """Ensure collections and content item tables exist (PostgreSQL)."""
+
+        self._ensure_postgres_collections_tables(conn)
+
+    def _postgres_migrate_to_v13(self, conn) -> None:
+        """Ensure collections tables are indexed and ready (PostgreSQL)."""
+
+        self._ensure_postgres_collections_tables(conn)
+
+    def _postgres_migrate_to_v14(self, conn) -> None:
+        """Ensure Data Tables base schema exists (PostgreSQL)."""
+
+        self._ensure_postgres_data_tables(conn)
+
+    def _postgres_migrate_to_v15(self, conn) -> None:
+        """Ensure Data Tables columns and late additions exist (PostgreSQL)."""
+
+        self._ensure_postgres_data_tables(conn)
+
+    def _postgres_migrate_to_v16(self, conn) -> None:
+        """Ensure Media.source_hash column/index exist (PostgreSQL)."""
+
+        self._ensure_postgres_source_hash_column(conn)
+
+    def _postgres_migrate_to_v17(self, conn) -> None:
+        """Ensure Claims extensions remain aligned (PostgreSQL)."""
+
+        self._ensure_postgres_claims_tables(conn)
+        self._ensure_postgres_claims_extensions(conn)
+
+    def _postgres_migrate_to_v18(self, conn) -> None:
+        """Ensure sequences are synced after structural changes (PostgreSQL)."""
+
+        self._sync_postgres_sequences(conn)
+
+    def _postgres_migrate_to_v19(self, conn) -> None:
+        """Finalise schema ensures (FTS + RLS) for PostgreSQL."""
+
+        self._ensure_postgres_fts(conn)
+        self._ensure_postgres_rls(conn)
 
     def _update_schema_version_postgres(self, conn, version: int) -> None:
         """Ensure schema_version table reflects the supplied version."""
@@ -3675,12 +3820,273 @@ class MediaDatabase:
 
     def _ensure_postgres_data_tables(self, conn) -> None:
         """Ensure Data Tables schema exists on PostgreSQL."""
-        try:
-            statements = self._convert_sqlite_sql_to_postgres_statements(self._DATA_TABLES_SQL)
-            for stmt in statements:
+        statements = self._convert_sqlite_sql_to_postgres_statements(self._DATA_TABLES_SQL)
+        create_tables = [s for s in statements if s.strip().upper().startswith("CREATE TABLE")]
+        other_statements = [s for s in statements if s not in create_tables]
+
+        for stmt in create_tables:
+            try:
                 self.backend.execute(stmt, connection=conn)
+            except BackendDatabaseError as exc:
+                logger.warning(
+                    "Could not ensure Data Tables base table on PostgreSQL: %s",
+                    exc,
+                )
+
+        # Some older PostgreSQL schemas may have partial data_tables definitions.
+        # Ensure late-added columns exist before applying indexes that depend on them.
+        self._ensure_postgres_data_tables_columns(conn)
+
+        for stmt in other_statements:
+            try:
+                self.backend.execute(stmt, connection=conn)
+            except BackendDatabaseError as exc:
+                logger.warning(
+                    "Could not ensure Data Tables index/statement on PostgreSQL: %s",
+                    exc,
+                )
+
+    def _ensure_postgres_columns(
+        self,
+        conn,
+        *,
+        table: str,
+        column_defs: Dict[str, str],
+    ) -> None:
+        """Ensure a set of columns exist on a PostgreSQL table."""
+
+        backend = self.backend
+        ident = backend.escape_identifier
+
+        if not backend.table_exists(table, connection=conn):
+            return
+
+        try:
+            existing = {
+                str(row.get("name") or "").lower()
+                for row in backend.get_table_info(table, connection=conn)
+            }
         except BackendDatabaseError as exc:
-            logger.warning(f"Could not ensure data_tables schema on PostgreSQL: {exc}")
+            logger.warning("Could not introspect PostgreSQL table %s: %s", table, exc)
+            return
+
+        for column, definition in column_defs.items():
+            if column.lower() in existing:
+                continue
+            try:
+                backend.execute(
+                    f"ALTER TABLE {ident(table)} "
+                    f"ADD COLUMN IF NOT EXISTS {ident(column)} {definition}",
+                    connection=conn,
+                )
+            except BackendDatabaseError as exc:
+                logger.warning(
+                    "Could not add PostgreSQL column %s.%s: %s",
+                    table,
+                    column,
+                    exc,
+                )
+
+    def _ensure_postgres_data_tables_columns(self, conn) -> None:
+        """Ensure late-added Data Tables columns and indexes exist on PostgreSQL."""
+
+        backend = self.backend
+        ident = backend.escape_identifier
+
+        try:
+            self._ensure_postgres_columns(
+                conn,
+                table="data_tables",
+                column_defs={
+                    "workspace_tag": "TEXT",
+                    "column_hints_json": "TEXT",
+                    "last_modified": "TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP",
+                    "version": "INTEGER NOT NULL DEFAULT 1",
+                    "client_id": "TEXT NOT NULL DEFAULT ''",
+                    "deleted": "BOOLEAN NOT NULL DEFAULT FALSE",
+                    "prev_version": "BIGINT",
+                    "merge_parent_uuid": "TEXT",
+                },
+            )
+            self._ensure_postgres_columns(
+                conn,
+                table="data_table_columns",
+                column_defs={
+                    "format": "TEXT",
+                    "last_modified": "TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP",
+                    "version": "INTEGER NOT NULL DEFAULT 1",
+                    "client_id": "TEXT NOT NULL DEFAULT ''",
+                    "deleted": "BOOLEAN NOT NULL DEFAULT FALSE",
+                    "prev_version": "BIGINT",
+                    "merge_parent_uuid": "TEXT",
+                },
+            )
+            self._ensure_postgres_columns(
+                conn,
+                table="data_table_rows",
+                column_defs={
+                    "row_hash": "TEXT",
+                    "last_modified": "TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP",
+                    "version": "INTEGER NOT NULL DEFAULT 1",
+                    "client_id": "TEXT NOT NULL DEFAULT ''",
+                    "deleted": "BOOLEAN NOT NULL DEFAULT FALSE",
+                    "prev_version": "BIGINT",
+                    "merge_parent_uuid": "TEXT",
+                },
+            )
+            self._ensure_postgres_columns(
+                conn,
+                table="data_table_sources",
+                column_defs={
+                    "last_modified": "TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP",
+                    "version": "INTEGER NOT NULL DEFAULT 1",
+                    "client_id": "TEXT NOT NULL DEFAULT ''",
+                    "deleted": "BOOLEAN NOT NULL DEFAULT FALSE",
+                    "prev_version": "BIGINT",
+                    "merge_parent_uuid": "TEXT",
+                },
+            )
+
+            if backend.table_exists("data_tables", connection=conn):
+                backend.execute(
+                    f"UPDATE {ident('data_tables')} "
+                    f"SET {ident('client_id')} = %s "
+                    f"WHERE {ident('client_id')} IS NULL OR {ident('client_id')} = ''",
+                    (str(self.client_id),),
+                    connection=conn,
+                )
+                backend.execute(
+                    f"UPDATE {ident('data_tables')} "
+                    f"SET {ident('last_modified')} = CURRENT_TIMESTAMP "
+                    f"WHERE {ident('last_modified')} IS NULL",
+                    connection=conn,
+                )
+                backend.execute(
+                    f"CREATE INDEX IF NOT EXISTS {ident('idx_data_tables_workspace_tag')} "
+                    f"ON {ident('data_tables')} ({ident('workspace_tag')})",
+                    connection=conn,
+                )
+        except BackendDatabaseError as exc:
+            logger.warning(
+                "Could not ensure late Data Tables columns/indexes on PostgreSQL: %s",
+                exc,
+            )
+
+    def _ensure_postgres_claims_tables(self, conn) -> None:
+        """Ensure Claims base tables exist on PostgreSQL."""
+
+        statements = self._convert_sqlite_sql_to_postgres_statements(self._CLAIMS_TABLE_SQL)
+        create_tables = [s for s in statements if s.strip().upper().startswith("CREATE TABLE")]
+        other_statements = [s for s in statements if s not in create_tables]
+
+        for stmt in create_tables:
+            try:
+                self.backend.execute(stmt, connection=conn)
+            except BackendDatabaseError as exc:
+                logger.warning("Could not ensure Claims base table on PostgreSQL: %s", exc)
+
+        # Claims extensions add late columns before index creation.
+        self._ensure_postgres_claims_extensions(conn)
+
+        for stmt in other_statements:
+            try:
+                self.backend.execute(stmt, connection=conn)
+            except BackendDatabaseError as exc:
+                logger.warning("Could not ensure Claims index/statement on PostgreSQL: %s", exc)
+
+    def _ensure_postgres_collections_tables(self, conn) -> None:
+        """Ensure collections/content item tables exist on PostgreSQL."""
+
+        backend = self.backend
+
+        try:
+            backend.execute(
+                (
+                    "CREATE TABLE IF NOT EXISTS output_templates ("
+                    "id SERIAL PRIMARY KEY, user_id TEXT NOT NULL, name TEXT NOT NULL, type TEXT NOT NULL, "
+                    "format TEXT NOT NULL, body TEXT NOT NULL, description TEXT, is_default BOOLEAN NOT NULL DEFAULT FALSE, "
+                    "created_at TIMESTAMPTZ NOT NULL, updated_at TIMESTAMPTZ NOT NULL)"
+                ),
+                connection=conn,
+            )
+            backend.execute(
+                "CREATE UNIQUE INDEX IF NOT EXISTS ux_output_templates_user_name "
+                "ON output_templates(user_id, name)",
+                connection=conn,
+            )
+            backend.execute(
+                (
+                    "CREATE TABLE IF NOT EXISTS reading_highlights ("
+                    "id SERIAL PRIMARY KEY, user_id TEXT NOT NULL, item_id INTEGER NOT NULL, quote TEXT NOT NULL, "
+                    "start_offset INTEGER, end_offset INTEGER, color TEXT, note TEXT, created_at TIMESTAMPTZ NOT NULL, "
+                    "anchor_strategy TEXT NOT NULL DEFAULT 'fuzzy_quote', content_hash_ref TEXT, context_before TEXT, context_after TEXT, "
+                    "state TEXT NOT NULL DEFAULT 'active')"
+                ),
+                connection=conn,
+            )
+            backend.execute(
+                "CREATE INDEX IF NOT EXISTS idx_highlights_user_item ON reading_highlights(user_id, item_id)",
+                connection=conn,
+            )
+            backend.execute(
+                (
+                    "CREATE TABLE IF NOT EXISTS collection_tags ("
+                    "id BIGSERIAL PRIMARY KEY, user_id TEXT NOT NULL, name TEXT NOT NULL, "
+                    "UNIQUE (user_id, name))"
+                ),
+                connection=conn,
+            )
+            backend.execute(
+                (
+                    "CREATE TABLE IF NOT EXISTS content_items ("
+                    "id BIGSERIAL PRIMARY KEY, user_id TEXT NOT NULL, origin TEXT NOT NULL, origin_type TEXT, "
+                    "origin_id BIGINT, url TEXT, canonical_url TEXT, domain TEXT, title TEXT, summary TEXT, notes TEXT, "
+                    "content_hash TEXT, word_count INTEGER, published_at TEXT, status TEXT, favorite INTEGER NOT NULL DEFAULT 0, "
+                    "metadata_json TEXT, media_id BIGINT, job_id BIGINT, run_id BIGINT, source_id BIGINT, read_at TEXT, "
+                    "created_at TEXT NOT NULL, updated_at TEXT NOT NULL)"
+                ),
+                connection=conn,
+            )
+            backend.execute(
+                "CREATE UNIQUE INDEX IF NOT EXISTS ux_content_items_user_canonical "
+                "ON content_items(user_id, canonical_url) WHERE canonical_url IS NOT NULL",
+                connection=conn,
+            )
+            backend.execute(
+                "CREATE UNIQUE INDEX IF NOT EXISTS ux_content_items_user_hash "
+                "ON content_items(user_id, content_hash) WHERE content_hash IS NOT NULL",
+                connection=conn,
+            )
+            backend.execute(
+                "CREATE INDEX IF NOT EXISTS idx_content_items_user_updated "
+                "ON content_items(user_id, updated_at DESC)",
+                connection=conn,
+            )
+            backend.execute(
+                "CREATE INDEX IF NOT EXISTS idx_content_items_user_domain "
+                "ON content_items(user_id, domain)",
+                connection=conn,
+            )
+            backend.execute(
+                "CREATE INDEX IF NOT EXISTS idx_content_items_job "
+                "ON content_items(job_id)",
+                connection=conn,
+            )
+            backend.execute(
+                "CREATE INDEX IF NOT EXISTS idx_content_items_run "
+                "ON content_items(run_id)",
+                connection=conn,
+            )
+            backend.execute(
+                (
+                    "CREATE TABLE IF NOT EXISTS content_item_tags ("
+                    "item_id BIGINT NOT NULL, tag_id BIGINT NOT NULL, "
+                    "UNIQUE (item_id, tag_id))"
+                ),
+                connection=conn,
+            )
+        except BackendDatabaseError as exc:
+            logger.warning("Could not ensure collections tables on PostgreSQL: %s", exc)
 
     def _ensure_postgres_source_hash_column(self, conn) -> None:
         """Ensure Media.source_hash column and index exist on PostgreSQL."""
@@ -7012,6 +7418,7 @@ class MediaDatabase:
         name: str,
         prompt: str,
         description: Optional[str] = None,
+        workspace_tag: Optional[str] = None,
         column_hints: Optional[Union[str, Dict[str, Any], List[Any]]] = None,
         status: str = "queued",
         row_count: int = 0,
@@ -7045,15 +7452,16 @@ class MediaDatabase:
                 conn,
                 """
                 INSERT INTO data_tables (
-                    uuid, name, description, prompt, column_hints_json, status,
+                    uuid, name, description, workspace_tag, prompt, column_hints_json, status,
                     row_count, generation_model, last_error,
                     created_at, updated_at, last_modified, version, client_id, deleted
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     table_uuid,
                     name,
                     description,
+                    workspace_tag,
                     prompt,
                     column_hints_json,
                     status,
@@ -7122,6 +7530,7 @@ class MediaDatabase:
         *,
         status: Optional[str] = None,
         search: Optional[str] = None,
+        workspace_tag: Optional[str] = None,
         limit: int = 50,
         offset: int = 0,
         include_deleted: bool = False,
@@ -7147,6 +7556,9 @@ class MediaDatabase:
         if status:
             conditions.append("status = ?")
             params.append(str(status))
+        if workspace_tag:
+            conditions.append("workspace_tag = ?")
+            params.append(str(workspace_tag))
         if search:
             like_op = "ILIKE" if self.backend_type == BackendType.POSTGRESQL else "LIKE"
             conditions.append(f"(name {like_op} ? OR description {like_op} ?)")
@@ -7169,6 +7581,7 @@ class MediaDatabase:
         *,
         status: Optional[str] = None,
         search: Optional[str] = None,
+        workspace_tag: Optional[str] = None,
         include_deleted: bool = False,
         owner_user_id: Optional[int] = None,
     ) -> int:
@@ -7184,6 +7597,9 @@ class MediaDatabase:
         if status:
             conditions.append("status = ?")
             params.append(str(status))
+        if workspace_tag:
+            conditions.append("workspace_tag = ?")
+            params.append(str(workspace_tag))
         if search:
             like_op = "ILIKE" if self.backend_type == BackendType.POSTGRESQL else "LIKE"
             conditions.append(f"(name {like_op} ? OR description {like_op} ?)")
@@ -8167,6 +8583,10 @@ class MediaDatabase:
             DatabaseError: If the database query fails.
         """
         try:
+            if not (_SAFE_IDENTIFIER_RE.fullmatch(table or "") and _SAFE_IDENTIFIER_RE.fullmatch(id_col or "")):
+                raise DatabaseError(
+                    f"Unsafe identifier in version lookup: table={table!r}, column={id_col!r}"
+                )
             cursor = conn.execute(f"SELECT version FROM {table} WHERE {id_col} = ? AND deleted = 0", (id_val,))
             result = cursor.fetchone()
             if result:
@@ -9412,7 +9832,7 @@ class MediaDatabase:
             ORDER BY {order_expr}, m.last_modified DESC, m.id DESC
         """
 
-        params = tuple(media_params + [False] + unique_clean_keywords)
+        params = tuple(media_params + unique_clean_keywords + [False])
 
         logger.debug(
             f"Executing fetch_media_for_keywords query for keywords: {unique_clean_keywords}, include_trash: {include_trash}")

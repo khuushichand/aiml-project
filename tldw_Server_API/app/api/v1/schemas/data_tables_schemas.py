@@ -43,6 +43,7 @@ class DataTableGenerateRequest(BaseModel):
     name: str = Field(..., min_length=1)
     prompt: str = Field(..., min_length=1)
     description: Optional[str] = None
+    workspace_tag: Optional[str] = Field(default=None, description="Optional workspace tag (e.g., 'workspace:<slug-or-id>') to associate this table.")
     sources: List[DataTableSourceInput]
     column_hints: Optional[List[DataTableColumnHint]] = None
     model: Optional[str] = None
@@ -147,6 +148,7 @@ class DataTableSummary(BaseModel):
     uuid: str
     name: str
     description: Optional[str] = None
+    workspace_tag: Optional[str] = None
     prompt: str
     column_hints: Optional[Any] = None
     status: str

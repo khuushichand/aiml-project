@@ -41,6 +41,26 @@ router = APIRouter(
 )
 
 
+def _normalize_etag_list(value: Optional[str]) -> list[str]:
+    if not value:
+        return []
+    tokens: list[str] = []
+    for raw in value.split(","):
+        token = raw.strip()
+        if not token:
+            continue
+        if token == "*":
+            tokens.append(token)
+            continue
+        if token.lower().startswith("w/"):
+            token = token[2:].strip()
+        if len(token) >= 2 and token[0] == token[-1] == '"':
+            token = token[1:-1]
+        if token:
+            tokens.append(token)
+    return tokens
+
+
 @router.get("/moderation/users", response_model=ModerationUserOverridesResponse, summary="List all per-user moderation overrides", tags=["moderation"])
 async def list_user_overrides() -> ModerationUserOverridesResponse:
     """List all per-user moderation override entries."""
@@ -106,10 +126,25 @@ async def get_blocklist() -> list[str]:
 async def update_blocklist(data: ModerationBlocklistUpdate) -> dict[str, Any]:
     """Replace the entire blocklist with the provided lines."""
     svc = get_moderation_service()
-    ok = svc.set_blocklist_lines(data.lines or [])
+    lines = data.lines or []
+    try:
+        lint = svc.lint_blocklist_lines(lines)
+    except Exception as exc:
+        logger.exception("Failed to lint blocklist lines")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Failed to lint blocklist lines",
+        ) from exc
+    if int(lint.get("invalid_count", 0)) > 0:
+        invalid_items = [it for it in (lint.get("items") or []) if not it.get("ok")]
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail={"error": "Invalid blocklist lines", "invalid_items": invalid_items},
+        )
+    ok = svc.set_blocklist_lines(lines)
     if not ok:
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Failed to persist blocklist")
-    return {"status": "ok", "count": len(data.lines or [])}
+    return {"status": "ok", "count": len(lines)}
 
 
 @router.get(
@@ -183,7 +218,16 @@ async def update_moderation_settings(body: ModerationSettingsUpdate) -> Moderati
     """Update runtime moderation settings without persisting by default."""
     svc = get_moderation_service()
     try:
-        data = svc.update_settings(pii_enabled=body.pii_enabled, categories_enabled=body.categories_enabled, persist=bool(body.persist))
+        fields_set = getattr(body, "model_fields_set", set())
+        clear_pii = ("pii_enabled" in fields_set and body.pii_enabled is None)
+        clear_categories = ("categories_enabled" in fields_set and body.categories_enabled is None)
+        data = svc.update_settings(
+            pii_enabled=body.pii_enabled,
+            categories_enabled=body.categories_enabled,
+            persist=bool(body.persist),
+            clear_pii=clear_pii,
+            clear_categories=clear_categories,
+        )
     except Exception as exc:
         logger.exception("Failed to update moderation settings")
         raise HTTPException(
@@ -205,7 +249,8 @@ async def get_blocklist_managed(response: Response) -> BlocklistManagedResponse:
     svc = get_moderation_service()
     state = svc.get_blocklist_state()
     # Set ETag header for clients to use with If-Match
-    response.headers["ETag"] = state.get("version", "")
+    version = state.get("version", "")
+    response.headers["ETag"] = f"\"{version}\"" if version else ""
     items = [BlocklistManagedItem(**it) for it in (state.get("items") or [])]
     return BlocklistManagedResponse(version=state.get("version", ""), items=items)
 
@@ -222,10 +267,32 @@ async def append_blocklist_line(
     if_match: Optional[str] = Header(None, alias="If-Match"),
 ) -> BlocklistAppendResponse:
     """Append a blocklist line using optimistic concurrency via If-Match."""
-    if not if_match:
+    tokens = _normalize_etag_list(if_match)
+    if not tokens:
         raise HTTPException(status_code=428, detail="If-Match header is required")
     svc = get_moderation_service()
-    ok, state = svc.append_blocklist_line(if_match, payload.line)
+    try:
+        lint = svc.lint_blocklist_lines([payload.line])
+    except Exception as exc:
+        logger.exception("Failed to lint blocklist line")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Failed to lint blocklist line",
+        ) from exc
+    if int(lint.get("invalid_count", 0)) > 0:
+        invalid_items = [it for it in (lint.get("items") or []) if not it.get("ok")]
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail={"error": "Invalid blocklist line", "invalid_items": invalid_items},
+        )
+    expected_version = ""
+    if "*" not in tokens:
+        current_state = svc.get_blocklist_state()
+        current_version = str(current_state.get("version", ""))
+        if current_version not in tokens:
+            raise HTTPException(status_code=status.HTTP_412_PRECONDITION_FAILED, detail="Version conflict")
+        expected_version = current_version
+    ok, state = svc.append_blocklist_line(expected_version, payload.line)
     if not ok:
         if state.get("conflict"):
             raise HTTPException(status_code=status.HTTP_412_PRECONDITION_FAILED, detail="Version conflict")
@@ -234,7 +301,7 @@ async def append_blocklist_line(
     items = state.get("items") or []
     # New index is last
     index = len(items) - 1
-    response.headers["ETag"] = version
+    response.headers["ETag"] = f"\"{version}\"" if version else ""
     return BlocklistAppendResponse(version=version, index=index, count=len(items))
 
 
@@ -250,10 +317,18 @@ async def delete_blocklist_item(
     if_match: Optional[str] = Header(None, alias="If-Match"),
 ) -> BlocklistDeleteResponse:
     """Delete a blocklist entry by index using optimistic concurrency."""
-    if not if_match:
+    tokens = _normalize_etag_list(if_match)
+    if not tokens:
         raise HTTPException(status_code=428, detail="If-Match header is required")
     svc = get_moderation_service()
-    ok, state = svc.delete_blocklist_index(if_match, item_id)
+    expected_version = ""
+    if "*" not in tokens:
+        current_state = svc.get_blocklist_state()
+        current_version = str(current_state.get("version", ""))
+        if current_version not in tokens:
+            raise HTTPException(status_code=status.HTTP_412_PRECONDITION_FAILED, detail="Version conflict")
+        expected_version = current_version
+    ok, state = svc.delete_blocklist_index(expected_version, item_id)
     if not ok:
         if state.get("conflict"):
             raise HTTPException(status_code=status.HTTP_412_PRECONDITION_FAILED, detail="Version conflict")
@@ -262,7 +337,7 @@ async def delete_blocklist_item(
         raise HTTPException(status_code=code, detail=detail)
     version = str(state.get("version", ""))
     items = state.get("items") or []
-    response.headers["ETag"] = version
+    response.headers["ETag"] = f"\"{version}\"" if version else ""
     return BlocklistDeleteResponse(version=version, count=len(items))
 
 
@@ -316,6 +391,56 @@ async def test_moderation(payload: ModerationTestRequest) -> ModerationTestRespo
     phase_enabled = eff.enabled and (eff.input_enabled if payload.phase == 'input' else eff.output_enabled)
     if not phase_enabled:
         return ModerationTestResponse(flagged=False, action='pass', sample=None, redacted_text=None, effective=eff.to_dict())
+    if hasattr(svc, 'evaluate_action_with_match'):
+        eval_res = svc.evaluate_action_with_match(payload.text, eff, payload.phase)
+        action = None
+        redacted = None
+        matched_pattern = None
+        category = None
+        match_span = None
+        if isinstance(eval_res, (tuple, list)):
+            if len(eval_res) >= 1:
+                action = eval_res[0]
+            if len(eval_res) >= 2:
+                redacted = eval_res[1]
+            if len(eval_res) >= 3:
+                matched_pattern = eval_res[2]
+            if len(eval_res) >= 4:
+                category = eval_res[3]
+            if len(eval_res) >= 5:
+                match_span = eval_res[4]
+        else:
+            try:
+                action, redacted, matched_pattern = eval_res  # type: ignore
+            except ValueError:
+                action = None
+                redacted = None
+                matched_pattern = None
+        flagged = (action != 'pass')
+        sanitized_sample = None
+        if flagged:
+            try:
+                if match_span and hasattr(svc, "build_sanitized_snippet"):
+                    sanitized_sample = svc.build_sanitized_snippet(payload.text, eff, match_span, matched_pattern)
+                else:
+                    _, sanitized_sample = svc.check_text(payload.text, eff, payload.phase)
+            except Exception:
+                logger.exception(
+                    "moderation.test: failed to sanitize sample",
+                    extra={"user_id": payload.user_id, "phase": payload.phase},
+                )
+                sanitized_sample = None
+        redacted_text = redacted if action == "redact" else None
+        if action == "redact" and redacted_text is None:
+            redacted_text = svc.redact_text(payload.text, eff)
+        return ModerationTestResponse(
+            flagged=flagged,
+            action=action if action else 'pass',
+            sample=sanitized_sample,
+            redacted_text=redacted_text,
+            effective=eff.to_dict(),
+            category=category,
+        )
     if hasattr(svc, 'evaluate_action'):
         eval_res = svc.evaluate_action(payload.text, eff, payload.phase)
         if isinstance(eval_res, tuple) and len(eval_res) >= 3:
@@ -327,9 +452,8 @@ async def test_moderation(payload: ModerationTestRequest) -> ModerationTestRespo
         flagged = (action != 'pass')
         sanitized_sample = None
         if flagged:
-            # evaluate_action returns the matched pattern; check_text builds a safe, redacted snippet for the response.
             try:
-                _, sanitized_sample = svc.check_text(payload.text, eff)
+                _, sanitized_sample = svc.check_text(payload.text, eff, payload.phase)
             except Exception:
                 logger.exception(
                     "moderation.test: failed to sanitize sample",
@@ -348,7 +472,7 @@ async def test_moderation(payload: ModerationTestRequest) -> ModerationTestRespo
             category=category,
         )
     else:
-        flagged, sample = svc.check_text(payload.text, eff)
+        flagged, sample = svc.check_text(payload.text, eff, payload.phase)
         if not flagged:
             return ModerationTestResponse(flagged=False, action='pass', sample=None, redacted_text=None, effective=eff.to_dict())
         action = eff.input_action if payload.phase == 'input' else eff.output_action

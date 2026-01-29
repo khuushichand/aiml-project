@@ -40,7 +40,7 @@
 - Advanced reranking (cross-encoder) within Postgres; remains separate pipeline stage.
 - Non-English stemming dictionaries beyond configurable `regconfig` string.
 - Historical migration tooling for legacy collections; focus on auto-migration at query time with best-effort backfill.
-- UI changes in `tldw-frontend`; API surfaces stay backend-only for this phase.
+- UI changes in the Next.js WebUI (`apps/tldw-frontend`); API surfaces stay backend-only for this phase.
 
 ## 5. Proposed Solution Overview
 1. **Schema Enhancements**

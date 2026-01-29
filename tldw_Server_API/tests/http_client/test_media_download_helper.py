@@ -131,3 +131,45 @@ async def test_download_url_async_rejects_oversize(tmp_path, monkeypatch):
                 check_extension=True,
                 max_bytes=10,
             )
+
+
+@pytest.mark.asyncio
+async def test_download_url_async_accepts_tar_gz(tmp_path, monkeypatch):
+    url = "http://example.com/archive.tar.gz"
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.method.upper() == "GET":
+            body = b"tar gz content"
+            return httpx.Response(
+                200,
+                headers={
+                    "content-type": "application/gzip",
+                    "content-length": str(len(body)),
+                    "content-disposition": "attachment; filename=\"archive.tar.gz\"",
+                },
+                content=body,
+            )
+        return httpx.Response(405)
+
+    transport = _MockTransport(handler)
+
+    import tldw_Server_API.app.core.http_client as hc
+
+    def _mk_async_client(**kwargs):
+        to = kwargs.get("timeout", 10.0)
+        return httpx.AsyncClient(timeout=to, transport=transport)
+
+    monkeypatch.setattr(hc, "create_async_client", _mk_async_client, raising=True)
+    monkeypatch.setenv("EGRESS_ALLOWLIST", "example.com")
+
+    async with httpx.AsyncClient(transport=transport) as client:
+        out_path = await _download_url_async(
+            client=client,
+            url=url,
+            target_dir=Path(tmp_path),
+            allowed_extensions={".tar.gz"},
+            check_extension=True,
+        )
+
+    assert out_path.exists()
+    assert out_path.name.endswith(".tar.gz")

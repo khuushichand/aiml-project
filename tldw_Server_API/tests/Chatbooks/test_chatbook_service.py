@@ -441,6 +441,211 @@ class TestChatbookService:
         assert any("Failed to read attachment" in warning for warning in status.warnings)
         assert status.successful_items == 1
 
+    def test_import_conversation_skips_oversized_attachment(self, service, mock_db, tmp_path):
+        """Oversized attachments should be skipped with a warning, not fail the conversation."""
+        conv_id = "conv-oversize"
+        content_root = tmp_path / "content" / "conversations"
+        assets_dir = content_root / f"conversation_{conv_id}_assets"
+        assets_dir.mkdir(parents=True, exist_ok=True)
+
+        image_bytes = b"0123456789"
+        rel_path = f"content/conversations/{assets_dir.name}/big.png"
+        (assets_dir / "big.png").write_bytes(image_bytes)
+
+        conversation_payload = {
+            "id": conv_id,
+            "name": "Conversation Oversize Attachment",
+            "created_at": "2024-01-01T00:00:00",
+            "messages": [
+                {
+                    "id": "msg-big",
+                    "role": "user",
+                    "content": "Hello",
+                    "timestamp": "2024-01-01T00:00:00",
+                    "attachments": [
+                        {
+                            "type": "image",
+                            "mime_type": "image/png",
+                            "file_path": rel_path,
+                        }
+                    ],
+                }
+            ],
+        }
+
+        conversation_file = content_root / f"conversation_{conv_id}.json"
+        conversation_file.write_text(json.dumps(conversation_payload), encoding="utf-8")
+
+        mock_db.add_conversation.return_value = "conv-id"
+
+        manifest = ChatbookManifest(
+            version=ChatbookVersion.V1,
+            name="Test",
+            description="Desc",
+        )
+        status = ImportJob(
+            job_id="job",
+            user_id="test_user",
+            status=ImportStatus.PENDING,
+            chatbook_path="dummy",
+        )
+
+        with patch.object(service, "_get_max_message_image_bytes", return_value=4):
+            with patch.object(service, "_get_conversation_by_name", return_value=None):
+                service._import_conversations(
+                    tmp_path,
+                    manifest,
+                    [conv_id],
+                    ConflictResolution.SKIP,
+                    prefix_imported=False,
+                    status=status,
+                )
+
+        assert mock_db.add_message.call_count == 1
+        message_payload = mock_db.add_message.call_args[0][0]
+        assert "images" not in message_payload
+        assert any("exceeds MAX_MESSAGE_IMAGE_BYTES" in warning for warning in status.warnings)
+        assert status.successful_items == 1
+
+    def test_import_dictionary_preserves_max_replacements_zero(self, service, mock_db, tmp_path):
+        """Dictionary imports should preserve max_replacements=0 (unlimited)."""
+        dict_id = "dict-max"
+        dict_dir = tmp_path / "content" / "dictionaries"
+        dict_dir.mkdir(parents=True, exist_ok=True)
+
+        dict_payload = {
+            "name": "Test Dict",
+            "description": "Desc",
+            "entries": [
+                {
+                    "pattern": "hello",
+                    "replacement": "hi",
+                    "type": "literal",
+                    "probability": 1.0,
+                    "max_replacements": 0,
+                }
+            ],
+        }
+        dict_file = dict_dir / f"dictionary_{dict_id}.json"
+        dict_file.write_text(json.dumps(dict_payload), encoding="utf-8")
+
+        manifest = ChatbookManifest(
+            version=ChatbookVersion.V1,
+            name="Test",
+            description="Desc",
+        )
+        status = ImportJob(
+            job_id="job",
+            user_id="test_user",
+            status=ImportStatus.PENDING,
+            chatbook_path="dummy",
+        )
+
+        class DummyDictService:
+            last_instance = None
+
+            def __init__(self, _db):
+                DummyDictService.last_instance = self
+                self.add_entry_calls = []
+
+            def get_dictionary_by_name(self, _name):
+                return None
+
+            def create_dictionary(self, _name, _description, _is_active=True):
+                return 123
+
+            def add_entry(self, *args, **kwargs):
+                self.add_entry_calls.append((args, kwargs))
+
+        with patch(
+            "tldw_Server_API.app.core.Character_Chat.chat_dictionary.ChatDictionaryService",
+            DummyDictService,
+        ):
+            service._import_dictionaries(
+                tmp_path,
+                manifest,
+                [dict_id],
+                ConflictResolution.SKIP,
+                prefix_imported=False,
+                status=status,
+            )
+
+        inst = DummyDictService.last_instance
+        assert inst is not None
+        assert inst.add_entry_calls
+        _args, kwargs = inst.add_entry_calls[0]
+        assert kwargs.get("max_replacements") == 0
+
+    def test_preview_export_uses_chat_dictionaries_table(self, service, mock_db):
+        """preview_export should query the chat_dictionaries table for dictionary counts."""
+        mock_db.execute_query.return_value = []
+
+        service.preview_export(["dictionaries"])
+
+        calls = [call_args[0][0] for call_args in mock_db.execute_query.call_args_list]
+        assert any("chat_dictionaries" in sql for sql in calls)
+
+    def test_delete_export_job_removes_file_and_record(self, service, mock_db, tmp_path):
+        """Completed export jobs should be removable and delete their archive."""
+        export_dir = tmp_path / "exports"
+        export_dir.mkdir(parents=True, exist_ok=True)
+        service.export_dir = export_dir
+
+        file_path = export_dir / "export.zip"
+        file_path.write_text("payload", encoding="utf-8")
+
+        job = ExportJob(
+            job_id="job-1",
+            user_id=service.user_id,
+            status=ExportStatus.COMPLETED,
+            chatbook_name="Test",
+            output_path=str(file_path),
+        )
+
+        with patch.object(service, "_get_export_job", return_value=job):
+            ok = service.delete_export_job(job.job_id)
+
+        assert ok is True
+        assert not file_path.exists()
+        mock_db.execute_query.assert_any_call(
+            "DELETE FROM export_jobs WHERE job_id = ? AND user_id = ?",
+            (job.job_id, service.user_id),
+            commit=True,
+        )
+
+    def test_delete_import_job_removes_record(self, service, mock_db):
+        """Cancelled import jobs should be removable."""
+        job = ImportJob(
+            job_id="job-2",
+            user_id=service.user_id,
+            status=ImportStatus.CANCELLED,
+            chatbook_path="dummy",
+        )
+
+        with patch.object(service, "_get_import_job", return_value=job):
+            ok = service.delete_import_job(job.job_id)
+
+        assert ok is True
+        mock_db.execute_query.assert_any_call(
+            "DELETE FROM import_jobs WHERE job_id = ? AND user_id = ?",
+            (job.job_id, service.user_id),
+            commit=True,
+        )
+
+    def test_delete_export_job_rejects_non_terminal_status(self, service):
+        """Non-terminal export jobs should not be removable."""
+        job = ExportJob(
+            job_id="job-3",
+            user_id=service.user_id,
+            status=ExportStatus.PENDING,
+            chatbook_name="Test",
+        )
+
+        with patch.object(service, "_get_export_job", return_value=job):
+            ok = service.delete_export_job(job.job_id)
+
+        assert ok is False
+
     def test_import_chatbook_cleans_temp_dir_on_failure(self, service, tmp_path):
         """Temporary extraction directories should not linger after import errors."""
         temp_dir = tmp_path / "chatbooks_tmp"
@@ -832,6 +1037,8 @@ class TestChatbookService:
     @pytest.mark.asyncio
     async def test_import_chatbook_conflict_strategy_alias(self, service):
         """conflict_strategy alias should map to the same enum handling."""
+        sample_path = service.import_dir / "sample.chatbook"
+        sample_path.write_text("dummy")
         with patch(
             "tldw_Server_API.app.core.Chatbooks.chatbook_service.asyncio.to_thread",
             new_callable=AsyncMock,
@@ -839,7 +1046,7 @@ class TestChatbookService:
             mock_to_thread.return_value = (True, "alias ok", None)
 
             await service.import_chatbook(
-                file_path="sample.chatbook",
+                file_path=str(sample_path),
                 conflict_strategy="rename",
             )
 
@@ -849,6 +1056,8 @@ class TestChatbookService:
     @pytest.mark.asyncio
     async def test_import_chatbook_invalid_conflict_resolution_defaults_to_skip(self, service):
         """Invalid conflict resolution values should fall back to SKIP."""
+        sample_path = service.import_dir / "sample.chatbook"
+        sample_path.write_text("dummy")
         with patch(
             "tldw_Server_API.app.core.Chatbooks.chatbook_service.asyncio.to_thread",
             new_callable=AsyncMock,
@@ -856,7 +1065,7 @@ class TestChatbookService:
             mock_to_thread.return_value = (True, "defaulted", None)
 
             await service.import_chatbook(
-                file_path="sample.chatbook",
+                file_path=str(sample_path),
                 conflict_resolution="replace",
             )
 

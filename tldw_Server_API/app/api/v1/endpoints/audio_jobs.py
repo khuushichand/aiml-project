@@ -82,6 +82,10 @@ class SubmitAudioJobRequest(BaseModel):
         None,
         description="Transcription model selector (defaults to config when omitted)",
     )
+    hotwords: Optional[str | List[str]] = Field(
+        None,
+        description="Optional hotwords to guide transcription (CSV/JSON string or list). Primarily used by VibeVoice-ASR.",
+    )
     perform_chunking: bool = Field(True, description="Whether to chunk the transcript after STT")
     perform_analysis: bool = Field(False, description="Whether to run LLM analysis after chunking")
     api_name: Optional[str] = Field(None, description="LLM provider key for analysis stage")
@@ -125,7 +129,7 @@ async def submit_audio_job(
     req: SubmitAudioJobRequest,
     current_user: Annotated[User, Depends(get_request_user)],
     jm: Annotated[JobManager, Depends(get_job_manager)],
-    request: Request = None,
+    request: Request,
 ):
     """
     Create an audio job in the Jobs queue. First stage is determined by input:
@@ -143,6 +147,7 @@ async def submit_audio_job(
 
         payload: Dict[str, Any] = {
             "model": requested_model,
+            "hotwords": req.hotwords,
             "perform_chunking": bool(req.perform_chunking),
             "perform_analysis": bool(req.perform_analysis),
             "api_name": req.api_name,
@@ -362,7 +367,7 @@ class OwnerProcessingSummary(BaseModel):
 async def owner_processing_summary(
     owner_user_id: int,
     jm: Annotated[JobManager, Depends(get_job_manager)],
-    request: Request = None,
+    request: Request,
 ):
     try:
         logger.info(

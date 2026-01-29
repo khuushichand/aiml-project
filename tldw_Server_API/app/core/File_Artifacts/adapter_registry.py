@@ -18,6 +18,7 @@ class FileAdapterRegistry:
         "html_table": "tldw_Server_API.app.core.File_Artifacts.adapters.html_table_adapter.HtmlTableAdapter",
         "xlsx": "tldw_Server_API.app.core.File_Artifacts.adapters.xlsx_adapter.XlsxAdapter",
         "data_table": "tldw_Server_API.app.core.File_Artifacts.adapters.data_table_adapter.DataTableAdapter",
+        "image": "tldw_Server_API.app.core.File_Artifacts.adapters.image_adapter.ImageAdapter",
     }
 
     def __init__(self) -> None:

@@ -374,6 +374,9 @@ RAG_SERVICE_CONFIG = {
 
 # Configuration for speaker diarization (config-level defaults)
 DIARIZATION_CONFIG = {
+    # Backend selection
+    "backend": "embedding",  # embedding | nemo_multitalk
+
     # VAD (Voice Activity Detection) settings
     "vad_backend": "silero_hub",  # silero_hub | onnx_silero
     "vad_threshold": 0.5,  # Silero VAD confidence threshold
@@ -418,6 +421,14 @@ DIARIZATION_CONFIG = {
     # Output settings
     "include_embeddings": False,  # Include embeddings in output
     "include_vad_scores": False,  # Include VAD scores in output
+
+    # NeMo multitalk (Parakeet + Sortformer diarization)
+    "nemo_multitalk_asr_model": "nvidia/multitalker-parakeet-streaming-0.6b-v1",
+    "nemo_multitalk_diar_model": "nvidia/diar_streaming_sortformer_4spk-v2.1",
+    "nemo_multitalk_device": "auto",  # auto, cpu, cuda
+    "nemo_multitalk_cache_dir": None,
+    "nemo_multitalk_max_speakers": 4,
+    "nemo_multitalk_disable_cuda_graphs": True,
 }
 
 
@@ -822,7 +833,7 @@ def load_settings():
         _max_characters_per_user = _cc_int('MAX_CHARACTERS_PER_USER', 1000)
         _max_character_import_size_mb = _cc_int('MAX_CHARACTER_IMPORT_SIZE_MB', 10)
         # Optional chat-specific knobs if present
-        _max_chats_per_user = _cc_int('MAX_CHATS_PER_USER', 100)
+        _max_chats_per_user = _cc_int('MAX_CHATS_PER_USER', 100000)
         _max_messages_per_chat = _cc_int('MAX_MESSAGES_PER_CHAT', 1000)
         _max_messages_per_chat_soft = _cc_int('MAX_MESSAGES_PER_CHAT_SOFT', _max_messages_per_chat)
         _max_chat_completions_per_minute = _cc_int('MAX_CHAT_COMPLETIONS_PER_MINUTE', 20)
@@ -831,9 +842,9 @@ def load_settings():
     except Exception:
         _character_rate_limit_ops = 100
         _character_rate_limit_window = 3600
-        _max_characters_per_user = 1000
+        _max_characters_per_user = 10000
         _max_character_import_size_mb = 10
-        _max_chats_per_user = 100
+        _max_chats_per_user = 100000
         _max_messages_per_chat = 1000
         _max_messages_per_chat_soft = _max_messages_per_chat
         _max_chat_completions_per_minute = 20
@@ -3128,6 +3139,8 @@ def load_and_log_configs():
             lowered = name.lower()
             if lowered in ("faster-whisper", "faster_whisper"):
                 return "faster-whisper"
+            if lowered in ("vibevoice", "vibevoice-asr", "vibevoice_asr"):
+                return "vibevoice"
             return lowered
 
         default_stt_provider = _normalize_stt_provider_name(raw_default_stt_provider)
@@ -3194,9 +3207,23 @@ def load_and_log_configs():
             s = str(raw).strip()
             return s if s != "" else default
 
+        # VibeVoice-ASR settings (local inference + optional vLLM HTTP path)
+        vibevoice_enabled = _get_bool('STT-Settings', 'vibevoice_enabled', False)
+        vibevoice_model_id = _get_str('STT-Settings', 'vibevoice_model_id', 'microsoft/VibeVoice-ASR') or 'microsoft/VibeVoice-ASR'
+        vibevoice_device = _get_str('STT-Settings', 'vibevoice_device', 'cuda') or 'cuda'
+        vibevoice_dtype = _get_str('STT-Settings', 'vibevoice_dtype', 'bfloat16') or 'bfloat16'
+        vibevoice_cache_dir = _get_str('STT-Settings', 'vibevoice_cache_dir', './models/vibevoice') or './models/vibevoice'
+        vibevoice_allow_download = _get_bool('STT-Settings', 'vibevoice_allow_download', True)
+        vibevoice_vllm_enabled = _get_bool('STT-Settings', 'vibevoice_vllm_enabled', False)
+        vibevoice_vllm_base_url = _get_str('STT-Settings', 'vibevoice_vllm_base_url', '') or ''
+        vibevoice_vllm_model_id = _get_str('STT-Settings', 'vibevoice_vllm_model_id', vibevoice_model_id) or vibevoice_model_id
+        vibevoice_vllm_api_key = _get_str('STT-Settings', 'vibevoice_vllm_api_key', None)
+        vibevoice_vllm_timeout_seconds = _get_int('STT-Settings', 'vibevoice_vllm_timeout_seconds', 600)
+
         diarization_config = dict(DIARIZATION_CONFIG)
         if config_parser_object.has_section('Diarization'):
             # Backend and VAD behavior
+            diarization_config['backend'] = _get_str('Diarization', 'backend', diarization_config.get('backend')) or diarization_config.get('backend')
             diarization_config['vad_backend'] = _get_str('Diarization', 'vad_backend', diarization_config.get('vad_backend')) or diarization_config.get('vad_backend')
             diarization_config['vad_threshold'] = _get_float('Diarization', 'vad_threshold', diarization_config.get('vad_threshold', 0.5))
             diarization_config['vad_min_speech_duration'] = _get_float('Diarization', 'vad_min_speech_duration', diarization_config.get('vad_min_speech_duration', 0.25))
@@ -3204,6 +3231,14 @@ def load_and_log_configs():
             diarization_config['allow_vad_fallback'] = _get_bool('Diarization', 'allow_vad_fallback', diarization_config.get('allow_vad_fallback', True))
             diarization_config['enable_torch_hub_fetch'] = _get_bool('Diarization', 'enable_torch_hub_fetch', diarization_config.get('enable_torch_hub_fetch', True))
             diarization_config['onnx_model_path'] = _get_str('Diarization', 'onnx_model_path', diarization_config.get('onnx_model_path'))
+
+            # NeMo multitalk settings
+            diarization_config['nemo_multitalk_asr_model'] = _get_str('Diarization', 'nemo_multitalk_asr_model', diarization_config.get('nemo_multitalk_asr_model')) or diarization_config.get('nemo_multitalk_asr_model')
+            diarization_config['nemo_multitalk_diar_model'] = _get_str('Diarization', 'nemo_multitalk_diar_model', diarization_config.get('nemo_multitalk_diar_model')) or diarization_config.get('nemo_multitalk_diar_model')
+            diarization_config['nemo_multitalk_device'] = _get_str('Diarization', 'nemo_multitalk_device', diarization_config.get('nemo_multitalk_device')) or diarization_config.get('nemo_multitalk_device')
+            diarization_config['nemo_multitalk_cache_dir'] = _get_str('Diarization', 'nemo_multitalk_cache_dir', diarization_config.get('nemo_multitalk_cache_dir')) or diarization_config.get('nemo_multitalk_cache_dir')
+            diarization_config['nemo_multitalk_max_speakers'] = _get_int('Diarization', 'nemo_multitalk_max_speakers', diarization_config.get('nemo_multitalk_max_speakers', 4))
+            diarization_config['nemo_multitalk_disable_cuda_graphs'] = _get_bool('Diarization', 'nemo_multitalk_disable_cuda_graphs', diarization_config.get('nemo_multitalk_disable_cuda_graphs', True))
 
             # Segmentation
             diarization_config['segment_duration'] = _get_float('Diarization', 'segment_duration', diarization_config.get('segment_duration', 30.0))
@@ -3332,6 +3367,12 @@ def load_and_log_configs():
         search_engine_searx_api = config_parser_object.get('Search-Engines', 'search_engine_searx_api', fallback='')
         # Tavily Search Settings
         tavily_search_api_key = config_parser_object.get('Search-Engines', 'search_engine_api_key_tavily', fallback='')
+        # Exa Search Settings
+        exa_search_api_key = config_parser_object.get('Search-Engines', 'search_engine_api_key_exa', fallback='')
+        exa_search_api_url = config_parser_object.get('Search-Engines', 'search_engine_api_url_exa', fallback='https://api.exa.ai/search')
+        # Firecrawl Search Settings
+        firecrawl_api_key = config_parser_object.get('Search-Engines', 'search_engine_api_key_firecrawl', fallback='')
+        firecrawl_search_api_url = config_parser_object.get('Search-Engines', 'search_engine_api_url_firecrawl', fallback='https://api.firecrawl.dev/v2/search')
         # Yandex Search Settings
         yandex_search_api_key = config_parser_object.get('Search-Engines', 'search_engine_api_key_yandex', fallback='')
         yandex_search_engine_id = config_parser_object.get('Search-Engines', 'search_engine_id_yandex', fallback='')
@@ -3836,6 +3877,19 @@ def load_and_log_configs():
                 'nemo_model_variant': nemo_model_variant,
                 'nemo_device': nemo_device,
                 'nemo_cache_dir': nemo_cache_dir,
+                # VibeVoice-ASR settings
+                'vibevoice_enabled': vibevoice_enabled,
+                'vibevoice_model_id': vibevoice_model_id,
+                'vibevoice_device': vibevoice_device,
+                'vibevoice_dtype': vibevoice_dtype,
+                'vibevoice_cache_dir': vibevoice_cache_dir,
+                'vibevoice_allow_download': vibevoice_allow_download,
+                # Optional vLLM HTTP path for VibeVoice-ASR
+                'vibevoice_vllm_enabled': vibevoice_vllm_enabled,
+                'vibevoice_vllm_base_url': vibevoice_vllm_base_url,
+                'vibevoice_vllm_model_id': vibevoice_vllm_model_id,
+                'vibevoice_vllm_api_key': vibevoice_vllm_api_key,
+                'vibevoice_vllm_timeout_seconds': vibevoice_vllm_timeout_seconds,
                 # Custom vocabulary settings
                 'custom_vocab_terms_file': stt_custom_vocab_terms_file,
                 'custom_vocab_replacements_file': stt_custom_vocab_replacements_file,
@@ -3851,6 +3905,19 @@ def load_and_log_configs():
                 'nemo_model_variant': nemo_model_variant,
                 'nemo_device': nemo_device,
                 'nemo_cache_dir': nemo_cache_dir,
+                # VibeVoice-ASR settings
+                'vibevoice_enabled': vibevoice_enabled,
+                'vibevoice_model_id': vibevoice_model_id,
+                'vibevoice_device': vibevoice_device,
+                'vibevoice_dtype': vibevoice_dtype,
+                'vibevoice_cache_dir': vibevoice_cache_dir,
+                'vibevoice_allow_download': vibevoice_allow_download,
+                # Optional vLLM HTTP path for VibeVoice-ASR
+                'vibevoice_vllm_enabled': vibevoice_vllm_enabled,
+                'vibevoice_vllm_base_url': vibevoice_vllm_base_url,
+                'vibevoice_vllm_model_id': vibevoice_vllm_model_id,
+                'vibevoice_vllm_api_key': vibevoice_vllm_api_key,
+                'vibevoice_vllm_timeout_seconds': vibevoice_vllm_timeout_seconds,
                 # Custom vocabulary settings
                 'custom_vocab_terms_file': stt_custom_vocab_terms_file,
                 'custom_vocab_replacements_file': stt_custom_vocab_replacements_file,
@@ -3954,6 +4021,10 @@ def load_and_log_configs():
                 'kagi_search_api_key': kagi_search_api_key,
                 'searx_search_api_url': search_engine_searx_api,
                 'tavily_search_api_key': tavily_search_api_key,
+                'exa_search_api_key': exa_search_api_key,
+                'exa_search_api_url': exa_search_api_url,
+                'firecrawl_api_key': firecrawl_api_key,
+                'firecrawl_search_api_url': firecrawl_search_api_url,
                 'yandex_search_api_key': yandex_search_api_key,
                 'yandex_search_engine_id': yandex_search_engine_id
             },

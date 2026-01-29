@@ -10,11 +10,12 @@ import io
 import base64
 import time
 import configparser
+import importlib
 from types import SimpleNamespace
 from functools import lru_cache
 from pathlib import Path as PathLib
 import sqlite3  # for DB-specific exception handling in limits endpoints
-from typing import AsyncGenerator, Optional, Dict, Any, List, Callable, Awaitable
+from typing import AsyncGenerator, Optional, Dict, Any, List, Callable, Awaitable, Set
 import numpy as np
 import soundfile as sf
 
@@ -47,6 +48,9 @@ from tldw_Server_API.app.api.v1.schemas.audio_schemas import (
     OpenAITranslationRequest,
     VoiceEncodeRequest,
     VoiceEncodeResponse,
+    AudioTokenizerEncodeRequest,
+    AudioTokenizerEncodeResponse,
+    AudioTokenizerDecodeRequest,
     TranscriptSegmentationRequest,
     TranscriptSegmentationResponse,
     SpeechChatRequest,
@@ -54,10 +58,14 @@ from tldw_Server_API.app.api.v1.schemas.audio_schemas import (
 )
 from tldw_Server_API.app.api.v1.schemas.chat_request_schemas import get_api_keys, DEFAULT_LLM_PROVIDER
 from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import get_request_user, User
+from tldw_Server_API.app.core.AuthNZ.exceptions import QuotaExceededError, StorageError
 from tldw_Server_API.app.core.AuthNZ.byok_runtime import (
     record_byok_missing_credentials,
     resolve_byok_credentials,
 )
+from tldw_Server_API.app.core.Storage.generated_file_helpers import save_and_register_tts_audio
+from tldw_Server_API.app.core.TTS.tts_config import get_tts_config_manager
+from tldw_Server_API.app.core.TTS.realtime_session import RealtimeSessionConfig
 from tldw_Server_API.app.core.config import AUTH_BEARER_PREFIX
 from tldw_Server_API.app.core.config import load_comprehensive_config
 
@@ -174,6 +182,222 @@ def _ws_error_payload(
         reserved = {"type", "message", "error_type", "request_id", "details"}
         payload.update({key: value for key, value in extra.items() if key not in reserved})
     return payload
+
+
+def _coerce_int(value: Any, default: int) -> int:
+    try:
+        if value is None:
+            return default
+        return int(value)
+    except (TypeError, ValueError):
+        return default
+
+
+def _get_qwen3_tokenizer_settings() -> Dict[str, Any]:
+    cfg_mgr = get_tts_config_manager()
+    provider_cfg = cfg_mgr.get_provider_config("qwen3_tts")
+    defaults = {
+        "tokenizer_model": "Qwen/Qwen3-TTS-Tokenizer-12Hz",
+        "tokenizer_max_audio_seconds": 300,
+        "tokenizer_max_tokens": 20000,
+        "tokenizer_max_payload_mb": 20,
+        "auto_download": False,
+    }
+    if provider_cfg is None:
+        return defaults
+    return {
+        "tokenizer_model": provider_cfg.tokenizer_model or defaults["tokenizer_model"],
+        "tokenizer_max_audio_seconds": _coerce_int(
+            provider_cfg.tokenizer_max_audio_seconds, defaults["tokenizer_max_audio_seconds"]
+        ),
+        "tokenizer_max_tokens": _coerce_int(provider_cfg.tokenizer_max_tokens, defaults["tokenizer_max_tokens"]),
+        "tokenizer_max_payload_mb": _coerce_int(
+            provider_cfg.tokenizer_max_payload_mb, defaults["tokenizer_max_payload_mb"]
+        ),
+        "auto_download": bool(provider_cfg.auto_download),
+    }
+
+
+def _decode_base64_payload(raw: str) -> bytes:
+    payload = raw
+    if "," in payload:
+        payload = payload.split(",", 1)[1]
+    return base64.b64decode(payload, validate=True)
+
+
+def _enforce_payload_limit(payload_bytes: bytes, max_payload_mb: int, request_id: Optional[str]) -> None:
+    if max_payload_mb <= 0:
+        return
+    max_bytes = max_payload_mb * 1024 * 1024
+    if len(payload_bytes) > max_bytes:
+        raise HTTPException(
+            status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
+            detail=_http_error_detail(
+                f"Payload too large ({len(payload_bytes)} bytes, max {max_bytes})",
+                request_id,
+            ),
+        )
+
+
+def _enforce_payload_size(size_bytes: int, max_payload_mb: int, request_id: Optional[str]) -> None:
+    if max_payload_mb <= 0:
+        return
+    max_bytes = max_payload_mb * 1024 * 1024
+    if size_bytes > max_bytes:
+        raise HTTPException(
+            status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
+            detail=_http_error_detail(
+                f"Payload too large ({size_bytes} bytes, max {max_bytes})",
+                request_id,
+            ),
+        )
+
+
+def _read_audio_from_bytes(
+    audio_bytes: bytes,
+    sample_rate_hint: Optional[int],
+    request_id: Optional[str],
+) -> tuple[np.ndarray, int, float]:
+    try:
+        audio_data, sample_rate = sf.read(io.BytesIO(audio_bytes), dtype="float32")
+    except Exception:
+        if sample_rate_hint is None:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=_http_error_detail(
+                    "Unable to decode audio; provide sample_rate for raw PCM",
+                    request_id,
+                ),
+            )
+        pcm = np.frombuffer(audio_bytes, dtype=np.int16)
+        audio_data = pcm.astype(np.float32) / 32768.0
+        sample_rate = int(sample_rate_hint)
+
+    if audio_data.ndim > 1:
+        audio_data = np.mean(audio_data, axis=1)
+    duration_seconds = float(len(audio_data)) / float(sample_rate or 24000)
+    return audio_data, int(sample_rate), duration_seconds
+
+
+def _resolve_tokenizer_sample_rate(tokenizer: Any, fallback: int) -> int:
+    for attr in ("sample_rate", "sampling_rate", "sr"):
+        value = getattr(tokenizer, attr, None)
+        try:
+            if value:
+                return int(value)
+        except Exception:
+            continue
+    return fallback
+
+
+def _resolve_tokenizer_frame_rate(tokenizer: Any) -> Optional[float]:
+    for attr in ("frame_rate", "tps", "token_rate"):
+        value = getattr(tokenizer, attr, None)
+        try:
+            if value:
+                return float(value)
+        except Exception:
+            continue
+    return None
+
+
+def _instantiate_tokenizer(tokenizer_cls: Any, model_id: str, allow_download: bool) -> Any:
+    if hasattr(tokenizer_cls, "from_pretrained"):
+        try:
+            return tokenizer_cls.from_pretrained(model_id, local_files_only=not allow_download)
+        except TypeError:
+            return tokenizer_cls.from_pretrained(model_id)
+    try:
+        return tokenizer_cls(model_id)
+    except TypeError:
+        return tokenizer_cls()
+
+
+def _load_qwen3_tokenizer(model_id: str, allow_download: bool) -> Any:
+    try:
+        module = importlib.import_module("qwen_tts")
+    except Exception as exc:
+        raise HTTPException(
+            status_code=status.HTTP_501_NOT_IMPLEMENTED,
+            detail=f"qwen-tts package not available: {exc}",
+        ) from exc
+
+    for name in ("Qwen3TTSTokenizer", "QwenTTSTokenizer", "TTSTokenizer"):
+        tokenizer_cls = getattr(module, name, None)
+        if tokenizer_cls is not None:
+            return _instantiate_tokenizer(tokenizer_cls, model_id, allow_download)
+
+    for fn_name in ("load_tokenizer", "get_tokenizer", "create_tokenizer"):
+        fn = getattr(module, fn_name, None)
+        if callable(fn):
+            try:
+                return fn(model_id)
+            except Exception:
+                return fn()
+
+    try:
+        tokenizer_mod = importlib.import_module("qwen_tts.tokenizer")
+        tokenizer_cls = getattr(tokenizer_mod, "Qwen3TTSTokenizer", None)
+        if tokenizer_cls is not None:
+            return _instantiate_tokenizer(tokenizer_cls, model_id, allow_download)
+    except Exception:
+        pass
+
+    raise HTTPException(
+        status_code=status.HTTP_501_NOT_IMPLEMENTED,
+        detail="Qwen3-TTS tokenizer backend is not available in this build",
+    )
+
+
+def _normalize_tokens(tokens: Any) -> tuple[List[int], Optional[float]]:
+    frame_rate = None
+    if isinstance(tokens, dict):
+        frame_rate = tokens.get("frame_rate") or tokens.get("tps")
+        tokens = tokens.get("tokens") or tokens.get("codes") or tokens.get("ids")
+    if isinstance(tokens, tuple) and len(tokens) == 2:
+        tokens, frame_rate = tokens
+    if isinstance(tokens, np.ndarray):
+        tokens = tokens.tolist()
+    if not isinstance(tokens, list):
+        tokens = list(tokens)
+    return [int(tok) for tok in tokens], frame_rate
+
+
+def _serialize_tokens(tokens: List[int], token_format: str) -> Any:
+    if token_format == "base64":
+        token_bytes = np.asarray(tokens, dtype=np.int32).tobytes()
+        return base64.b64encode(token_bytes).decode("ascii")
+    return tokens
+
+
+def _coerce_tokens_payload(payload: Any) -> List[int]:
+    if isinstance(payload, list):
+        return [int(tok) for tok in payload]
+    if isinstance(payload, str):
+        data = _decode_base64_payload(payload)
+        tokens = np.frombuffer(data, dtype=np.int32).tolist()
+        return [int(tok) for tok in tokens]
+    raise HTTPException(
+        status_code=status.HTTP_400_BAD_REQUEST,
+        detail="tokens must be a list of ints or base64-encoded bytes",
+    )
+
+
+def _serialize_audio_output(audio: Any, sample_rate: int, response_format: str) -> bytes:
+    if isinstance(audio, (bytes, bytearray)):
+        return bytes(audio)
+
+    audio_np = np.asarray(audio)
+    if audio_np.ndim > 1:
+        audio_np = np.mean(audio_np, axis=1)
+    if audio_np.dtype != np.int16:
+        audio_np = np.clip(audio_np, -1.0, 1.0)
+        audio_np = (audio_np * 32767.0).astype(np.int16)
+    if response_format == "pcm":
+        return audio_np.tobytes()
+    buffer = io.BytesIO()
+    sf.write(buffer, audio_np, sample_rate, format="WAV", subtype="PCM_16")
+    return buffer.getvalue()
 
 
 async def _stream_tts_to_websocket(
@@ -467,6 +691,8 @@ def _infer_tts_provider_from_model(model: Optional[str]) -> Optional[str]:
         return "supertonic2"
     if m.startswith("supertonic") or m.startswith("tts-supertonic"):
         return "supertonic"
+    if m.startswith("echo-tts") or m.startswith("echo_tts") or m.startswith("jordand/echo-tts"):
+        return "echo_tts"
     return None
 
 
@@ -501,6 +727,25 @@ def _map_openai_audio_model_to_whisper(model: Optional[str]) -> str:
     m = raw.lower()
 
     valid_sizes = _valid_whisper_model_sizes()
+    valid_sizes_lower = {s.lower() for s in valid_sizes}
+    if not valid_sizes_lower:
+        valid_sizes_lower = {
+            "tiny",
+            "tiny.en",
+            "base",
+            "base.en",
+            "small",
+            "small.en",
+            "medium",
+            "medium.en",
+            "large-v1",
+            "large-v2",
+            "large-v3",
+            "large",
+            "distil-large-v3",
+            "distil-medium.en",
+            "distil-small.en",
+        }
 
     # Pass through known internal sizes and HF ids
     if raw in valid_sizes or m in valid_sizes or "/" in raw:
@@ -509,6 +754,12 @@ def _map_openai_audio_model_to_whisper(model: Optional[str]) -> str:
     # OpenAI-compatible aliases
     if m == "whisper-1":
         return default_model
+    if m in {"whisper-large-v3-turbo", "whisper-large-v3-turbo-ct2", "large-v3-turbo"}:
+        return "deepdml/faster-whisper-large-v3-turbo-ct2"
+    if m.startswith("whisper-") and m.endswith("-ct2"):
+        ct2_tail = m[len("whisper-"):-4]
+        if ct2_tail in valid_sizes_lower:
+            return ct2_tail
 
     # Fallback to default
     return default_model
@@ -522,6 +773,7 @@ from tldw_Server_API.app.core.TTS.tts_service_v2 import get_tts_service_v2, TTSS
 from tldw_Server_API.app.core.TTS.tts_exceptions import (
     TTSError,
     TTSValidationError,
+    TTSInvalidVoiceReferenceError,
     TTSProviderNotConfiguredError,
     TTSAuthenticationError,
     TTSRateLimitError,
@@ -536,6 +788,140 @@ async def get_tts_service() -> TTSServiceV2:
     """Get the V2 TTS service instance."""
     return await get_tts_service_v2()
 
+def _raise_for_tts_error(exc: Exception, request_id: Optional[str]) -> None:
+    if isinstance(exc, TTSInvalidVoiceReferenceError):
+        logger.warning(f"TTS voice reference error: {exc}", exc_info=True)
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=_http_error_detail("TTS voice reference invalid", request_id, exc=exc),
+        )
+    if isinstance(exc, TTSValidationError):
+        logger.warning(f"TTS validation error: {exc}", exc_info=True)
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=_http_error_detail("TTS validation failed", request_id, exc=exc),
+        )
+    if isinstance(exc, TTSProviderNotConfiguredError):
+        logger.error(f"TTS provider not configured: {exc}", exc_info=True)
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=_http_error_detail("TTS service unavailable", request_id, exc=exc),
+        )
+    if isinstance(exc, TTSAuthenticationError):
+        logger.error(f"TTS authentication error: {exc}", exc_info=True)
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail=_http_error_detail("TTS provider authentication failed", request_id, exc=exc),
+        )
+    if isinstance(exc, TTSRateLimitError):
+        logger.warning(f"TTS rate limit exceeded: {exc}", exc_info=True)
+        raise HTTPException(
+            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+            detail=_http_error_detail(
+                "TTS provider rate limit exceeded. Please try again later.", request_id, exc=exc
+            ),
+        )
+    if isinstance(exc, TTSQuotaExceededError):
+        logger.warning(f"TTS quota exceeded: {exc}", exc_info=True)
+        raise HTTPException(
+            status_code=status.HTTP_402_PAYMENT_REQUIRED,
+            detail=_http_error_detail("TTS quota exceeded. Please review your plan or quota.", request_id, exc=exc),
+        )
+    if isinstance(exc, TTSError):
+        logger.error(f"TTS error: {exc}", exc_info=True)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=_http_error_detail("TTS generation failed", request_id, exc=exc),
+        )
+    logger.error(f"Unexpected error during audio generation: {exc}", exc_info=True)
+    raise HTTPException(
+        status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+        detail=_http_error_detail("An unexpected error occurred during audio generation", request_id, exc=exc),
+    )
+
+
+def _sanitize_speech_request(
+    request_data: OpenAISpeechRequest,
+    *,
+    request_id: Optional[str],
+) -> Optional[str]:
+    """Validate and sanitize input text, returning provider hint."""
+    try:
+        tts_config = get_tts_config()
+        validator = TTSInputValidator({"strict_validation": tts_config.strict_validation})
+
+        provider_hint = _infer_tts_provider_from_model(getattr(request_data, "model", None))
+        sanitized_text = validator.sanitize_text(request_data.input, provider=provider_hint)
+        if not sanitized_text or len(sanitized_text.strip()) == 0:
+            raise TTSValidationError(
+                "Input text cannot be empty after sanitization",
+                details={"original_length": len(request_data.input)},
+            )
+        request_data.input = sanitized_text
+        return provider_hint
+    except TTSValidationError as exc:
+        logger.warning(f"TTS validation error: {exc}", exc_info=True)
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=_http_error_detail("TTS validation failed", request_id, exc=exc),
+        ) from exc
+
+
+def _tts_fallback_resolver(name: str) -> Optional[str]:
+    try:
+        cfg = get_tts_config()
+        provider_cfg = getattr(cfg, "providers", {}).get(name)
+        api_key = getattr(provider_cfg, "api_key", None) if provider_cfg else None
+        return api_key or None
+    except (AttributeError, KeyError, TypeError) as exc:
+        logger.debug(f"TTS fallback resolver failed for provider '{name}': {exc}")
+        return None
+
+
+async def _resolve_tts_byok(
+    *,
+    provider_hint: Optional[str],
+    current_user: User,
+    request: Request,
+) -> tuple[Optional[int], Optional[Dict[str, Any]], Optional[Any]]:
+    user_id_int: Optional[int] = None
+    try:
+        user_id_int = getattr(current_user, "id_int", None)
+        if user_id_int is None:
+            raw_id = getattr(current_user, "id", None)
+            if raw_id is not None:
+                user_id_int = int(raw_id)
+    except (AttributeError, TypeError, ValueError) as exc:
+        logger.debug(f"Failed to extract user_id from current_user: {exc}")
+        user_id_int = None
+
+    tts_overrides: Optional[Dict[str, Any]] = None
+    byok_tts_resolution = None
+    if provider_hint:
+        byok_tts_resolution = await resolve_byok_credentials(
+            provider_hint,
+            user_id=user_id_int,
+            request=request,
+            fallback_resolver=_tts_fallback_resolver,
+        )
+        if byok_tts_resolution.uses_byok:
+            tts_overrides = {"api_key": byok_tts_resolution.api_key}
+            base_url = byok_tts_resolution.credential_fields.get("base_url")
+            if isinstance(base_url, str) and base_url.strip():
+                tts_overrides["base_url"] = base_url.strip()
+        elif not byok_tts_resolution.api_key:
+            if provider_hint in {"openai", "elevenlabs"}:
+                record_byok_missing_credentials(provider_hint, operation="audio_tts")
+                raise HTTPException(
+                    status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                    detail={
+                        "error_code": "missing_provider_credentials",
+                        "message": f"TTS provider '{provider_hint}' requires an API key.",
+                    },
+                )
+
+    return user_id_int, tts_overrides, byok_tts_resolution
+
 
 # --- End of Placeholder ---
 
@@ -547,6 +933,20 @@ async def get_tts_service() -> TTSServiceV2:
         Depends(check_rate_limit),
         Depends(require_token_scope("any", require_if_present=True, endpoint_id="audio.speech", count_as="call")),
     ],
+    responses={
+        200: {
+            "headers": {
+                "X-TTS-Alignment": {
+                    "description": "Base64url-encoded JSON alignment payload when available (non-streaming).",
+                    "schema": {"type": "string"},
+                },
+                "X-TTS-Alignment-Format": {
+                    "description": "Alignment header encoding format (currently json+base64).",
+                    "schema": {"type": "string"},
+                },
+            }
+        }
+    },
 )
 async def create_speech(
     request_data: OpenAISpeechRequest,  # FastAPI will parse JSON body into this
@@ -585,81 +985,14 @@ async def create_speech(
 
     request_id = ensure_request_id(request)
 
-    # Input validation using the new validation system
-    provider_hint: Optional[str] = None
-    try:
-        # Create validator instance; strictness can be configured via TTS config
-        tts_config = get_tts_config()
-        validator = TTSInputValidator({"strict_validation": tts_config.strict_validation})
-
-        # Validate and sanitize input text
-        provider_hint = _infer_tts_provider_from_model(getattr(request_data, "model", None))
-        sanitized_text = validator.sanitize_text(request_data.input, provider=provider_hint)
-
-        # Check for empty input after sanitization
-        if not sanitized_text or len(sanitized_text.strip()) == 0:
-            raise TTSValidationError(
-                "Input text cannot be empty after sanitization", details={"original_length": len(request_data.input)}
-            )
-
-        # Update request with sanitized text
-        request_data.input = sanitized_text
-
-    except TTSValidationError as e:
-        logger.warning(f"TTS validation error: {e}", exc_info=True)
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail=_http_error_detail("TTS validation failed", request_id, exc=e),
-        ) from e
-
-    # Resolve BYOK credentials for TTS providers (OpenAI/ElevenLabs)
-    user_id_int: Optional[int] = None
-    try:
-        user_id_int = getattr(current_user, "id_int", None)
-        if user_id_int is None:
-            raw_id = getattr(current_user, "id", None)
-            if raw_id is not None:
-                user_id_int = int(raw_id)
-    except (AttributeError, TypeError, ValueError) as exc:
-        logger.debug(f"Failed to extract user_id from current_user: {exc}")
-        user_id_int = None
+    provider_hint = _sanitize_speech_request(request_data, request_id=request_id)
 
     tts_provider_hint = provider_hint
-
-    def _tts_fallback_resolver(name: str) -> Optional[str]:
-        try:
-            cfg = get_tts_config()
-            provider_cfg = getattr(cfg, "providers", {}).get(name)
-            api_key = getattr(provider_cfg, "api_key", None) if provider_cfg else None
-            return api_key or None
-        except (AttributeError, KeyError, TypeError) as exc:
-            logger.debug(f"TTS fallback resolver failed for provider '{name}': {exc}")
-            return None
-
-    byok_tts_resolution = None
-    tts_overrides: Optional[Dict[str, Any]] = None
-    if tts_provider_hint:
-        byok_tts_resolution = await resolve_byok_credentials(
-            tts_provider_hint,
-            user_id=user_id_int,
-            request=request,
-            fallback_resolver=_tts_fallback_resolver,
-        )
-        if byok_tts_resolution.uses_byok:
-            tts_overrides = {"api_key": byok_tts_resolution.api_key}
-            base_url = byok_tts_resolution.credential_fields.get("base_url")
-            if isinstance(base_url, str) and base_url.strip():
-                tts_overrides["base_url"] = base_url.strip()
-        elif not byok_tts_resolution.api_key:
-            if tts_provider_hint in {"openai", "elevenlabs"}:
-                record_byok_missing_credentials(tts_provider_hint, operation="audio_tts")
-                raise HTTPException(
-                    status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-                    detail={
-                        "error_code": "missing_provider_credentials",
-                        "message": f"TTS provider '{tts_provider_hint}' requires an API key.",
-                    },
-                )
+    user_id_int, tts_overrides, byok_tts_resolution = await _resolve_tts_byok(
+        provider_hint=tts_provider_hint,
+        current_user=current_user,
+        request=request,
+    )
     logger.info(
         f"Received speech request: model={request_data.model}, voice={request_data.voice}, format={request_data.response_format}, request_id={request_id}"
     )
@@ -709,50 +1042,10 @@ async def create_speech(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail=f"Unsupported response_format: {request_data.response_format}. Supported formats are: {', '.join(content_type_map.keys())}",
         )
-
-    def _raise_for_tts_error(exc: Exception) -> None:
-        if isinstance(exc, TTSValidationError):
-            logger.warning(f"TTS validation error: {exc}", exc_info=True)
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail=_http_error_detail("TTS validation failed", request_id, exc=exc),
-            )
-        if isinstance(exc, TTSProviderNotConfiguredError):
-            logger.error(f"TTS provider not configured: {exc}", exc_info=True)
-            raise HTTPException(
-                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-                detail=_http_error_detail("TTS service unavailable", request_id, exc=exc),
-            )
-        if isinstance(exc, TTSAuthenticationError):
-            logger.error(f"TTS authentication error: {exc}", exc_info=True)
-            raise HTTPException(
-                status_code=status.HTTP_502_BAD_GATEWAY,
-                detail=_http_error_detail("TTS provider authentication failed", request_id, exc=exc),
-            )
-        if isinstance(exc, TTSRateLimitError):
-            logger.warning(f"TTS rate limit exceeded: {exc}", exc_info=True)
-            raise HTTPException(
-                status_code=status.HTTP_429_TOO_MANY_REQUESTS,
-                detail=_http_error_detail(
-                    "TTS provider rate limit exceeded. Please try again later.", request_id, exc=exc
-                ),
-            )
-        if isinstance(exc, TTSQuotaExceededError):
-            logger.warning(f"TTS quota exceeded: {exc}", exc_info=True)
-            raise HTTPException(
-                status_code=status.HTTP_402_PAYMENT_REQUIRED,
-                detail=_http_error_detail("TTS quota exceeded. Please review your plan or quota.", request_id, exc=exc),
-            )
-        if isinstance(exc, TTSError):
-            logger.error(f"TTS error: {exc}", exc_info=True)
-            raise HTTPException(
-                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                detail=_http_error_detail("TTS generation failed", request_id, exc=exc),
-            )
-        logger.error(f"Unexpected error during audio generation: {exc}", exc_info=True)
+    if request_data.stream and request_data.return_download_link:
         raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=_http_error_detail("An unexpected error occurred during audio generation", request_id, exc=exc),
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="return_download_link requires stream=false",
         )
 
     try:
@@ -766,7 +1059,7 @@ async def create_speech(
             user_id=user_id_int,
         )
     except Exception as exc:
-        _raise_for_tts_error(exc)
+        _raise_for_tts_error(exc, request_id)
 
     async def _pull_first_chunk() -> bytes:
         try:
@@ -776,7 +1069,7 @@ async def create_speech(
         except HTTPException:
             raise
         except Exception as exc:
-            _raise_for_tts_error(exc)
+            _raise_for_tts_error(exc, request_id)
 
     async def _stream_chunks(initial_chunk: bytes):
         try:
@@ -793,7 +1086,7 @@ async def create_speech(
         except HTTPException:
             raise
         except Exception as exc:
-            _raise_for_tts_error(exc)
+            _raise_for_tts_error(exc, request_id)
         finally:
             if byok_tts_resolution is not None:
                 try:
@@ -831,7 +1124,7 @@ async def create_speech(
     except HTTPException:
         raise
     except Exception as exc:
-        _raise_for_tts_error(exc)
+        _raise_for_tts_error(exc, request_id)
 
     # Drop any internal boundary markers if present
     all_audio_bytes = all_audio_bytes.replace(b"--final_boundary_for_non_streamed--", b"")
@@ -848,15 +1141,366 @@ async def create_speech(
         except Exception as exc:
             logger.debug(f"Failed to update BYOK last_used timestamp: {exc}")
 
+    headers = {
+        "Content-Disposition": f"attachment; filename=speech.{request_data.response_format}",
+        "Cache-Control": "no-cache",
+        "X-Request-Id": request_id,
+    }
+    try:
+        metadata = getattr(request_data, "_tts_metadata", None)
+        if isinstance(metadata, dict):
+            alignment_payload = metadata.get("alignment")
+        else:
+            alignment_payload = None
+    except Exception:
+        alignment_payload = None
+    if alignment_payload:
+        try:
+            alignment_json = json.dumps(alignment_payload, separators=(",", ":"), ensure_ascii=True)
+            alignment_b64 = base64.urlsafe_b64encode(alignment_json.encode("utf-8")).decode("ascii")
+            headers["X-TTS-Alignment"] = alignment_b64
+            headers["X-TTS-Alignment-Format"] = "json+base64"
+        except Exception as exc:
+            logger.debug(f"Failed to encode alignment metadata header: {exc}")
+
+    if request_data.return_download_link:
+        try:
+            file_record = await save_and_register_tts_audio(
+                user_id=user_id_int,
+                audio_bytes=all_audio_bytes,
+                audio_format=request_data.response_format,
+                original_text=request_data.input,
+                voice_name=request_data.voice,
+                model_name=request_data.model,
+                check_quota=True,
+            )
+            file_id = file_record.get("id")
+            if file_id:
+                headers["X-Download-Path"] = f"/api/v1/storage/files/{file_id}/download"
+                headers["X-Generated-File-Id"] = str(file_id)
+        except QuotaExceededError as exc:
+            raise HTTPException(
+                status_code=status.HTTP_507_INSUFFICIENT_STORAGE,
+                detail=str(exc),
+            ) from exc
+        except StorageError as exc:
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail=str(exc),
+            ) from exc
+
     return Response(
         content=all_audio_bytes,
         media_type=content_type,
-        headers={
-            "Content-Disposition": f"attachment; filename=speech.{request_data.response_format}",
-            "Cache-Control": "no-cache",
-            "X-Request-Id": request_id,
-        },
+        headers=headers,
     )
+
+
+@router.post(
+    "/speech/metadata",
+    summary="Returns alignment metadata for a TTS request.",
+    dependencies=[
+        Depends(check_rate_limit),
+        Depends(require_token_scope("any", require_if_present=True, endpoint_id="audio.speech", count_as="call")),
+    ],
+    responses={
+        200: {
+            "content": {
+                "application/json": {
+                    "example": {
+                        "alignment": {
+                            "engine": "kokoro",
+                            "sample_rate": 24000,
+                            "words": [
+                                {"word": "Hello", "start_ms": 0, "end_ms": 400},
+                                {"word": "world", "start_ms": 450, "end_ms": 900},
+                            ],
+                        }
+                    }
+                }
+            }
+        },
+        204: {"description": "No alignment metadata available for this request."},
+    },
+)
+async def create_speech_metadata(
+    request_data: OpenAISpeechRequest,
+    request: Request,
+    tts_service: TTSServiceV2 = Depends(get_tts_service),
+    current_user: User = Depends(get_request_user),
+    usage_log: UsageEventLogger = Depends(get_usage_event_logger),
+):
+    request_id = ensure_request_id(request)
+    provider_hint = _sanitize_speech_request(request_data, request_id=request_id)
+    tts_provider_hint = provider_hint
+    user_id_int, tts_overrides, byok_tts_resolution = await _resolve_tts_byok(
+        provider_hint=tts_provider_hint,
+        current_user=current_user,
+        request=request,
+    )
+
+    try:
+        usage_log.log_event(
+            "audio.tts.metadata",
+            tags=[str(request_data.model or ""), str(request_data.voice or "")],
+            metadata={"stream": bool(getattr(request_data, "stream", False)), "format": request_data.response_format},
+        )
+    except Exception as exc:
+        logger.debug(f"usage_log audio.tts.metadata failed: error={exc}")
+
+    if hasattr(request_data, "stream"):
+        try:
+            request_data.stream = False
+        except (AttributeError, TypeError) as exc:
+            logger.warning(
+                "audio.speech.metadata: failed to set request_data.stream=False (model={}, request_id={}): {}",
+                getattr(request_data, "model", None),
+                request_id,
+                exc,
+            )
+    else:
+        logger.warning(
+            "audio.speech.metadata: request_data missing stream attribute (model={}, request_id={})",
+            getattr(request_data, "model", None),
+            request_id,
+        )
+
+    try:
+        speech_iter = tts_service.generate_speech(
+            request_data,
+            provider=tts_provider_hint,
+            fallback=True,
+            provider_overrides=tts_overrides,
+            voice_to_voice_route="audio.speech.metadata",
+            user_id=user_id_int,
+            metadata_only=True,
+        )
+    except Exception as exc:
+        _raise_for_tts_error(exc, request_id)
+
+    try:
+        try:
+            await speech_iter.__anext__()
+        except StopAsyncIteration:
+            pass
+    except Exception as exc:
+        _raise_for_tts_error(exc, request_id)
+    finally:
+        if byok_tts_resolution is not None:
+            try:
+                await byok_tts_resolution.touch_last_used()
+            except Exception as exc:
+                logger.debug(f"Failed to update BYOK last_used timestamp: {exc}")
+
+    metadata = getattr(request_data, "_tts_metadata", None)
+    alignment_payload = None
+    if isinstance(metadata, dict):
+        alignment_payload = metadata.get("alignment")
+    if not alignment_payload:
+        return Response(status_code=status.HTTP_204_NO_CONTENT, headers={"X-Request-Id": request_id})
+    return JSONResponse(content={"alignment": alignment_payload}, headers={"X-Request-Id": request_id})
+
+
+@router.post(
+    "/tokenizer/encode",
+    summary="Encode audio into Qwen3-TTS tokens",
+    dependencies=[
+        Depends(check_rate_limit),
+        Depends(
+            require_token_scope(
+                "audio.tokenizer",
+                require_if_present=True,
+                endpoint_id="audio.tokenizer.encode",
+                count_as="call",
+            )
+        ),
+    ],
+)
+async def encode_audio_tokenizer(
+    request: Request,
+    current_user: User = Depends(get_request_user),
+):
+    request_id = ensure_request_id(request)
+    settings = _get_qwen3_tokenizer_settings()
+    tokenizer_model = settings["tokenizer_model"]
+    token_format = "list"
+    sample_rate_hint: Optional[int] = None
+
+    content_type = (request.headers.get("content-type") or "").lower()
+    if "multipart/form-data" in content_type:
+        form = await request.form()
+        upload = form.get("file") or form.get("audio")
+        if not isinstance(upload, UploadFile):
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=_http_error_detail("Missing audio file in multipart form", request_id),
+            )
+        audio_bytes = await upload.read()
+        tokenizer_model = str(form.get("tokenizer_model") or tokenizer_model)
+        token_format = str(form.get("token_format") or token_format)
+        try:
+            if form.get("sample_rate") is not None:
+                sample_rate_hint = int(form.get("sample_rate"))
+        except Exception:
+            sample_rate_hint = None
+    else:
+        payload = AudioTokenizerEncodeRequest(**(await request.json()))
+        audio_bytes = _decode_base64_payload(payload.audio_base64)
+        tokenizer_model = payload.tokenizer_model or tokenizer_model
+        token_format = payload.token_format or token_format
+        sample_rate_hint = payload.sample_rate
+
+    if token_format not in {"list", "base64"}:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=_http_error_detail("token_format must be 'list' or 'base64'", request_id),
+        )
+
+    _enforce_payload_limit(audio_bytes, settings["tokenizer_max_payload_mb"], request_id)
+    audio_data, sample_rate, duration_seconds = _read_audio_from_bytes(
+        audio_bytes, sample_rate_hint, request_id
+    )
+
+    max_audio_seconds = settings["tokenizer_max_audio_seconds"]
+    if max_audio_seconds > 0 and duration_seconds > max_audio_seconds:
+        raise HTTPException(
+            status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
+            detail=_http_error_detail(
+                f"Audio too long ({duration_seconds:.2f}s, max {max_audio_seconds}s)",
+                request_id,
+            ),
+        )
+
+    tokenizer = _load_qwen3_tokenizer(tokenizer_model, settings["auto_download"])
+    encode_fn = getattr(tokenizer, "encode", None)
+    if not callable(encode_fn):
+        raise HTTPException(
+            status_code=status.HTTP_501_NOT_IMPLEMENTED,
+            detail="Tokenizer backend does not expose encode()",
+        )
+
+    try:
+        tokens_raw = encode_fn(audio_data, sample_rate=sample_rate)
+    except TypeError:
+        try:
+            tokens_raw = encode_fn(audio_data, sample_rate)
+        except TypeError:
+            tokens_raw = encode_fn(audio_data)
+
+    tokens, frame_rate = _normalize_tokens(tokens_raw)
+    max_tokens = settings["tokenizer_max_tokens"]
+    if max_tokens > 0 and len(tokens) > max_tokens:
+        raise HTTPException(
+            status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
+            detail=_http_error_detail(
+                f"Token payload too large ({len(tokens)} tokens, max {max_tokens})",
+                request_id,
+            ),
+        )
+
+    if frame_rate is None:
+        frame_rate = _resolve_tokenizer_frame_rate(tokenizer)
+
+    payload_tokens = _serialize_tokens(tokens, token_format)
+    response = AudioTokenizerEncodeResponse(
+        tokens=payload_tokens,
+        token_format=token_format,
+        sample_rate=sample_rate,
+        frame_rate=frame_rate,
+        tokenizer_model=tokenizer_model,
+        duration_seconds=duration_seconds,
+    )
+    return JSONResponse(content=response.model_dump(), headers={"X-Request-Id": request_id})
+
+
+@router.post(
+    "/tokenizer/decode",
+    summary="Decode Qwen3-TTS tokens into audio",
+    dependencies=[
+        Depends(check_rate_limit),
+        Depends(
+            require_token_scope(
+                "audio.tokenizer",
+                require_if_present=True,
+                endpoint_id="audio.tokenizer.decode",
+                count_as="call",
+            )
+        ),
+    ],
+)
+async def decode_audio_tokenizer(
+    payload: AudioTokenizerDecodeRequest,
+    request: Request,
+    current_user: User = Depends(get_request_user),
+):
+    request_id = ensure_request_id(request)
+    settings = _get_qwen3_tokenizer_settings()
+    tokenizer_model = payload.tokenizer_model or settings["tokenizer_model"]
+
+    if isinstance(payload.tokens, str):
+        token_bytes = _decode_base64_payload(payload.tokens)
+        _enforce_payload_limit(token_bytes, settings["tokenizer_max_payload_mb"], request_id)
+        tokens = np.frombuffer(token_bytes, dtype=np.int32).tolist()
+    elif isinstance(payload.tokens, list):
+        token_bytes_len = len(payload.tokens) * 4
+        _enforce_payload_size(token_bytes_len, settings["tokenizer_max_payload_mb"], request_id)
+        tokens = [int(tok) for tok in payload.tokens]
+    else:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=_http_error_detail("tokens must be list[int] or base64 string", request_id),
+        )
+
+    max_tokens = settings["tokenizer_max_tokens"]
+    if max_tokens > 0 and len(tokens) > max_tokens:
+        raise HTTPException(
+            status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
+            detail=_http_error_detail(
+                f"Token payload too large ({len(tokens)} tokens, max {max_tokens})",
+                request_id,
+            ),
+        )
+
+    tokenizer = _load_qwen3_tokenizer(tokenizer_model, settings["auto_download"])
+    decode_fn = getattr(tokenizer, "decode", None)
+    if not callable(decode_fn):
+        raise HTTPException(
+            status_code=status.HTTP_501_NOT_IMPLEMENTED,
+            detail="Tokenizer backend does not expose decode()",
+        )
+
+    try:
+        decoded = decode_fn(tokens)
+    except TypeError:
+        decoded = decode_fn(tokens=tokens)
+
+    sample_rate = _resolve_tokenizer_sample_rate(tokenizer, 24000)
+    audio = decoded
+    if isinstance(decoded, tuple) and len(decoded) == 2:
+        audio, sample_rate = decoded
+    elif isinstance(decoded, dict):
+        audio = decoded.get("audio") or decoded.get("samples") or decoded.get("pcm")
+        sample_rate = int(decoded.get("sample_rate") or sample_rate)
+
+    audio_bytes = _serialize_audio_output(audio, sample_rate, payload.response_format)
+    duration_seconds = 0.0
+    try:
+        if payload.response_format == "pcm":
+            duration_seconds = len(audio_bytes) / 2.0 / float(sample_rate or 24000)
+        else:
+            with sf.SoundFile(io.BytesIO(audio_bytes)) as info:
+                duration_seconds = float(len(info)) / float(info.samplerate or sample_rate)
+    except Exception:
+        duration_seconds = 0.0
+
+    media_type = "audio/wav" if payload.response_format == "wav" else "application/octet-stream"
+    headers = {
+        "X-Request-Id": request_id,
+        "X-Audio-Sample-Rate": str(sample_rate),
+        "X-Audio-Duration-Seconds": str(duration_seconds),
+        "X-Tokenizer-Model": tokenizer_model,
+    }
+    return Response(content=audio_bytes, media_type=media_type, headers=headers)
 
 
 @router.post(
@@ -878,6 +1522,10 @@ async def create_transcription(
     ),
     language: Optional[str] = Form(default=None, description="Language of the audio in ISO-639-1 format"),
     prompt: Optional[str] = Form(default=None, description="Optional text to guide the model's style"),
+    hotwords: Optional[str] = Form(
+        default=None,
+        description="Optional hotwords to guide transcription (CSV or JSON list). Primarily used by VibeVoice-ASR.",
+    ),
     response_format: str = Form(default="json", description="Format of the transcript output"),
     temperature: float = Form(default=0.0, ge=0.0, le=1.0, description="Sampling temperature"),
     task: str = Form(
@@ -1110,6 +1758,25 @@ async def create_transcription(
         if task_normalized not in {"transcribe", "translate"}:
             task_normalized = "transcribe"
 
+        # Normalize optional hotwords (CSV or JSON list).
+        hotwords_norm: Optional[list[str]] = None
+        raw_hotwords = (hotwords or "").strip()
+        if raw_hotwords:
+            if raw_hotwords.startswith("["):
+                try:
+                    parsed_hotwords = json.loads(raw_hotwords)
+                    if isinstance(parsed_hotwords, list):
+                        hotwords_norm = [str(x).strip() for x in parsed_hotwords if str(x).strip()]
+                except Exception as hotwords_exc:
+                    logger.debug(f"Failed to parse hotwords JSON; falling back to CSV parsing: {hotwords_exc}")
+            if hotwords_norm is None:
+                hotwords_norm = [part.strip() for part in raw_hotwords.split(",") if part.strip()]
+            if hotwords_norm:
+                # Cap hotword count defensively to avoid unbounded payloads.
+                hotwords_norm = hotwords_norm[:128]
+            else:
+                hotwords_norm = None
+
         # Determine provider from requested model name.
         # We reuse the core STT parser so that HTTP models like
         # "parakeet-mlx", "parakeet-onnx", "qwen2audio-*" route
@@ -1236,6 +1903,7 @@ async def create_transcription(
                         task=task_normalized,
                         word_timestamps=("word" in granularity_tokens),
                         prompt=prompt,
+                        hotwords=hotwords_norm,
                         base_dir=base_dir,
                     )
                     detected_language = artifact.get("language")
@@ -1260,6 +1928,7 @@ async def create_transcription(
                         task=task_normalized,
                         word_timestamps=("word" in granularity_tokens),
                         prompt=prompt,
+                        hotwords=hotwords_norm,
                         base_dir=base_dir,
                     )
                     detected_language = artifact.get("language")
@@ -1576,10 +2245,18 @@ async def create_translation(
         model=model,
         language=None,  # Allow backend to auto-detect source language
         prompt=prompt,
+        hotwords=None,
         response_format=response_format,
         temperature=temperature,
         task="translate",
         timestamp_granularities="segment",
+        segment=False,
+        seg_K=6,
+        seg_min_segment_size=5,
+        seg_lambda_balance=0.01,
+        seg_utterance_expansion_width=2,
+        seg_embeddings_provider=None,
+        seg_embeddings_model=None,
         current_user=current_user,
     )
 
@@ -1952,6 +2629,8 @@ async def list_tts_voices(
 
             raise HTTPException(status_code=404, detail=f"Provider '{provider}' not found or unavailable")
         return all_voices
+    except HTTPException:
+        raise
     except Exception as e:
         logger.error(f"Error listing TTS voices: {e}", exc_info=True)
         request_id = ensure_request_id(request)
@@ -2135,9 +2814,11 @@ async def _audio_ws_authenticate(
                 from tldw_Server_API.app.core.AuthNZ.api_key_manager import get_api_key_manager
                 from tldw_Server_API.app.core.AuthNZ.database import get_db_pool
                 from tldw_Server_API.app.core.AuthNZ.quotas import increment_and_check_api_key_quota
+                from tldw_Server_API.app.core.AuthNZ.settings import get_settings
+                from tldw_Server_API.app.core.AuthNZ.ip_allowlist import resolve_client_ip
 
                 api_mgr = await get_api_key_manager()
-                client_ip = getattr(websocket.client, "host", None)
+                client_ip = resolve_client_ip(websocket, get_settings())
                 info = await api_mgr.validate_api_key(api_key=x_api_key, ip_address=client_ip)
                 if not info:
                     await _stream_error("Invalid API key", code=4401)
@@ -2244,15 +2925,11 @@ async def _audio_ws_authenticate(
 
     # Single-user mode
     from tldw_Server_API.app.core.AuthNZ.settings import get_settings
+    from tldw_Server_API.app.core.AuthNZ.ip_allowlist import resolve_client_ip
 
     settings = get_settings()
     expected_key = settings.SINGLE_USER_API_KEY
-    client_ip = None
-    try:
-        client_ip = getattr(websocket.client, "host", None)
-    except Exception as exc:  # noqa: BLE001
-        logger.debug(f"Failed to resolve client IP for single-user auth: {exc}")
-        client_ip = None
+    client_ip = resolve_client_ip(websocket, settings)
 
     def _ip_allowed_single_user(ip: Optional[str]) -> bool:
         try:
@@ -3764,6 +4441,380 @@ async def websocket_tts(
                 )
 
 
+@ws_router.websocket("/stream/tts/realtime")
+async def websocket_tts_realtime(
+    websocket: WebSocket,
+    token: Optional[str] = Query(None),  # noqa: ARG001 - kept for parity
+):
+    """
+    WebSocket realtime TTS endpoint: accepts streaming text frames and streams audio bytes.
+
+    Client frames:
+      - type=config: set provider/model/voice/format/speed/lang/extra_params/auto_flush_ms/auto_flush_tokens
+      - type=text:   text delta (fields: delta | text | input)
+      - type=commit: flush buffered text to synthesis
+      - type=final:  flush and close session
+
+    Server frames:
+      - JSON status/warning/error frames
+      - Binary audio frames for synthesized audio
+    """
+    await websocket.accept()
+
+    try:
+        _raw_idle = os.getenv("AUDIO_WS_IDLE_TIMEOUT_S") or os.getenv("STREAM_IDLE_TIMEOUT_S")
+        _idle_timeout = float(_raw_idle) if _raw_idle else None
+    except Exception:
+        _idle_timeout = None
+
+    _outer_stream = None
+    try:
+        from tldw_Server_API.app.core.Streaming.streams import WebSocketStream as _WSStream
+
+        _outer_stream = _WSStream(
+            websocket,
+            heartbeat_interval_s=None,
+            compat_error_type=True,
+            close_on_done=True,
+            idle_timeout_s=_idle_timeout,
+            labels={"component": "audio", "endpoint": "audio_tts_realtime_ws"},
+        )
+        await _outer_stream.start()
+    except Exception:
+        _outer_stream = None
+
+    try:
+        _hdrs = websocket.headers or {}
+        request_id = (
+            _hdrs.get("x-request-id")
+            or _hdrs.get("X-Request-Id")
+            or (websocket.query_params.get("request_id") if hasattr(websocket, "query_params") else None)
+            or str(uuid4())
+        )
+    except Exception:
+        request_id = str(uuid4())
+
+    def _policy_close_code() -> int:
+        flag = str(os.getenv("AUDIO_WS_QUOTA_CLOSE_1008", "0")).strip().lower()
+        return 1008 if flag in {"1", "true", "yes", "on"} else 4003
+
+    async def _send_json(payload: Dict[str, Any]) -> None:
+        if _outer_stream:
+            await _outer_stream.send_json(payload)
+        else:
+            await websocket.send_json(payload)
+
+    done_sent = False
+    error_sent = False
+
+    def _allowed_formats_for(provider_name: Optional[str]) -> Set[str]:
+        try:
+            from tldw_Server_API.app.core.TTS.tts_validation import ProviderLimits
+
+            limits = ProviderLimits.get_limits(str(provider_name).lower()) if provider_name else ProviderLimits.get_limits("default")
+            return set(limits.get("valid_formats", {"pcm", "wav", "mp3"}))
+        except Exception:
+            return {"pcm", "wav", "mp3", "opus", "flac"}
+
+    async def _send_error(code: str, message: str, *, close: bool = False, close_code: Optional[int] = None) -> None:
+        nonlocal error_sent
+        payload = {
+            "type": "error",
+            "code": code,
+            "message": message,
+            "error_type": code,
+            "request_id": request_id,
+            "data": {"request_id": request_id},
+        }
+        if _outer_stream:
+            await _outer_stream.send_json(payload)
+        else:
+            await websocket.send_json(payload)
+        error_sent = True
+        if not close:
+            return
+        if close_code is None:
+            if code == "quota_exceeded":
+                close_code = _policy_close_code()
+            else:
+                try:
+                    close_code = _outer_stream._map_close_code(code) if _outer_stream else 1011
+                except Exception:
+                    close_code = 1011
+        try:
+            await websocket.close(code=close_code)
+        except Exception:
+            pass
+
+    auth_ok, jwt_user_id = await _audio_ws_authenticate(
+        websocket,
+        _outer_stream,
+        endpoint_id="audio.stream.tts.realtime",
+        ws_path="/api/v1/audio/stream/tts/realtime",
+    )
+    if not auth_ok:
+        return
+
+    if is_multi_user_mode() and jwt_user_id is not None:
+        user_id_for_usage = int(jwt_user_id)
+    else:
+        from tldw_Server_API.app.core.AuthNZ.settings import get_settings as _get_settings
+
+        _s = _get_settings()
+        user_id_for_usage = getattr(_s, "SINGLE_USER_FIXED_ID", 1)
+
+    acquired_stream = False
+    session = None
+    sender_task: Optional[asyncio.Task] = None
+
+    def _coerce_float(val: Any, default: float) -> float:
+        try:
+            return float(val)
+        except Exception:
+            return default
+
+    def _coerce_int(val: Any, default: int) -> int:
+        try:
+            return int(val)
+        except Exception:
+            return default
+
+    try:
+        try:
+            ok_stream, msg_stream = await can_start_stream(user_id_for_usage)
+            if not ok_stream:
+                await _send_error("quota_exceeded", msg_stream or "Concurrent audio streams limit reached", close=False)
+                await websocket.close(code=_policy_close_code())
+                return
+            acquired_stream = True
+        except Exception:
+            await _send_error("quota_error", "Unable to evaluate audio stream quota or concurrency", close=False)
+            await websocket.close(code=_policy_close_code())
+            return
+
+        # Read initial config or text frame
+        try:
+            raw_msg = await asyncio.wait_for(websocket.receive_text(), timeout=10.0)
+            first = json.loads(raw_msg)
+        except Exception as exc:
+            logger.debug(f"TTS realtime WS initial frame parse failed: {exc}")
+            await _send_error("bad_request", "Initial config or text frame required", close=False)
+            await websocket.close(code=4400)
+            return
+
+        msg_type = (first.get("type") or "").lower()
+        if msg_type not in {"config", "prompt", "text"}:
+            await _send_error("bad_request", "First frame must be type=config, prompt, or text", close=False)
+            await websocket.close(code=4400)
+            return
+
+        # Defaults
+        default_provider = "vibevoice_realtime"
+        default_model = "vibevoice-realtime-0.5b"
+        default_voice = "default"
+        default_format = "pcm"
+        default_speed = 1.0
+        default_auto_flush_ms = _coerce_int(os.getenv("TTS_REALTIME_AUTO_FLUSH_MS"), 600)
+        default_auto_flush_tokens = _coerce_int(os.getenv("TTS_REALTIME_AUTO_FLUSH_TOKENS"), 60)
+
+        provider_hint = first.get("provider") or default_provider
+        model = first.get("model") or default_model
+        voice = first.get("voice") or default_voice
+        response_format = first.get("format") or first.get("response_format") or default_format
+        response_format = str(response_format).lower()
+        speed = _coerce_float(first.get("speed", default_speed), default_speed)
+        lang_code = first.get("lang") or first.get("lang_code")
+        extra_params = first.get("extra_params")
+        if extra_params is not None and not isinstance(extra_params, dict):
+            extra_params = None
+
+        auto_flush_ms = _coerce_int(first.get("auto_flush_ms", default_auto_flush_ms), default_auto_flush_ms)
+        auto_flush_tokens = _coerce_int(first.get("auto_flush_tokens", default_auto_flush_tokens), default_auto_flush_tokens)
+        if auto_flush_ms < 0:
+            auto_flush_ms = 0
+        if auto_flush_tokens < 0:
+            auto_flush_tokens = 0
+
+        allowed_formats = _allowed_formats_for(str(provider_hint) if provider_hint else None)
+        if response_format not in allowed_formats:
+            await _send_error("bad_request", f"Unsupported format '{response_format}'")
+            await websocket.close(code=4400)
+            return
+
+        tts_service = await get_tts_service()
+        config = RealtimeSessionConfig(
+            model=str(model),
+            voice=str(voice),
+            response_format=str(response_format),
+            speed=float(speed),
+            lang_code=lang_code,
+            extra_params=extra_params,
+            provider=str(provider_hint) if provider_hint else None,
+        )
+        handle = await tts_service.open_realtime_session(
+            config=config,
+            provider_hint=str(provider_hint) if provider_hint else None,
+            route="audio.stream.tts.realtime",
+            user_id=user_id_for_usage,
+        )
+        session = handle.session
+        if handle.provider:
+            provider_allowed = _allowed_formats_for(handle.provider)
+            if response_format not in provider_allowed:
+                await _send_error(
+                    "bad_request",
+                    f"Unsupported format '{response_format}' for provider '{handle.provider}'",
+                    close=True,
+                    close_code=4400,
+                )
+                try:
+                    await session.finish()
+                except Exception:
+                    pass
+                return
+
+        await _send_json(
+            {
+                "type": "ready",
+                "provider": handle.provider or provider_hint,
+                "format": response_format,
+                "sample_rate": 24000,
+                "request_id": request_id,
+            }
+        )
+        if handle.warning:
+            await _send_json({"type": "warning", "message": handle.warning, "request_id": request_id})
+
+        async def _audio_sender() -> None:
+            try:
+                async for chunk in session.audio_stream():
+                    if not chunk:
+                        continue
+                    await websocket.send_bytes(chunk)
+                    if _outer_stream:
+                        _outer_stream.mark_activity()
+            except Exception as exc:
+                logger.debug(f"TTS realtime audio sender failed: {exc}")
+
+        sender_task = asyncio.create_task(_audio_sender())
+
+        # Handle the initial frame as text if provided
+        initial_text = first.get("delta") or first.get("text") or first.get("input")
+        buffered_tokens = 0
+        buffered_chars = 0
+        last_input_ts: Optional[float] = None
+
+        if isinstance(initial_text, str) and initial_text:
+            await session.push_text(initial_text)
+            buffered_chars += len(initial_text)
+            buffered_tokens += len(initial_text.split())
+            last_input_ts = time.monotonic()
+
+        while True:
+            timeout = None
+            if auto_flush_ms and buffered_chars > 0:
+                now = time.monotonic()
+                elapsed = now - (last_input_ts or now)
+                remaining = (auto_flush_ms / 1000.0) - elapsed
+                timeout = max(0.0, remaining)
+
+            try:
+                raw_msg = await asyncio.wait_for(websocket.receive_text(), timeout=timeout)
+            except asyncio.TimeoutError:
+                if buffered_chars > 0:
+                    await session.commit()
+                    buffered_chars = 0
+                    buffered_tokens = 0
+                    last_input_ts = None
+                continue
+
+            try:
+                data = json.loads(raw_msg)
+            except Exception:
+                await _send_error("bad_request", "Invalid JSON frame", close=False)
+                await websocket.close(code=4400)
+                return
+
+            msg_type = (data.get("type") or "").lower()
+            if msg_type in {"text", "input"}:
+                delta = data.get("delta") or data.get("text") or data.get("input")
+                if not isinstance(delta, str) or not delta:
+                    continue
+                await session.push_text(delta)
+                buffered_chars += len(delta)
+                buffered_tokens += len(delta.split())
+                last_input_ts = time.monotonic()
+                if auto_flush_tokens and buffered_tokens >= auto_flush_tokens:
+                    await session.commit()
+                    buffered_chars = 0
+                    buffered_tokens = 0
+                    last_input_ts = None
+            elif msg_type == "commit":
+                await session.commit()
+                buffered_chars = 0
+                buffered_tokens = 0
+                last_input_ts = None
+            elif msg_type == "final":
+                await session.finish()
+                break
+            elif msg_type == "config":
+                await _send_json({"type": "warning", "message": "Config updates are ignored after session start."})
+            elif msg_type == "ping":
+                await _send_json({"type": "pong"})
+            else:
+                await _send_json({"type": "warning", "message": f"Unknown message type '{msg_type}'"})
+
+        if sender_task:
+            await sender_task
+        if getattr(session, "error", None):
+            await _send_error("internal_error", "Realtime TTS session failed", close=True)
+        if not error_sent:
+            if _outer_stream:
+                await _outer_stream.done()
+            else:
+                await _send_json({"type": "done"})
+            done_sent = True
+    except WebSocketDisconnect:
+        logger.info("TTS realtime WS disconnected")
+    except Exception as exc:
+        logger.error(f"TTS realtime WS error: {exc}", exc_info=True)
+        try:
+            await _send_error("internal_error", "Internal error", close=True)
+        except Exception:
+            pass
+    finally:
+        if session is not None:
+            try:
+                await session.finish()
+            except Exception:
+                pass
+        if sender_task and not sender_task.done():
+            sender_task.cancel()
+            try:
+                await sender_task
+            except Exception:
+                pass
+        if acquired_stream:
+            try:
+                await finish_stream(user_id_for_usage)
+            except EXPECTED_DB_EXC as e:
+                logger.debug(
+                    f"Failed to release streaming quota slot (audio.stream.tts.realtime): "
+                    f"user_id={user_id_for_usage}, error={e}"
+                )
+        try:
+            if _outer_stream and not done_sent and not error_sent:
+                await _outer_stream.done()
+        except Exception as outer_exc:
+            try:
+                await websocket.close()
+            except Exception as close_exc:
+                logger.debug(
+                    "audio.stream.tts.realtime websocket close failed after _outer_stream.done error: "
+                    f"outer_error={outer_exc}, close_error={close_exc}"
+                )
+
+
 @router.get("/stream/status", summary="Check streaming transcription availability")
 async def streaming_status():
     """
@@ -3841,8 +4892,8 @@ async def streaming_status():
 
 @router.get("/stream/limits", summary="Get user's streaming quota and usage")
 async def streaming_limits(
+    request: Request,
     current_user: User = Depends(get_request_user),
-    request: Request = None,
 ):
     """
     Return the current user's streaming quota and usage summary.

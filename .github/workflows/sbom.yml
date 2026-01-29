@@ -92,10 +92,10 @@ jobs:
 
       - name: Generate Node SBOM (CycloneDX NPM)
         run: |
-          if [ -f package-lock.json ]; then \
-            npx -y @cyclonedx/cyclonedx-npm --output-file sbom-node.cdx.json; \
-          elif [ -f tldw-frontend/package-lock.json ]; then \
-            (cd tldw-frontend && npx -y @cyclonedx/cyclonedx-npm --output-file ../sbom-node.cdx.json); \
+          if [ -f apps/package-lock.json ]; then \
+            (cd apps && npx -y @cyclonedx/cyclonedx-npm --output-file ../sbom-node.cdx.json); \
+          elif [ -f apps/tldw-frontend/package-lock.json ]; then \
+            (cd apps/tldw-frontend && npx -y @cyclonedx/cyclonedx-npm --output-file ../../sbom-node.cdx.json); \
           else \
             echo "No package-lock.json found; skipping Node SBOM"; \
           fi

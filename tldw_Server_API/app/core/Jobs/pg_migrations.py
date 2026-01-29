@@ -15,6 +15,7 @@ CREATE TABLE IF NOT EXISTS jobs (
   job_type TEXT NOT NULL,
   owner_user_id TEXT,
   project_id INTEGER,
+  batch_group TEXT,
   idempotency_key TEXT,
   payload JSONB,
   result JSONB,
@@ -58,6 +59,7 @@ CREATE INDEX IF NOT EXISTS idx_jobs_lookup
 CREATE INDEX IF NOT EXISTS idx_jobs_status ON jobs(status);
 CREATE INDEX IF NOT EXISTS idx_jobs_lease ON jobs(leased_until);
 CREATE INDEX IF NOT EXISTS idx_jobs_owner_status ON jobs(owner_user_id, status, created_at);
+CREATE INDEX IF NOT EXISTS idx_jobs_batch_group ON jobs(batch_group);
 
 -- updated_at trigger
 CREATE OR REPLACE FUNCTION set_jobs_updated_at()
@@ -99,6 +101,7 @@ CREATE TABLE IF NOT EXISTS jobs_archive (
   job_type TEXT NOT NULL,
   owner_user_id TEXT,
   project_id INTEGER,
+  batch_group TEXT,
   idempotency_key TEXT,
   payload JSONB,
   result JSONB,
@@ -226,10 +229,12 @@ def ensure_jobs_tables_pg(db_url: str) -> str:
                     f.execute("ALTER TABLE jobs ADD COLUMN IF NOT EXISTS error_code TEXT")
                     f.execute("ALTER TABLE jobs ADD COLUMN IF NOT EXISTS error_class TEXT")
                     f.execute("ALTER TABLE jobs ADD COLUMN IF NOT EXISTS error_stack JSONB")
+                    f.execute("ALTER TABLE jobs ADD COLUMN IF NOT EXISTS batch_group TEXT")
                     # Forward-migrate archive table compressed columns (if table exists)
                     try:
                         f.execute("ALTER TABLE jobs_archive ADD COLUMN IF NOT EXISTS payload_compressed BYTEA")
                         f.execute("ALTER TABLE jobs_archive ADD COLUMN IF NOT EXISTS result_compressed BYTEA")
+                        f.execute("ALTER TABLE jobs_archive ADD COLUMN IF NOT EXISTS batch_group TEXT")
                     except Exception:
                         pass
         except Exception:

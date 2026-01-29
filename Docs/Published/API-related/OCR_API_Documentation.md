@@ -33,6 +33,8 @@ OCR is typically enabled via the media ingestion request options. Key fields (se
 - `ocr_dpi` (int) - DPI for page rendering prior to OCR
 - `ocr_mode` (enum) - `always` or `fallback`
 - `ocr_min_page_text_chars` (int) - threshold to treat a page as “no text” for fallback OCR
+- `ocr_output_format` (str | null) - `text|markdown|json` (controls structured OCR output)
+- `ocr_prompt_preset` (str | null) - `general|doc|table|spotting|json` (backend-specific presets)
 
 Reference (code): `tldw_Server_API/app/api/v1/schemas/media_request_models.py`.
 
@@ -59,6 +61,43 @@ Enable OCR in media ingestion (illustrative JSON fragment)
   "ocr_lang": "eng",
   "ocr_mode": "fallback",
   "ocr_dpi": 300
+}
+```
+
+Structured OCR example (process PDF + inspect `analysis_details`)
+
+```bash
+curl -s -X POST http://localhost:8000/api/v1/media/process-pdfs \
+  -H "X-API-KEY: $TLDW_API_KEY" \
+  -F "enable_ocr=true" \
+  -F "ocr_backend=hunyuan" \
+  -F "ocr_output_format=json" \
+  -F "ocr_prompt_preset=json" \
+  -F "files=@/path/to/sample.pdf"
+```
+
+Example response excerpt (truncated)
+
+```json
+{
+  "results": [
+    {
+      "analysis_details": {
+        "ocr": {
+          "backend": "hunyuan",
+          "output_format": "json",
+          "prompt_preset": "json",
+          "structured": {
+            "format": "json",
+            "text": "...",
+            "pages": [
+              { "text": "...", "raw": { "blocks": [ { "text": "..." } ] } }
+            ]
+          }
+        }
+      }
+    }
+  ]
 }
 ```
 

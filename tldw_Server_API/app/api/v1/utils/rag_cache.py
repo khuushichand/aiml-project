@@ -22,6 +22,55 @@ def _collect_cache_namespaces(
     return collected
 
 
+async def delete_media_vectors(
+    current_user: Optional[User],
+    *,
+    media_id: int,
+    namespaces: Optional[Iterable[str]] = None,
+) -> None:
+    """Best-effort vector-store cleanup for a media item."""
+    cache_namespaces = _collect_cache_namespaces(current_user, namespaces)
+    if not cache_namespaces:
+        cache_namespaces = {"0"}
+
+    try:
+        from tldw_Server_API.app.core.config import settings as _settings
+        if not isinstance(_settings, dict):
+            return
+        rag_cfg = _settings.get("RAG", {}) or {}
+        if not rag_cfg.get("vector_store_type"):
+            return
+    except Exception as exc:
+        logger.debug("Vector cleanup skipped (settings error): {}", exc)
+        return
+
+    try:
+        from tldw_Server_API.app.core.RAG.rag_service.vector_stores.factory import (
+            create_from_settings_for_user,
+        )
+    except Exception as exc:
+        logger.debug("Vector cleanup skipped (factory import error): {}", exc)
+        return
+
+    for namespace in cache_namespaces:
+        try:
+            user_id = str(namespace)
+            adapter = create_from_settings_for_user(_settings, user_id)
+            if adapter is None:
+                continue
+            if not getattr(adapter, "_initialized", False):
+                await adapter.initialize()
+            collection_name = f"user_{user_id}_media_embeddings"
+            await adapter.delete_by_filter(collection_name, {"media_id": str(media_id)})
+        except Exception as exc:
+            logger.debug(
+                "Vector cleanup skipped for user {} media {}: {}",
+                namespace,
+                media_id,
+                exc,
+            )
+
+
 def invalidate_rag_caches(
     current_user: Optional[User],
     *,

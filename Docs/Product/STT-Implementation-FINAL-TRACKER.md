@@ -29,7 +29,7 @@ Goal: deliver Waves 1–3 (stabilize STT, ship non-streaming voice command path,
   - Store user transcript + audio ref as `user` message; assistant reply + audio ref as `assistant` message in existing chat/notes store; return/reuse `session_id`. Make audio retention optional (flag to skip storing audio in prod).
   - Touchpoints: chat/notes storage layer (ChaChaNotes), schema helpers for message payloads; audio blob storage path/refs.
 - **WebUI hook (minimal)**
-  - Add “press to talk” path in `tldw-frontend` calling `/api/v1/audio/chat`, playing reply audio, showing transcripts. Keep settings for default STT/LLM/TTS selections.
+  - Add “press to talk” path in the Next.js WebUI (`apps/tldw-frontend`) calling `/api/v1/audio/chat`, playing reply audio, showing transcripts. Keep settings for default STT/LLM/TTS selections.
 - **Tests**
   - Unit: schema validation, orchestration success, and each failure leg (STT/LLM/TTS).
   - Integration: happy path using small fixture audio + stub LLM/TTS/action; auth/quota regression; action execution happy/failure; chat message round-trip with transcript + audio refs.

@@ -25,7 +25,10 @@ from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import (
 )
 from tldw_Server_API.app.api.v1.API_Deps.v1_endpoint_deps import oauth2_scheme
 from tldw_Server_API.app.core.AuthNZ.principal_model import AuthPrincipal
-from tldw_Server_API.app.core.AuthNZ.ip_allowlist import is_single_user_ip_allowed
+from tldw_Server_API.app.core.AuthNZ.ip_allowlist import (
+    is_single_user_ip_allowed,
+    resolve_client_ip,
+)
 from tldw_Server_API.app.core.exceptions import InactiveUserError
 
 
@@ -112,12 +115,7 @@ async def verify_api_key(
     if isinstance(token, str) and token.startswith("Bearer "):
         token = token[7:]
 
-    client_ip = None
-    try:
-        if request and request.client:
-            client_ip = request.client.host
-    except Exception:
-        client_ip = None
+    client_ip = resolve_client_ip(request, settings)
 
     if settings.AUTH_MODE == "single_user":
         if not is_single_user_ip_allowed(client_ip, settings):

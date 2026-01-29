@@ -264,7 +264,7 @@ Token scopes:
 
 ## 14. UX and Client Integration
 
-- Libraries: Cytoscape.js or Sigma.js (Graphology) in `tldw-frontend`.
+- Libraries: Cytoscape.js or Sigma.js (Graphology) in the Next.js WebUI (`apps/tldw-frontend`).
 - Edge visibility: default to showing manual, wikilinks/backlinks, tag membership, and source membership.
 - Manual link creation from graph UI posts to `POST /notes/{note_id}/links`.
 - Layouts: client-managed (no server persistence). Provide `format=cytoscape` for direct rendering.

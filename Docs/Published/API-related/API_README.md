@@ -27,7 +27,13 @@ See also:
   - Streaming (SSE), persistence toggle, multi-provider support
   - See: [Chat API Documentation](Chat_API_Documentation.md)
 
-- Character Chat API: sessions and messages under `/api/v1/chats` and `/api/v1/messages`
+- Anthropic Messages API (Anthropic-compatible): `POST /api/v1/messages` and `POST /v1/messages`
+  - Includes `POST /api/v1/messages/count_tokens` and `POST /v1/messages/count_tokens`
+  - Native providers: `anthropic`, `llama.cpp`; other providers use OpenAI conversion
+  - Note: `/api/v1/messages` (no ID) is reserved for the Anthropic-compatible API; Character Chat uses `/api/v1/chats/{chat_id}/messages` and `/api/v1/messages/{message_id}`
+  - See: [Anthropic Messages API](Anthropic_Messages_API.md)
+
+- Character Chat API: sessions under `/api/v1/chats`; messages under `/api/v1/chats/{chat_id}/messages` and `/api/v1/messages/{message_id}`
   - Create/list/update/delete chats, send/edit/delete/search messages
   - Export chat history; fetch messages formatted for completions
   - Use Chat API for LLM replies with `conversation_id`/`character_id`

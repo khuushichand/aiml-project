@@ -14,6 +14,7 @@ from typing import Any, Dict, Optional
 import os
 import atexit
 import warnings
+import sys
 
 from loguru import logger
 
@@ -263,6 +264,14 @@ async def shutdown_audit_adapter_services() -> None:
 # Ensure services are shutdown at interpreter exit to avoid hanging tests
 def _shutdown_on_exit() -> None:
     try:
+        try:
+            if getattr(sys, "stderr", None) is None or sys.stderr.closed:
+                logger.remove()
+            else:
+                logger.disable("tldw_Server_API.app.api.v1.API_Deps.Audit_DB_Deps")
+                logger.disable("tldw_Server_API.app.core.Embeddings.audit_adapter")
+        except Exception:
+            pass
         # Prefer running in a fresh loop if no loop is running
         try:
             loop = asyncio.get_running_loop()

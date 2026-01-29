@@ -12,17 +12,16 @@ import time
 import threading
 import hashlib
 import re
+import weakref
 from pathlib import Path
 from functools import wraps
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Annotated, Literal
 #
 # Third-party Libraries
 import numpy as np
-import onnxruntime as ort
-from huggingface_hub import model_info  # Assuming this is used in _ensure_hf_revision
 from loguru import logger
 from pydantic import BaseModel, Field
-from prometheus_client import Counter, Gauge  # Assuming these are defined elsewhere or used directly
+from prometheus_client import Counter, Gauge, REGISTRY  # Assuming these are defined elsewhere or used directly
 # NOTE: Avoid importing heavy deps (torch, transformers) at module import time.
 # Import them lazily inside functions/methods when needed to keep app import light.
 
@@ -44,6 +43,31 @@ def _import_transformers():
     except Exception as e:
         raise ImportError(
             "'transformers' is required for this embeddings provider. Install transformers to proceed."
+        ) from e
+
+
+_ORT_IMPORT_ERROR: Optional[Exception] = None
+try:
+    import onnxruntime as ort  # type: ignore
+except Exception as e:
+    ort = None  # type: ignore[assignment]
+    _ORT_IMPORT_ERROR = e
+
+
+def _import_onnxruntime():
+    """Lazily import onnxruntime only when actually needed."""
+    global ort, _ORT_IMPORT_ERROR
+    if ort is not None:
+        return ort
+    try:
+        import onnxruntime as _ort  # type: ignore
+        ort = _ort
+        _ORT_IMPORT_ERROR = None
+        return _ort
+    except Exception as e:
+        _ORT_IMPORT_ERROR = e
+        raise ImportError(
+            "'onnxruntime' is required for the ONNX embeddings provider. Install onnxruntime to proceed."
         ) from e
 #
 # Local Imports
@@ -365,13 +389,48 @@ def _release_model_in_use(model_id: str) -> None:
         else:
             model_in_use_counts[model_id] = current - 1
 
+def _get_or_create_metric(metric_cls, name: str, documentation: str, labelnames: tuple[str, ...]):
+    """Return an existing Prometheus collector when available, else create one.
+
+    This makes metric registration idempotent across module re-imports in tests.
+    """
+    try:
+        existing = REGISTRY._names_to_collectors.get(name)  # type: ignore[attr-defined]
+        if existing is not None:
+            existing_labels = tuple(getattr(existing, "_labelnames", ()))
+            if existing_labels == labelnames:
+                return existing
+            try:
+                REGISTRY.unregister(existing)
+            except Exception:
+                # If unregister fails, fall through and let metric creation raise with context.
+                pass
+    except Exception:
+        # Accessing registry internals is best-effort; metric creation will validate again.
+        pass
+    return metric_cls(name, documentation, labelnames=labelnames)
+
+
 # Prometheus Metrics (Ensure these are correctly defined and registered in your application)
-ACTIVE_EMBEDDERS = Gauge("active_embedder_instances", "Number of active embedder instances",
-                         labelnames=("provider", "model_id"))
-EMBEDDINGS_REQUESTS = Counter("embedding_requests_total", "Total number of embedding requests",
-                              labelnames=("provider", "model_id"))
-MODEL_CACHE_HITS = Counter("embedding_model_cache_hits_total", "Total number of model cache hits",
-                           labelnames=("model_id",))
+ACTIVE_EMBEDDERS = _get_or_create_metric(
+    Gauge,
+    "active_embedder_instances",
+    "Number of active embedder instances",
+    ("provider", "model_id"),
+)
+# Use a distinct metric name to avoid collisions with API-level embedding_requests_total.
+EMBEDDINGS_REQUESTS = _get_or_create_metric(
+    Counter,
+    "embedding_backend_requests_total",
+    "Total number of backend embedding requests",
+    ("provider", "model_id"),
+)
+MODEL_CACHE_HITS = _get_or_create_metric(
+    Counter,
+    "embedding_model_cache_hits_total",
+    "Total number of model cache hits",
+    ("model_id",),
+)
 
 
 # Add other metrics from your previous version or as needed, e.g., for load times, creation times
@@ -396,31 +455,34 @@ class BaseModelCfg(BaseModel):
 
 
 class HFModelCfg(BaseModelCfg):
-    provider: str = "huggingface"
+    provider: Literal["huggingface"] = "huggingface"
     hf_cache_dir_subpath: str = "huggingface_cache"
 
 
 class ONNXModelCfg(BaseModelCfg):
-    provider: str = "onnx"
+    provider: Literal["onnx"] = "onnx"
     onnx_storage_dir_subpath: str = "onnx_models"
     onnx_providers: List[str] = Field(default_factory=lambda: ["CPUExecutionProvider"])
 
 
 class OpenAIModelCfg(BaseModelCfg):
-    provider: str = "openai"
+    provider: Literal["openai"] = "openai"
     api_key: Optional[str] = None
     dimensions: Optional[int] = None
 
 
 class LocalAPICfg(BaseModelCfg):
-    provider: str = "local_api"
+    provider: Literal["local_api"] = "local_api"
     api_url: str
     api_key: Optional[str] = None
     # Consider adding chunk_size for local_api batching
     # chunk_size: int = 100
 
 
-ModelCfg = HFModelCfg | ONNXModelCfg | OpenAIModelCfg | LocalAPICfg
+ModelCfg = Annotated[
+    HFModelCfg | ONNXModelCfg | OpenAIModelCfg | LocalAPICfg,
+    Field(discriminator="provider"),
+]
 
 
 class EmbeddingConfigSchema(BaseModel):
@@ -438,7 +500,17 @@ def _ensure_hf_revision(model_name_or_path: str, expected_sha: Optional[str]) ->
         logger.debug(f"No revision SHA provided for {model_name_or_path}, skipping check.")
         return
     try:
-        info = model_info(model_name_or_path, revision=expected_sha)  # Check against the specific revision
+        try:
+            from huggingface_hub import model_info as _model_info  # type: ignore
+        except Exception as import_exc:
+            logger.warning(
+                "huggingface_hub not available; skipping revision verification for {}. "
+                "Install huggingface_hub to enable commit hash checks. Error: {}",
+                model_name_or_path,
+                import_exc,
+            )
+            return
+        info = _model_info(model_name_or_path, revision=expected_sha)  # Check against the specific revision
         actual_sha = info.sha
         if actual_sha != expected_sha:
             logger.error(
@@ -511,35 +583,40 @@ class TokenBucketLimiter:
                 time.sleep(wait_time)
             # Loop again to re-evaluate after waiting
 
+    def acquire(self) -> None:
+        """Acquire a token, honoring ResourceGovernor if enabled."""
+        # When ResourceGovernor is enabled, prefer ResourceGovernor as
+        # the primary enforcement path. The legacy in-process token bucket
+        # is retained as a fallback when RG is disabled.
+        if not _rg_embeddings_server_enabled():
+            self._acquire()
+            return
+
+        # RG enforcement with simple backoff based on retry_after.
+        while True:
+            decision = _maybe_enforce_with_rg_embeddings_server_sync()
+            if decision is None:
+                _log_rg_emb_server_fallback("rg_decision_unavailable")
+                raise RuntimeError(
+                    "Embeddings server ResourceGovernor unavailable while RG_ENABLED=1. "
+                    "Ensure RG policy loader and backend are configured."
+                )
+            if decision.get("allowed", False):
+                return
+            retry_after = decision.get("retry_after")
+            wait_s = 1.0
+            try:
+                if isinstance(retry_after, (int, float)) and retry_after > 0:
+                    wait_s = float(retry_after)
+            except Exception:
+                wait_s = 1.0
+            time.sleep(wait_s)
+
     def __call__(self, fn):
         @wraps(fn)
         def wrapper(*args, **kwargs):
-            # When ResourceGovernor is enabled, prefer ResourceGovernor as
-            # the primary enforcement path. The legacy in-process token bucket
-            # is retained as a fallback when RG is disabled.
-            if not _rg_embeddings_server_enabled():
-                self._acquire()
-                return fn(*args, **kwargs)
-
-            # RG enforcement with simple backoff based on retry_after.
-            while True:
-                decision = _maybe_enforce_with_rg_embeddings_server_sync()
-                if decision is None:
-                    _log_rg_emb_server_fallback("rg_decision_unavailable")
-                    raise RuntimeError(
-                        "Embeddings server ResourceGovernor unavailable while RG_ENABLED=1. "
-                        "Ensure RG policy loader and backend are configured."
-                    )
-                if decision.get("allowed", False):
-                    return fn(*args, **kwargs)
-                retry_after = decision.get("retry_after")
-                wait_s = 1.0
-                try:
-                    if isinstance(retry_after, (int, float)) and retry_after > 0:
-                        wait_s = float(retry_after)
-                except Exception:
-                    wait_s = 1.0
-                time.sleep(wait_s)
+            self.acquire()
+            return fn(*args, **kwargs)
 
         return wrapper
 
@@ -547,8 +624,9 @@ class TokenBucketLimiter:
 # --- Resource Governor plumbing (optional) for embeddings server -------------
 _rg_emb_server_governor = None
 _rg_emb_server_loader = None
-_rg_emb_server_lock = asyncio.Lock()
 _rg_emb_server_log_lock = threading.Lock()
+_rg_emb_server_lock_guard = threading.Lock()
+_rg_emb_server_locks: "weakref.WeakKeyDictionary[asyncio.AbstractEventLoop, asyncio.Lock]" = weakref.WeakKeyDictionary()
 _rg_emb_server_init_error: Optional[str] = None
 _rg_emb_server_init_error_logged = False
 _rg_emb_server_fallback_logged = False
@@ -647,6 +725,21 @@ except Exception:  # pragma: no cover - safe fallback when RG not installed
     rg_enabled = None  # type: ignore
 
 
+def _rg_emb_server_async_lock() -> asyncio.Lock:
+    """Return a loop-bound async lock for RG initialization."""
+    try:
+        loop = asyncio.get_running_loop()
+    except RuntimeError:
+        # Should not happen in async context; return a fresh lock just in case.
+        return asyncio.Lock()
+    with _rg_emb_server_lock_guard:
+        lock = _rg_emb_server_locks.get(loop)
+        if lock is None:
+            lock = asyncio.Lock()
+            _rg_emb_server_locks[loop] = lock
+        return lock
+
+
 def _should_enforce_rg_in_production() -> bool:
     env = (os.getenv("ENVIRONMENT") or os.getenv("APP_ENV") or os.getenv("ENV") or "dev").lower()
     if env not in {"prod", "production"}:
@@ -701,7 +794,7 @@ async def _get_embeddings_server_rg_governor():
         return None
     if _rg_emb_server_governor is not None:
         return _rg_emb_server_governor
-    async with _rg_emb_server_lock:
+    async with _rg_emb_server_async_lock():
         if _rg_emb_server_governor is not None:
             return _rg_emb_server_governor
         try:
@@ -777,7 +870,8 @@ def _maybe_enforce_with_rg_embeddings_server_sync() -> Optional[Dict[str, object
     Synchronous helper for RG enforcement around create_embeddings_batch.
 
     Uses asyncio.run when no event loop is running in the current thread; if a
-    loop is already running, skips RG to avoid blocking and returns None.
+    loop is already running, runs RG enforcement in a worker thread to avoid
+    cross-loop locks while still enforcing RG.
     """
     if not _rg_embeddings_server_enabled():
         return None
@@ -787,11 +881,36 @@ def _maybe_enforce_with_rg_embeddings_server_sync() -> Optional[Dict[str, object
         except RuntimeError:
             # No running loop in this thread; safe to use asyncio.run.
             return asyncio.run(_maybe_enforce_with_rg_embeddings_server_async())
-        # Running inside an event loop; avoid blocking.
-        logger.debug(
-            "Embeddings server RG sync helper invoked inside running event loop; "
-            "skipping RG enforcement to avoid blocking."
-        )
+        # Running inside an event loop; execute RG check in a worker thread.
+        decision_holder: Dict[str, object] = {}
+        error_holder: Dict[str, Exception] = {}
+        done = threading.Event()
+
+        def _run_in_thread() -> None:
+            try:
+                decision_holder["decision"] = asyncio.run(
+                    _maybe_enforce_with_rg_embeddings_server_async()
+                )
+            except Exception as exc:
+                error_holder["error"] = exc
+            finally:
+                done.set()
+
+        t = threading.Thread(target=_run_in_thread, daemon=True)
+        t.start()
+        timeout_s = float(os.getenv("RG_EMBEDDINGS_SERVER_SYNC_TIMEOUT_SEC", "5") or "5")
+        done.wait(timeout=timeout_s)
+        if not done.is_set():
+            logger.debug(
+                "Embeddings server RG sync helper timed out after {}s", timeout_s
+            )
+            return None
+        if error_holder:
+            logger.debug("Embeddings server RG sync helper failed: {}", error_holder.get("error"))
+            return None
+        decision = decision_holder.get("decision")
+        if isinstance(decision, dict):
+            return decision
         return None
     except Exception:
         # Best-effort: treat RG as unavailable on any unexpected error.
@@ -1122,6 +1241,13 @@ class HuggingFaceEmbedder:
             if self.unload_timer:
                 self.unload_timer.cancel()
                 self.unload_timer = None
+        # Update memory accounting outside the model lock to avoid lock ordering issues.
+        try:
+            with embedding_models_lock:
+                if self.model_identifier in model_memory_usage:
+                    model_memory_usage[self.model_identifier] = 0.0
+        except Exception:
+            pass
 
     def create_embeddings(self, texts: List[str]) -> np.ndarray:
         self.load_model()
@@ -1424,6 +1550,7 @@ class ONNXEmbedder:
 
         with self._lock:
             if self.session is None:
+                ort_mod = _import_onnxruntime()
                 session_load_attempted = True
                 log_counter("onnx_model_load_attempt", labels={"model_id": self.model_identifier})
 
@@ -1433,7 +1560,7 @@ class ONNXEmbedder:
                     f"Loading ONNX model for {self.model_identifier} from {self.onnx_model_file_path} "
                     f"with providers: {self.device_providers}"
                 )
-                self.session = ort.InferenceSession(self.onnx_model_file_path, providers=self.device_providers)
+                self.session = ort_mod.InferenceSession(self.onnx_model_file_path, providers=self.device_providers)
 
                 ACTIVE_EMBEDDERS.labels(provider="onnx", model_id=self.model_identifier).inc()
                 log_counter("onnx_model_load_success", labels={"model_id": self.model_identifier})
@@ -1462,6 +1589,13 @@ class ONNXEmbedder:
             if self.unload_timer:
                 self.unload_timer.cancel()
                 self.unload_timer = None
+        # Update memory accounting outside the model lock to avoid lock ordering issues.
+        try:
+            with embedding_models_lock:
+                if self.model_identifier in model_memory_usage:
+                    model_memory_usage[self.model_identifier] = 0.0
+        except Exception:
+            pass
 
     def create_embeddings(self, texts: List[str]) -> np.ndarray:
         self.load_model()  # Handles locking, model loading/conversion, and timer reset
@@ -1542,16 +1676,25 @@ class ONNXEmbedder:
 
 
 
-# Global limiter instance. Parameters (20 calls per 60s) are fixed.
-# To make this dynamic per model_config, the limiter would need to be
-# managed differently, perhaps per-embedder or applied inside create_embeddings_batch.
-limiter = TokenBucketLimiter(capacity=20, period=60)
+_LIMITER_CACHE: Dict[tuple[int, int], TokenBucketLimiter] = {}
+_LIMITER_CACHE_LOCK = threading.Lock()
+
+
+def _get_token_bucket_limiter(capacity: int, period: int) -> TokenBucketLimiter:
+    cap = max(1, int(capacity))
+    per = max(1, int(period))
+    key = (cap, per)
+    with _LIMITER_CACHE_LOCK:
+        limiter = _LIMITER_CACHE.get(key)
+        if limiter is None:
+            limiter = TokenBucketLimiter(capacity=cap, period=per)
+            _LIMITER_CACHE[key] = limiter
+        return limiter
 
 
 # Exponential backoff decorator with fixed parameters.
 # To make this dynamic per model_config, apply similarly to limiter.
 @exponential_backoff(max_retries=3, base_delay=1)
-@limiter  # Applied to all calls to create_embeddings_batch
 def create_embeddings_batch(
         texts: List[str],
         user_app_config: Dict[str, Any],  # Renamed for clarity: this is the top-level app config
@@ -1570,6 +1713,16 @@ def create_embeddings_batch(
     if not texts:
         logger.warning("create_embeddings_batch called with empty list of texts.")
         return []
+
+    try:
+        loop = asyncio.get_running_loop()
+    except RuntimeError:
+        loop = None
+    if loop and loop.is_running():
+        logger.warning(
+            "create_embeddings_batch called from a running event loop; "
+            "use create_embeddings_batch_async to avoid blocking."
+        )
 
     try:
         # Extract and validate the specific embedding configuration part
@@ -1627,6 +1780,18 @@ def create_embeddings_batch(
     model_id_to_use = resolved_key
 
     provider = model_spec.provider
+
+    # Apply per-config rate limiter (fallback to defaults if unset).
+    try:
+        limiter_cfg = embedding_service_config.rate_limiter
+        limiter = _get_token_bucket_limiter(
+            getattr(limiter_cfg, "max_calls", 20),
+            getattr(limiter_cfg, "period", 60),
+        )
+        limiter.acquire()
+    except Exception as e:
+        logger.debug(f"Rate limiter acquisition failed or skipped: {e}")
+
     # Ensure model_storage_base_dir exists and stays under the allowlist root
     base_dir = _normalize_model_storage_base_dir(embedding_service_config.model_storage_base_dir)
     os.makedirs(base_dir, exist_ok=True)
@@ -1677,11 +1842,27 @@ def create_embeddings_batch(
                         except Exception:
                             pass
                         evict_lru_models(keep_model_id=model_id_to_use)
+                        if not check_memory_limit(estimated_size):
+                            logger.error(
+                                "Memory limit still exceeded after eviction; refusing to load model {}.",
+                                model_id_to_use,
+                            )
+                            raise RuntimeError(
+                                f"Embeddings model '{model_id_to_use}' exceeds memory limit and no evictable models are available."
+                            )
 
                     # Evict LRU models if at capacity
                     if len(embedding_models) >= MAX_MODELS_IN_MEMORY:
                         logger.info(f"At model capacity ({MAX_MODELS_IN_MEMORY}), evicting LRU models")
                         evict_lru_models(keep_model_id=model_id_to_use)
+                        if len(embedding_models) >= MAX_MODELS_IN_MEMORY:
+                            logger.error(
+                                "Model cache still at capacity after eviction; refusing to load model {}.",
+                                model_id_to_use,
+                            )
+                            raise RuntimeError(
+                                f"Embeddings model cache at capacity and no evictable models are available for '{model_id_to_use}'."
+                            )
 
                     os.makedirs(model_cache_dir, exist_ok=True)
                     embedding_models[model_id_to_use] = HuggingFaceEmbedder(
@@ -1744,11 +1925,27 @@ def create_embeddings_batch(
                         except Exception:
                             pass
                         evict_lru_models(keep_model_id=model_id_to_use)
+                        if not check_memory_limit(estimated_size):
+                            logger.error(
+                                "Memory limit still exceeded after eviction; refusing to load ONNX model {}.",
+                                model_id_to_use,
+                            )
+                            raise RuntimeError(
+                                f"Embeddings model '{model_id_to_use}' exceeds memory limit and no evictable models are available."
+                            )
 
                     # Evict LRU models if at capacity
                     if len(embedding_models) >= MAX_MODELS_IN_MEMORY:
                         logger.info(f"At model capacity ({MAX_MODELS_IN_MEMORY}), evicting LRU models")
                         evict_lru_models(keep_model_id=model_id_to_use)
+                        if len(embedding_models) >= MAX_MODELS_IN_MEMORY:
+                            logger.error(
+                                "Model cache still at capacity after eviction; refusing to load ONNX model {}.",
+                                model_id_to_use,
+                            )
+                            raise RuntimeError(
+                                f"Embeddings model cache at capacity and no evictable models are available for '{model_id_to_use}'."
+                            )
 
                     embedding_models[model_id_to_use] = ONNXEmbedder(
                         model_id_to_use,
@@ -1814,7 +2011,7 @@ def create_embeddings_batch(
 
             payload = {"texts": texts, "model": model_spec.model_name_or_path}
 
-            # The outbound call is already wrapped by @exponential_backoff and @limiter
+            # The outbound call is already wrapped by exponential backoff and the per-config rate limiter
             from tldw_Server_API.app.core.http_client import fetch as _fetch
             resp = _fetch(method="POST", url=model_spec.api_url, headers=headers, json=payload, timeout=60)
             if resp.status_code >= 400:

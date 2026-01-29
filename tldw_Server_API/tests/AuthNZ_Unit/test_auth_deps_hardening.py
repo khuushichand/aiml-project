@@ -5,6 +5,7 @@ from typing import Any
 
 import pytest
 from fastapi import HTTPException, Response
+from fastapi.security import HTTPAuthorizationCredentials
 from loguru import logger
 
 from tldw_Server_API.app.api.v1.API_Deps import auth_deps
@@ -177,6 +178,82 @@ async def test_api_key_auth_error_logging_does_not_leak_exception_message_outsid
     captured = sink.getvalue()
     assert "API key authentication error in get_current_user" in captured
     assert secret not in captured
+
+
+@pytest.mark.asyncio
+async def test_get_current_user_prefers_jwt_then_falls_back_to_api_key_on_401(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls = {"jwt": 0, "api_key": 0}
+
+    async def _fake_verify_jwt_and_fetch_user(request, token: str = ""):
+        calls["jwt"] += 1
+        raise HTTPException(
+            status_code=401,
+            detail="Could not validate credentials",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+
+    async def _fake_api_key_auth(request, api_key: str):
+        calls["api_key"] += 1
+        return {
+            "id": 99,
+            "username": "api-user",
+            "is_active": True,
+            "is_verified": True,
+        }
+
+    monkeypatch.setattr(auth_deps, "verify_jwt_and_fetch_user", _fake_verify_jwt_and_fetch_user)
+    monkeypatch.setattr(auth_deps, "_authenticate_api_key_from_request", _fake_api_key_auth)
+
+    request = _DummyRequest()
+    creds = HTTPAuthorizationCredentials(scheme="Bearer", credentials="aaa.bbb.ccc")
+
+    user = await auth_deps.get_current_user(
+        request=request,
+        response=Response(),
+        credentials=creds,
+        session_manager=object(),
+        db_pool=object(),
+        x_api_key="api-key",
+    )
+
+    assert user["id"] == 99
+    assert calls["jwt"] == 1
+    assert calls["api_key"] == 1
+
+
+@pytest.mark.asyncio
+async def test_get_current_user_does_not_fall_back_when_jwt_succeeds(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    async def _fake_verify_jwt_and_fetch_user(request, token: str = ""):
+        return {
+            "id": 42,
+            "username": "jwt-user",
+            "is_active": True,
+            "is_verified": True,
+        }
+
+    async def _fake_api_key_auth(request, api_key: str):
+        raise AssertionError("API key auth should not be used when JWT succeeds")
+
+    monkeypatch.setattr(auth_deps, "verify_jwt_and_fetch_user", _fake_verify_jwt_and_fetch_user)
+    monkeypatch.setattr(auth_deps, "_authenticate_api_key_from_request", _fake_api_key_auth)
+
+    request = _DummyRequest()
+    creds = HTTPAuthorizationCredentials(scheme="Bearer", credentials="aaa.bbb.ccc")
+
+    user = await auth_deps.get_current_user(
+        request=request,
+        response=Response(),
+        credentials=creds,
+        session_manager=object(),
+        db_pool=object(),
+        x_api_key="api-key",
+    )
+
+    assert user["id"] == 42
 
 
 def _profile_helper_should_not_be_called() -> bool:

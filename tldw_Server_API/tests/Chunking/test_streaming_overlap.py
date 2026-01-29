@@ -104,6 +104,58 @@ def test_chunk_file_stream_sentences_overlap(tmp_path):
     assert recon == original_tokens, "Sentence stream should preserve content with dedup"
 
 
+def test_chunk_file_stream_sentences_overlap_matches_full_chunking(tmp_path, monkeypatch):
+
+    ck = Chunker()
+    sents = [f"Sentence {i}." for i in range(1, 9)]
+    text = " ".join(sents)
+    part1 = " ".join(sents[:4]) + " "
+    p = tmp_path / "sents_boundary.txt"
+    p.write_text(text, encoding="utf-8")
+
+    # Force early flushing so we hit a boundary split deterministically.
+    monkeypatch.setattr(ck, "_estimate_stream_flush_threshold", lambda method, max_size: len(part1))
+
+    chunks_stream = list(
+        ck.chunk_file_stream(
+            p,
+            method="sentences",
+            max_size=3,
+            overlap=1,
+            language="en",
+            buffer_size=len(part1),
+        )
+    )
+    chunks_full = ck.chunk_text(text, method="sentences", max_size=3, overlap=1, language="en")
+    assert chunks_stream == chunks_full
+
+
+def test_chunk_file_stream_sentences_no_overlap_matches_full_chunking(tmp_path, monkeypatch):
+
+    ck = Chunker()
+    sents = [f"Sentence {i}." for i in range(1, 9)]
+    text = " ".join(sents)
+    part1 = " ".join(sents[:4]) + " "
+    p = tmp_path / "sents_boundary_no_overlap.txt"
+    p.write_text(text, encoding="utf-8")
+
+    # Force early flushing so we hit a boundary split deterministically.
+    monkeypatch.setattr(ck, "_estimate_stream_flush_threshold", lambda method, max_size: len(part1))
+
+    chunks_stream = list(
+        ck.chunk_file_stream(
+            p,
+            method="sentences",
+            max_size=3,
+            overlap=0,
+            language="en",
+            buffer_size=len(part1),
+        )
+    )
+    recon = _reconstruct_tokens_from_stream(chunks_stream, max_overlap=0)
+    assert recon == text.split()
+
+
 def test_structure_aware_code_fence_no_trailing_newline():
 
     ck = Chunker()
@@ -113,6 +165,16 @@ def test_structure_aware_code_fence_no_trailing_newline():
     # Ensure code fence is recognized and serialized back with fences present
     assert any("```python" in c and "```" in c for c in chunks), "Code fence should be preserved as a single block"
     assert any("print('hello')" in c for c in chunks), "Code content should be present"
+
+
+def test_structure_aware_code_fence_long_marker():
+
+    ck = Chunker()
+    src = "# Title\n\n" "````python\n" "print('hello')\n" "````\n" "Paragraph after.\n"
+    chunks = ck.chunk_text(src, method="structure_aware", max_size=1, overlap=0, language="en")
+    assert any("print('hello')" in c for c in chunks), "Code content should be present"
+    assert any("Paragraph after." in c for c in chunks), "Trailing paragraph should not be swallowed"
+    assert not any("````python" in c for c in chunks), "Language tag should not include stray backticks"
 
 
 def test_language_autodetect_thai():
@@ -152,11 +214,12 @@ def test_language_autodetect_japanese_prefers_kana():
 
 
 @pytest.mark.asyncio
-async def test_async_chunk_stream_sentences_overlap_tail():
+async def test_async_chunk_stream_sentences_overlap_boundary_matches_full():
     from tldw_Server_API.app.core.Chunking.async_chunker import AsyncChunker
 
     part1 = " ".join([f"Sentence {i}." for i in range(1, 7)]) + " "
     part2 = " ".join([f"Sentence {i}." for i in range(7, 11)])
+    full_text = part1 + part2
 
     async def text_stream():
         yield part1
@@ -175,7 +238,70 @@ async def test_async_chunk_stream_sentences_overlap_tail():
             )
         ]
 
-    assert "Sentence 5. Sentence 6." in chunks
+    expected = Chunker().chunk_text(full_text, method="sentences", max_size=3, overlap=1, language="en")
+    assert chunks == expected
+
+
+@pytest.mark.asyncio
+async def test_async_chunk_stream_sentences_overlap_matches_full():
+
+    from tldw_Server_API.app.core.Chunking.async_chunker import AsyncChunker
+
+    sents = [f"Sentence {i}." for i in range(1, 9)]
+    part1 = " ".join(sents[:4]) + " "
+    part2 = " ".join(sents[4:])
+    full_text = part1 + part2
+
+    async def text_stream():
+        yield part1
+        yield part2
+
+    expected = Chunker().chunk_text(full_text, method="sentences", max_size=3, overlap=1, language="en")
+
+    async with AsyncChunker() as chunker:
+        chunks = [
+            ch
+            async for ch in chunker.chunk_stream(
+                text_stream(),
+                method="sentences",
+                max_size=3,
+                overlap=1,
+                buffer_size=len(part1),
+                language="en",
+            )
+        ]
+
+    assert chunks == expected
+
+
+@pytest.mark.asyncio
+async def test_async_chunk_stream_sentences_no_overlap_matches_full():
+    from tldw_Server_API.app.core.Chunking.async_chunker import AsyncChunker
+
+    sents = [f"Sentence {i}." for i in range(1, 9)]
+    part1 = " ".join(sents[:4]) + " "
+    part2 = " ".join(sents[4:])
+    full_text = part1 + part2
+
+    async def text_stream():
+        yield part1
+        yield part2
+
+    async with AsyncChunker() as chunker:
+        chunks = [
+            ch
+            async for ch in chunker.chunk_stream(
+                text_stream(),
+                method="sentences",
+                max_size=3,
+                overlap=0,
+                buffer_size=len(part1),
+                language="en",
+            )
+        ]
+
+    recon = _reconstruct_tokens_from_stream(chunks, max_overlap=0)
+    assert recon == full_text.split()
 
 
 @pytest.mark.asyncio

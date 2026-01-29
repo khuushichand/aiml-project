@@ -253,6 +253,19 @@ class BaseChunkingStrategy(ABC):
         for i, chunk in enumerate(chunks):
             # Find chunk position in original text
             chunk_start = text.find(chunk, current_pos)
+            used_backtrack = False
+            if chunk_start == -1:
+                # Backtrack up to one chunk length to handle non-char overlap units
+                try:
+                    if chunk:
+                        backtrack = min(current_pos, len(chunk))
+                    else:
+                        backtrack = 0
+                except Exception:
+                    backtrack = 0
+                if backtrack > 0:
+                    chunk_start = text.find(chunk, max(0, current_pos - backtrack))
+                    used_backtrack = chunk_start != -1
             if chunk_start == -1:
                 chunk_start = current_pos
             chunk_end = chunk_start + len(chunk)
@@ -273,7 +286,13 @@ class BaseChunkingStrategy(ABC):
             )
 
             results.append(ChunkResult(text=chunk, metadata=metadata))
-            current_pos = chunk_end - overlap if overlap > 0 else chunk_end
+            if overlap > 0 and not used_backtrack and chunk_start >= current_pos:
+                try:
+                    current_pos = max(chunk_start, chunk_end - min(overlap, len(chunk)))
+                except Exception:
+                    current_pos = chunk_end
+            else:
+                current_pos = chunk_end
 
         return results
 
@@ -369,6 +388,7 @@ class ChunkerConfig:
                  max_text_size: int = 100_000_000,  # 100MB
                  enable_metrics: bool = True,
                  verbose_logging: bool = False,
+                 strategy_cache_mode: str = "shared",
                  # Execution/concurrency knobs (used by AsyncChunker; optional here)
                  max_workers: int = 4,
                  max_concurrent: int = 10):
@@ -386,6 +406,7 @@ class ChunkerConfig:
             enable_metrics: Whether to collect metrics
             max_workers: Default worker threads for async execution helpers
             max_concurrent: Default concurrency semaphore for async helpers
+            strategy_cache_mode: Strategy reuse policy ('shared', 'thread', 'call')
         """
         # Convert string to enum if needed
         if isinstance(default_method, str):
@@ -414,6 +435,14 @@ class ChunkerConfig:
             raise ValueError(f"max_workers must be a positive integer, got {max_workers}")
         if not isinstance(max_concurrent, int) or max_concurrent <= 0:
             raise ValueError(f"max_concurrent must be a positive integer, got {max_concurrent}")
+        if not isinstance(strategy_cache_mode, str):
+            raise ValueError(f"strategy_cache_mode must be a string, got {type(strategy_cache_mode).__name__}")
+        strategy_cache_mode = strategy_cache_mode.strip().lower()
+        if strategy_cache_mode not in {"shared", "thread", "call"}:
+            raise ValueError(
+                "strategy_cache_mode must be one of 'shared', 'thread', or 'call', "
+                f"got {strategy_cache_mode!r}"
+            )
 
         self.default_method = default_method
         self.default_max_size = default_max_size
@@ -429,6 +458,7 @@ class ChunkerConfig:
         self.max_text_size = max_text_size
         self.enable_metrics = enable_metrics
         self.verbose_logging = bool(verbose_logging)
+        self.strategy_cache_mode = strategy_cache_mode
         # Execution/concurrency knobs (used by AsyncChunker)
         self.max_workers = max_workers
         self.max_concurrent = max_concurrent

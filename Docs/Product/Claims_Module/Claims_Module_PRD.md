@@ -50,7 +50,7 @@ Analysts and downstream automations need grounded, inspectable factual statement
 - Periodic loop in `main.py` optionally enqueues rebuilds based on `CLAIMS_REBUILD_*` settings, obeying single-user defaults until multi-user scheduling is implemented.
 
 ### 6.5 UI & Integrations
-- Next.js search page exposes toggles for enabling claims, selecting extractor/verifier, confidence thresholds, and NLI model overrides (`tldw-frontend/pages/search.tsx`).
+- Next.js search page exposes toggles for enabling claims, selecting extractor/verifier, confidence thresholds, and NLI model overrides (`apps/tldw-frontend/pages/search.tsx`).
 - Streaming RAG responses emit claim events when enabled, enabling clients to display overlays in real time (`tldw_Server_API/app/core/RAG/rag_service/generation.py`).
 
 ## 7. Non-Functional Requirements
@@ -72,7 +72,7 @@ Analysts and downstream automations need grounded, inspectable factual statement
 ## 10. Interfaces
 - REST endpoints under `/api/v1/claims/*` for listing, rebuilding, FTS maintenance, and worker status.
 - RAG APIs (`/api/v1/rag/search`, `/api/v1/rag/search/stream`) accept claim parameters and emit claim payloads in responses.
-- UI controls in `tldw-frontend` reflect backend capabilities and persist query params for shareable URLs.
+- UI controls in the Next.js WebUI (`apps/tldw-frontend`) reflect backend capabilities and persist query params for shareable URLs.
 
 ## 11. Instrumentation & Monitoring
 - Metrics: `rag_nli_unsupported_ratio`, `rag_unsupported_claims_total`, `rag_postcheck_duration_seconds`, plus logs emitted by rebuild service and ingestion pipeline.

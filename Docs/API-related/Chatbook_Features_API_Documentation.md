@@ -855,10 +855,16 @@ DELETE `/api/v1/chatbooks/export/jobs/{job_id}`
 #### 11. Cancel Import Job
 DELETE `/api/v1/chatbooks/import/jobs/{job_id}`
 
-#### 12. Clean Old Exports
+#### 12. Remove Export Job
+DELETE `/api/v1/chatbooks/export/jobs/{job_id}/remove`
+
+#### 13. Remove Import Job
+DELETE `/api/v1/chatbooks/import/jobs/{job_id}/remove`
+
+#### 14. Clean Old Exports
 POST `/api/v1/chatbooks/cleanup`
 
-#### 13. Service Health
+#### 15. Service Health
 GET `/api/v1/chatbooks/health`
 
 Lightweight health indicator for the Chatbooks subsystem.

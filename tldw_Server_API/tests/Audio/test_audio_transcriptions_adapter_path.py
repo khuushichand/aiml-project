@@ -52,8 +52,10 @@ def test_audio_transcriptions_uses_adapter_base_dir(
             task="transcribe",
             word_timestamps=False,
             prompt=None,
+            hotwords=None,
             base_dir=None,
         ):
+            assert hotwords is None
             assert base_dir is not None
             assert base_dir == audio_ep.PathLib(audio_path).parent
             return {

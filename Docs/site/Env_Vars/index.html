@@ -4907,7 +4907,7 @@ Notable: <code>ALLOW_ZERO_EMBEDDINGS_MEDIA_TYPES</code> lets media-embeddings jo
 - <code>RAG_PRECOMPUTED_SPANS_RETENTION_DAYS</code>: Retention window for precomputed spans before GC (default <code>30</code>).</p>
 <p>Monitoring &amp; Telemetry
 - <code>METRICS_ENABLED</code>: Enable text metrics endpoints.
-- <code>METRICS_RING_BUFFER_MAXLEN</code>: Rolling metrics sample window size (default <code>10000</code>). Set <code>0</code> or a negative value to disable the limit.
+- <code>METRICS_RING_BUFFER_MAXLEN_OR_UNBOUNDED</code>: Rolling metrics sample window size (default <code>10000</code>). Set <code>0</code> or a negative value for an unbounded buffer.
 - OpenTelemetry export is controlled via standard <code>OTEL_*</code> environment variables (e.g., <code>OTEL_EXPORTER_OTLP_ENDPOINT</code>, <code>OTEL_SERVICE_NAME</code>, <code>OTEL_TRACES_EXPORTER</code>). See the Deployment/Monitoring docs.</p>
 <h2 id="workflows-auth-scheduler">Workflows (Auth &amp; Scheduler)<a class="headerlink" href="#workflows-auth-scheduler" title="Permanent link">&para;</a></h2>
 <ul>

@@ -283,9 +283,9 @@ from typing import Union
 )
 async def websearch_endpoint(
     payload: WebSearchRequest,
+    request: Request,
     current_user: User = Depends(get_request_user),
     db: MediaDatabase = Depends(get_media_db_for_user),
-    request: Request = None,
 ):
     """
     Runs the websearch pipeline: optional subqueries + provider search. If aggregate=True,
@@ -307,6 +307,9 @@ async def websearch_endpoint(
             "geolocation": payload.geolocation,
             "search_result_language": payload.search_result_language,
             "sort_results_by": payload.sort_results_by,
+            "searx_url": payload.searx_url,
+            "searx_json_mode": payload.searx_json_mode,
+            "google_domain": payload.google_domain,
             "subquery_generation": payload.subquery_generation,
             "subquery_generation_llm": payload.subquery_generation_llm,
             "user_review": payload.user_review,

@@ -4,7 +4,7 @@
 - Base path: `/api/v1`
 - Endpoint: `POST /api/v1/chat/completions` (OpenAI-compatible)
 - Purpose: Route chat requests to configured LLM providers with optional streaming and persistence.
-- Scope note: Chat Dictionaries and the Document Generator are implemented as sub-routes under `/api/v1/chat`, but documented in Chatbook features. See `./Chatbook_Features_API_Documentation.md`.
+- Scope note: Chat Dictionaries and the Document Generator are implemented as sub-routes under `/api/v1/chat`, but documented in Chatbook features. See [Chatbook Features API Documentation](./Chatbook_Features_API_Documentation.md).
 - OpenAPI tags: `chat`, `chat-dictionaries`, `chat-documents`
 
 ## Conversation Metadata Endpoints
@@ -278,8 +278,8 @@ Image metrics now track per-image sizes when multiple images are included in a s
 - Intended for administrators/operations; avoid exposing in multi-tenant environments without RBAC.
 
 ## WebUI
-- Location: `/webui` → Chat Completions tab.
-- Persistence: “Save to DB” checkbox, default pulled from `/webui/config.json` reflecting server config.
+- Location: Next.js WebUI (`apps/tldw-frontend`) → Chat page.
+- Persistence: “Save to DB” checkbox uses server defaults.
 - Providers/models: Dropdowns reflect configured providers and models.
 
 ## Related Documentation
@@ -290,8 +290,9 @@ Image metrics now track per-image sizes when multiple images are included in a s
 Supporting endpoints for discovering providers and models:
 - `GET /api/v1/llm/providers` - Configured providers and models
 - `GET /api/v1/llm/providers/{provider}` - Details for a specific provider
-- `GET /api/v1/llm/models` - Flat list of `<provider>/<model>` values
-- `GET /api/v1/llm/models/metadata` - Flattened model capability metadata
+- `GET /api/v1/llm/models` - Flat list of `<provider>/<model>` values (includes `image/<backend>` entries)
+- `GET /api/v1/llm/models/metadata` - Flattened model capability metadata (includes `type=image` entries)
+  - Use filters like `?type=chat` or `?output_modality=text` to keep chat-only lists.
 
 ## Commercial Tests
 - Scope: Optional integration tests for supported providers (OpenAI, Anthropic, Cohere, DeepSeek, Google, Groq, Qwen, HuggingFace, Mistral, Bedrock, OpenRouter) and local backends (llama.cpp, Kobold, Ollama, Oobabooga, TabbyAPI, vLLM). Disabled by default to avoid accidental network calls. The exact set is determined at runtime from configuration.

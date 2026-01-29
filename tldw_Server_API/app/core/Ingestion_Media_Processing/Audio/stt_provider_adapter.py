@@ -15,7 +15,7 @@ from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from enum import Enum
 from pathlib import Path
-from typing import Any, Dict, Optional, Tuple, Callable
+from typing import Any, Dict, Optional, Sequence, Tuple, Callable
 
 from tldw_Server_API.app.core.config import get_stt_config
 from tldw_Server_API.app.core.exceptions import BadRequestError, CancelCheckError, TranscriptionCancelled
@@ -86,6 +86,9 @@ def _resolve_default_model_for_provider(
         return "nemo-canary-1b", "standard"
     if normalized == SttProviderName.QWEN2AUDIO.value:
         return "qwen2audio", None
+    if normalized == SttProviderName.VIBEVOICE.value:
+        model_id = str(stt_cfg.get("vibevoice_model_id", "microsoft/VibeVoice-ASR")).strip()
+        return model_id or "microsoft/VibeVoice-ASR", None
     if normalized == SttProviderName.EXTERNAL.value:
         return "external:default", None
     return "", None
@@ -98,6 +101,7 @@ class SttProviderName(str, Enum):
     PARAKEET = "parakeet"
     CANARY = "canary"
     QWEN2AUDIO = "qwen2audio"
+    VIBEVOICE = "vibevoice"
     EXTERNAL = "external"
 
 
@@ -149,6 +153,7 @@ class SttProviderAdapter(ABC):
         task: str = "transcribe",
         word_timestamps: bool = False,
         prompt: Optional[str] = None,
+        hotwords: Optional[Sequence[str]] = None,
         base_dir: Optional[Path] = None,
         cancel_check: Optional[Callable[[], bool]] = None,
     ) -> Dict[str, Any]:
@@ -192,6 +197,7 @@ class FasterWhisperAdapter(SttProviderAdapter):
         task: str = "transcribe",
         word_timestamps: bool = False,
         prompt: Optional[str] = None,
+        hotwords: Optional[Sequence[str]] = None,
         base_dir: Optional[Path] = None,
         cancel_check: Optional[Callable[[], bool]] = None,
     ) -> Dict[str, Any]:
@@ -269,6 +275,7 @@ class ParakeetAdapter(SttProviderAdapter):
         task: str = "transcribe",
         word_timestamps: bool = False,
         prompt: Optional[str] = None,
+        hotwords: Optional[Sequence[str]] = None,
         base_dir: Optional[Path] = None,
         cancel_check: Optional[Callable[[], bool]] = None,
     ) -> Dict[str, Any]:
@@ -338,6 +345,7 @@ class CanaryAdapter(SttProviderAdapter):
         task: str = "transcribe",
         word_timestamps: bool = False,
         prompt: Optional[str] = None,
+        hotwords: Optional[Sequence[str]] = None,
         base_dir: Optional[Path] = None,
         cancel_check: Optional[Callable[[], bool]] = None,
     ) -> Dict[str, Any]:
@@ -418,6 +426,7 @@ class Qwen2AudioAdapter(SttProviderAdapter):
         task: str = "transcribe",
         word_timestamps: bool = False,
         prompt: Optional[str] = None,
+        hotwords: Optional[Sequence[str]] = None,
         base_dir: Optional[Path] = None,
         cancel_check: Optional[Callable[[], bool]] = None,
     ) -> Dict[str, Any]:
@@ -451,6 +460,64 @@ class Qwen2AudioAdapter(SttProviderAdapter):
         }
 
 
+class VibeVoiceAdapter(SttProviderAdapter):
+    """Adapter metadata for VibeVoice-ASR models."""
+
+    def __init__(self) -> None:
+        super().__init__(SttProviderName.VIBEVOICE)
+
+    def get_capabilities(self) -> SttProviderCapabilities:
+        # VibeVoice-ASR is batch-first and includes diarization metadata.
+        return SttProviderCapabilities(
+            name=self.name,
+            supports_batch=True,
+            supports_streaming=False,
+            supports_diarization=True,
+            notes="VibeVoice-ASR supports batch transcription with diarization metadata; streaming is not supported.",
+        )
+
+    def transcribe_batch(
+        self,
+        audio_path: str,
+        *,
+        model: Optional[str] = None,
+        language: Optional[str] = None,
+        task: str = "transcribe",
+        word_timestamps: bool = False,
+        prompt: Optional[str] = None,
+        hotwords: Optional[Sequence[str]] = None,
+        base_dir: Optional[Path] = None,
+        cancel_check: Optional[Callable[[], bool]] = None,
+    ) -> Dict[str, Any]:
+        from tldw_Server_API.app.core.Ingestion_Media_Processing.Audio.Audio_Transcription_VibeVoice import (  # type: ignore
+            transcribe_with_vibevoice,
+        )
+
+        if model:
+            model_name = model
+        else:
+            try:
+                stt_cfg = get_stt_config() or {}
+            except Exception:
+                stt_cfg = {}
+            model_name, _ = _resolve_default_model_for_provider(self.name.value, stt_cfg)
+            if not model_name:
+                model_name = "microsoft/VibeVoice-ASR"
+
+        _raise_if_cancelled(cancel_check)
+        artifact = transcribe_with_vibevoice(
+            audio_path,
+            model_id=model_name,
+            language=language,
+            hotwords=list(hotwords) if hotwords else None,
+            base_dir=base_dir,
+            cancel_check=cancel_check,
+        )
+        if not isinstance(artifact, dict):
+            raise BadRequestError("VibeVoice-ASR transcription did not return a valid artifact")
+        return artifact
+
+
 class ExternalAdapter(SttProviderAdapter):
     """Adapter metadata for external/custom STT providers."""
 
@@ -476,6 +543,7 @@ class ExternalAdapter(SttProviderAdapter):
         task: str = "transcribe",
         word_timestamps: bool = False,
         prompt: Optional[str] = None,
+        hotwords: Optional[Sequence[str]] = None,
         base_dir: Optional[Path] = None,
         cancel_check: Optional[Callable[[], bool]] = None,
     ) -> Dict[str, Any]:
@@ -522,6 +590,7 @@ def _normalize_provider_name(name: Optional[str]) -> str:
 
     - Accepts both 'faster_whisper' and 'faster-whisper' and normalizes to
       'faster-whisper'.
+    - Accepts 'vibevoice-asr' aliases and normalizes to 'vibevoice'.
     - Returns lower-cased identifiers for consistency.
     """
     if not name:
@@ -529,6 +598,8 @@ def _normalize_provider_name(name: Optional[str]) -> str:
     lowered = str(name).strip().lower()
     if lowered in {"faster-whisper", "faster_whisper"}:
         return "faster-whisper"
+    if lowered in {"vibevoice-asr", "vibevoice_asr"}:
+        return "vibevoice"
     return lowered
 
 
@@ -546,6 +617,7 @@ class SttProviderRegistry:
             SttProviderName.PARAKEET.value: ParakeetAdapter(),
             SttProviderName.CANARY.value: CanaryAdapter(),
             SttProviderName.QWEN2AUDIO.value: Qwen2AudioAdapter(),
+            SttProviderName.VIBEVOICE.value: VibeVoiceAdapter(),
             SttProviderName.EXTERNAL.value: ExternalAdapter(),
         }
 

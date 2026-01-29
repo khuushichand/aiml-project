@@ -860,6 +860,7 @@ def cleanup_abtest_resources(
     *,
     delete_db: bool,
     delete_idempotency: bool,
+    created_by: Optional[str] = None,
 ) -> Dict[str, int]:
     from tldw_Server_API.app.core.config import settings as app_settings
 
@@ -867,7 +868,7 @@ def cleanup_abtest_resources(
     embedding_config = app_settings.get("EMBEDDING_CONFIG", {}).copy()
     embedding_config["USER_DB_BASE_DIR"] = app_settings.get("USER_DB_BASE_DIR")
     manager = ChromaDBManager(user_id=str(user_id), user_embedding_config=embedding_config)
-    arms = db.get_abtest_arms(test_id)
+    arms = db.get_abtest_arms(test_id, created_by=created_by)
     for arm in arms:
         cname = arm.get("collection_name")
         if not cname:
@@ -886,7 +887,7 @@ def cleanup_abtest_resources(
     db_deleted = 0
     if delete_db:
         try:
-            db_deleted = int(db.delete_abtest(test_id, delete_idempotency=delete_idempotency))
+            db_deleted = int(db.delete_abtest(test_id, delete_idempotency=delete_idempotency, created_by=created_by))
         except Exception as exc:
             logger.warning(f"Cleanup failed for A/B test rows {test_id}: {exc}")
     return {"collections_deleted": deleted, "abtests_deleted": db_deleted}

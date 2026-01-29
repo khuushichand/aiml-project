@@ -14,12 +14,47 @@ import { Badge } from '@/components/ui/badge';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import { useConfirm } from '@/components/ui/confirm-dialog';
 import { useToast } from '@/components/ui/toast';
-import { ArrowLeft, Key, Save, Building2, Users, Shield, Monitor, RefreshCw, Trash2 } from 'lucide-react';
+import { ArrowLeft, Key, Save, Building2, Users, Shield, Monitor, RefreshCw, Trash2, Clock, ShieldCheck, Plus, X } from 'lucide-react';
+import { AccessibleIconButton } from '@/components/ui/accessible-icon-button';
 import { api, ApiError } from '@/lib/api-client';
 import { formatDateTime } from '@/lib/format';
+import { parseOptionalInt } from '@/lib/number';
+import {
+  deriveLimitPerMinute,
+  getDerivedLimitPerMin,
+  normalizeRateLimitValue,
+  validateRateLimitInputs,
+} from '@/lib/rate-limits';
 import { canEditFromMemberships } from '@/lib/permissions';
-import { User } from '@/types';
+import { User, Permission } from '@/types';
 import Link from 'next/link';
+
+type UserRateLimits = {
+  requests_per_minute?: number | null;
+  requests_per_hour?: number | null;
+  requests_per_day?: number | null;
+};
+
+type RateLimitUpsertPayload = {
+  resource: string;
+  limit_per_min: number | null;
+  burst: number | null;
+};
+
+const DEFAULT_RATE_LIMIT_RESOURCE = 'api.default';
+
+type PermissionOverride = {
+  id: number;
+  permission_id: number;
+  permission_name: string;
+  grant: boolean;
+};
+
+type EffectivePermission = {
+  id: number;
+  name: string;
+  source: 'role' | 'override';
+};
 
 const roleOptions = [
   { value: 'member', label: 'Member' },
@@ -53,6 +88,53 @@ type UserSession = {
   created_at: string;
   last_activity?: string | null;
   expires_at?: string | null;
+};
+
+type RateLimitRecord = {
+  resource?: string;
+  limit_per_min?: number | null;
+  burst?: number | null;
+  requests_per_minute?: number | null;
+  requests_per_hour?: number | null;
+  requests_per_day?: number | null;
+};
+
+const toOptionalNumber = (input: unknown): number | null => {
+  if (typeof input !== 'number' || !Number.isFinite(input)) return null;
+  return input > 0 ? input : null;
+};
+
+const selectRateLimitRecord = (items: RateLimitRecord[]): RateLimitRecord | null => {
+  if (!items.length) return null;
+  return items.find((item) => item.resource === DEFAULT_RATE_LIMIT_RESOURCE) ?? items[0];
+};
+
+const normalizeRateLimits = (value: unknown): UserRateLimits | null => {
+  if (!value) return null;
+  if (Array.isArray(value)) {
+    const record = selectRateLimitRecord(value as RateLimitRecord[]);
+    return record ? normalizeRateLimits(record) : null;
+  }
+  if (typeof value !== 'object') return null;
+
+  const container = value as RateLimitRecord & { rate_limits?: unknown; items?: unknown };
+  if (container.rate_limits) {
+    return normalizeRateLimits(container.rate_limits);
+  }
+  if (container.items) {
+    return normalizeRateLimits(container.items);
+  }
+
+  const rpm = toOptionalNumber(container.requests_per_minute ?? container.limit_per_min);
+  const rph = toOptionalNumber(container.requests_per_hour);
+  const rpd = toOptionalNumber(container.requests_per_day);
+
+  if (rpm === null && rph === null && rpd === null) return null;
+  return {
+    requests_per_minute: rpm,
+    requests_per_hour: rph,
+    requests_per_day: rpd,
+  };
 };
 
 const isForbiddenError = (err: unknown): boolean => {
@@ -96,21 +178,54 @@ export default function UserDetailPage() {
     storage_quota_mb: 0,
   });
 
+  // Rate Limits
+  const [rateLimits, setRateLimits] = useState<UserRateLimits>({});
+  const [editRpm, setEditRpm] = useState('');
+  const [editRph, setEditRph] = useState('');
+  const [editRpd, setEditRpd] = useState('');
+  const [rateLimitsSaving, setRateLimitsSaving] = useState(false);
+
+  // Permission Overrides
+  const [permissionOverrides, setPermissionOverrides] = useState<PermissionOverride[]>([]);
+  const [effectivePermissions, setEffectivePermissions] = useState<EffectivePermission[]>([]);
+  const [allPermissions, setAllPermissions] = useState<Permission[]>([]);
+  const [permissionsLoading, setPermissionsLoading] = useState(false);
+  const [showAddOverride, setShowAddOverride] = useState(false);
+  const [newOverridePermissionId, setNewOverridePermissionId] = useState('');
+  const [newOverrideGrant, setNewOverrideGrant] = useState(true);
+
+  const applyRateLimits = useCallback((limits?: UserRateLimits | null) => {
+    if (!limits) {
+      setRateLimits({});
+      setEditRpm('');
+      setEditRph('');
+      setEditRpd('');
+      return;
+    }
+    setRateLimits(limits);
+    setEditRpm(limits.requests_per_minute?.toString() || '');
+    setEditRph(limits.requests_per_hour?.toString() || '');
+    setEditRpd(limits.requests_per_day?.toString() || '');
+  }, []);
+
   const loadUser = useCallback(async () => {
     try {
       setLoading(true);
       setError('');
       setIsAuthorized(true);
       const data = await api.getUser(userId);
-      const roleValue = data.role && isValidRole(data.role) ? data.role : 'member';
-      setUser(data);
+      const userValue = data as User & { rate_limits?: UserRateLimits };
+      const roleValue = userValue.role && isValidRole(userValue.role) ? userValue.role : 'member';
+      setUser(userValue);
       setFormData({
-        username: data.username || '',
-        email: data.email || '',
+        username: userValue.username || '',
+        email: userValue.email || '',
         role: roleValue,
-        is_active: data.is_active ?? true,
-        storage_quota_mb: data.storage_quota_mb || 0,
+        is_active: userValue.is_active ?? true,
+        storage_quota_mb: userValue.storage_quota_mb || 0,
       });
+      const normalizedRateLimits = normalizeRateLimits(userValue.rate_limits);
+      applyRateLimits(normalizedRateLimits);
 
       try {
         const currentUser = await api.getCurrentUser();
@@ -148,7 +263,7 @@ export default function UserDetailPage() {
     } finally {
       setLoading(false);
     }
-  }, [userId]);
+  }, [applyRateLimits, userId]);
 
   const loadSecurity = useCallback(async () => {
     if (!userId) return;
@@ -185,6 +300,59 @@ export default function UserDetailPage() {
     }
   }, [userId]);
 
+  const loadPermissions = useCallback(async () => {
+    if (!userId) return;
+    try {
+      setPermissionsLoading(true);
+      const results = await Promise.allSettled([
+        api.getUserEffectivePermissions(userId),
+        api.getUserPermissionOverrides(userId),
+        api.getPermissions(),
+        api.getUserRateLimits(userId),
+      ]);
+      const [effectiveResult, overridesResult, allPermsResult, rateLimitsResult] = results;
+      const hasRejected = results.some((result) => result.status === 'rejected');
+      if (hasRejected) {
+        setEffectivePermissions([]);
+        setPermissionOverrides([]);
+        setAllPermissions([]);
+        applyRateLimits(normalizeRateLimits({}));
+        return;
+      }
+
+      if (effectiveResult.status === 'fulfilled') {
+        const data = effectiveResult.value as { permissions?: EffectivePermission[]; items?: EffectivePermission[] };
+        setEffectivePermissions(
+          Array.isArray(data.permissions) ? data.permissions :
+          Array.isArray(data.items) ? data.items :
+          Array.isArray(data) ? data as EffectivePermission[] : []
+        );
+      }
+
+      if (overridesResult.status === 'fulfilled') {
+        const data = overridesResult.value as { overrides?: PermissionOverride[]; items?: PermissionOverride[] };
+        setPermissionOverrides(
+          Array.isArray(data.overrides) ? data.overrides :
+          Array.isArray(data.items) ? data.items :
+          Array.isArray(data) ? data as PermissionOverride[] : []
+        );
+      }
+
+      if (allPermsResult.status === 'fulfilled') {
+        setAllPermissions(Array.isArray(allPermsResult.value) ? allPermsResult.value : []);
+      }
+
+      if (rateLimitsResult.status === 'fulfilled') {
+        const normalizedRateLimits = normalizeRateLimits(rateLimitsResult.value);
+        applyRateLimits(normalizedRateLimits);
+      }
+    } catch (err: unknown) {
+      console.error('Failed to load permissions:', err);
+    } finally {
+      setPermissionsLoading(false);
+    }
+  }, [applyRateLimits, userId]);
+
   useEffect(() => {
     loadUser();
   }, [loadUser]);
@@ -192,8 +360,9 @@ export default function UserDetailPage() {
   useEffect(() => {
     if (user && isAuthorized) {
       void loadSecurity();
+      void loadPermissions();
     }
-  }, [user, isAuthorized, loadSecurity]);
+  }, [user, isAuthorized, loadSecurity, loadPermissions]);
 
   const handleSave = async () => {
     if (!isAuthorized) {
@@ -286,6 +455,151 @@ export default function UserDetailPage() {
     }
   };
 
+  const buildRateLimitPayload = (
+    rpm: number | null,
+    rph: number | null,
+    rpd: number | null
+  ): RateLimitUpsertPayload => {
+    const limitPerMin = getDerivedLimitPerMin(rpm, rph, rpd);
+    const burstPerMinute = rph != null
+      ? deriveLimitPerMinute(rph, 60)
+      : rpd != null
+        ? deriveLimitPerMinute(rpd, 1440)
+        : null;
+    const burstMultiplier = burstPerMinute != null && limitPerMin
+      ? Math.max(1, burstPerMinute / limitPerMin)
+      : 1;
+
+    return {
+      resource: DEFAULT_RATE_LIMIT_RESOURCE,
+      limit_per_min: normalizeRateLimitValue(limitPerMin),
+      burst: normalizeRateLimitValue(burstMultiplier),
+    };
+  };
+
+  const handleSaveRateLimits = async () => {
+    try {
+      setRateLimitsSaving(true);
+      setError('');
+      const data: UserRateLimits = {};
+      const rpm = parseOptionalInt(editRpm);
+      const rph = parseOptionalInt(editRph);
+      const rpd = parseOptionalInt(editRpd);
+      const normalizedRpm = normalizeRateLimitValue(rpm);
+      const normalizedRph = normalizeRateLimitValue(rph);
+      const normalizedRpd = normalizeRateLimitValue(rpd);
+      if (normalizedRpm !== null) data.requests_per_minute = normalizedRpm;
+      if (normalizedRph !== null) data.requests_per_hour = normalizedRph;
+      if (normalizedRpd !== null) data.requests_per_day = normalizedRpd;
+
+      const { error: rateLimitError } = validateRateLimitInputs(
+        normalizedRpm,
+        normalizedRph,
+        normalizedRpd
+      );
+      if (rateLimitError) {
+        setRateLimitsSaving(false);
+        setError(rateLimitError);
+        return;
+      }
+
+      const payload = buildRateLimitPayload(normalizedRpm, normalizedRph, normalizedRpd);
+      await api.setUserRateLimits(userId, payload);
+      let normalizedRateLimits: UserRateLimits | null = null;
+      try {
+        const updated = await api.getUserRateLimits(userId);
+        normalizedRateLimits = normalizeRateLimits(updated);
+      } catch (err: unknown) {
+        console.error('Failed to reload rate limits after update:', err);
+        normalizedRateLimits = data;
+      }
+      applyRateLimits(normalizedRateLimits);
+      toastSuccess('Rate limits updated', 'User rate limits have been saved.');
+    } catch (err: unknown) {
+      console.error('Failed to update rate limits:', err);
+      const message = err instanceof Error ? err.message : 'Failed to update rate limits';
+      showError('Save failed', message);
+    } finally {
+      setRateLimitsSaving(false);
+    }
+  };
+
+  const handleClearRateLimits = async () => {
+    const confirmed = await confirm({
+      title: 'Clear Rate Limits',
+      message: 'Remove all custom rate limits for this user? They will inherit role or default limits.',
+      confirmText: 'Clear',
+      variant: 'danger',
+    });
+    if (!confirmed) return;
+
+    try {
+      setRateLimitsSaving(true);
+      await api.setUserRateLimits(userId, {
+        resource: DEFAULT_RATE_LIMIT_RESOURCE,
+        limit_per_min: null,
+        burst: null,
+      });
+      setRateLimits({});
+      setEditRpm('');
+      setEditRph('');
+      setEditRpd('');
+      toastSuccess('Rate limits cleared', 'Custom rate limits have been removed.');
+    } catch (err: unknown) {
+      const message = err instanceof Error ? err.message : 'Failed to clear rate limits';
+      showError('Clear failed', message);
+    } finally {
+      setRateLimitsSaving(false);
+    }
+  };
+
+  const handleAddPermissionOverride = async () => {
+    if (!newOverridePermissionId) {
+      showError('Select permission', 'Please select a permission to override.');
+      return;
+    }
+
+    try {
+      setPermissionsLoading(true);
+      await api.addUserPermissionOverride(userId, {
+        permission_id: parseInt(newOverridePermissionId, 10),
+        grant: newOverrideGrant,
+      });
+      toastSuccess('Override added', 'Permission override has been added.');
+      setShowAddOverride(false);
+      setNewOverridePermissionId('');
+      setNewOverrideGrant(true);
+      void loadPermissions();
+    } catch (err: unknown) {
+      const message = err instanceof Error ? err.message : 'Failed to add override';
+      showError('Add failed', message);
+    } finally {
+      setPermissionsLoading(false);
+    }
+  };
+
+  const handleRemovePermissionOverride = async (override: PermissionOverride) => {
+    const confirmed = await confirm({
+      title: 'Remove Override',
+      message: `Remove the override for "${override.permission_name}"? The user will inherit this permission from their role.`,
+      confirmText: 'Remove',
+      variant: 'warning',
+    });
+    if (!confirmed) return;
+
+    try {
+      setPermissionsLoading(true);
+      await api.removeUserPermissionOverride(userId, override.id.toString());
+      toastSuccess('Override removed', 'Permission override has been removed.');
+      void loadPermissions();
+    } catch (err: unknown) {
+      const message = err instanceof Error ? err.message : 'Failed to remove override';
+      showError('Remove failed', message);
+    } finally {
+      setPermissionsLoading(false);
+    }
+  };
+
   const formatStorage = (usedMb: number, quotaMb: number) => {
     const percentage = quotaMb > 0 ? (usedMb / quotaMb) * 100 : 0;
     return {
@@ -336,9 +650,12 @@ export default function UserDetailPage() {
             {/* Header */}
             <div className="mb-8 flex items-center justify-between">
               <div className="flex items-center gap-4">
-                <Button variant="ghost" onClick={() => router.push('/users')}>
-                  <ArrowLeft className="h-4 w-4" />
-                </Button>
+                <AccessibleIconButton
+                  icon={ArrowLeft}
+                  label="Go back to users list"
+                  variant="ghost"
+                  onClick={() => router.push('/users')}
+                />
                 <div>
                   <h1 className="text-3xl font-bold">{user.username}</h1>
                   <p className="text-muted-foreground">{user.email}</p>
@@ -465,7 +782,17 @@ export default function UserDetailPage() {
                         <span>{storage.used} MB used</span>
                         <span>{storage.quota} MB quota</span>
                       </div>
-                      <div className="w-full bg-gray-200 rounded-full h-3">
+                      <div
+                        className="w-full bg-gray-200 rounded-full h-3"
+                        role="progressbar"
+                        aria-valuenow={parseFloat(storage.percentage)}
+                        aria-valuemin={0}
+                        aria-valuemax={100}
+                        aria-label={`Storage usage: ${storage.percentage}%${
+                          parseFloat(storage.percentage) > 90 ? ', critical' :
+                          parseFloat(storage.percentage) > 70 ? ', warning' : ''
+                        }`}
+                      >
                         <div
                           className={`h-3 rounded-full transition-all ${
                             parseFloat(storage.percentage) > 90 ? 'bg-red-500' :
@@ -640,6 +967,220 @@ export default function UserDetailPage() {
                       </div>
                     )}
                   </div>
+                </CardContent>
+              </Card>
+
+              {/* Rate Limits */}
+              <Card>
+                <CardHeader>
+                  <CardTitle className="flex items-center gap-2">
+                    <Clock className="h-5 w-5" />
+                    Rate Limits
+                  </CardTitle>
+                  <CardDescription>
+                    Set custom rate limits for this user (overrides role defaults)
+                  </CardDescription>
+                </CardHeader>
+                <CardContent className="space-y-4">
+                  <div className="grid gap-4 sm:grid-cols-3">
+                    <div className="space-y-1">
+                      <Label htmlFor="user-rate-rpm">Requests/Min</Label>
+                      <Input
+                        id="user-rate-rpm"
+                        type="number"
+                        min="0"
+                        placeholder="e.g., 60"
+                        value={editRpm}
+                        onChange={(e) => setEditRpm(e.target.value)}
+                        disabled={!isAuthorized}
+                      />
+                    </div>
+                    <div className="space-y-1">
+                      <Label htmlFor="user-rate-rph">Requests/Hour</Label>
+                      <Input
+                        id="user-rate-rph"
+                        type="number"
+                        min="0"
+                        placeholder="e.g., 1000"
+                        value={editRph}
+                        onChange={(e) => setEditRph(e.target.value)}
+                        disabled={!isAuthorized}
+                      />
+                    </div>
+                    <div className="space-y-1">
+                      <Label htmlFor="user-rate-rpd">Requests/Day</Label>
+                      <Input
+                        id="user-rate-rpd"
+                        type="number"
+                        min="0"
+                        placeholder="e.g., 10000"
+                        value={editRpd}
+                        onChange={(e) => setEditRpd(e.target.value)}
+                        disabled={!isAuthorized}
+                      />
+                    </div>
+                  </div>
+                  <div className="flex gap-2">
+                    <Button
+                      onClick={handleSaveRateLimits}
+                      disabled={rateLimitsSaving || !isAuthorized}
+                    >
+                      {rateLimitsSaving ? 'Saving...' : 'Save Limits'}
+                    </Button>
+                    {(rateLimits.requests_per_minute || rateLimits.requests_per_hour || rateLimits.requests_per_day) && (
+                      <Button
+                        variant="outline"
+                        onClick={handleClearRateLimits}
+                        disabled={rateLimitsSaving || !isAuthorized}
+                      >
+                        Clear
+                      </Button>
+                    )}
+                  </div>
+                  {(rateLimits.requests_per_minute || rateLimits.requests_per_hour || rateLimits.requests_per_day) && (
+                    <p className="text-sm text-muted-foreground">
+                      Current limits:{' '}
+                      {rateLimits.requests_per_minute && `${rateLimits.requests_per_minute}/min`}
+                      {rateLimits.requests_per_minute && rateLimits.requests_per_hour && ', '}
+                      {rateLimits.requests_per_hour && `${rateLimits.requests_per_hour}/hr`}
+                      {(rateLimits.requests_per_minute || rateLimits.requests_per_hour) && rateLimits.requests_per_day && ', '}
+                      {rateLimits.requests_per_day && `${rateLimits.requests_per_day}/day`}
+                    </p>
+                  )}
+                </CardContent>
+              </Card>
+
+              {/* Permission Overrides */}
+              <Card>
+                <CardHeader>
+                  <CardTitle className="flex items-center gap-2">
+                    <ShieldCheck className="h-5 w-5" />
+                    Permission Overrides
+                  </CardTitle>
+                  <CardDescription>
+                    Grant or deny specific permissions beyond role defaults
+                  </CardDescription>
+                </CardHeader>
+                <CardContent className="space-y-4">
+                  {/* Add Override Form */}
+                  {showAddOverride ? (
+                    <div className="p-4 border rounded-lg space-y-3">
+                      <div className="flex items-center justify-between">
+                        <span className="font-medium">Add Permission Override</span>
+                        <Button
+                          variant="ghost"
+                          size="icon"
+                          onClick={() => setShowAddOverride(false)}
+                          aria-label="Close add permission override"
+                        >
+                          <X className="h-4 w-4" />
+                        </Button>
+                      </div>
+                      <div className="grid gap-3 sm:grid-cols-2">
+                        <div className="space-y-1">
+                          <Label htmlFor="override-permission">Permission</Label>
+                          <Select
+                            id="override-permission"
+                            value={newOverridePermissionId}
+                            onChange={(e) => setNewOverridePermissionId(e.target.value)}
+                          >
+                            <option value="">Select permission...</option>
+                            {allPermissions.map((perm) => (
+                              <option key={perm.id} value={perm.id}>
+                                {perm.name}
+                              </option>
+                            ))}
+                          </Select>
+                        </div>
+                        <div className="space-y-1">
+                          <Label htmlFor="override-grant">Action</Label>
+                          <Select
+                            id="override-grant"
+                            value={newOverrideGrant ? 'grant' : 'deny'}
+                            onChange={(e) => setNewOverrideGrant(e.target.value === 'grant')}
+                          >
+                            <option value="grant">Grant</option>
+                            <option value="deny">Deny</option>
+                          </Select>
+                        </div>
+                      </div>
+                      <div className="flex gap-2">
+                        <Button
+                          onClick={handleAddPermissionOverride}
+                          disabled={permissionsLoading || !newOverridePermissionId}
+                        >
+                          Add Override
+                        </Button>
+                        <Button variant="outline" onClick={() => setShowAddOverride(false)}>
+                          Cancel
+                        </Button>
+                      </div>
+                    </div>
+                  ) : (
+                    <Button
+                      variant="outline"
+                      onClick={() => setShowAddOverride(true)}
+                      disabled={!isAuthorized}
+                    >
+                      <Plus className="mr-2 h-4 w-4" />
+                      Add Override
+                    </Button>
+                  )}
+
+                  {/* Current Overrides */}
+                  {permissionOverrides.length > 0 && (
+                    <div className="space-y-2">
+                      <span className="text-sm font-medium">Active Overrides</span>
+                      <div className="space-y-1">
+                        {permissionOverrides.map((override) => (
+                          <div
+                            key={override.id}
+                            className={`flex items-center justify-between p-2 rounded text-sm ${
+                              override.grant ? 'bg-green-50 dark:bg-green-900/20' : 'bg-red-50 dark:bg-red-900/20'
+                            }`}
+                          >
+                            <div className="flex items-center gap-2">
+                              <Badge variant={override.grant ? 'default' : 'destructive'}>
+                                {override.grant ? 'Grant' : 'Deny'}
+                              </Badge>
+                              <code className="font-mono text-xs">{override.permission_name}</code>
+                            </div>
+                            <Button
+                              variant="ghost"
+                              size="icon"
+                              onClick={() => handleRemovePermissionOverride(override)}
+                              disabled={!isAuthorized || permissionsLoading}
+                              aria-label={`Remove override for ${override.permission_name}`}
+                            >
+                              <Trash2 className="h-4 w-4" />
+                            </Button>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+
+                  {/* Effective Permissions */}
+                  {effectivePermissions.length > 0 && (
+                    <details className="text-sm">
+                      <summary className="cursor-pointer text-muted-foreground hover:text-foreground">
+                        View effective permissions ({effectivePermissions.length})
+                      </summary>
+                      <div className="mt-2 max-h-48 overflow-y-auto space-y-1">
+                        {effectivePermissions.map((perm, index) => (
+                          <div
+                            key={perm.id || `perm-${index}`}
+                            className="flex items-center justify-between p-2 rounded bg-muted/30"
+                          >
+                            <code className="font-mono text-xs">{perm.name}</code>
+                            <Badge variant="outline" className="text-xs">
+                              {perm.source || 'role'}
+                            </Badge>
+                          </div>
+                        ))}
+                      </div>
+                    </details>
+                  )}
                 </CardContent>
               </Card>
 

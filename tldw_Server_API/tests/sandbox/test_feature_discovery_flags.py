@@ -97,3 +97,21 @@ def test_firecracker_egress_supported_only_when_enforced(monkeypatch) -> None:
         fc2 = next((rt for rt in d2.get("runtimes", []) if rt.get("name") == "firecracker"), None)
         assert fc2 is not None
         assert fc2.get("egress_allowlist_supported") is True
+
+
+def test_firecracker_not_available_when_real_disabled(monkeypatch) -> None:
+
+
+    monkeypatch.setenv("TEST_MODE", "1")
+    monkeypatch.setenv("ROUTES_ENABLE", "sandbox")
+    monkeypatch.setenv("SANDBOX_STORE_BACKEND", "memory")
+    monkeypatch.setenv("SANDBOX_FIRECRACKER_ENABLE_REAL", "0")
+    monkeypatch.delenv("TLDW_SANDBOX_FIRECRACKER_AVAILABLE", raising=False)
+    clear_config_cache()
+    with TestClient(app) as client:
+        r = client.get("/api/v1/sandbox/runtimes")
+        assert r.status_code == 200
+        data = r.json()
+        fc = next((rt for rt in data.get("runtimes", []) if rt.get("name") == "firecracker"), None)
+        assert fc is not None
+        assert fc.get("available") is False

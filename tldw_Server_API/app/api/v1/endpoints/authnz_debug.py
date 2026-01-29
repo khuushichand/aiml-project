@@ -1,12 +1,13 @@
 from __future__ import annotations
 
-from fastapi import APIRouter, Request, Header
+from fastapi import APIRouter, Request, Header, Depends
 from typing import Optional, Dict, Any
 
 from loguru import logger
 
 from tldw_Server_API.app.core.AuthNZ.key_resolution import resolve_api_key_by_hash
 from tldw_Server_API.app.core.AuthNZ.principal_model import AuthContext, AuthPrincipal
+from tldw_Server_API.app.api.v1.API_Deps.auth_deps import require_roles
 from tldw_Server_API.app.core.AuthNZ.virtual_keys import (
     get_key_limits,
     summarize_usage_for_key_day,
@@ -75,7 +76,11 @@ async def _resolve_api_key_id(request: Request, x_api_key: Optional[str]) -> Dic
 
 
 @router.get("/authnz/debug/api-key-id", tags=["authnz-debug"])
-async def debug_api_key_id(request: Request, X_API_KEY: Optional[str] = Header(None, alias="X-API-KEY")):
+async def debug_api_key_id(
+    request: Request,
+    X_API_KEY: Optional[str] = Header(None, alias="X-API-KEY"),
+    _: AuthPrincipal = Depends(require_roles("admin")),
+):
     """
     Resolve the provided API key and return its associated api_key_id and user_id.
 
@@ -89,7 +94,11 @@ async def debug_api_key_id(request: Request, X_API_KEY: Optional[str] = Header(N
 
 
 @router.get("/authnz/debug/budget-summary", tags=["authnz-debug"])
-async def debug_budget_summary(request: Request, X_API_KEY: Optional[str] = Header(None, alias="X-API-KEY")):
+async def debug_budget_summary(
+    request: Request,
+    X_API_KEY: Optional[str] = Header(None, alias="X-API-KEY"),
+    _: AuthPrincipal = Depends(require_roles("admin")),
+):
     """
     Provide limits, daily and monthly usage summaries, and an over-budget evaluation for the resolved API key.
 

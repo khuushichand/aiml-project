@@ -117,6 +117,15 @@ def _close_response(resp: Any) -> None:
     close = getattr(resp, "close", None)
     if callable(close):
         close()
+
+
+def _truncate_text(value: Optional[str], max_len: int = 600) -> str:
+    if not value:
+        return ""
+    text = str(value).strip()
+    if len(text) <= max_len:
+        return text
+    return text[: max_len - 1].rstrip() + "..."
 from tldw_Server_API.app.core.LLM_Calls.Summarization_General_Lib import analyze
 #
 #
@@ -1186,11 +1195,39 @@ def perform_websearch(search_engine, search_query, content_country, search_lang,
                 site_blacklist=site_blacklist,
             )
 
+        elif search_engine.lower() == "exa":
+            web_search_results = search_web_exa(
+                search_query=search_query,
+                result_count=result_count,
+                content_country=content_country,
+                site_blacklist=site_blacklist,
+            )
+
+        elif search_engine.lower() == "firecrawl":
+            web_search_results = search_web_firecrawl(
+                search_query=search_query,
+                result_count=result_count,
+                content_country=content_country,
+                date_range=date_range,
+            )
+
         elif search_engine.lower() == "searx":
-            web_search_results = search_web_searx(search_query, language='auto', time_range='', safesearch=0, pageno=1, categories='general')
+            web_search_results = search_web_searx(
+                search_query,
+                language='auto',
+                time_range=date_range or '',
+                safesearch=0,
+                pageno=1,
+                categories='general',
+                searx_url=search_params.get('searx_url'),
+                json_mode=search_params.get('searx_json_mode', False),
+            )
 
         elif search_engine.lower() == "yandex":
             web_search_results = search_web_yandex()
+
+        elif search_engine.lower() in {"sogou", "startpage", "stract"}:
+            raise ValueError(f"{search_engine} provider not implemented")
 
         else:
             return f"Error: Invalid Search Engine Name {search_engine}"
@@ -1390,6 +1427,10 @@ def process_web_search_results(search_results: Dict, search_engine: str) -> Dict
             parsed_results = parse_serper_results(search_results, web_search_results_dict)
         elif search_engine.lower() == "tavily":
             parsed_results = parse_tavily_results(search_results, web_search_results_dict)
+        elif search_engine.lower() == "exa":
+            parsed_results = parse_exa_results(search_results, web_search_results_dict)
+        elif search_engine.lower() == "firecrawl":
+            parsed_results = parse_firecrawl_results(search_results, web_search_results_dict)
         elif search_engine.lower() == "searx":
             parsed_results = parse_searx_results(search_results, web_search_results_dict)
         elif search_engine.lower() == "yandex":
@@ -2229,7 +2270,16 @@ def test_parse_kagi_results():
 # https://searx.github.io/searx/dev/search_api.html
 # (legacy session helper removed; using http_client directly)
 
-def search_web_searx(search_query, language='auto', time_range='', safesearch=0, pageno=1, categories='general', searx_url=None):
+def search_web_searx(
+    search_query,
+    language='auto',
+    time_range='',
+    safesearch=0,
+    pageno=1,
+    categories='general',
+    searx_url=None,
+    json_mode: bool = False,
+):
     """
     Perform a search using a Searx instance.
 
@@ -2262,6 +2312,8 @@ def search_web_searx(search_query, language='auto', time_range='', safesearch=0,
             'pageno': pageno,
             'categories': categories
         }
+        if json_mode:
+            params['format'] = 'json'
         search_url = f"{parsed_url.scheme}://{parsed_url.netloc}{parsed_url.path}?{urlencode(params)}"
         logging.info(f"Search URL: {search_url}")
     except Exception as e:
@@ -2479,6 +2531,182 @@ def parse_tavily_results(tavily_search_results, web_search_results_dict):
 
 
 def test_parse_tavily_results():
+    pass
+
+
+
+
+######################### Exa Search #########################
+#
+# https://exa.ai/docs/reference/search
+def search_web_exa(
+    search_query: str,
+    result_count: int = 10,
+    content_country: Optional[str] = None,
+    site_blacklist: Optional[List[str]] = None,
+    site_whitelist: Optional[List[str]] = None,
+    exa_api_key: Optional[str] = None,
+    exa_api_url: Optional[str] = None,
+):
+    exa_cfg = get_loaded_config().get("search_engines", {})
+    if not exa_api_url:
+        exa_api_url = exa_cfg.get("exa_search_api_url") or "https://api.exa.ai/search"
+    if not exa_api_key:
+        exa_api_key = exa_cfg.get("exa_search_api_key")
+    if not exa_api_key:
+        raise ValueError("Please provide a valid Exa API key")
+
+    payload: Dict[str, Any] = {
+        "query": search_query,
+        "numResults": result_count,
+        "text": True,
+    }
+    if content_country:
+        payload["userLocation"] = content_country
+    if site_whitelist:
+        payload["includeDomains"] = site_whitelist
+    if site_blacklist:
+        payload["excludeDomains"] = site_blacklist
+
+    # Enforce SSRF/egress policy
+    try:
+        from tldw_Server_API.app.core.Security.egress import evaluate_url_policy
+        pol = evaluate_url_policy(exa_api_url)
+        if not getattr(pol, 'allowed', False):
+            raise ValueError(f"Egress denied: {getattr(pol, 'reason', 'blocked')}")
+    except Exception as _e:
+        raise ValueError(f"Egress policy evaluation failed: {_e}")
+
+    headers = {"Content-Type": "application/json", "x-api-key": exa_api_key}
+    from tldw_Server_API.app.core.http_client import fetch_json
+    return fetch_json(method="POST", url=exa_api_url, headers=headers, json=payload, timeout=20.0)
+
+
+def parse_exa_results(exa_search_results, web_search_results_dict):
+    try:
+        if "results" not in web_search_results_dict:
+            web_search_results_dict["results"] = []
+
+        items = exa_search_results.get("results", []) if isinstance(exa_search_results, dict) else []
+        for item in items:
+            title = item.get("title", "")
+            url = item.get("url", "")
+            highlights = item.get("highlights") if isinstance(item.get("highlights"), list) else []
+            snippet = item.get("summary") or (highlights[0] if highlights else "") or item.get("text") or ""
+            snippet = _truncate_text(snippet)
+
+            processed = {
+                "title": title,
+                "url": url,
+                "content": snippet,
+                "metadata": {
+                    "date_published": item.get("publishedDate"),
+                    "author": item.get("author"),
+                    "source": extract_domain(url) if url else None,
+                    "language": item.get("language"),
+                    "relevance_score": item.get("score"),
+                    "snippet": snippet,
+                },
+            }
+            web_search_results_dict["results"].append(processed)
+
+        web_search_results_dict["total_results_found"] = len(web_search_results_dict["results"])
+    except Exception as e:
+        web_search_results_dict["processing_error"] = f"Error processing Exa results: {e}"
+
+
+def test_parse_exa_results():
+    pass
+
+
+
+
+######################### Firecrawl Search #########################
+#
+# https://docs.firecrawl.dev/api-reference/search
+def search_web_firecrawl(
+    search_query: str,
+    result_count: int = 10,
+    content_country: Optional[str] = None,
+    date_range: Optional[str] = None,
+    firecrawl_api_key: Optional[str] = None,
+    firecrawl_api_url: Optional[str] = None,
+):
+    fc_cfg = get_loaded_config().get("search_engines", {})
+    if not firecrawl_api_url:
+        firecrawl_api_url = fc_cfg.get("firecrawl_search_api_url") or "https://api.firecrawl.dev/v2/search"
+    if not firecrawl_api_key:
+        firecrawl_api_key = fc_cfg.get("firecrawl_api_key")
+    if not firecrawl_api_key:
+        raise ValueError("Please provide a valid Firecrawl API key")
+
+    payload: Dict[str, Any] = {"query": search_query, "limit": result_count}
+    if content_country:
+        payload["country"] = content_country
+    if date_range:
+        payload["tbs"] = date_range
+
+    # Enforce SSRF/egress policy
+    try:
+        from tldw_Server_API.app.core.Security.egress import evaluate_url_policy
+        pol = evaluate_url_policy(firecrawl_api_url)
+        if not getattr(pol, 'allowed', False):
+            raise ValueError(f"Egress denied: {getattr(pol, 'reason', 'blocked')}")
+    except Exception as _e:
+        raise ValueError(f"Egress policy evaluation failed: {_e}")
+
+    headers = {"Content-Type": "application/json", "Authorization": f"Bearer {firecrawl_api_key}"}
+    from tldw_Server_API.app.core.http_client import fetch_json
+    return fetch_json(method="POST", url=firecrawl_api_url, headers=headers, json=payload, timeout=20.0)
+
+
+def parse_firecrawl_results(firecrawl_search_results, web_search_results_dict):
+    try:
+        if "results" not in web_search_results_dict:
+            web_search_results_dict["results"] = []
+
+        if isinstance(firecrawl_search_results, dict):
+            data = firecrawl_search_results.get("data", [])
+        else:
+            data = []
+
+        items: List[Dict[str, Any]] = []
+        if isinstance(data, dict):
+            for key in ("web", "news", "images"):
+                bucket = data.get(key)
+                if isinstance(bucket, list):
+                    items.extend(bucket)
+        elif isinstance(data, list):
+            items = data
+
+        for item in items:
+            title = item.get("title") or item.get("name") or ""
+            url = item.get("url") or item.get("link") or ""
+            snippet = item.get("markdown") or item.get("description") or item.get("content") or ""
+            snippet = _truncate_text(snippet)
+            published = item.get("publishedDate") or item.get("published") or None
+
+            processed = {
+                "title": title,
+                "url": url,
+                "content": snippet,
+                "metadata": {
+                    "date_published": published,
+                    "author": item.get("author"),
+                    "source": extract_domain(url) if url else None,
+                    "language": item.get("language"),
+                    "relevance_score": item.get("score"),
+                    "snippet": snippet,
+                },
+            }
+            web_search_results_dict["results"].append(processed)
+
+        web_search_results_dict["total_results_found"] = len(web_search_results_dict["results"])
+    except Exception as e:
+        web_search_results_dict["processing_error"] = f"Error processing Firecrawl results: {e}"
+
+
+def test_parse_firecrawl_results():
     pass
 
 

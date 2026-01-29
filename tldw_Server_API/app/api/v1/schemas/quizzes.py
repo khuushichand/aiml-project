@@ -13,6 +13,7 @@ class QuestionType(str, Enum):
 class QuizCreate(BaseModel):
     name: str = Field(..., description="Quiz name")
     description: Optional[str] = Field(None, description="Optional quiz description")
+    workspace_tag: Optional[str] = Field(None, description="Optional workspace tag (e.g., 'workspace:<slug-or-id>')")
     media_id: Optional[int] = Field(None, description="Source media ID for AI-generated quizzes")
     time_limit_seconds: Optional[int] = Field(None, ge=1, description="Optional time limit in seconds")
     passing_score: Optional[int] = Field(None, ge=0, le=100, description="Passing score percentage")
@@ -23,6 +24,7 @@ class QuizUpdate(BaseModel):
 
     name: Optional[str] = None
     description: Optional[str] = None
+    workspace_tag: Optional[str] = None
     media_id: Optional[int] = None
     time_limit_seconds: Optional[int] = Field(None, ge=1)
     passing_score: Optional[int] = Field(None, ge=0, le=100)
@@ -33,6 +35,7 @@ class QuizResponse(BaseModel):
     id: int
     name: str
     description: Optional[str] = None
+    workspace_tag: Optional[str] = None
     media_id: Optional[int] = None
     total_questions: int
     time_limit_seconds: Optional[int] = None
@@ -144,6 +147,7 @@ class QuizGenerateRequest(BaseModel):
     difficulty: str = Field("mixed", description="easy, medium, hard, mixed")
     focus_topics: Optional[List[str]] = None
     model: Optional[str] = None
+    workspace_tag: Optional[str] = Field(None, description="Optional workspace tag (e.g., 'workspace:<slug-or-id>')")
 
 
 class QuizGenerateResponse(BaseModel):

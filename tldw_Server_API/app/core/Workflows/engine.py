@@ -144,6 +144,12 @@ class WorkflowEngine:
         except Exception as e:
             logger.debug(f"WorkflowEngine: failed to clear tenant cache for {run_id}: {e}")
 
+    def _aggregate_run_token_usage(self, run_id: str) -> tuple[Optional[int], Optional[int], Optional[float]]:
+        try:
+            return self.db.aggregate_run_token_usage(run_id)
+        except Exception:
+            return (None, None, None)
+
     def _append_event(self, run_id: str, event_type: str, payload: Optional[Dict[str, Any]] = None, step_run_id: Optional[str] = None) -> None:
         try:
             tenant = self._tenant_for_run(run_id)
@@ -245,6 +251,27 @@ class WorkflowEngine:
         except Exception:
             pass
         context: Dict[str, Any] = {"inputs": inputs, "tenant_id": _tenant}
+        try:
+            meta = definition.get("metadata") if isinstance(definition, dict) else None
+            if isinstance(meta, dict):
+                context["workflow_metadata"] = meta
+            policy = None
+            if isinstance(definition, dict):
+                policy = definition.get("mcp_policy") or definition.get("mcp")
+            if isinstance(policy, dict):
+                context["workflow_mcp_policy"] = policy
+        except Exception as e:
+            definition_type = type(definition).__name__
+            definition_keys = list(definition.keys()) if isinstance(definition, dict) else None
+            logger.debug(
+                "WorkflowEngine: failed to extract workflow metadata or MCP policy "
+                "run_id={} definition_type={} definition_keys={} error={}",
+                run_id,
+                definition_type,
+                definition_keys,
+                e,
+                exc_info=True,
+            )
         if _user_id is not None:
             context["user_id"] = _user_id
         # Attach and retain secrets for the lifetime of the run
@@ -434,7 +461,17 @@ class WorkflowEngine:
                             idx = id_to_idx[jump_to_id_on_failure]
                             continue  # proceed to next selected step
                         # Otherwise, fail the run
-                        self.db.update_run_status(run_id, status="failed", status_reason=str(err), ended_at=self._now_iso(), error=str(err))
+                        tokens_in, tokens_out, cost_usd = self._aggregate_run_token_usage(run_id)
+                        self.db.update_run_status(
+                            run_id,
+                            status="failed",
+                            status_reason=str(err),
+                            ended_at=self._now_iso(),
+                            error=str(err),
+                            tokens_input=tokens_in,
+                            tokens_output=tokens_out,
+                            cost_usd=cost_usd,
+                        )
                         self._append_event(run_id, "run_failed", {"error": str(err)})
                         try:
                             increment_counter("workflows_runs_failed", labels={"tenant": self._tenant_for_run(run_id)})
@@ -527,7 +564,17 @@ class WorkflowEngine:
                     duration_ms = int((datetime.utcnow() - started).total_seconds() * 1000)
             except Exception:
                 duration_ms = None
-            self.db.update_run_status(run_id, status="succeeded", ended_at=self._now_iso(), duration_ms=duration_ms, outputs=last_outputs)
+            tokens_in, tokens_out, cost_usd = self._aggregate_run_token_usage(run_id)
+            self.db.update_run_status(
+                run_id,
+                status="succeeded",
+                ended_at=self._now_iso(),
+                duration_ms=duration_ms,
+                outputs=last_outputs,
+                tokens_input=tokens_in,
+                tokens_output=tokens_out,
+                cost_usd=cost_usd,
+            )
             self._append_event(run_id, "run_completed", {"success": True})
             try:
                 tenant_label = self._tenant_for_run(run_id)
@@ -543,7 +590,17 @@ class WorkflowEngine:
             except Exception:
                 pass
         except Exception as e:
-            self.db.update_run_status(run_id, status="failed", status_reason=str(e), ended_at=self._now_iso(), error=str(e))
+            tokens_in, tokens_out, cost_usd = self._aggregate_run_token_usage(run_id)
+            self.db.update_run_status(
+                run_id,
+                status="failed",
+                status_reason=str(e),
+                ended_at=self._now_iso(),
+                error=str(e),
+                tokens_input=tokens_in,
+                tokens_output=tokens_out,
+                cost_usd=cost_usd,
+            )
             self._append_event(run_id, "run_failed", {"error": str(e)})
             logger.error(f"WorkflowEngine: run {run_id} failed: {e}")
             # Completion webhook on failure
@@ -572,13 +629,19 @@ class WorkflowEngine:
             try:
                 if not keep:
                     self._pop_run_secrets(run_id)
-            except Exception:
-                pass
+            except Exception as e:
+                logger.debug(
+                    f"WorkflowEngine: continue_run pop_run_secrets failed run_id={run_id}: {e}",
+                    exc_info=True,
+                )
             self._clear_tenant_cache(run_id)
             try:
                 WorkflowScheduler.instance().notify_finished(_tenant_for_notify, _wf_for_notify)
-            except Exception:
-                pass
+            except Exception as e:
+                logger.debug(
+                    f"WorkflowEngine: continue_run notify_finished failed run_id={run_id}: {e}",
+                    exc_info=True,
+                )
 
         keep_secrets = False
         finalized = False
@@ -591,7 +654,11 @@ class WorkflowEngine:
         try:
             import json
             definition = json.loads(run.definition_snapshot_json or "{}")
-        except Exception:
+        except Exception as e:
+            logger.debug(
+                f"WorkflowEngine: continue_run definition parse failed run_id={run_id}: {e}",
+                exc_info=True,
+            )
             definition = {}
         steps = definition.get("steps") or []
         # Find start index and build id map
@@ -605,14 +672,39 @@ class WorkflowEngine:
         if next_step_id:
             try:
                 start_idx = id_to_idx[str(next_step_id)]
-            except Exception:
-                pass
+            except Exception as e:
+                logger.debug(
+                    "WorkflowEngine: continue_run next_step_id lookup failed "
+                    f"run_id={run_id} next_step_id={next_step_id}: {e}",
+                    exc_info=True,
+                )
         context = {
             "inputs": json.loads(run.inputs_json or "{}"),
             "tenant_id": getattr(run, "tenant_id", None) or self.config.tenant_id,
             "run_id": run_id,
             "user_id": getattr(run, "user_id", None),
         }
+        try:
+            meta = definition.get("metadata") if isinstance(definition, dict) else None
+            if isinstance(meta, dict):
+                context["workflow_metadata"] = meta
+            policy = None
+            if isinstance(definition, dict):
+                policy = definition.get("mcp_policy") or definition.get("mcp")
+            if isinstance(policy, dict):
+                context["workflow_mcp_policy"] = policy
+        except Exception as e:
+            definition_type = type(definition).__name__
+            definition_keys = list(definition.keys()) if isinstance(definition, dict) else None
+            logger.debug(
+                "WorkflowEngine: failed to extract workflow metadata or MCP policy "
+                "run_id={} definition_type={} definition_keys={} error={}",
+                run_id,
+                definition_type,
+                definition_keys,
+                e,
+                exc_info=True,
+            )
         if last_outputs:
             context["last"] = last_outputs
         # Mark running
@@ -717,7 +809,17 @@ class WorkflowEngine:
                     context.update({"last": last})
                     idx = id_to_idx[failure_next]
                     continue
-                self.db.update_run_status(run_id, status="failed", status_reason=str(err), ended_at=self._now_iso(), error=str(err))
+                tokens_in, tokens_out, cost_usd = self._aggregate_run_token_usage(run_id)
+                self.db.update_run_status(
+                    run_id,
+                    status="failed",
+                    status_reason=str(err),
+                    ended_at=self._now_iso(),
+                    error=str(err),
+                    tokens_input=tokens_in,
+                    tokens_output=tokens_out,
+                    cost_usd=cost_usd,
+                )
                 self._append_event(run_id, "run_failed", {"error": str(err)})
                 try:
                     await self._maybe_send_completion_webhook(definition, run_id, status="failed")
@@ -798,19 +900,17 @@ class WorkflowEngine:
                 duration_ms = int((datetime.utcnow() - started).total_seconds() * 1000)
         except Exception:
             duration_ms = None
-        # Attempt to derive token/cost metrics from outputs
-        tokens_in = None
-        tokens_out = None
-        cost_usd = None
-        try:
-            meta = (last or {}).get("metadata") or {}
-            tu = meta.get("token_usage") or {}
-            tokens_in = tu.get("prompt_tokens") or tu.get("input_tokens")
-            tokens_out = tu.get("completion_tokens") or tu.get("output_tokens")
-            cost_usd = meta.get("cost_usd")
-        except Exception:
-            pass
-        self.db.update_run_status(run_id, status="succeeded", ended_at=self._now_iso(), duration_ms=duration_ms, outputs=last, tokens_input=tokens_in, tokens_output=tokens_out, cost_usd=cost_usd)
+        tokens_in, tokens_out, cost_usd = self._aggregate_run_token_usage(run_id)
+        self.db.update_run_status(
+            run_id,
+            status="succeeded",
+            ended_at=self._now_iso(),
+            duration_ms=duration_ms,
+            outputs=last,
+            tokens_input=tokens_in,
+            tokens_output=tokens_out,
+            cost_usd=cost_usd,
+        )
         self._append_event(run_id, "run_completed", {"success": True})
         # Parity with start_run: record completion metrics for continue_run path
         try:
@@ -893,6 +993,7 @@ class WorkflowEngine:
         # Adapter defaults
         defaults = {
             "prompt": 1,
+            "llm": 1,
             "tts": 1,
             "webhook": 1,
             "delay": 0,
@@ -919,10 +1020,11 @@ class WorkflowEngine:
         # Per-type caps via env (if provided)
         try:
             caps = {
-                "prompt": os.getenv("WORKFLOWS_MAX_RETRIES_PROMPT"),
-                "tts": os.getenv("WORKFLOWS_MAX_RETRIES_TTS"),
-                "webhook": os.getenv("WORKFLOWS_MAX_RETRIES_WEBHOOK"),
-            }
+            "prompt": os.getenv("WORKFLOWS_MAX_RETRIES_PROMPT"),
+            "llm": os.getenv("WORKFLOWS_MAX_RETRIES_LLM"),
+            "tts": os.getenv("WORKFLOWS_MAX_RETRIES_TTS"),
+            "webhook": os.getenv("WORKFLOWS_MAX_RETRIES_WEBHOOK"),
+        }
             cap_s = caps.get(step_type)
             if cap_s is not None and str(cap_s).strip() != "":
                 cap = max(0, int(cap_s))
@@ -1095,12 +1197,18 @@ class WorkflowEngine:
                     pass
             ctx["add_artifact"] = _add_artifact
 
+        if step_type == "llm":
+            from tldw_Server_API.app.core.Workflows.adapters import run_llm_adapter
+            return await run_llm_adapter(step_cfg, ctx)
         if step_type == "prompt":
             return await run_prompt_adapter(step_cfg, ctx)
         if step_type == "rag_search":
             return await run_rag_search_adapter(step_cfg, ctx)
         if step_type == "media_ingest":
             return await run_media_ingest_adapter(step_cfg, ctx)
+        if step_type == "kanban":
+            from tldw_Server_API.app.core.Workflows.adapters import run_kanban_adapter
+            return await run_kanban_adapter(step_cfg, ctx)
         if step_type == "mcp_tool":
             return await run_mcp_tool_adapter(step_cfg, ctx)
         if step_type == "tts":
@@ -1157,21 +1265,137 @@ class WorkflowEngine:
         raise RuntimeError("Unsupported step type: {}".format(step_type))
 
     async def _reap_orphans(self) -> None:
-        """Single pass to mark long-stale running steps as failed (orphaned)."""
+        """Single pass to mark long-stale running steps as failed (orphaned) and requeue."""
         try:
             from datetime import datetime, timedelta, timezone
+            from pathlib import Path
+            from types import SimpleNamespace
+
+            def _parse_ts(val: Optional[str]) -> Optional[datetime]:
+                if not val:
+                    return None
+                try:
+                    dt = datetime.fromisoformat(val)
+                except Exception:
+                    try:
+                        dt = datetime.strptime(val.split(".")[0], "%Y-%m-%dT%H:%M:%S")
+                    except Exception:
+                        return None
+                if dt.tzinfo is None:
+                    dt = dt.replace(tzinfo=timezone.utc)
+                return dt
+
             cutoff = datetime.utcnow().replace(tzinfo=timezone.utc) - timedelta(seconds=int(self.config.heartbeat_interval_sec * 15))
             stale = self.db.find_orphan_step_runs(cutoff.isoformat())
+            if not stale:
+                return
+            now = datetime.utcnow().replace(tzinfo=timezone.utc)
+            grace_ms = 5000
+            requeue_targets: Dict[str, Dict[str, Any]] = {}
+
             for s in stale:
                 sid = s.get("step_run_id")
                 rid = s.get("run_id")
+                step_id = s.get("step_id")
+
+                # Subprocess cleanup if recorded
+                forced = False
+                if s.get("pid") or s.get("pgid"):
+                    task = SimpleNamespace()
+                    task.pid = s.get("pid")
+                    task.pgid = s.get("pgid")
+                    task.workdir = Path(s.get("workdir") or ".")
+                    task.stdout_path = Path(s.get("stdout_path") or "stdout.log")
+                    task.stderr_path = Path(s.get("stderr_path") or "stderr.log")
+                    try:
+                        from tldw_Server_API.app.core.Workflows.subprocess_utils import terminate_process
+                        _, forced = terminate_process(task, grace_ms=grace_ms)  # type: ignore[arg-type]
+                    except Exception:
+                        forced = False
+
+                elapsed_ms = None
+                started_at = _parse_ts(s.get("started_at"))
+                if started_at:
+                    try:
+                        elapsed_ms = int((now - started_at).total_seconds() * 1000)
+                    except Exception:
+                        elapsed_ms = None
+
+                if rid:
+                    payload: Dict[str, Any] = {
+                        "step_id": step_id,
+                        "forced_kill": bool(forced),
+                        "orphan_reaped": True,
+                        "grace_ms": grace_ms,
+                    }
+                    if elapsed_ms is not None:
+                        payload["elapsed_ms"] = elapsed_ms
+                    self._append_event(str(rid), "step_cancelled", payload, step_run_id=str(sid) if sid else None)
+
                 try:
-                    self.db.complete_step_run(step_run_id=str(sid), status="failed", error="orphan_reaped")
+                    if sid:
+                        self.db.complete_step_run(step_run_id=str(sid), status="failed", error="orphan_reaped")
                 except Exception:
                     pass
-                self.db.update_run_status(str(rid), status="failed", status_reason="orphan_reaped", ended_at=self._now_iso())
+
                 if rid:
-                    self._append_event(str(rid), "run_failed", {"status_reason": "orphan_reaped", "step_run_id": sid})
+                    # Pick the most recently active stale step per run for requeue
+                    prev = requeue_targets.get(str(rid))
+                    if not prev:
+                        requeue_targets[str(rid)] = s
+                    else:
+                        prev_ts = _parse_ts(prev.get("heartbeat_at")) or _parse_ts(prev.get("started_at"))
+                        cur_ts = _parse_ts(s.get("heartbeat_at")) or _parse_ts(s.get("started_at"))
+                        if cur_ts and (not prev_ts or cur_ts > prev_ts):
+                            requeue_targets[str(rid)] = s
+
+            for rid, target in requeue_targets.items():
+                run = self.db.get_run(rid)
+                if not run:
+                    continue
+                if run.status in {"failed", "succeeded", "cancelled"}:
+                    continue
+                if self.db.is_cancel_requested(rid):
+                    try:
+                        self.db.update_run_status(rid, status="cancelled", status_reason="cancelled_by_user", ended_at=self._now_iso())
+                        self._append_event(rid, "run_cancelled", {"by": "user", "reason": "cancel_requested"})
+                    except Exception:
+                        pass
+                    continue
+
+                step_id = target.get("step_id")
+                if not step_id:
+                    continue
+                after_step_id = step_id
+                last_outputs: Optional[Dict[str, Any]] = None
+                try:
+                    last = self.db.get_last_completed_step_run(run_id=rid, before_ts=target.get("started_at"))
+                    if last:
+                        after_step_id = last.get("step_id") or step_id
+                        try:
+                            import json as _json
+                            raw_outputs = last.get("outputs_json")
+                            if isinstance(raw_outputs, dict):
+                                last_outputs = raw_outputs
+                            else:
+                                last_outputs = _json.loads(raw_outputs or "{}")
+                        except Exception:
+                            last_outputs = None
+                except Exception:
+                    last_outputs = None
+
+                try:
+                    self.db.update_run_status(rid, status="running", status_reason="orphan_requeued")
+                except Exception:
+                    pass
+                try:
+                    self._append_event(rid, "run_requeued", {"step_id": step_id, "step_run_id": target.get("step_run_id")})
+                except Exception:
+                    pass
+                try:
+                    asyncio.create_task(self.continue_run(rid, after_step_id=str(after_step_id), last_outputs=last_outputs, next_step_id=str(step_id)))
+                except Exception:
+                    pass
         except Exception as e:
             logger.warning(f"Orphan reaper failed: {e}")
 

@@ -391,6 +391,27 @@ async def warm_chacha_db_for_user(user_id: int, client_id: str | None = None) ->
         logger.warning(f"Warm-up for ChaChaNotes user {user_id} failed: {e}")
 
 
+async def get_chacha_db_for_user_id(user_id: int, client_id: str | None = None) -> CharactersRAGDB:
+    """
+    Fetch a CharactersRAGDB instance for a specific user ID.
+
+    This helper mirrors get_chacha_db_for_user but is intended for non-request contexts
+    (e.g., WebSocket handlers) where we already know the user id.
+    """
+    if not isinstance(user_id, int):
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="User identification failed for ChaChaNotes DB.",
+        )
+
+    db_instance = await _get_or_init_db_instance(user_id, client_id or str(user_id))
+    if not _is_chacha_shutting_down():
+        task = asyncio.create_task(_ensure_default_character_async(db_instance, user_id))
+        _chacha_default_char_tasks.add(task)
+        task.add_done_callback(_chacha_default_char_tasks.discard)
+    return db_instance
+
+
 # --- Main Dependency Function ---
 
 

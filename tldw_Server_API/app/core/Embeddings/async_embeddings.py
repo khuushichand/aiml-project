@@ -5,20 +5,21 @@ import asyncio
 import hashlib
 import time
 import atexit
+import threading
+import weakref
 from typing import List, Dict, Any, Optional, Tuple
 from concurrent.futures import ThreadPoolExecutor
 import numpy as np
 
 from loguru import logger
 from tldw_Server_API.app.core.Embeddings.connection_pool import get_pool_manager
-from tldw_Server_API.app.core.Embeddings.metrics_integration import get_metrics, track_embedding_request
+from tldw_Server_API.app.core.Embeddings.metrics_integration import get_metrics
 from tldw_Server_API.app.core.Embeddings.error_recovery import get_recovery_manager
 from tldw_Server_API.app.core.Embeddings.rate_limiter import get_async_rate_limiter
 from tldw_Server_API.app.core.Embeddings.multi_tier_cache import get_multi_tier_cache
 from tldw_Server_API.app.core.Embeddings.request_batching import get_batcher
 from tldw_Server_API.app.core.Embeddings.simplified_config import get_config
 from tldw_Server_API.app.core.Utils.tokenizer import count_tokens as _count_tokens
-from tldw_Server_API.app.core.http_client import afetch, RetryPolicy
 
 
 def _normalize_embedding_response(payload: Any) -> List[float]:
@@ -47,17 +48,6 @@ def _normalize_embedding_response(payload: Any) -> List[float]:
 
     raise ValueError(f"Unexpected embedding response shape: {array.shape}")
 
-
-async def _close_response(resp: Any) -> None:
-    if resp is None:
-        return
-    close = getattr(resp, "aclose", None)
-    if callable(close):
-        await close()
-        return
-    close = getattr(resp, "close", None)
-    if callable(close):
-        close()
 
 
 class AsyncEmbeddingProvider:
@@ -96,15 +86,22 @@ class AsyncEmbeddingProvider:
 class AsyncOpenAIProvider(AsyncEmbeddingProvider):
     """Async OpenAI embeddings provider"""
 
-    def __init__(self, api_key: Optional[str] = None):
+    def __init__(self, api_key: Optional[str] = None, base_url: Optional[str] = None):
         super().__init__("openai", api_key)
-        self.base_url = "https://api.openai.com/v1/embeddings"
+        self.base_url = base_url or "https://api.openai.com/v1/embeddings"
+
+    def _resolve_url(self, base_url_override: Optional[str]) -> str:
+        url = base_url_override or self.base_url
+        if url.endswith("/embeddings"):
+            return url
+        return f"{url.rstrip('/')}/embeddings"
 
     async def create_embedding(
         self,
         text: str,
         model: str = "text-embedding-3-small",
-        user_id: Optional[str] = None
+        user_id: Optional[str] = None,
+        base_url_override: Optional[str] = None,
     ) -> List[float]:
         """Create embedding using OpenAI API"""
         import time as _time
@@ -119,6 +116,7 @@ class AsyncOpenAIProvider(AsyncEmbeddingProvider):
                 tokens_units = 0
             allowed, retry_after = await self.rate_limiter.check_rate_limit_async(
                 user_id,
+                cost=1,
                 tokens_units=tokens_units,
             )
             if not allowed:
@@ -137,58 +135,55 @@ class AsyncOpenAIProvider(AsyncEmbeddingProvider):
 
         # Get connection pool for this provider
         pool = self.pool_manager.get_pool(self.provider_name)
-        async with pool.acquire_connection():
-            headers = {"Content-Type": "application/json"}
-            if self.api_key:
-                headers["Authorization"] = f"Bearer {self.api_key}"
+        headers = {"Content-Type": "application/json"}
+        if self.api_key:
+            headers["Authorization"] = f"Bearer {self.api_key}"
 
-            payload = {
-                "input": text,
-                "model": model
-            }
+        payload = {
+            "input": text,
+            "model": model
+        }
 
-            resp = None
-            try:
-                retry_policy = RetryPolicy(attempts=max(1, int(getattr(pool, "retry_attempts", 3))))
-                resp = await afetch(
-                    method="POST",
-                    url=self.base_url,
-                    json=payload,
-                    headers=headers,
-                    timeout=getattr(pool, "timeout_seconds", 30),
-                    retry=retry_policy,
-                )
-                if resp.status_code >= 400:
-                    status = "failure"
-                    self.metrics.log_error(self.provider_name, f"HTTP {resp.status_code}")
-                    raise Exception(f"HTTP {resp.status_code}")
-                data = resp.json()
-                return data["data"][0]["embedding"]
-            except Exception as e:
+        try:
+            data = await pool.request(
+                method="POST",
+                url=self._resolve_url(base_url_override),
+                headers=headers,
+                json_data=payload,
+            )
+            if isinstance(data, dict) and "error" in data:
                 status = "failure"
-                self.metrics.log_error(self.provider_name, str(type(e).__name__))
-                raise
-            finally:
-                await _close_response(resp)
-                # Emit metrics with the actual requested model
-                elapsed = _time.perf_counter() - t0
-                self.metrics.log_request(self.provider_name, model, status=status)
-                self.metrics.log_request_latency(self.provider_name, model, elapsed)
+                self.metrics.log_error(self.provider_name, "APIError")
+                raise ValueError(str(data.get("error")))
+            if isinstance(data, dict) and data.get("data"):
+                return data["data"][0]["embedding"]
+            status = "failure"
+            raise ValueError("Invalid OpenAI embeddings response format")
+        except Exception as e:
+            status = "failure"
+            self.metrics.log_error(self.provider_name, str(type(e).__name__))
+            raise
+        finally:
+            # Emit metrics with the actual requested model
+            elapsed = _time.perf_counter() - t0
+            self.metrics.log_request(self.provider_name, model, status=status)
+            self.metrics.log_request_latency(self.provider_name, model, elapsed)
 
 
 class AsyncHuggingFaceProvider(AsyncEmbeddingProvider):
     """Async HuggingFace embeddings provider"""
 
-    def __init__(self, api_key: Optional[str] = None):
+    def __init__(self, api_key: Optional[str] = None, base_url: Optional[str] = None):
         super().__init__("huggingface", api_key)
-        self.base_url = "https://api-inference.huggingface.co/models"
+        self.base_url = base_url or "https://api-inference.huggingface.co/models"
         self.executor = ThreadPoolExecutor(max_workers=4)
 
     async def create_embedding(
         self,
         text: str,
         model: str = "sentence-transformers/all-MiniLM-L6-v2",
-        user_id: Optional[str] = None
+        user_id: Optional[str] = None,
+        base_url_override: Optional[str] = None,
     ) -> List[float]:
         """Create embedding using HuggingFace API"""
 
@@ -200,6 +195,7 @@ class AsyncHuggingFaceProvider(AsyncEmbeddingProvider):
                 tokens_units = 0
             allowed, retry_after = await self.rate_limiter.check_rate_limit_async(
                 user_id,
+                cost=1,
                 tokens_units=tokens_units,
             )
             if not allowed:
@@ -215,44 +211,32 @@ class AsyncHuggingFaceProvider(AsyncEmbeddingProvider):
                 )
                 raise Exception(f"Rate limit exceeded.{retry_after_msg}")
 
-        url = f"{self.base_url}/{model}"
+        base_url = base_url_override or self.base_url
+        url = f"{base_url.rstrip('/')}/{model}"
 
         # Get connection pool for this provider
         pool = self.pool_manager.get_pool(self.provider_name)
-        async with pool.acquire_connection():
-            headers = {"Content-Type": "application/json"}
-            if self.api_key:
-                headers["Authorization"] = f"Bearer {self.api_key}"
+        headers = {"Content-Type": "application/json"}
+        if self.api_key:
+            headers["Authorization"] = f"Bearer {self.api_key}"
 
-            payload = {
-                "inputs": text,
-                "options": {"wait_for_model": True}
-            }
+        payload = {
+            "inputs": text,
+            "options": {"wait_for_model": True}
+        }
 
-            resp = None
-            try:
-                retry_policy = RetryPolicy(attempts=max(1, int(getattr(pool, "retry_attempts", 3))))
-                resp = await afetch(
-                    method="POST",
-                    url=url,
-                    json=payload,
-                    headers=headers,
-                    timeout=getattr(pool, "timeout_seconds", 30),
-                    retry=retry_policy,
-                )
-                if resp.status_code >= 400:
-                    self.metrics.log_error(self.provider_name, f"HTTP {resp.status_code}")
-                    raise Exception(f"HTTP {resp.status_code}")
-                data = resp.json()
-
-                # Usage is already recorded in check_rate_limit_async
-                return _normalize_embedding_response(data)
-
-            except Exception as e:
-                self.metrics.log_error(self.provider_name, str(type(e).__name__))
-                raise
-            finally:
-                await _close_response(resp)
+        try:
+            data = await pool.request(
+                method="POST",
+                url=url,
+                headers=headers,
+                json_data=payload,
+            )
+            # Usage is already recorded in check_rate_limit_async
+            return _normalize_embedding_response(data)
+        except Exception as e:
+            self.metrics.log_error(self.provider_name, str(type(e).__name__))
+            raise
 
 
 class AsyncLocalAPIProvider(AsyncEmbeddingProvider):
@@ -279,6 +263,7 @@ class AsyncLocalAPIProvider(AsyncEmbeddingProvider):
                 tokens_units = 0
             allowed, retry_after = await self.rate_limiter.check_rate_limit_async(
                 user_id,
+                cost=1,
                 tokens_units=tokens_units,
             )
             if not allowed:
@@ -296,50 +281,44 @@ class AsyncLocalAPIProvider(AsyncEmbeddingProvider):
                 raise Exception(f"Rate limit exceeded.{retry_after_msg}")
 
         pool = self.pool_manager.get_pool(self.provider_name)
-        async with pool.acquire_connection():
-            headers = {"Content-Type": "application/json"}
-            if self.api_key:
-                headers["Authorization"] = f"Bearer {self.api_key}"
+        headers = {"Content-Type": "application/json"}
+        if self.api_key:
+            headers["Authorization"] = f"Bearer {self.api_key}"
 
-            payload = {"texts": [text], "model": model}
+        payload = {"texts": [text], "model": model}
 
-            resp = None
-            try:
-                retry_policy = RetryPolicy(attempts=max(1, int(getattr(pool, "retry_attempts", 3))))
-                resp = await afetch(
-                    method="POST",
-                    url=self.api_url,
-                    json=payload,
-                    headers=headers,
-                    timeout=getattr(pool, "timeout_seconds", 30),
-                    retry=retry_policy,
-                )
-                if resp.status_code >= 400:
-                    status = "failure"
-                    self.metrics.log_error(self.provider_name, f"HTTP {resp.status_code}")
-                    raise Exception(f"HTTP {resp.status_code}")
-                data = resp.json()
-                return _normalize_embedding_response(data)
-            except Exception as e:
-                status = "failure"
-                self.metrics.log_error(self.provider_name, str(type(e).__name__))
-                raise
-            finally:
-                await _close_response(resp)
-                elapsed = _time.perf_counter() - t0
-                self.metrics.log_request(self.provider_name, model, status=status)
-                self.metrics.log_request_latency(self.provider_name, model, elapsed)
+        try:
+            data = await pool.request(
+                method="POST",
+                url=self.api_url,
+                headers=headers,
+                json_data=payload,
+            )
+            return _normalize_embedding_response(data)
+        except Exception as e:
+            status = "failure"
+            self.metrics.log_error(self.provider_name, str(type(e).__name__))
+            raise
+        finally:
+            elapsed = _time.perf_counter() - t0
+            self.metrics.log_request(self.provider_name, model, status=status)
+            self.metrics.log_request_latency(self.provider_name, model, elapsed)
 
 
 class AsyncLocalProvider(AsyncEmbeddingProvider):
     """Async local embeddings provider using sentence-transformers"""
 
-    def __init__(self):
+    def __init__(self, max_models_in_memory: int = 3, model_ttl_seconds: int = 3600):
         super().__init__("local", None)
-        self.models = {}
+        self.models: Dict[str, Any] = {}
+        self.model_last_used: Dict[str, float] = {}
+        self.model_in_use: Dict[str, int] = {}
+        self.max_models_in_memory = max(1, int(max_models_in_memory))
+        self.model_ttl_seconds = max(0, int(model_ttl_seconds)) if model_ttl_seconds is not None else 0
         self.executor = ThreadPoolExecutor(max_workers=2)
         self._model_locks: Dict[str, asyncio.Lock] = {}
         self._model_locks_guard = asyncio.Lock()
+        self._models_guard = asyncio.Lock()
 
     async def _get_model_lock(self, model_name: str) -> asyncio.Lock:
         """Return a per-model lock to prevent duplicate loads."""
@@ -350,6 +329,62 @@ class AsyncLocalProvider(AsyncEmbeddingProvider):
                 self._model_locks[model_name] = lock
             return lock
 
+    async def _mark_in_use(self, model_name: str) -> None:
+        async with self._models_guard:
+            self.model_in_use[model_name] = self.model_in_use.get(model_name, 0) + 1
+
+    async def _release_in_use(self, model_name: str) -> None:
+        async with self._models_guard:
+            current = self.model_in_use.get(model_name, 0)
+            if current <= 1:
+                self.model_in_use.pop(model_name, None)
+            else:
+                self.model_in_use[model_name] = current - 1
+
+    async def _touch_model(self, model_name: str) -> None:
+        async with self._models_guard:
+            self.model_last_used[model_name] = time.time()
+
+    async def _drop_model(self, model_name: str) -> None:
+        async with self._models_guard:
+            model = self.models.pop(model_name, None)
+            self.model_last_used.pop(model_name, None)
+            self.model_in_use.pop(model_name, None)
+        if model is not None:
+            try:
+                if hasattr(model, "cpu"):
+                    model.cpu()
+            except Exception:
+                pass
+
+    async def _evict_if_needed(self, keep: Optional[str] = None) -> None:
+        to_drop: list[str] = []
+        async with self._models_guard:
+            now = time.time()
+            if self.model_ttl_seconds > 0:
+                expired = [
+                    name for name, last_used in self.model_last_used.items()
+                    if name != keep and (now - last_used) > self.model_ttl_seconds
+                ]
+                for name in expired:
+                    if self.model_in_use.get(name, 0) > 0:
+                        continue
+                    to_drop.append(name)
+
+            # Only evict when we exceed the limit; keep exactly max_models_in_memory.
+            while len(self.models) - len(to_drop) > self.max_models_in_memory:
+                candidates = [
+                    (name, last_used) for name, last_used in self.model_last_used.items()
+                    if name != keep and self.model_in_use.get(name, 0) <= 0 and name not in to_drop
+                ]
+                if not candidates:
+                    break
+                lru_name = min(candidates, key=lambda item: item[1])[0]
+                to_drop.append(lru_name)
+
+        for name in to_drop:
+            await self._drop_model(name)
+
     async def _load_model(self, model_name: str):
         """Load model if not already loaded"""
         if model_name not in self.models:
@@ -357,6 +392,7 @@ class AsyncLocalProvider(AsyncEmbeddingProvider):
             async with lock:
                 if model_name in self.models:
                     return
+                await self._evict_if_needed(keep=model_name)
                 # Run model loading in thread pool to avoid blocking
                 loop = asyncio.get_running_loop()
 
@@ -368,7 +404,7 @@ class AsyncLocalProvider(AsyncEmbeddingProvider):
                     self.executor,
                     load
                 )
-
+                await self._touch_model(model_name)
                 logger.info(f"Loaded local model: {model_name}")
 
     async def create_embedding(
@@ -384,10 +420,16 @@ class AsyncLocalProvider(AsyncEmbeddingProvider):
 
         # Run encoding in thread pool
         loop = asyncio.get_running_loop()
-        embedding = await loop.run_in_executor(
-            self.executor,
-            lambda: self.models[model].encode(text, convert_to_tensor=False)
-        )
+        await self._mark_in_use(model)
+        try:
+            await self._touch_model(model)
+            model_instance = self.models[model]
+            embedding = await loop.run_in_executor(
+                self.executor,
+                lambda: model_instance.encode(text, convert_to_tensor=False)
+            )
+        finally:
+            await self._release_in_use(model)
 
         return embedding.tolist()
 
@@ -422,13 +464,16 @@ class AsyncEmbeddingService:
             if not provider_config.enabled:
                 continue
 
+            pool_key = provider_config.name
             if provider_config.name == "openai":
                 self.providers["openai"] = AsyncOpenAIProvider(
-                    api_key=provider_config.api_key
+                    api_key=provider_config.api_key,
+                    base_url=provider_config.api_url,
                 )
             elif provider_config.name == "huggingface":
                 self.providers["huggingface"] = AsyncHuggingFaceProvider(
-                    api_key=provider_config.api_key
+                    api_key=provider_config.api_key,
+                    base_url=provider_config.api_url,
                 )
             elif provider_config.name == "local":
                 if provider_config.api_url:
@@ -436,14 +481,28 @@ class AsyncEmbeddingService:
                         api_url=provider_config.api_url,
                         api_key=provider_config.api_key,
                     )
+                    pool_key = "local_api"
                 else:
-                    self.providers["local"] = AsyncLocalProvider()
+                    self.providers["local"] = AsyncLocalProvider(
+                        max_models_in_memory=self.config.resources.max_models_in_memory,
+                        model_ttl_seconds=self.config.resources.model_ttl_seconds,
+                    )
             elif provider_config.name == "local_api":
                 if provider_config.api_url:
                     self.providers["local_api"] = AsyncLocalAPIProvider(
                         api_url=provider_config.api_url,
                         api_key=provider_config.api_key,
                     )
+                    pool_key = "local_api"
+
+            try:
+                self.pool_manager.get_pool(
+                    pool_key,
+                    max_connections=provider_config.max_connections,
+                    timeout_seconds=provider_config.timeout_seconds,
+                )
+            except Exception as exc:
+                logger.warning(f"Failed to initialize connection pool for provider '{pool_key}': {exc}")
 
             logger.info(f"Initialized provider: {provider_config.name}")
 
@@ -471,13 +530,26 @@ class AsyncEmbeddingService:
             Embedding vector
         """
         # Use defaults if not specified
+        explicit_provider = provider is not None
         provider = provider or self.config.default_provider
         model = model or self.config.default_model
         provider = self._resolve_provider_alias(provider)
+        actual_provider = provider
+        actual_model = model
+        provider_config = self.config.get_provider(provider)
+        base_url_override: Optional[str] = None
+        if provider_config and provider in {"openai", "huggingface"}:
+            if provider_config.api_url:
+                base_url_override = provider_config.api_url
+                # Ensure explicit provider overrides reach the async providers directly.
+                if explicit_provider:
+                    use_batching = False
 
         # Create deterministic cache key across processes
         text_hash = hashlib.sha256(text.encode("utf-8")).hexdigest()
         cache_key = f"{provider}:{model}:{text_hash}"
+        if base_url_override:
+            cache_key = f"{cache_key}:{base_url_override}"
 
         # Check cache
         if use_cache:
@@ -502,19 +574,25 @@ class AsyncEmbeddingService:
             provider_instance = self.providers[provider]
 
             try:
-                embedding = await provider_instance.create_embedding(
-                    text=text,
-                    model=model,
-                    user_id=user_id
-                )
+                call_kwargs = {"text": text, "model": model, "user_id": user_id}
+                if base_url_override and provider in {"openai", "huggingface"}:
+                    call_kwargs["base_url_override"] = base_url_override
+                embedding = await provider_instance.create_embedding(**call_kwargs)
             except Exception as e:
                 # Try fallback provider
-                embedding = await self._try_fallback_providers(
+                embedding, actual_provider, actual_model = await self._try_fallback_providers(
                     text, model, provider, user_id, e
                 )
 
         # Cache the result
         if use_cache:
+            cache_key = f"{actual_provider}:{actual_model}:{text_hash}"
+            actual_provider_config = self.config.get_provider(actual_provider)
+            actual_base_url = None
+            if actual_provider_config and actual_provider in {"openai", "huggingface"}:
+                actual_base_url = actual_provider_config.api_url
+            if actual_base_url:
+                cache_key = f"{cache_key}:{actual_base_url}"
             await self.cache.set_async(cache_key, embedding)
 
         return embedding
@@ -574,7 +652,7 @@ class AsyncEmbeddingService:
         failed_provider: str,
         user_id: Optional[str],
         original_error: Exception
-    ) -> List[float]:
+    ) -> Tuple[List[float], str, str]:
         """Try fallback providers when primary fails"""
 
         # Get provider config
@@ -592,12 +670,10 @@ class AsyncEmbeddingService:
                     provider_instance = self.providers[fallback]
                     fallback_model = model
                     fallback_config = self.config.get_provider(fallback)
-                    if fallback_config is None:
-                        fallback_model = None
-                    elif fallback_config.fallback_model:
+                    if fallback_config and fallback_config.fallback_model:
                         fallback_model = fallback_config.fallback_model
                     else:
-                        available_models = fallback_config.models or []
+                        available_models = (fallback_config.models or []) if fallback_config else []
                         if available_models and model not in available_models:
                             fallback_model = available_models[0]
                             logger.debug(
@@ -608,9 +684,17 @@ class AsyncEmbeddingService:
                                 model=model,
                             )
                     call_kwargs = {"text": text, "user_id": user_id}
-                    if fallback_model:
+                    if fallback_model is not None:
                         call_kwargs["model"] = fallback_model
-                    return await provider_instance.create_embedding(**call_kwargs)
+                    if (
+                        fallback_config
+                        and fallback in {"openai", "huggingface"}
+                        and fallback_config.api_url
+                    ):
+                        call_kwargs["base_url_override"] = fallback_config.api_url
+                    embedding = await provider_instance.create_embedding(**call_kwargs)
+                    used_model = fallback_model or model
+                    return embedding, fallback, used_model
                 except Exception as e:
                     logger.error(f"Fallback provider {fallback} also failed: {e}")
 
@@ -689,59 +773,87 @@ class AsyncEmbeddingService:
         logger.info("Async embedding service shutdown complete")
 
 
-# Global async service instance
-_async_service: Optional[AsyncEmbeddingService] = None
+# Global async service instances scoped by event loop
+_async_services: "weakref.WeakKeyDictionary[asyncio.AbstractEventLoop, AsyncEmbeddingService]" = (
+    weakref.WeakKeyDictionary()
+)
+_async_service_fallback: Optional[AsyncEmbeddingService] = None
+_health_check_tasks: "weakref.WeakKeyDictionary[asyncio.AbstractEventLoop, asyncio.Task]" = (
+    weakref.WeakKeyDictionary()
+)
 _shutdown_registered = False
-_health_check_task: Optional[asyncio.Task] = None
+_service_lock = threading.Lock()
 
 
-async def _cancel_health_check_task():
-    """Cancel and await the periodic health task if it exists."""
-    global _health_check_task
-    task = _health_check_task
-    if task is None:
-        return
-    try:
-        task_loop = task.get_loop()
+async def _cancel_health_check_task(loop: Optional[asyncio.AbstractEventLoop] = None):
+    """Cancel and await the periodic health task(s) if they exist."""
+    tasks: list[tuple[asyncio.AbstractEventLoop, asyncio.Task]] = []
+    if loop is not None:
+        task = _health_check_tasks.get(loop)
+        if task is not None:
+            tasks.append((loop, task))
+    else:
+        tasks = list(_health_check_tasks.items())
+
+    for task_loop, task in tasks:
         try:
-            current_loop = asyncio.get_running_loop()
-        except RuntimeError:
-            current_loop = None
+            try:
+                current_loop = asyncio.get_running_loop()
+            except RuntimeError:
+                current_loop = None
 
-        if current_loop and task_loop is current_loop:
-            task.cancel()
-            try:
-                await task
-            except asyncio.CancelledError:
-                pass
-        else:
-            # Different loop or no running loop; request cancellation and return
-            try:
-                if task_loop.is_running():
-                    task_loop.call_soon_threadsafe(task.cancel)
-                else:
-                    # Loop already stopped; best-effort cancel
-                    task.cancel()
-            except Exception:
+            if current_loop and task_loop is current_loop:
+                task.cancel()
                 try:
-                    task.cancel()
-                except Exception:
+                    await task
+                except asyncio.CancelledError:
                     pass
-    finally:
-        _health_check_task = None
+            else:
+                # Different loop or no running loop; request cancellation and return
+                try:
+                    if task_loop.is_running():
+                        task_loop.call_soon_threadsafe(task.cancel)
+                    else:
+                        task.cancel()
+                except Exception:
+                    try:
+                        task.cancel()
+                    except Exception:
+                        pass
+        finally:
+            try:
+                _health_check_tasks.pop(task_loop, None)
+            except Exception:
+                pass
 
 
 async def _shutdown_service(service: AsyncEmbeddingService):
     """Shutdown helper that cancels background tasks then stops the service."""
-    await _cancel_health_check_task()
+    loop = getattr(service, "_loop", None)
+    await _cancel_health_check_task(loop=loop)
     await service.shutdown()
 
 
 def get_async_embedding_service() -> AsyncEmbeddingService:
     """Get or create the global async embedding service."""
-    global _async_service, _shutdown_registered
-    if _async_service is None:
-        _async_service = AsyncEmbeddingService()
+    global _async_service_fallback, _shutdown_registered
+    try:
+        loop = asyncio.get_running_loop()
+    except RuntimeError:
+        loop = None
+
+    with _service_lock:
+        if loop is not None:
+            service = _async_services.get(loop)
+            if service is None:
+                service = AsyncEmbeddingService()
+                service._loop = loop
+                _async_services[loop] = service
+        else:
+            if _async_service_fallback is None:
+                _async_service_fallback = AsyncEmbeddingService()
+            service = _async_service_fallback
+
         if not _shutdown_registered:
             try:
                 atexit.register(_shutdown_async_embedding_service_sync)
@@ -749,39 +861,47 @@ def get_async_embedding_service() -> AsyncEmbeddingService:
                 logger.warning(f"Failed to register async embedding service shutdown hook: {exc}")
             else:
                 _shutdown_registered = True
-    return _async_service
+
+    return service
 
 
 def _shutdown_async_embedding_service_sync():
-    """Best-effort shutdown for the global async service at interpreter exit."""
-    global _async_service
-    service = _async_service
-    if service is None:
-        return
+    """Best-effort shutdown for all async embedding services at interpreter exit."""
+    global _async_service_fallback
 
-    try:
-        loop = getattr(service, "_loop", None)
-        if loop and not loop.is_closed():
-            if loop.is_running():
-                fut = asyncio.run_coroutine_threadsafe(_shutdown_service(service), loop)
-                try:
-                    fut.result(timeout=15)
-                except Exception as exc:
-                    try:
-                        logger.warning(f"Async embedding service shutdown timed out: {exc}")
-                    except Exception:
-                        pass
-            else:
-                loop.run_until_complete(_shutdown_service(service))
-        else:
-            asyncio.run(_shutdown_service(service))
-    except Exception as exc:
+    with _service_lock:
+        services = list(_async_services.items())
+        fallback = _async_service_fallback
+        _async_services.clear()
+        _async_service_fallback = None
+
+    def _shutdown_with_loop(service: AsyncEmbeddingService, loop: Optional[asyncio.AbstractEventLoop]) -> None:
         try:
-            logger.warning(f"Failed during async embedding service shutdown: {exc}")
-        except Exception:
-            pass
-    finally:
-        _async_service = None
+            if loop and not loop.is_closed():
+                if loop.is_running():
+                    fut = asyncio.run_coroutine_threadsafe(_shutdown_service(service), loop)
+                    try:
+                        fut.result(timeout=15)
+                    except Exception as exc:
+                        try:
+                            logger.warning(f"Async embedding service shutdown timed out: {exc}")
+                        except Exception:
+                            pass
+                else:
+                    loop.run_until_complete(_shutdown_service(service))
+            else:
+                asyncio.run(_shutdown_service(service))
+        except Exception as exc:
+            try:
+                logger.warning(f"Failed during async embedding service shutdown: {exc}")
+            except Exception:
+                pass
+
+    for loop, service in services:
+        _shutdown_with_loop(service, loop)
+
+    if fallback is not None:
+        _shutdown_with_loop(fallback, getattr(fallback, "_loop", None))
 
 
 # Convenience functions
@@ -838,15 +958,8 @@ async def startup_event():
     await service.warmup_providers()
 
     # Start periodic tasks
-    global _health_check_task
-    try:
-        loop = asyncio.get_running_loop()
-    except RuntimeError:
-        loop = None
-    if loop:
-        _health_check_task = loop.create_task(periodic_health_check())
-    else:
-        _health_check_task = asyncio.create_task(periodic_health_check())
+    loop = asyncio.get_running_loop()
+    _health_check_tasks[loop] = loop.create_task(periodic_health_check())
 
 
 async def shutdown_event():

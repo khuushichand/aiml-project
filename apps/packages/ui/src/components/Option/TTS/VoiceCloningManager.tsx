@@ -1,0 +1,469 @@
+import React from "react"
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
+import {
+  Alert,
+  Button,
+  Input,
+  List,
+  Popconfirm,
+  Select,
+  Space,
+  Tag,
+  Typography,
+  notification
+} from "antd"
+import { Trash2, Play, UploadCloud, Wand2 } from "lucide-react"
+import type { TldwTtsProvidersInfo } from "@/services/tldw/audio-providers"
+import { getProviderLabel } from "@/utils/provider-registry"
+import {
+  deleteCustomVoice,
+  encodeCustomVoice,
+  listCustomVoices,
+  uploadCustomVoice,
+  VOICE_PROVIDER_REQUIREMENTS,
+  type TldwCustomVoice
+} from "@/services/tldw/voice-cloning"
+import { normalizeTtsProviderKey, toServerTtsProviderKey } from "@/services/tldw/tts-provider-keys"
+import { tldwClient } from "@/services/tldw/TldwApiClient"
+
+const { Text, Paragraph } = Typography
+
+type ProviderOption = {
+  value: string
+  label: string
+  available: boolean
+  supportsCloning: boolean
+}
+
+type VoiceCloningManagerProps = {
+  providersInfo?: TldwTtsProvidersInfo | null
+  onSelectVoice?: (value: string, provider?: string) => void
+}
+
+const formatSeconds = (value?: number | null) => {
+  if (value == null || Number.isNaN(value)) return "n/a"
+  if (value < 1) return `${Math.round(value * 1000)} ms`
+  return `${value.toFixed(value < 10 ? 1 : 0)} s`
+}
+
+const formatBytes = (value?: number | null) => {
+  if (!value || value <= 0) return "n/a"
+  if (value < 1024) return `${value} B`
+  if (value < 1024 * 1024) return `${(value / 1024).toFixed(1)} KB`
+  return `${(value / (1024 * 1024)).toFixed(1)} MB`
+}
+
+const resolveCaps = (providersInfo: TldwTtsProvidersInfo | null | undefined, key: string) => {
+  if (!providersInfo?.providers) return null
+  const target = normalizeTtsProviderKey(key)
+  const matchKey = Object.keys(providersInfo.providers).find(
+    (candidate) => normalizeTtsProviderKey(candidate) === target
+  )
+  return matchKey ? providersInfo.providers[matchKey] : null
+}
+
+const getVoiceProviderRequirement = (key: string) => {
+  const direct = VOICE_PROVIDER_REQUIREMENTS[key]
+  if (direct) return direct
+  const serverKey = toServerTtsProviderKey(key)
+  return VOICE_PROVIDER_REQUIREMENTS[serverKey]
+}
+
+export const VoiceCloningManager: React.FC<VoiceCloningManagerProps> = ({
+  providersInfo,
+  onSelectVoice
+}) => {
+  const queryClient = useQueryClient()
+  const { data: customVoices = [], isLoading: voicesLoading } = useQuery<TldwCustomVoice[]>(
+    {
+      queryKey: ["tts-custom-voices"],
+      queryFn: listCustomVoices
+    }
+  )
+
+  const providerOptions = React.useMemo<ProviderOption[]>(() => {
+    const candidates = new Set<string>(Object.keys(VOICE_PROVIDER_REQUIREMENTS))
+    if (providersInfo?.providers) {
+      Object.keys(providersInfo.providers).forEach((key) => candidates.add(key))
+    }
+    const entries: ProviderOption[] = []
+    for (const key of Array.from(candidates)) {
+      const caps = resolveCaps(providersInfo, key)
+      const supportsCloning =
+        caps?.supports_voice_cloning ?? Boolean(getVoiceProviderRequirement(key))
+      if (!supportsCloning) continue
+      entries.push({
+        value: key,
+        label: getProviderLabel(key, "tts-engine") || key,
+        available: Boolean(caps),
+        supportsCloning
+      })
+    }
+    return entries.sort((a, b) => a.label.localeCompare(b.label))
+  }, [providersInfo])
+
+  const [uploadProvider, setUploadProvider] = React.useState<string>(
+    providerOptions.find((opt) => opt.available)?.value || providerOptions[0]?.value || ""
+  )
+  const [uploadName, setUploadName] = React.useState("")
+  const [uploadDescription, setUploadDescription] = React.useState("")
+  const [referenceText, setReferenceText] = React.useState("")
+  const [uploadFile, setUploadFile] = React.useState<File | null>(null)
+  const [previewText, setPreviewText] = React.useState(
+    "Hello, this is a preview of your custom voice."
+  )
+  const [previewUrl, setPreviewUrl] = React.useState<string | null>(null)
+  const [previewingId, setPreviewingId] = React.useState<string | null>(null)
+
+  React.useEffect(() => {
+    if (!uploadProvider && providerOptions.length > 0) {
+      const next = providerOptions.find((opt) => opt.available) || providerOptions[0]
+      setUploadProvider(next?.value || "")
+    }
+  }, [providerOptions, uploadProvider])
+
+  React.useEffect(() => {
+    return () => {
+      if (previewUrl) {
+        try {
+          URL.revokeObjectURL(previewUrl)
+        } catch {}
+      }
+    }
+  }, [previewUrl])
+
+  const uploadMutation = useMutation({
+    mutationFn: async () => {
+      if (!uploadFile) throw new Error("Please select a voice sample file.")
+      if (!uploadProvider) throw new Error("Please select a target provider.")
+      if (!uploadName.trim()) throw new Error("Please enter a name for the voice.")
+      return uploadCustomVoice({
+        file: uploadFile,
+        name: uploadName.trim(),
+        description: uploadDescription.trim() || undefined,
+        provider: toServerTtsProviderKey(uploadProvider),
+        referenceText: referenceText.trim() || undefined
+      })
+    },
+    onSuccess: (data) => {
+      notification.success({
+        message: "Voice uploaded",
+        description: data?.info || "Your custom voice is ready to use."
+      })
+      setUploadFile(null)
+      setUploadName("")
+      setUploadDescription("")
+      setReferenceText("")
+      queryClient.invalidateQueries({ queryKey: ["tts-custom-voices"] })
+    },
+    onError: (error: unknown) => {
+      notification.error({
+        message: "Voice upload failed",
+        description: error instanceof Error ? error.message : "Unable to upload voice sample."
+      })
+    }
+  })
+
+  const encodeMutation = useMutation({
+    mutationFn: async ({ voiceId, provider }: { voiceId: string; provider: string }) => {
+      return encodeCustomVoice({
+        voice_id: voiceId,
+        provider: toServerTtsProviderKey(provider)
+      })
+    },
+    onSuccess: () => {
+      notification.success({
+        message: "Voice prepared",
+        description: "Provider-specific artifacts were generated."
+      })
+      queryClient.invalidateQueries({ queryKey: ["tts-custom-voices"] })
+    },
+    onError: (error: unknown) => {
+      notification.error({
+        message: "Voice encoding failed",
+        description: error instanceof Error ? error.message : "Unable to encode voice."
+      })
+    }
+  })
+
+  const deleteMutation = useMutation({
+    mutationFn: async (voiceId: string) => {
+      await deleteCustomVoice(voiceId)
+    },
+    onSuccess: () => {
+      notification.success({
+        message: "Voice deleted"
+      })
+      queryClient.invalidateQueries({ queryKey: ["tts-custom-voices"] })
+    },
+    onError: (error: unknown) => {
+      notification.error({
+        message: "Delete failed",
+        description: error instanceof Error ? error.message : "Unable to delete voice."
+      })
+    }
+  })
+
+  const handlePreview = async (voice: TldwCustomVoice) => {
+    const voiceId = voice.voice_id
+    if (!voiceId) return
+    if (!voice.provider) {
+      notification.error({
+        message: "Missing provider",
+        description: "This voice is missing a provider identifier."
+      })
+      return
+    }
+    setPreviewingId(voiceId)
+    try {
+      const text = previewText.trim() || "Hello, this is a preview of your custom voice."
+      const buffer = await tldwClient.synthesizeSpeech(text, {
+        model: voice.provider,
+        voice: `custom:${voiceId}`,
+        responseFormat: "mp3"
+      })
+      const blob = new Blob([buffer], { type: "audio/mpeg" })
+      const url = URL.createObjectURL(blob)
+      if (previewUrl) {
+        try {
+          URL.revokeObjectURL(previewUrl)
+        } catch {}
+      }
+      setPreviewUrl(url)
+    } catch (error: unknown) {
+      notification.error({
+        message: "Preview failed",
+        description: error instanceof Error ? error.message : "Unable to generate preview."
+      })
+    } finally {
+      setPreviewingId(null)
+    }
+  }
+
+  const activeProvider = providerOptions.find((opt) => opt.value === uploadProvider)
+  const requirement = uploadProvider ? getVoiceProviderRequirement(uploadProvider) : null
+  const providerUnavailable = activeProvider ? !activeProvider.available : false
+
+  return (
+    <div className="space-y-4">
+      <div>
+        <Text strong>Upload a custom voice</Text>
+        <Paragraph className="!mb-1 text-xs text-text-subtle">
+          Upload a short voice sample to enable cloning on supported providers. Use the
+          generated voice in TTS requests as <Text code>custom:&lt;voice_id&gt;</Text>.
+        </Paragraph>
+      </div>
+
+      <div className="grid gap-3 sm:grid-cols-2">
+        <div>
+          <label className="block text-xs mb-1 text-text">Provider</label>
+          <Select
+            className="w-full focus-ring"
+            placeholder="Select provider"
+            value={uploadProvider || undefined}
+            onChange={(value) => setUploadProvider(value)}
+            options={providerOptions.map((opt) => ({
+              value: opt.value,
+              label: (
+                <Space size="small">
+                  <span>{opt.label}</span>
+                  <Tag color={opt.available ? "green" : "default"} bordered>
+                    {opt.available ? "Enabled" : "Disabled"}
+                  </Tag>
+                </Space>
+              )
+            }))}
+          />
+        </div>
+        <div>
+          <label className="block text-xs mb-1 text-text">Voice name</label>
+          <Input
+            placeholder="Researcher voice"
+            value={uploadName}
+            onChange={(e) => setUploadName(e.target.value)}
+          />
+        </div>
+        <div>
+          <label className="block text-xs mb-1 text-text">Description (optional)</label>
+          <Input
+            placeholder="Short note about this voice"
+            value={uploadDescription}
+            onChange={(e) => setUploadDescription(e.target.value)}
+          />
+        </div>
+        <div>
+          <label className="block text-xs mb-1 text-text">Reference transcript (optional)</label>
+          <Input
+            placeholder="Transcript of the sample audio"
+            value={referenceText}
+            onChange={(e) => setReferenceText(e.target.value)}
+          />
+        </div>
+        <div className="sm:col-span-2">
+          <label className="block text-xs mb-1 text-text">Voice sample file</label>
+          <Input
+            type="file"
+            accept="audio/*"
+            onChange={(e) => {
+              const file = e.target.files?.[0] || null
+              setUploadFile(file)
+            }}
+          />
+        </div>
+      </div>
+
+      {requirement && (
+        <div className="text-xs text-text-subtle">
+          <Space size="small" wrap>
+            <span>Formats: {requirement.formats.join(" ")}</span>
+            {requirement.duration && (
+              <span>
+                Duration: {requirement.duration.min}-{requirement.duration.max}s
+              </span>
+            )}
+            {requirement.sample_rate && (
+              <span>Sample rate: {requirement.sample_rate} Hz</span>
+            )}
+          </Space>
+        </div>
+      )}
+
+      {providerUnavailable && (
+        <Alert
+          type="warning"
+          showIcon
+          message="Provider disabled on server"
+          description="Enable this provider in Config_Files/tts_providers_config.yaml to upload voices."
+        />
+      )}
+
+      <div className="flex flex-wrap items-center gap-2">
+        <Button
+          type="primary"
+          icon={<UploadCloud className="h-4 w-4" />}
+          loading={uploadMutation.isPending}
+          disabled={providerUnavailable || !uploadProvider || !uploadFile || !uploadName.trim()}
+          onClick={() => uploadMutation.mutate()}
+        >
+          Upload voice
+        </Button>
+        <Text type="secondary" className="text-xs">
+          Uploaded voices appear below. Use them with the TTS provider that supports cloning.
+        </Text>
+      </div>
+
+      <div className="border-t border-border pt-3">
+        <div className="flex flex-wrap items-center justify-between gap-2">
+          <Text strong>Custom voices</Text>
+          <Button
+            size="small"
+            onClick={() => queryClient.invalidateQueries({ queryKey: ["tts-custom-voices"] })}
+          >
+            Refresh
+          </Button>
+        </div>
+        <div className="mt-2 space-y-2">
+          <label className="block text-xs text-text">Preview text</label>
+          <Input
+            value={previewText}
+            onChange={(e) => setPreviewText(e.target.value)}
+            placeholder="Preview text"
+          />
+          {previewUrl && (
+            <audio className="w-full" controls src={previewUrl} />
+          )}
+        </div>
+
+        <List
+          className="mt-3"
+          loading={voicesLoading}
+          dataSource={customVoices}
+          locale={{ emptyText: "No custom voices yet" }}
+          renderItem={(voice) => (
+            <List.Item
+              key={voice.voice_id}
+              actions={[
+                <Button
+                  key="use"
+                  size="small"
+                  onClick={() =>
+                    onSelectVoice?.(`custom:${voice.voice_id}`, voice.provider)
+                  }
+                >
+                  Use
+                </Button>,
+                <Button
+                  key="preview"
+                  size="small"
+                  icon={<Play className="h-3 w-3" />}
+                  loading={previewingId === voice.voice_id}
+                  onClick={() => handlePreview(voice)}
+                >
+                  Preview
+                </Button>,
+                <Button
+                  key="encode"
+                  size="small"
+                  icon={<Wand2 className="h-3 w-3" />}
+                  loading={
+                    encodeMutation.isPending &&
+                    encodeMutation.variables?.voiceId === voice.voice_id
+                  }
+                  onClick={() => {
+                    if (!voice.provider) {
+                      notification.error({
+                        message: "Missing provider",
+                        description: "This voice is missing a provider identifier."
+                      })
+                      return
+                    }
+                    encodeMutation.mutate({
+                      voiceId: voice.voice_id,
+                      provider: voice.provider
+                    })
+                  }}
+                >
+                  Encode
+                </Button>,
+                <Popconfirm
+                  key="delete"
+                  title="Delete this voice?"
+                  onConfirm={() => deleteMutation.mutate(voice.voice_id)}
+                >
+                  <Button
+                    size="small"
+                    type="text"
+                    danger
+                    icon={<Trash2 className="h-3 w-3" />}
+                  />
+                </Popconfirm>
+              ]}
+            >
+              <List.Item.Meta
+                title={
+                  <div className="flex flex-wrap items-center gap-2">
+                    <Text strong>{voice.name || voice.voice_id}</Text>
+                    {voice.provider && (
+                      <Tag bordered>{getProviderLabel(voice.provider, "tts-engine")}</Tag>
+                    )}
+                  </div>
+                }
+                description={
+                  <div className="text-xs text-text-subtle space-y-1">
+                    <div className="flex flex-wrap gap-3">
+                      <span>Duration: {formatSeconds(voice.duration)}</span>
+                      <span>Format: {voice.format || "n/a"}</span>
+                      <span>Size: {formatBytes(voice.size_bytes)}</span>
+                      {voice.sample_rate && <span>Sample rate: {voice.sample_rate} Hz</span>}
+                    </div>
+                    {voice.description && <div>{voice.description}</div>}
+                  </div>
+                }
+              />
+            </List.Item>
+          )}
+        />
+      </div>
+    </div>
+  )
+}

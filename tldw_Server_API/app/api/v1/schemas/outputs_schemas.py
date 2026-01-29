@@ -12,6 +12,10 @@ class OutputCreateRequest(BaseModel):
     run_id: Optional[int] = Field(default=None, description="Run to select items from (future)")
     title: Optional[str] = None
     data: Optional[Dict[str, object]] = Field(default=None, description="Inline context override (advanced)")
+    workspace_tag: Optional[str] = Field(
+        default=None,
+        description="Optional workspace tag (e.g., 'workspace:<slug-or-id>') to associate this output.",
+    )
     generate_mece: bool = Field(default=False, description="Generate a MECE variant output")
     mece_template_id: Optional[int] = Field(default=None, description="Override template id for MECE output")
     generate_tts: bool = Field(default=False, description="Generate a TTS audio variant output")
@@ -30,6 +34,7 @@ class OutputArtifact(BaseModel):
     storage_path: str
     media_item_id: Optional[int] = None
     created_at: datetime
+    workspace_tag: Optional[str] = None
 
 
 class OutputListResponse(BaseModel):

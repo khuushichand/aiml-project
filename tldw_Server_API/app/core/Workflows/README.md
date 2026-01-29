@@ -10,7 +10,8 @@ Define, run, and monitor multi‑step workflows. Includes definition/versioning,
   - Start runs from a saved definition (`run_mode` async/sync) or ad‑hoc payload; inject per‑run secrets (never persisted) and idempotency keys.
   - Events and artifacts persisted; step run entries tracked with timestamps and status.
 - Step types (initial set)
-  - `prompt`, `rag_search`, `process_media`, `webhook`, `tts`, `delay`, `log`, `translate`, `stt_transcribe`, `notify`, `diff_change_detector`, `policy_check`, `wait_for_human`, `wait_for_approval`, `map`, `branch`.
+  - `media_ingest`, `prompt` (templating), `llm`, `rag_search`, `kanban`, `mcp_tool`, `tts`, `webhook`, `delay`, `log`, `wait_for_human`, `wait_for_approval`, `branch`, `map`, `process_media`, `policy_check`, `rss_fetch`, `atom_fetch`, `embed`, `translate`, `stt_transcribe`, `notify`, `diff_change_detector`.
+  - Map sub-steps: `map` supports nested types `prompt`, `log`, `delay`, `rag_search`, `media_ingest`, `mcp_tool`, `webhook`, `kanban` only (others are rejected).
 - Scheduling
   - Recurring schedules via Workflows Scheduler (cron/APS); presence gating, concurrency mode (skip/queue), coalesce/misfire behavior, jitter.
 - Governance
@@ -59,7 +60,7 @@ Related Schemas
 
 - Folder structure
   - `core/Workflows/engine.py` — run lifecycle and execution primitives.
-  - `core/Workflows/adapters.py` — integrations for step types (prompt, RAG, media, webhook, MCP tools).
+  - `core/Workflows/adapters.py` — integrations for step types (prompt/llm, RAG, media, webhook, MCP tools).
   - `core/Workflows/metrics.py`, `core/Workflows/registry.py` — metrics wiring and step registry.
   - `api/v1/endpoints/workflows.py` — REST endpoints for definitions/runs/events.
   - `api/v1/endpoints/scheduler_workflows.py` — recurring schedules API.

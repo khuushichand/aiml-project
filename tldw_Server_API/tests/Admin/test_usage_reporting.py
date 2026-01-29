@@ -141,8 +141,3 @@ async def test_admin_usage_endpoints_sqlite_smoke(monkeypatch):
         top = r_top.json()
         assert "items" in top and isinstance(top["items"], list)
         assert len(top["items"]) >= 1
-
-        # WebUI smoke: admin content contains the Usage section
-        r_ui = client.get("/webui/tabs/admin_content.html")
-        assert r_ui.status_code == 200
-        assert "/api/v1/admin/usage/daily" in r_ui.text or "Usage Reports" in r_ui.text

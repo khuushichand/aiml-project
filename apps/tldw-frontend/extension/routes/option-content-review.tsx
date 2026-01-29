@@ -1,0 +1,12 @@
+import OptionLayout from "@web/components/layout/WebLayout"
+import ContentReviewPage from "@/components/ContentReview/ContentReviewPage"
+
+const OptionContentReview = () => {
+  return (
+    <OptionLayout>
+      <ContentReviewPage />
+    </OptionLayout>
+  )
+}
+
+export default OptionContentReview

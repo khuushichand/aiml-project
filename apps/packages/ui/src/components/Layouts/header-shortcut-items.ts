@@ -1,0 +1,311 @@
+import type { LucideIcon } from "lucide-react"
+import {
+  BookMarked,
+  BookOpen,
+  BookText,
+  ClipboardList,
+  CogIcon,
+  CombineIcon,
+  FileText,
+  FlaskConical,
+  Gauge,
+  GitCompare,
+  Headphones,
+  Kanban,
+  Layers,
+  LayoutGrid,
+  Library,
+  MessageSquare,
+  Mic,
+  Microscope,
+  NotebookPen,
+  Rss,
+  Scissors,
+  ShieldCheck,
+  SquarePen,
+  StickyNote,
+  UserCircle2,
+  Volume2,
+  Table2
+} from "lucide-react"
+import type { HeaderShortcutId } from "@/services/settings/ui-settings"
+
+export type HeaderShortcutItem = {
+  id: HeaderShortcutId
+  to: string
+  icon: LucideIcon
+  labelKey: string
+  labelDefault: string
+}
+
+export type HeaderShortcutGroup = {
+  id: string
+  titleKey: string
+  titleDefault: string
+  items: HeaderShortcutItem[]
+}
+
+export const HEADER_SHORTCUT_GROUPS: HeaderShortcutGroup[] = [
+  {
+    id: "chatting",
+    titleKey: "option:header.groupChatting",
+    titleDefault: "Chatting",
+    items: [
+      {
+        id: "chat",
+        to: "/",
+        icon: MessageSquare,
+        labelKey: "option:header.modePlayground",
+        labelDefault: "Chat"
+      },
+      {
+        id: "prompts",
+        to: "/prompts",
+        icon: NotebookPen,
+        labelKey: "option:header.modePromptsPlayground",
+        labelDefault: "Prompts"
+      },
+      {
+        id: "characters",
+        to: "/characters",
+        icon: UserCircle2,
+        labelKey: "option:header.modeCharacters",
+        labelDefault: "Characters"
+      },
+      {
+        id: "chat-dictionaries",
+        to: "/dictionaries",
+        icon: BookMarked,
+        labelKey: "option:header.modeDictionaries",
+        labelDefault: "Chat dictionaries"
+      },
+      {
+        id: "world-books",
+        to: "/world-books",
+        icon: BookOpen,
+        labelKey: "option:header.modeWorldBooks",
+        labelDefault: "World Books"
+      }
+    ]
+  },
+  {
+    id: "knowledge",
+    titleKey: "option:header.groupKnowledge",
+    titleDefault: "Knowledge",
+    items: [
+      {
+        id: "knowledge-qa",
+        to: "/knowledge",
+        icon: CombineIcon,
+        labelKey: "option:header.modeKnowledge",
+        labelDefault: "Knowledge QA"
+      },
+      {
+        id: "media",
+        to: "/media",
+        icon: BookText,
+        labelKey: "option:header.media",
+        labelDefault: "Media"
+      },
+      {
+        id: "multi-item-review",
+        to: "/media-multi",
+        icon: LayoutGrid,
+        labelKey: "option:header.libraryView",
+        labelDefault: "Multi-Item Review"
+      },
+      {
+        id: "flashcards",
+        to: "/flashcards",
+        icon: Layers,
+        labelKey: "option:header.flashcards",
+        labelDefault: "Flashcards"
+      },
+      {
+        id: "notes",
+        to: "/notes",
+        icon: StickyNote,
+        labelKey: "option:header.notes",
+        labelDefault: "Notes"
+      },
+      {
+        id: "watchlists",
+        to: "/watchlists",
+        icon: Rss,
+        labelKey: "option:header.modeWatchlists",
+        labelDefault: "Watchlists"
+      },
+      {
+        id: "collections",
+        to: "/collections",
+        icon: Library,
+        labelKey: "option:header.modeCollections",
+        labelDefault: "Collections"
+      }
+    ]
+  },
+  {
+    id: "workspace",
+    titleKey: "option:header.groupWorkspace",
+    titleDefault: "Workspace",
+    items: [
+      {
+        id: "model-playground",
+        to: "/model-playground",
+        icon: FlaskConical,
+        labelKey: "option:header.workspacePlayground",
+        labelDefault: "Model Playground"
+      },
+      {
+        id: "workspace-playground",
+        to: "/workspace-playground",
+        icon: GitCompare,
+        labelKey: "option:header.modelPlayground",
+        labelDefault: "Workspace Playground"
+      },
+      {
+        id: "writing-playground",
+        to: "/writing-playground",
+        icon: SquarePen,
+        labelKey: "option:header.writingPlayground",
+        labelDefault: "Writing Playground"
+      },
+      {
+        id: "quizzes",
+        to: "/quiz",
+        icon: ClipboardList,
+        labelKey: "option:header.quiz",
+        labelDefault: "Quizzes"
+      },
+      {
+        id: "evaluations",
+        to: "/evaluations",
+        icon: Microscope,
+        labelKey: "option:header.evaluations",
+        labelDefault: "Evaluations"
+      },
+      {
+        id: "stt-playground",
+        to: "/stt",
+        icon: Mic,
+        labelKey: "option:header.modeStt",
+        labelDefault: "STT Playground"
+      },
+      {
+        id: "tts-playground",
+        to: "/tts",
+        icon: Volume2,
+        labelKey: "option:tts.playground",
+        labelDefault: "TTS Playground"
+      },
+      {
+        id: "chunking-playground",
+        to: "/chunking-playground",
+        icon: Scissors,
+        labelKey: "settings:chunkingPlayground.nav",
+        labelDefault: "Chunking Playground"
+      },
+      {
+        id: "kanban-playground",
+        to: "/kanban",
+        icon: Kanban,
+        labelKey: "option:header.modeKanban",
+        labelDefault: "Kanban Playground"
+      },
+      {
+        id: "data-tables",
+        to: "/data-tables",
+        icon: Table2,
+        labelKey: "option:header.dataTables",
+        labelDefault: "Data Tables"
+      },
+      {
+        id: "prompt-studio",
+        to: "/prompt-studio",
+        icon: NotebookPen,
+        labelKey: "option:header.modePromptStudio",
+        labelDefault: "Prompt Studio"
+      },
+      {
+        id: "audiobook-studio",
+        to: "/audiobook-studio",
+        icon: Headphones,
+        labelKey: "option:header.audiobookStudio",
+        labelDefault: "Audiobook Studio"
+      }
+    ]
+  },
+  {
+    id: "administration",
+    titleKey: "option:header.groupAdministration",
+    titleDefault: "Administration",
+    items: [
+      {
+        id: "admin-server",
+        to: "/admin/server",
+        icon: CogIcon,
+        labelKey: "option:header.adminServer",
+        labelDefault: "Server Admin"
+      },
+      {
+        id: "documentation",
+        to: "/documentation",
+        icon: FileText,
+        labelKey: "option:header.modeDocumentation",
+        labelDefault: "Documentation"
+      },
+      {
+        id: "chatbooks-playground",
+        to: "/chatbooks",
+        icon: BookOpen,
+        labelKey: "option:header.chatbooksPlayground",
+        labelDefault: "Chatbooks Playground"
+      },
+      {
+        id: "moderation-playground",
+        to: "/moderation-playground",
+        icon: ShieldCheck,
+        labelKey: "option:moderationPlayground.nav",
+        labelDefault: "Moderation Playground"
+      },
+      {
+        id: "admin-llamacpp",
+        to: "/admin/llamacpp",
+        icon: Microscope,
+        labelKey: "option:header.adminLlamacpp",
+        labelDefault: "Llama.cpp Admin"
+      },
+      {
+        id: "admin-mlx",
+        to: "/admin/mlx",
+        icon: Gauge,
+        labelKey: "option:header.adminMlx",
+        labelDefault: "MLX LM Admin"
+      }
+    ]
+  },
+  {
+    id: "settings",
+    titleKey: "option:header.groupSettings",
+    titleDefault: "Settings shortcuts",
+    items: [
+      {
+        id: "settings",
+        to: "/settings",
+        icon: CogIcon,
+        labelKey: "settings",
+        labelDefault: "Settings"
+      }
+    ]
+  }
+]
+
+export const HEADER_SHORTCUT_ITEMS: HeaderShortcutItem[] =
+  HEADER_SHORTCUT_GROUPS.flatMap((group) => group.items)
+
+export const normalizeHeaderShortcutSelection = (
+  selection: HeaderShortcutId[]
+): HeaderShortcutItem[] => {
+  const selected = new Set(selection)
+  return HEADER_SHORTCUT_ITEMS.filter((item) => selected.has(item.id))
+}

@@ -22,6 +22,7 @@ CREATE TABLE IF NOT EXISTS jobs (
   job_type TEXT NOT NULL,
   owner_user_id TEXT,
   project_id INTEGER,
+  batch_group TEXT,
   idempotency_key TEXT,
   payload TEXT,
   result TEXT,
@@ -66,6 +67,7 @@ CREATE INDEX IF NOT EXISTS idx_jobs_lookup ON jobs(domain, queue, status, availa
 CREATE INDEX IF NOT EXISTS idx_jobs_status ON jobs(status);
 CREATE INDEX IF NOT EXISTS idx_jobs_lease ON jobs(leased_until);
 CREATE INDEX IF NOT EXISTS idx_jobs_owner_status ON jobs(owner_user_id, status, created_at);
+CREATE INDEX IF NOT EXISTS idx_jobs_batch_group ON jobs(batch_group);
 -- Cover ready vs scheduled scans
 CREATE INDEX IF NOT EXISTS idx_jobs_status_available_at ON jobs(status, available_at);
 
@@ -91,6 +93,7 @@ CREATE TABLE IF NOT EXISTS jobs_archive (
   job_type TEXT NOT NULL,
   owner_user_id TEXT,
   project_id INTEGER,
+  batch_group TEXT,
   idempotency_key TEXT,
   payload TEXT,
   result TEXT,
@@ -240,6 +243,15 @@ def ensure_jobs_tables(db_path: Optional[Path] = None) -> Path:
             except Exception:
                 pass
             conn.executescript(JOBS_SQLITE_DDL)
+            conn.commit()
+            try:
+                conn.execute("ALTER TABLE jobs ADD COLUMN batch_group TEXT")
+            except Exception:
+                pass
+            try:
+                conn.execute("ALTER TABLE jobs_archive ADD COLUMN batch_group TEXT")
+            except Exception:
+                pass
             conn.commit()
         try:
             logger.info(f"Ensured Jobs schema at {Path(db_path).resolve()}")

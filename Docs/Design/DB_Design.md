@@ -25,7 +25,7 @@ Migrating to sqlite-vec
 
 https://github.com/erikbern/ann-benchmarks/
 https://github.com/dicroce/hnsw
-
+https://mccue.dev/pages/3-11-25-life-altering-postgresql-patterns?&aid=recFRC6CXEpEHClBV
 https://github.com/GreenmaskIO/greenmask
 https://blog.vectorchord.ai/postgresql-full-text-search-fast-when-done-right-debunking-the-slow-myth
 https://github.com/1yefuwang1/vectorlite

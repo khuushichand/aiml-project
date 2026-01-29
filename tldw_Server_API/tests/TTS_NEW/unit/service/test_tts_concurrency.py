@@ -8,6 +8,8 @@ from tldw_Server_API.app.core.TTS.adapters.base import TTSAdapter, TTSRequest, T
 
 
 class BlockingAdapter(TTSAdapter):
+    PROVIDER_KEY = "blocking"
+
     def __init__(self, state):
         super().__init__({})
         self._status = ProviderStatus.AVAILABLE
@@ -82,6 +84,39 @@ async def test_concurrency_respects_config_limit():
     assert state['max'] <= 2
 
     # Release and finish
+    state['event'].set()
+    await asyncio.gather(*tasks)
+
+
+@pytest.mark.asyncio
+async def test_provider_concurrency_respects_provider_limit():
+    state = {'current': 0, 'max': 0, 'event': asyncio.Event()}
+
+    factory = MagicMock()
+    registry = MagicMock()
+    registry.config = {
+        "performance": {"max_concurrent_generations": 5},
+        "providers": {"blocking": {"max_concurrent_generations": 1}},
+    }
+    factory.registry = registry
+    factory.get_adapter_by_model = AsyncMock(side_effect=lambda model: BlockingAdapter(state))
+
+    svc = TTSServiceV2(factory)
+
+    async def run_one():
+        req = OpenAISpeechRequest(input='Hello', model='mock', voice='v1', response_format='mp3', stream=True)
+        agen = svc.generate_speech(req)
+        try:
+            async for _ in agen:
+                break
+        except Exception:
+            pass
+
+    tasks = [asyncio.create_task(run_one()) for _ in range(3)]
+    await asyncio.sleep(0.1)
+
+    assert state['max'] <= 1
+
     state['event'].set()
     await asyncio.gather(*tasks)
 

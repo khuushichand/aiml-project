@@ -1,4 +1,4 @@
-from typing import Any, Dict
+from typing import Any, Dict, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, status, Body
 from loguru import logger
@@ -21,6 +21,34 @@ from tldw_Server_API.app.core.AuthNZ.permissions import NOTES_GRAPH_READ, NOTES_
 
 
 router = APIRouter()
+
+
+def _normalize_note_id(raw_id: Optional[str]) -> str:
+    if raw_id is None:
+        raise HTTPException(status_code=400, detail="note_id is required")
+    text = str(raw_id).strip()
+    if not text:
+        raise HTTPException(status_code=400, detail="note_id is required")
+    if ":" in text:
+        prefix, value = text.split(":", 1)
+        if prefix != "note" or not value:
+            raise HTTPException(status_code=400, detail="note_id must be a raw UUID or note:<uuid>")
+        return value
+    return text
+
+
+def _normalize_edge_id(raw_id: Optional[str]) -> str:
+    if raw_id is None:
+        raise HTTPException(status_code=400, detail="edge_id is required")
+    text = str(raw_id).strip()
+    if not text:
+        raise HTTPException(status_code=400, detail="edge_id is required")
+    if ":" in text:
+        prefix, value = text.split(":", 1)
+        if prefix not in {"e", "edge"} or not value:
+            raise HTTPException(status_code=400, detail="edge_id must be a raw UUID or e:<uuid>")
+        return value
+    return text
 
 
 @router.get(
@@ -116,6 +144,10 @@ async def get_notes_graph(
     Returns an empty graph structure for now.
     """
     try:
+        # Normalize typed IDs if provided (e.g., note:<uuid>)
+        if getattr(req, "center_note_id", None):
+            normalized_center = _normalize_note_id(req.center_note_id)
+            req.center_note_id = normalized_center
         limits = GraphLimits(max_nodes=300, max_edges=1200, max_degree=40)
         return NoteGraphResponse(
             nodes=[],
@@ -163,6 +195,8 @@ async def get_note_neighbors(
     """
     Stub neighbors endpoint; enforces RBAC and token scope.
     """
+    normalized_note_id = _normalize_note_id(note_id)
+    # TODO: use normalized_note_id for neighbor lookup
     limits = GraphLimits(max_nodes=300, max_edges=1200, max_degree=40)
     return NoteGraphResponse(
         nodes=[],
@@ -222,15 +256,14 @@ async def create_manual_link(
     """
     Create a manual link in the user's ChaChaNotes DB. Populates created_by.
     """
-    to_note_id = link.to_note_id
-    if not to_note_id:
-        raise HTTPException(status_code=400, detail="to_note_id is required")
+    from_note_id = _normalize_note_id(note_id)
+    to_note_id = _normalize_note_id(link.to_note_id)
 
     try:
         principal = f"user:{current_user.id_str}"
         edge = db.create_manual_note_edge(
             user_id=str(current_user.id_str),
-            from_note_id=note_id,
+            from_note_id=from_note_id,
             to_note_id=to_note_id,
             directed=bool(link.directed),
             weight=link.weight if link.weight is not None else 1.0,
@@ -287,8 +320,9 @@ async def delete_manual_link(
     Delete a manual link by id for the current user.
     """
     try:
-        deleted = db.delete_manual_note_edge(user_id=str(current_user.id_str), edge_id=edge_id)
-        return {"deleted": bool(deleted), "edge_id": edge_id}
+        normalized_edge_id = _normalize_edge_id(edge_id)
+        deleted = db.delete_manual_note_edge(user_id=str(current_user.id_str), edge_id=normalized_edge_id)
+        return {"deleted": bool(deleted), "edge_id": normalized_edge_id}
     except InputError as e:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
     except CharactersRAGDBError as e:

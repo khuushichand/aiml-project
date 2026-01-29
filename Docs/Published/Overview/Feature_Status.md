@@ -34,7 +34,7 @@ Legend
 | File-based transcription | Working | faster_whisper, NeMo, Qwen2Audio | [docs](../API-related/Audio_Transcription_API.md) · [code](https://github.com/rmusser01/tldw_server/blob/main/tldw_Server_API/app/api/v1/endpoints/audio.py) |
 | Real-time WS transcription | Working | `WS /api/v1/audio/stream/transcribe` | [docs](../API-related/Audio_Transcription_API.md) · [code](https://github.com/rmusser01/tldw_server/blob/main/tldw_Server_API/app/api/v1/endpoints/audio.py) |
 | Diarization + VAD | Working | Optional diarization, timestamps | [docs](../Code_Documentation/Ingestion_Pipeline_Audio.md) · [code](https://github.com/rmusser01/tldw_server/blob/main/tldw_Server_API/app/api/v1/endpoints/audio.py) |
-| TTS (OpenAI-compatible) | Working | Streaming + non-streaming | [docs](https://github.com/rmusser01/tldw_server/blob/main/tldw_Server_API/app/core/TTS/TTS-README.md) · [code](https://github.com/rmusser01/tldw_server/blob/main/tldw_Server_API/app/api/v1/endpoints/audio.py) |
+| TTS (OpenAI-compatible) | Working | Streaming + non-streaming; providers: OpenAI, ElevenLabs, Kokoro, PocketTTS, LuxTTS, Higgs, Chatterbox, Dia, VibeVoice, VibeVoice Realtime, NeuTTS, IndexTTS2, Supertonic, Supertonic2, Qwen3-TTS, EchoTTS | [docs](https://github.com/rmusser01/tldw_server/blob/main/tldw_Server_API/app/core/TTS/TTS-README.md) · [code](https://github.com/rmusser01/tldw_server/blob/main/tldw_Server_API/app/api/v1/endpoints/audio.py) |
 | Voice catalog + management | Working | `GET /api/v1/audio/voices/catalog` | [docs](https://github.com/rmusser01/tldw_server/blob/main/tldw_Server_API/app/core/TTS/README.md) · [code](https://github.com/rmusser01/tldw_server/blob/main/tldw_Server_API/app/api/v1/endpoints/audio.py) |
 | Audio jobs queue | Working | Background audio processing | [docs](../API-related/Audio_Jobs_API.md) · [code](https://github.com/rmusser01/tldw_server/blob/main/tldw_Server_API/app/api/v1/endpoints/audio_jobs.py) |
 
@@ -135,5 +135,4 @@ Legend
 | Watchlists: notifications | Experimental | Email/chatbook delivery | [docs](https://github.com/rmusser01/tldw_server/blob/main/Docs/Product/Watchlist_PRD.md) |
 | Workflows engine & scheduler | WIP | Defs CRUD, runs, scheduler | [docs](https://github.com/rmusser01/tldw_server/blob/main/Docs/Product/Workflows_PRD.md) · [code](https://github.com/rmusser01/tldw_server/blob/main/tldw_Server_API/app/api/v1/endpoints/workflows.py) |
 | VLM backends listing | Experimental | `/api/v1/vlm/backends` | [code](https://github.com/rmusser01/tldw_server/blob/main/tldw_Server_API/app/api/v1/endpoints/vlm.py) |
-| Next.js WebUI | Working | Primary client | [code](https://github.com/rmusser01/tldw_server/tree/main/tldw-frontend/) |
-| Legacy WebUI (/webui) | Working | Feature-frozen legacy | [code](https://github.com/rmusser01/tldw_server/tree/main/tldw_Server_API/WebUI/) |
+| Next.js WebUI | Working | Primary web client (`apps/tldw-frontend`) | [code](https://github.com/rmusser01/tldw_server/tree/main/apps/tldw-frontend/) |

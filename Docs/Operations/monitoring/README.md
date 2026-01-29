@@ -1,134 +1,70 @@
-# Monitoring TLDW Embeddings Jobs
+# Monitoring (Prometheus + Alertmanager)
 
-This folder contains a ready-to-import Grafana dashboard and basic guidance to scrape Prometheus metrics from the API process. The embeddings Redis Streams worker does not expose a standalone Prometheus endpoint; root Jobs metrics and API counters are exported by the API process.
+This directory contains Prometheus alert rules and an Alertmanager configuration for tldw_server.
 
-## Prometheus Scrape Setup
+## Files
 
-The API exposes Prometheus text metrics under `/metrics` (root) and also JSON/text under the API namespace:
+- `prometheus_alerts_tldw.yml` — Prometheus rules for HTTP 5xx error spikes
+- `alertmanager_email_webhook.yml` — Alertmanager routes for email + webhook delivery
 
-- Root: `GET /metrics` (if enabled by your deployment)
-- API JSON: `GET /api/v1/metrics/json`
-- API text: `GET /api/v1/metrics/text` (Prometheus format)
+## Usage (docker-compose.monitoring.yml)
 
-Example `prometheus.yml` snippet:
+The monitoring compose file wires Prometheus + Alertmanager and mounts these configs:
+
+```bash
+# from repo root
+cd Dockerfiles/Monitoring
+
+# start Prometheus + Alertmanager + Grafana
+docker compose -f docker-compose.monitoring.yml up -d
+```
+
+Prometheus scrapes tldw_server at:
+
+- `http://host.docker.internal:8000/api/v1/metrics/text`
+
+Alert rules are loaded from:
+
+- `/etc/prometheus/alerts/tldw_alerts.yml`
+
+Alertmanager listens on:
+
+- `http://localhost:9093`
+
+## Configure email/webhook alerts
+
+Edit `Docs/Operations/monitoring/alertmanager_email_webhook.yml`:
+
+- `email_configs`: set `to`, `from`, `smarthost`, `auth_username`, `auth_password_file`
+- `webhook_configs`: set `url` to your alert endpoint
+
+Example (replace values):
 
 ```yaml
-scrape_configs:
-  # API process (aggregates API metrics;
-  # text endpoint can be proxied at /api/v1/metrics/text)
-  - job_name: 'tldw-api'
-    metrics_path: '/api/v1/metrics/text'
-    static_configs:
-      - targets: ['api:8000']
-
+receivers:
+  - name: tldw-alerts
+    email_configs:
+      - to: "alerts@yourdomain.com"
+        from: "alertmanager@yourdomain.com"
+        smarthost: "smtp.yourdomain.com:587"
+        auth_username: "alertmanager@yourdomain.com"
+        auth_password_file: "/etc/alertmanager/secrets/smtp_password"
+        require_tls: true
+        send_resolved: true
+    webhook_configs:
+      - url: "https://your-alert-endpoint.example.com/alertmanager"
+        send_resolved: true
 ```
 
-Notes:
-- If you terminate SSL at a reverse proxy, ensure the metrics paths are reachable inside the cluster/VPC.
-- For local dev, you can scrape `http://127.0.0.1:8000/api/v1/metrics/text`.
+Provide the SMTP password via the mounted secret file used by the monitoring compose:
 
-## Grafana
-
-Import the provided dashboards:
-
-- Embeddings Redis Streams (queue/depth panels driven by Redis + API metrics): `grafana_embeddings_orchestrator.json`
-- Workflows: `grafana_workflows.json`
-- Service Overview: `grafana_service_overview.json`
-- Tenant Overview: `grafana_tenant_overview.json`
-  - Panels:
-    - SSE Connections, Disconnects, Summary Failures
-    - Queue Depth by queue
-    - DLQ Depth by queue
-    - Queue latency p95 (10m window; from `jobs.queue_latency_seconds`)
-    - Stage processed/s and failed/s
-    - Stage flags (paused/drain)
-
-Additionally, for streaming (SSE/WS) metrics, import `Docs/Deployment/Monitoring/Grafana_Streaming_Basics.json` which includes:
-- SSE enqueue→yield latency (ms) histogram
-- SSE queue high-watermark gauge
-- WS send latency (ms) histogram
-- WS pings sent (counter)
-
-Streaming metrics labels
-- The stream helpers accept optional low-cardinality labels to facet metrics by component/endpoint.
-- Example (SSE):
-
-```python
-from tldw_Server_API.app.core.Streaming.streams import SSEStream
-stream = SSEStream(labels={"component": "chat", "endpoint": "chat_stream"})
+```bash
+mkdir -p Dockerfiles/Monitoring/secrets
+printf '%s' 'your-smtp-password' > Dockerfiles/Monitoring/secrets/smtp_password
 ```
 
-- Example (WS):
+## Notes
 
-```python
-from tldw_Server_API.app.core.Streaming.streams import WebSocketStream
-ws_stream = WebSocketStream(websocket, labels={"component": "audio", "endpoint": "audio_unified_ws"})
-```
-
-Template variables
-- component: derived from metric labels; filter panels by component
-- endpoint: derived from metric labels; filter panels and drive a repeated row that facets metrics per endpoint
-
-In Grafana:
-1. Dashboards → New → Import
-2. Upload `grafana_embeddings_orchestrator.json`, `grafana_workflows.json`, `grafana_service_overview.json`, or `grafana_tenant_overview.json`
-3. For dashboards with variables, set the Prometheus data source and use the top-left dropdowns to filter (Provider / Model / Pipeline / Tenant).
-
-## Alertmanager
-
-An example Alertmanager configuration is provided at `Docs/Operations/monitoring/alertmanager_example.yml` with Slack and PagerDuty receivers. Replace placeholders with your credentials/integration keys and point your Alertmanager to this file via its `--config.file` or mounted configmap.
-3. Select the correct Prometheus data source
-
-SLO alert rules for the embeddings pipeline are provided in `Docs/Operations/monitoring/alerts/embeddings_slos.yaml` and include:
-
-- Error budget burn (>0.5% failures over 1h)
-- Queue age p95 > 2 minutes per queue
-- Stage latency p99 > 10 seconds
-
-Add the file to your Prometheus `rule_files` section, for example:
-
-```yaml
-rule_files:
-  - Docs/Operations/monitoring/alerts/*.yaml
-```
-
-Claims monitoring alert rules live in `Docs/Monitoring/claims_alerts_prometheus.yaml`. Add the file to your Prometheus `rule_files` list and keep the runbook (`Docs/Operations/Claims_Alerts_Runbook.md`) alongside Alertmanager receiver routing so on-call responders have clear remediation steps.
-
-## Metrics Primer
-
-Core Jobs metrics exported by the API process (filter by `domain="embeddings"`):
-
-- `jobs.queued` (gauge): queued jobs by domain/queue
-- `jobs.processing` (gauge): in-flight jobs by domain/queue
-- `jobs.backlog` (gauge): queued + scheduled
-- `jobs.queue_latency_seconds` (histogram): enqueue-to-start latency
-- `jobs.duration_seconds` (histogram): processing duration
-- `jobs.retries_total` (counter): retries by domain/job_type
-- `jobs.failures_total` (counter): failures by domain/job_type
-
-## Migration from Orchestrator Metrics
-
-If upgrading from a previous version that exposed orchestrator/worker metrics, update your dashboards and alerts to use Jobs metrics.
-
-Deprecated metrics:
-- `orchestrator.*` metrics -> use `jobs.*` metrics filtered by `domain="embeddings"`
-- `worker.*` metrics -> use `jobs.*` metrics filtered by `domain="embeddings"`
-
-Key replacements:
-- Queue age -> `jobs.queue_latency_seconds`
-- Processing count -> `jobs.processing`
-- Queue depth -> `jobs.queued`
-
-Behavior changes to note:
-- Metrics now come from the API process and reflect the Jobs DB state.
-- Latency histograms measure enqueue-to-start (`jobs.queue_latency_seconds`) and processing duration (`jobs.duration_seconds`) per domain/job_type.
-
-Action items:
-1. Update Prometheus alert rules to use the new metric names and labels.
-2. Re-import the Grafana dashboards listed above, since older panels will not resolve the new series.
-3. Verify the embeddings Redis worker is running; it no longer exposes a separate metrics endpoint.
-
-## Troubleshooting
-
-- If Jobs metrics are empty, verify the Jobs DB is reachable and the embeddings Redis worker is running.
-- If metrics endpoints return 401/403, use admin credentials (single-user API key or admin JWT role).
+- Ensure your tldw_server instance is reachable from the Prometheus container.
+- If you’re not using Docker Desktop, replace `host.docker.internal` with the actual host IP.
+- You can add more rules to `prometheus_alerts_tldw.yml` as needed.

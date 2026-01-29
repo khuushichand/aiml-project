@@ -70,6 +70,8 @@ async def test_save_uploaded_files_extension_candidates_tar_gz(tmp_path, monkeyp
     assert not errors, errors
     assert len(saved) == 1
     assert saved[0]["original_filename"] == "archive.tar.gz"
+    assert str(saved[0]["path"]).endswith("archive.tar.gz")
+    assert "archive.tar.tar.gz" not in str(saved[0]["path"])
 
 
 def test_process_docs_streaming_respects_validator_limits(client_with_single_user, monkeypatch, tmp_path):

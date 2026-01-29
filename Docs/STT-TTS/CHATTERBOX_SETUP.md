@@ -89,7 +89,7 @@ See adapter for details: `tldw_Server_API/app/core/TTS/adapters/chatterbox_adapt
 ```bash
 python -m uvicorn tldw_Server_API.app.main:app --reload
 # API docs: http://127.0.0.1:8000/docs
-# Web UI:   http://127.0.0.1:8000/webui/
+# Quickstart: http://127.0.0.1:8000/api/v1/config/quickstart
 ```
 
 Verify provider availability:
@@ -164,7 +164,7 @@ curl -X POST "http://127.0.0.1:8000/api/v1/audio/speech" \
 ```
 
 ## WebUI Usage
-1. Start the server and open `http://127.0.0.1:8000/webui/`.
+1. Start the server and open `http://127.0.0.1:8000/api/v1/config/quickstart`.
 2. Go to the Audio tab, select “Chatterbox”.
 3. Provide input text; optionally upload/mic-record a reference clip.
 4. Adjust emotion intensity (exaggeration), CFG weight, and sampling parameters.

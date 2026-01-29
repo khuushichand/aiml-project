@@ -7,7 +7,7 @@ import os
 import subprocess
 import tempfile
 from pathlib import Path
-from typing import Optional, Tuple, Dict, Any
+from typing import Optional, Tuple, Dict, Any, List
 #
 # Third-party Imports
 import numpy as np
@@ -35,8 +35,153 @@ class AudioConverter:
         'flac': 'flac',
         'ogg': 'libvorbis',
         'opus': 'libopus',
-        'm4a': 'aac'
+        'm4a': 'aac',
+        'm4b': 'aac',
     }
+
+    @staticmethod
+    def _write_concat_list(input_paths: list[Path]) -> str:
+        tmp = tempfile.NamedTemporaryFile(delete=False, suffix=".txt")
+        with tmp:
+            for path in input_paths:
+                path_str = str(path).replace("'", "'\\''")
+                tmp.write(f"file '{path_str}'\n".encode())
+        return tmp.name
+
+    @staticmethod
+    async def concat_audio_files(
+        input_paths: list[Path],
+        output_path: Path,
+        target_format: str,
+        **kwargs,
+    ) -> bool:
+        if not input_paths:
+            logger.error("No input files provided for concatenation")
+            return False
+        codec = AudioConverter.AUDIO_CODECS.get(target_format.lower())
+        if not codec:
+            logger.error(f"Unsupported concat format: {target_format}")
+            return False
+        output_path = output_path.with_suffix(f".{target_format.lower()}")
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+        list_path = AudioConverter._write_concat_list(input_paths)
+
+        try:
+            cmd = ['ffmpeg', '-y', '-f', 'concat', '-safe', '0', '-i', list_path]
+            if 'sample_rate' in kwargs:
+                cmd.extend(['-ar', str(kwargs['sample_rate'])])
+            if 'channels' in kwargs:
+                cmd.extend(['-ac', str(kwargs['channels'])])
+            if 'bitrate' in kwargs:
+                cmd.extend(['-b:a', str(kwargs['bitrate'])])
+            cmd.extend(['-c:a', codec, str(output_path)])
+
+            process = await asyncio.create_subprocess_exec(
+                *cmd,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+            )
+            stdout, stderr = await process.communicate()
+            if process.returncode != 0:
+                logger.error(f"Concat failed: {stderr.decode()}")
+                return False
+            logger.info(f"Concatenated {len(input_paths)} files into {output_path.name}")
+            return True
+        finally:
+            try:
+                os.unlink(list_path)
+            except Exception:
+                pass
+
+    @staticmethod
+    async def package_m4b_with_chapters(
+        input_paths: list[Path],
+        output_path: Path,
+        chapter_titles: list[str],
+        *,
+        metadata: Optional[Dict[str, str]] = None,
+    ) -> bool:
+        if not input_paths:
+            logger.error("No input files provided for M4B packaging")
+            return False
+        output_path = output_path.with_suffix(".m4b")
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+
+        list_path = AudioConverter._write_concat_list(input_paths)
+        meta_file = tempfile.NamedTemporaryFile(delete=False, suffix=".ffmeta")
+        try:
+            durations_ms: List[int] = []
+            for path in input_paths:
+                duration = await AudioConverter.get_duration(path)
+                durations_ms.append(max(1, int(round(duration * 1000))))
+
+            meta_text = AudioConverter._build_ffmetadata(chapter_titles, durations_ms, metadata)
+            with meta_file:
+                meta_file.write(meta_text.encode())
+
+            cmd = [
+                'ffmpeg', '-y',
+                '-f', 'concat', '-safe', '0', '-i', list_path,
+                '-i', meta_file.name,
+                '-map_metadata', '1',
+                '-map_chapters', '1',
+                '-c:a', 'aac',
+                str(output_path),
+            ]
+            process = await asyncio.create_subprocess_exec(
+                *cmd,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+            )
+            stdout, stderr = await process.communicate()
+            if process.returncode != 0:
+                logger.error(f"M4B packaging failed: {stderr.decode()}")
+                return False
+            logger.info(f"Packaged M4B with {len(input_paths)} chapters: {output_path.name}")
+            return True
+        finally:
+            try:
+                os.unlink(list_path)
+            except Exception:
+                pass
+            try:
+                os.unlink(meta_file.name)
+            except Exception:
+                pass
+
+    @staticmethod
+    def _build_ffmetadata(
+        chapter_titles: list[str],
+        chapter_durations_ms: list[int],
+        metadata: Optional[Dict[str, str]] = None,
+    ) -> str:
+        lines = [";FFMETADATA1"]
+        if metadata:
+            title = metadata.get("title")
+            artist = metadata.get("artist")
+            if title:
+                lines.append(f"title={title}")
+            if artist:
+                lines.append(f"artist={artist}")
+
+        current_ms = 0
+        for idx, duration_ms in enumerate(chapter_durations_ms):
+            duration_ms = max(1, int(duration_ms))
+            start = current_ms
+            end = current_ms + duration_ms
+            current_ms = end
+            chapter_title = chapter_titles[idx] if idx < len(chapter_titles) else f"Chapter {idx + 1}"
+            lines.extend(
+                [
+                    "[CHAPTER]",
+                    "TIMEBASE=1/1000",
+                    f"START={start}",
+                    f"END={end}",
+                    f"title={chapter_title}",
+                ]
+            )
+
+        return "\n".join(lines) + "\n"
 
     @staticmethod
     async def convert_to_wav(
@@ -370,6 +515,72 @@ class AudioConverter:
 
         except Exception as e:
             logger.error(f"Audio normalization error: {e}")
+            return False
+
+    @staticmethod
+    def _build_atempo_filter(speed_ratio: float) -> str:
+        if speed_ratio <= 0:
+            raise ValueError("speed_ratio must be positive")
+        factors: List[float] = []
+        remaining = speed_ratio
+        while remaining > 2.0:
+            factors.append(2.0)
+            remaining /= 2.0
+        while remaining < 0.5:
+            factors.append(0.5)
+            remaining /= 0.5
+        factors.append(remaining)
+        return ",".join(f"atempo={factor:.6g}" for factor in factors)
+
+    @staticmethod
+    async def time_stretch(
+        input_path: Path,
+        output_path: Path,
+        speed_ratio: float,
+    ) -> bool:
+        """
+        Time-stretch audio using ffmpeg atempo filter.
+
+        Args:
+            input_path: Path to input audio
+            output_path: Path for stretched output
+            speed_ratio: Playback speed ratio (e.g., 1.05 to speed up)
+
+        Returns:
+            True if successful
+        """
+        if speed_ratio <= 0:
+            logger.error("Time-stretch speed_ratio must be positive")
+            return False
+        if speed_ratio == 1.0:
+            try:
+                output_path.parent.mkdir(parents=True, exist_ok=True)
+                output_path.write_bytes(input_path.read_bytes())
+                return True
+            except Exception as exc:
+                logger.error(f"Time-stretch noop copy failed: {exc}")
+                return False
+        try:
+            output_path.parent.mkdir(parents=True, exist_ok=True)
+            filter_spec = AudioConverter._build_atempo_filter(speed_ratio)
+            cmd = [
+                'ffmpeg', '-y', '-i', str(input_path),
+                '-filter:a', filter_spec,
+                str(output_path)
+            ]
+            process = await asyncio.create_subprocess_exec(
+                *cmd,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE
+            )
+            stdout, stderr = await process.communicate()
+            if process.returncode != 0:
+                logger.error(f"Time-stretch failed: {stderr.decode()}")
+                return False
+            logger.info(f"Time-stretch applied (ratio: {speed_ratio})")
+            return True
+        except Exception as e:
+            logger.error(f"Time-stretch error: {e}")
             return False
 
     @staticmethod

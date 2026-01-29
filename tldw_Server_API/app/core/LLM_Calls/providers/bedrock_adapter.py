@@ -121,18 +121,26 @@ class BedrockAdapter(ChatProvider):
         payload: Dict[str, Any] = {
             "model": model,
             "messages": payload_messages,
-            "temperature": request.get("temperature"),
-            "top_p": request.get("top_p"),
-            "max_tokens": request.get("max_tokens"),
-            "n": request.get("n"),
-            "presence_penalty": request.get("presence_penalty"),
-            "frequency_penalty": request.get("frequency_penalty"),
-            "logit_bias": request.get("logit_bias"),
-            "user": request.get("user"),
-            "logprobs": request.get("logprobs"),
-            "top_logprobs": request.get("top_logprobs"),
-            "seed": request.get("seed"),
         }
+        for key in (
+            "temperature",
+            "top_p",
+            "max_tokens",
+            "n",
+            "presence_penalty",
+            "frequency_penalty",
+            "logit_bias",
+            "user",
+            "seed",
+        ):
+            value = request.get(key)
+            if value is not None:
+                payload[key] = value
+        logprobs = request.get("logprobs")
+        if logprobs is not None:
+            payload["logprobs"] = logprobs
+        if logprobs and request.get("top_logprobs") is not None:
+            payload["top_logprobs"] = request.get("top_logprobs")
         # Optional fields
         if request.get("response_format") is not None:
             payload["response_format"] = request.get("response_format")

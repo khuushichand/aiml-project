@@ -46,15 +46,17 @@ async def emit_budget_audit_event(
     request_id = (
         request.headers.get("X-Request-ID") or getattr(request.state, "request_id", None)
     )
-    ctx = AuditContext(
-        user_id=str(actor_id) if actor_id is not None else None,
-        correlation_id=correlation_id,
-        request_id=request_id or "",
-        ip_address=(request.client.host if request.client else None),
-        user_agent=request.headers.get("user-agent"),
-        endpoint=str(request.url.path),
-        method=request.method,
-    )
+    ctx_kwargs = {
+        "user_id": str(actor_id) if actor_id is not None else None,
+        "correlation_id": correlation_id,
+        "ip_address": (request.client.host if request.client else None),
+        "user_agent": request.headers.get("user-agent"),
+        "endpoint": str(request.url.path),
+        "method": request.method,
+    }
+    if request_id:
+        ctx_kwargs["request_id"] = request_id
+    ctx = AuditContext(**ctx_kwargs)
 
     await svc.log_event(
         event_type=AuditEventType.CONFIG_CHANGED,

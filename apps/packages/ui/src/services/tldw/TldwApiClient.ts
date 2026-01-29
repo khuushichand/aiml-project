@@ -1,0 +1,3520 @@
+import { Storage } from "@plasmohq/storage"
+import { createSafeStorage, safeStorageSerde } from "@/utils/safe-storage"
+import { bgRequest, bgStream, bgUpload } from "@/services/background-proxy"
+import { isPlaceholderApiKey } from "@/utils/api-key"
+import { normalizeChatRole } from "@/utils/normalize-chat-role"
+import type { AllowedPath, PathOrUrl } from "@/services/tldw/openapi-guard"
+import { appendPathQuery } from "@/services/tldw/path-utils"
+import {
+  buildContentPayload,
+  mapApiDetailToUi,
+  mapApiListToUi,
+  mapUiSourceToApi,
+  type ApiDataTableGenerateResponse,
+  type ApiDataTableJobStatus
+} from "@/services/tldw/data-tables"
+import type { DataTableColumn } from "@/types/data-tables"
+
+const DEFAULT_SERVER_URL = "http://127.0.0.1:8000"
+const CHARACTER_CACHE_TTL_MS = 5 * 60 * 1000
+const CHAT_MESSAGES_CACHE_TTL_MS = 60 * 1000
+
+export interface TldwConfig {
+  serverUrl: string
+  apiKey?: string
+  accessToken?: string
+  refreshToken?: string
+  orgId?: number
+  authMode: 'single-user' | 'multi-user'
+}
+
+export interface TldwModel {
+  id: string
+  name: string
+  provider: string
+  description?: string
+  capabilities?: string[] | Record<string, unknown>
+  context_length?: number
+  vision?: boolean
+  function_calling?: boolean
+  json_output?: boolean
+  type?: string
+  modalities?: {
+    input?: string[]
+    output?: string[]
+  }
+}
+
+export type ChatCompletionContentPartText = {
+  type: "text"
+  text: string
+}
+
+export type ChatCompletionContentPartImage = {
+  type: "image_url"
+  image_url: {
+    url: string
+    detail?: "auto" | "low" | "high" | null
+  }
+}
+
+export type ChatCompletionContentPart =
+  | ChatCompletionContentPartText
+  | ChatCompletionContentPartImage
+
+export type ChatCompletionUserContent = string | ChatCompletionContentPart[]
+
+export type ChatCompletionAssistantContent = string | null
+
+export type ChatCompletionToolCall = {
+  id: string
+  type: "function"
+  function: {
+    name: string
+    arguments?: string | null
+    parameters?: Record<string, unknown> | null
+    description?: string | null
+  }
+}
+
+export type FunctionCall = {
+  name: string
+  arguments: string
+}
+
+export type ChatMessage =
+  | {
+      role: "system"
+      content: string
+      name?: string | null
+    }
+  | {
+      role: "user"
+      content: ChatCompletionUserContent
+      name?: string | null
+    }
+  | {
+      role: "assistant"
+      content: ChatCompletionAssistantContent
+      name?: string | null
+      tool_calls?: ChatCompletionToolCall[] | null
+      function_call?: FunctionCall | null
+    }
+  | {
+      role: "tool"
+      content: string
+      tool_call_id: string
+      name?: string | null
+    }
+
+export interface ChatCompletionRequest {
+  messages: ChatMessage[]
+  model: string
+  stream?: boolean
+  temperature?: number
+  max_tokens?: number
+  top_p?: number
+  frequency_penalty?: number
+  presence_penalty?: number
+  reasoning_effort?: "low" | "medium" | "high"
+  tool_choice?: "auto" | "none" | "required"
+  tools?: Record<string, unknown>[]
+  save_to_db?: boolean
+  conversation_id?: string
+  history_message_limit?: number
+  history_message_order?: string
+  slash_command_injection_mode?: string
+  api_provider?: string
+  extra_headers?: Record<string, unknown>
+  extra_body?: Record<string, unknown>
+  response_format?: { type: "json_object" | "text" }
+}
+
+export interface ServerChatSummary {
+  id: string
+  title: string
+  created_at: string
+  updated_at?: string | null
+  source?: string | null
+  state?: ConversationState | string | null
+  topic_label?: string | null
+  cluster_id?: string | null
+  external_ref?: string | null
+  bm25_norm?: number | null
+  character_id?: string | number | null
+  parent_conversation_id?: string | null
+  root_id?: string | null
+  version?: number | null
+}
+
+export type ConversationState =
+  | "in-progress"
+  | "resolved"
+  | "backlog"
+  | "non-viable"
+
+export interface ServerChatMessage {
+  id: string
+  role: "system" | "user" | "assistant"
+  content: string
+  created_at: string
+  version?: number
+}
+
+type PromptPayload = {
+  name?: string
+  title?: string
+  author?: string
+  details?: string
+  system_prompt?: string | null
+  user_prompt?: string | null
+  keywords?: string[]
+  content?: string
+  is_system?: boolean
+}
+
+export type FileArtifactExport = {
+  status?: "none" | "ready" | "pending"
+  format?: "ics" | "md" | "html" | "xlsx" | "csv" | "json" | "png" | "jpg" | "webp"
+  url?: string | null
+  content_type?: string | null
+  bytes?: number | null
+  job_id?: string | null
+  content_b64?: string | null
+  expires_at?: string | null
+}
+
+export type FileArtifact = {
+  file_id: number
+  file_type: string
+  title: string
+  structured?: Record<string, unknown>
+  export?: FileArtifactExport
+  created_at?: string
+  updated_at?: string
+}
+
+export type FileCreateResponse = {
+  artifact: FileArtifact
+}
+
+export type ImageArtifactRequest = {
+  backend: string
+  prompt: string
+  negativePrompt?: string
+  width?: number
+  height?: number
+  steps?: number
+  cfgScale?: number
+  seed?: number
+  sampler?: string
+  model?: string
+  extraParams?: Record<string, unknown>
+  format?: "png" | "jpg" | "webp"
+  title?: string
+  persist?: boolean
+  timeoutMs?: number
+}
+
+export interface ImageBackend {
+  id: string
+  name: string
+  is_configured: boolean
+  supported_formats?: string[]
+}
+
+export interface TldwEmbeddingModel {
+  provider: string
+  model: string
+  allowed?: boolean
+  default?: boolean
+}
+
+export interface TldwEmbeddingModelsResponse {
+  data?: TldwEmbeddingModel[]
+  allowed_providers?: string[] | null
+  allowed_models?: string[] | null
+}
+
+export interface TldwEmbeddingProvidersConfig {
+  default_provider: string
+  default_model: string
+  providers: {
+    name: string
+    models: string[]
+  }[]
+}
+
+// Admin / RBAC types
+export interface AdminUserSummary {
+  id: number
+  uuid: string
+  username: string
+  email: string
+  role: string
+  is_active: boolean
+  is_verified: boolean
+  created_at: string
+  last_login?: string | null
+  storage_quota_mb: number
+  storage_used_mb: number
+}
+
+export interface AdminUserListResponse {
+  users: AdminUserSummary[]
+  total: number
+  page: number
+  limit: number
+  pages: number
+}
+
+export interface AdminUserUpdateRequest {
+  email?: string
+  role?: string
+  is_active?: boolean
+  is_verified?: boolean
+  is_locked?: boolean
+  storage_quota_mb?: number
+}
+
+export interface AdminRole {
+  id: number
+  name: string
+  description?: string | null
+  is_system?: boolean
+}
+
+// MLX admin types
+export interface MlxStatusConfig {
+  device?: string | null
+  dtype?: string | null
+  compile?: boolean
+  warmup?: boolean
+  max_seq_len?: number | null
+  max_batch_size?: number | null
+}
+
+export interface MlxStatus {
+  active: boolean
+  model: string | null
+  loaded_at: number | string | null
+  supports_embeddings: boolean
+  warmup_completed: boolean
+  max_concurrent: number
+  config?: MlxStatusConfig
+}
+
+export interface MlxLoadRequest {
+  model_path?: string
+  max_seq_len?: number
+  max_batch_size?: number
+  device?: string
+  dtype?: string
+  quantization?: string
+  compile?: boolean
+  warmup?: boolean
+  prompt_template?: string
+  revision?: string
+  trust_remote_code?: boolean
+  tokenizer?: string
+  adapter?: string
+  adapter_weights?: string
+  max_kv_cache_size?: number
+  max_concurrent?: number
+}
+
+export interface MlxUnloadRequest {
+  reason?: string
+}
+
+export class TldwApiClient {
+  private storage: Storage
+  private config: TldwConfig | null = null
+  private baseUrl: string = ''
+  private headers: HeadersInit = {}
+  private characterCache = new Map<string, { value: any; expiresAt: number }>()
+  private characterInFlight = new Map<string, Promise<any>>()
+  private chatMessagesCache = new Map<
+    string,
+    { value: ServerChatMessage[]; expiresAt: number }
+  >()
+  private chatMessagesInFlight = new Map<string, Promise<ServerChatMessage[]>>()
+  private openApiPathSet: Set<string> | null = null
+  private openApiPathSetPromise: Promise<Set<string> | null> | null = null
+  private resolvedPathCache = new Map<string, string>()
+
+  constructor() {
+    this.storage = createSafeStorage({
+      serde: safeStorageSerde
+    })
+  }
+
+  private getEnvApiKey(): string | null {
+    try {
+      const env: any = (import.meta as any)?.env || {}
+      const raw =
+        (env?.VITE_TLDW_API_KEY as string | undefined) ??
+        (env?.VITE_TLDW_DEFAULT_API_KEY as string | undefined)
+      const key = (raw || "").trim()
+      return key || null
+    } catch {
+      return null
+    }
+  }
+
+  private isDevMode(): boolean {
+    try {
+      const env: any = (import.meta as any)?.env || {}
+      return Boolean(env?.DEV) || env?.MODE === "development"
+    } catch {
+      return false
+    }
+  }
+
+  private getMissingApiKeyMessage(): string {
+    return "tldw server API key is missing. Open Settings → tldw server and configure an API key before continuing."
+  }
+
+  private getChatMessagesCacheKey(chatId: string, query: string): string {
+    return `${chatId}${query || ""}`
+  }
+
+  invalidateChatMessagesCache(chatId?: string | number): void {
+    const cid = chatId != null ? String(chatId) : null
+    if (!cid) {
+      this.chatMessagesCache.clear()
+      return
+    }
+    for (const key of this.chatMessagesCache.keys()) {
+      if (key.startsWith(cid)) {
+        this.chatMessagesCache.delete(key)
+      }
+    }
+  }
+
+  private getPlaceholderApiKeyMessage(): string {
+    return "tldw server API key is still set to the default demo value. Replace it with your real API key in Settings → tldw server before continuing."
+  }
+
+  private async ensureConfigForRequest(requireAuth: boolean): Promise<TldwConfig> {
+    const cfg = (await this.getConfig()) || null
+    if (!cfg || !cfg.serverUrl) {
+      const msg =
+        "tldw server is not configured. Open Settings → tldw server in the extension and set the server URL and API key."
+      // eslint-disable-next-line no-console
+      console.warn(msg)
+      throw new Error(msg)
+    }
+
+    if (!requireAuth) {
+      return cfg
+    }
+
+    if (cfg.authMode === "multi-user") {
+      const token = (cfg.accessToken || "").trim()
+      if (!token) {
+        const msg =
+          "Not authenticated. Please log in under Settings → tldw server before continuing."
+        // eslint-disable-next-line no-console
+        console.warn(msg)
+        throw new Error(msg)
+      }
+      return cfg
+    }
+
+    // single-user auth
+    const key = (cfg.apiKey || "").trim()
+    if (!key) {
+      const msg = this.getMissingApiKeyMessage()
+      // eslint-disable-next-line no-console
+      console.warn(msg)
+      throw new Error(msg)
+    }
+    if (isPlaceholderApiKey(key)) {
+      const msg = this.getPlaceholderApiKeyMessage()
+      // eslint-disable-next-line no-console
+      console.warn(msg)
+      throw new Error(msg)
+    }
+    return cfg
+  }
+
+  private async request<T>(init: any, requireAuth = true): Promise<T> {
+    await this.ensureConfigForRequest(requireAuth && !init?.noAuth)
+    return await bgRequest<T>(init)
+  }
+
+  async fetchWithAuth(
+    path: PathOrUrl,
+    init?: {
+      method?: string
+      headers?: Record<string, string>
+      body?: any
+      timeoutMs?: number
+      signal?: AbortSignal
+      responseType?: "json" | "text" | "arrayBuffer"
+    }
+  ): Promise<{
+    ok: boolean
+    status?: number
+    error?: string
+    data?: any
+    json: () => Promise<any>
+    text: () => Promise<string>
+  }> {
+    await this.ensureConfigForRequest(true)
+    const response = await bgRequest<any, PathOrUrl>({
+      path,
+      method: (init?.method || "GET") as any,
+      headers: init?.headers,
+      body: init?.body,
+      timeoutMs: init?.timeoutMs,
+      abortSignal: init?.signal,
+      responseType: init?.responseType,
+      returnResponse: true
+    })
+    const data = response?.data
+    const text = () => {
+      if (typeof data === "string") return Promise.resolve(data)
+      if (data == null) return Promise.resolve("")
+      try {
+        return Promise.resolve(JSON.stringify(data))
+      } catch {
+        return Promise.resolve(String(data))
+      }
+    }
+    return {
+      ok: Boolean(response?.ok),
+      status: response?.status,
+      error: response?.error,
+      data,
+      json: () => Promise.resolve(data),
+      text
+    }
+  }
+
+  private async upload<T>(init: any, requireAuth = true): Promise<T> {
+    await this.ensureConfigForRequest(requireAuth)
+    return await bgUpload<T>(init)
+  }
+
+  private async *stream(init: any, requireAuth = true): AsyncGenerator<string> {
+    await this.ensureConfigForRequest(requireAuth)
+    for await (const line of bgStream(init)) {
+      yield line as string
+    }
+  }
+
+  async initialize(): Promise<void> {
+    let stored = await this.storage.get<TldwConfig>("tldwConfig")
+    if (!stored) {
+      try {
+        const localStore = createSafeStorage({
+          area: "local",
+          serde: safeStorageSerde
+        })
+        const localConfig = await localStore.get<TldwConfig>("tldwConfig")
+        if (localConfig) {
+          stored = localConfig
+          await this.storage.set("tldwConfig", localConfig)
+        }
+      } catch {
+        // ignore migration failures
+      }
+    }
+    const envApiKey = this.getEnvApiKey()
+
+    if (!stored) {
+      // True first-run: leave config null so callers (like the connection
+      // store) can distinguish an unconfigured state from a misconfigured
+      // or unreachable server.
+      this.config = null
+    } else {
+      const hydrated: TldwConfig = {
+        ...stored,
+        // Default authMode but do not silently inject a server URL if none
+        // has been configured yet.
+        authMode: stored.authMode || "single-user",
+        serverUrl: stored.serverUrl || ""
+      }
+      if (!hydrated.apiKey && envApiKey) {
+        hydrated.apiKey = envApiKey
+      }
+      this.config = hydrated
+      await this.storage.set("tldwConfig", hydrated)
+    }
+
+    const config = this.config
+    const nextBaseUrl = (config?.serverUrl || DEFAULT_SERVER_URL).replace(/\/$/, "")
+    if (this.baseUrl && this.baseUrl !== nextBaseUrl) {
+      this.openApiPathSet = null
+      this.openApiPathSetPromise = null
+      this.resolvedPathCache.clear()
+    }
+    this.baseUrl = nextBaseUrl
+
+    // Set up headers based on auth mode
+    this.headers = {
+      "Content-Type": "application/json"
+    }
+
+    if (config?.authMode === "single-user" && config.apiKey) {
+      const key = String(config.apiKey || "").trim()
+      if (key) {
+        this.headers["X-API-KEY"] = key
+      }
+    } else if (config?.authMode === "multi-user" && config.accessToken) {
+      this.headers["Authorization"] = `Bearer ${config.accessToken}`
+    }
+    if (config?.orgId) {
+      this.headers["X-TLDW-Org-Id"] = String(config.orgId)
+    }
+  }
+
+  async getConfig(): Promise<TldwConfig | null> {
+    if (this.config === null) {
+      await this.initialize().catch(() => null)
+    }
+    return this.config
+  }
+
+  async updateConfig(config: Partial<TldwConfig>): Promise<void> {
+    const currentConfig = (await this.getConfig()) || {}
+    const newConfig = { ...(currentConfig as any), ...config } as TldwConfig
+    await this.storage.set('tldwConfig', newConfig)
+    this.config = newConfig
+    await this.initialize().catch(() => null)
+  }
+
+  async healthCheck(): Promise<boolean> {
+    try {
+      await bgRequest<{ status?: string; [k: string]: any }>({
+        path: '/api/v1/health',
+        method: 'GET'
+      })
+      return true
+    } catch {
+      // Swallow errors to avoid noisy console during first-run
+      return false
+    }
+  }
+
+  async getServerInfo(): Promise<any> {
+    return await bgRequest<any>({ path: '/', method: 'GET' })
+  }
+
+  private buildQuery(params?: Record<string, any>): string {
+    if (!params || Object.keys(params).length === 0) {
+      return ''
+    }
+    const search = new URLSearchParams()
+    for (const [key, value] of Object.entries(params)) {
+      if (value === undefined || value === null) continue
+      if (Array.isArray(value)) {
+        value.forEach((entry) => search.append(key, String(entry)))
+        continue
+      }
+      search.append(key, String(value))
+    }
+    const query = search.toString()
+    return query ? `?${query}` : ''
+  }
+
+  async getOpenAPISpec(): Promise<any | null> {
+    try {
+      if (!this.baseUrl) await this.initialize()
+      if (!this.baseUrl) return null
+      return await bgRequest<any>({
+        path: `${this.baseUrl.replace(/\/$/, '')}/openapi.json` as any,
+        method: 'GET' as any
+      })
+    } catch {
+      return null
+    }
+  }
+
+  private normalizePathShape(path: string): string {
+    return path.replace(/\{[^}]+\}/g, "{}")
+  }
+
+  private async getOpenApiPathSet(): Promise<Set<string> | null> {
+    if (this.openApiPathSet) return this.openApiPathSet
+    if (!this.openApiPathSetPromise) {
+      this.openApiPathSetPromise = (async () => {
+        const spec = await this.getOpenAPISpec()
+        if (!spec?.paths || typeof spec.paths !== "object") {
+          this.openApiPathSet = null
+          this.openApiPathSetPromise = null
+          return null
+        }
+        const paths = new Set(Object.keys(spec.paths))
+        this.openApiPathSet = paths
+        this.resolvedPathCache.clear()
+        return paths
+      })()
+    }
+    return this.openApiPathSetPromise
+  }
+
+  private async resolveApiPath(
+    key: string,
+    candidates: string[]
+  ): Promise<AllowedPath> {
+    const cached = this.resolvedPathCache.get(key)
+    if (cached) return cached as AllowedPath
+    const fallback = candidates[0] as AllowedPath
+    if (!fallback) {
+      throw new Error(`No path candidates provided for ${key}`)
+    }
+    const specPaths = await this.getOpenApiPathSet().catch(() => null)
+    if (!specPaths || specPaths.size === 0) {
+      this.resolvedPathCache.set(key, fallback)
+      return fallback
+    }
+
+    const specShapes = new Set(
+      Array.from(specPaths, (path) => this.normalizePathShape(String(path)))
+    )
+
+    const resolved =
+      candidates.find((candidate) => {
+        if (specPaths.has(candidate)) return true
+        return specShapes.has(this.normalizePathShape(candidate))
+      }) || fallback
+
+    this.resolvedPathCache.set(key, resolved)
+    return resolved as AllowedPath
+  }
+
+  private fillPathParams(
+    template: AllowedPath,
+    values: string | string[]
+  ): AllowedPath {
+    if (!template.includes("{")) return template
+    if (Array.isArray(values)) {
+      let index = 0
+      return template.replace(/\{[^}]+\}/g, () => {
+        const value = values[index] ?? ""
+        index += 1
+        return encodeURIComponent(value)
+      }) as AllowedPath
+    }
+    const encoded = encodeURIComponent(values)
+    return template.replace(/\{[^}]+\}/g, encoded) as AllowedPath
+  }
+
+  async postChatMetric(payload: Record<string, unknown>): Promise<any> {
+    return await this.request<any>({
+      path: "/api/v1/metrics/chat",
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: payload
+    })
+  }
+
+  async getModels(): Promise<TldwModel[]> {
+    const meta = await this.getModelsMetadata()
+    const list =
+      Array.isArray(meta) && meta.length > 0
+        ? meta
+        : meta && typeof meta === "object" && Array.isArray((meta as any).models)
+          ? (meta as any).models
+          : []
+
+    return list.map((m: any) => ({
+      id: String(m.id || m.model || m.name),
+      name: String(m.name || m.id || m.model),
+      provider: String(m.provider || "default"),
+      description: m.description,
+      capabilities: Array.isArray(m.capabilities)
+        ? m.capabilities
+        : Array.isArray(m.features)
+          ? m.features
+          : typeof m.capabilities === "object"
+            ? m.capabilities
+            : undefined,
+      context_length:
+        typeof m.context_length === "number"
+          ? m.context_length
+          : typeof m.context_window === "number"
+            ? m.context_window
+            : typeof m.contextLength === "number"
+              ? m.contextLength
+              : undefined,
+      vision: Boolean(
+        (m.capabilities && m.capabilities.vision) ?? m.vision
+      ),
+      function_calling: Boolean(
+        (m.capabilities &&
+          (m.capabilities.function_calling || m.capabilities.tool_use)) ??
+          m.function_calling
+      ),
+      json_output: Boolean(
+        (m.capabilities && m.capabilities.json_mode) ?? m.json_output
+      ),
+      type: typeof m.type === "string" ? m.type : undefined,
+      modalities:
+        m.modalities && typeof m.modalities === "object"
+          ? {
+              input: Array.isArray(m.modalities.input)
+                ? m.modalities.input.map((v: any) => String(v))
+                : undefined,
+              output: Array.isArray(m.modalities.output)
+                ? m.modalities.output.map((v: any) => String(v))
+                : undefined
+            }
+          : {
+              input: Array.isArray(m.input_modality)
+                ? m.input_modality.map((v: any) => String(v))
+                : Array.isArray(m.input_modalities)
+                  ? m.input_modalities.map((v: any) => String(v))
+                  : typeof m.input_modality === "string"
+                    ? [String(m.input_modality)]
+                    : undefined,
+              output: Array.isArray(m.output_modality)
+                ? m.output_modality.map((v: any) => String(v))
+                : Array.isArray(m.output_modalities)
+                  ? m.output_modalities.map((v: any) => String(v))
+                  : typeof m.output_modality === "string"
+                    ? [String(m.output_modality)]
+                    : undefined
+            }
+    }))
+  }
+
+  async getProviders(): Promise<any> {
+    return await bgRequest<any>({ path: '/api/v1/llm/providers', method: 'GET' })
+  }
+
+  async getModelsMetadata(): Promise<any> {
+    // tldw_server returns either an array or an object
+    // of the form { models: [...], total: N }.
+    return await bgRequest<any>({ path: '/api/v1/llm/models/metadata', method: 'GET' })
+  }
+
+  async getImageBackends(): Promise<ImageBackend[]> {
+    try {
+      const meta = await this.getModelsMetadata()
+      const list: any[] =
+        Array.isArray(meta) && meta.length > 0
+          ? meta
+          : meta && typeof meta === "object" && Array.isArray((meta as any).models)
+            ? (meta as any).models
+            : []
+
+      return list
+        .filter((m: any) => m.type === "image")
+        .map((m: any) => ({
+          id: String(m.name || m.id || "").replace(/^image\//, ""),
+          name: String(m.name || m.id || ""),
+          is_configured: Boolean(m.is_configured),
+          supported_formats: Array.isArray(m.supported_formats) ? m.supported_formats : undefined
+        }))
+        .filter((b) => b.id.length > 0)
+    } catch (e) {
+      if (import.meta.env?.DEV) {
+        console.warn("tldw_server: getImageBackends failed", e)
+      }
+      return []
+    }
+  }
+
+  async generateImage(payload: {
+    backend: string
+    prompt: string
+    negative_prompt?: string
+    width?: number
+    height?: number
+    steps?: number
+    cfg_scale?: number
+    format?: "png" | "jpg" | "webp"
+    persist?: boolean
+    timeoutMs?: number
+  }): Promise<{ content_b64: string; content_type: string }> {
+    const response = await this.createImageArtifact({
+      backend: payload.backend,
+      prompt: payload.prompt,
+      negativePrompt: payload.negative_prompt,
+      width: payload.width,
+      height: payload.height,
+      steps: payload.steps,
+      cfgScale: payload.cfg_scale,
+      format: payload.format,
+      persist: payload.persist,
+      timeoutMs: payload.timeoutMs
+    })
+    const exportInfo = response?.artifact?.export
+    const content_b64 = exportInfo?.content_b64
+    if (!content_b64) {
+      throw new Error("Image generation returned no data.")
+    }
+    const content_type =
+      exportInfo?.content_type ||
+      (exportInfo?.format ? `image/${exportInfo.format}` : "image/png")
+    return { content_b64, content_type }
+  }
+
+  // Embeddings - Models & Providers
+  async getEmbeddingModelsList(): Promise<TldwEmbeddingModel[]> {
+    try {
+      const data = await bgRequest<TldwEmbeddingModelsResponse | TldwEmbeddingModel[]>({
+        path: "/api/v1/embeddings/models",
+        method: "GET"
+      })
+
+      const list: any[] = Array.isArray(data)
+        ? data
+        : Array.isArray((data as TldwEmbeddingModelsResponse)?.data)
+          ? (data as TldwEmbeddingModelsResponse).data!
+          : []
+
+      return list
+        .map((item) => ({
+          provider: String((item as any).provider || "unknown"),
+          model: String((item as any).model || ""),
+          allowed:
+            typeof (item as any).allowed === "boolean"
+              ? Boolean((item as any).allowed)
+              : true,
+          default: Boolean((item as any).default)
+        }))
+        .filter((m) => m.model.length > 0)
+    } catch (e) {
+      if (import.meta.env?.DEV) {
+        console.warn("tldw_server: GET /api/v1/embeddings/models failed", e)
+      }
+      return []
+    }
+  }
+
+  async getEmbeddingProvidersConfig(): Promise<TldwEmbeddingProvidersConfig | null> {
+    try {
+      const cfg = await bgRequest<TldwEmbeddingProvidersConfig>({
+        path: "/api/v1/embeddings/providers-config",
+        method: "GET"
+      })
+      return cfg
+    } catch (e) {
+      if (import.meta.env?.DEV) {
+        console.warn(
+          "tldw_server: GET /api/v1/embeddings/providers-config failed",
+          e
+        )
+      }
+      return null
+    }
+  }
+
+  // Admin / diagnostics helpers
+  async getSystemStats(): Promise<any> {
+    return await bgRequest<any>({
+      path: "/api/v1/admin/stats",
+      method: "GET"
+    })
+  }
+
+  async getLlamacppStatus(): Promise<any> {
+    return await bgRequest<any>({
+      path: "/api/v1/llamacpp/status",
+      method: "GET"
+    })
+  }
+
+  async listLlamacppModels(): Promise<any> {
+    return await bgRequest<any>({
+      path: "/api/v1/llamacpp/models",
+      method: "GET"
+    })
+  }
+
+  async startLlamacppServer(
+    modelFilename: string,
+    serverArgs?: Record<string, any>
+  ): Promise<any> {
+    return await bgRequest<any>({
+      path: "/api/v1/llamacpp/start_server",
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: {
+        model_filename: modelFilename,
+        server_args: serverArgs || {}
+      }
+    })
+  }
+
+  async stopLlamacppServer(): Promise<any> {
+    return await bgRequest<any>({
+      path: "/api/v1/llamacpp/stop_server",
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: {}
+    })
+  }
+
+  async getLlmProviders(
+    includeDeprecated = false
+  ): Promise<any> {
+    const query = this.buildQuery(includeDeprecated ? { include_deprecated: true } : {})
+    return await bgRequest<any>({
+      path: `/api/v1/llm/providers${query}`,
+      method: "GET"
+    })
+  }
+
+  // MLX admin helpers
+  async getMlxStatus(): Promise<MlxStatus> {
+    return await bgRequest<MlxStatus>({
+      path: "/api/v1/llm/providers/mlx/status",
+      method: "GET"
+    })
+  }
+
+  async loadMlxModel(payload: MlxLoadRequest): Promise<MlxStatus> {
+    return await bgRequest<MlxStatus>({
+      path: "/api/v1/llm/providers/mlx/load",
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: payload
+    })
+  }
+
+  async unloadMlxModel(payload?: MlxUnloadRequest): Promise<{ message?: string }> {
+    return await bgRequest<{ message?: string }>({
+      path: "/api/v1/llm/providers/mlx/unload",
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: payload || {}
+    })
+  }
+
+  async listAdminUsers(params?: {
+    page?: number
+    limit?: number
+    role?: string
+    is_active?: boolean
+    search?: string
+  }): Promise<AdminUserListResponse> {
+    const query = this.buildQuery(params as Record<string, any>)
+    return await bgRequest<AdminUserListResponse>({
+      path: `/api/v1/admin/users${query}`,
+      method: "GET"
+    })
+  }
+
+  async updateAdminUser(
+    userId: number,
+    payload: AdminUserUpdateRequest
+  ): Promise<{ message: string }> {
+    return await bgRequest<{ message: string }>({
+      path: `/api/v1/admin/users/${userId}`,
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: payload
+    })
+  }
+
+  async listAdminRoles(): Promise<AdminRole[]> {
+    return await bgRequest<AdminRole[]>({
+      path: "/api/v1/admin/roles",
+      method: "GET"
+    })
+  }
+
+  async createAdminRole(
+    name: string,
+    description?: string
+  ): Promise<AdminRole> {
+    return await bgRequest<AdminRole>({
+      path: "/api/v1/admin/roles",
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: { name, description }
+    })
+  }
+
+  async deleteAdminRole(roleId: number): Promise<{ message: string }> {
+    return await bgRequest<{ message: string }>({
+      path: `/api/v1/admin/roles/${roleId}`,
+      method: "DELETE"
+    })
+  }
+
+  async createChatCompletion(request: ChatCompletionRequest): Promise<Response> {
+    // Non-stream request via background
+    const res = await bgRequest<Response>({ path: '/api/v1/chat/completions', method: 'POST', headers: { 'Content-Type': 'application/json' }, body: request })
+    // bgRequest returns parsed data; for non-streaming chat we expect a JSON structure or text. To keep existing consumers happy, wrap as Response-like
+    // For simplicity, return a minimal object with json() and text()
+    const data = res as any
+    return new Response(typeof data === 'string' ? data : JSON.stringify(data), { status: 200, headers: { 'content-type': typeof data === 'string' ? 'text/plain' : 'application/json' } })
+  }
+
+  async *streamChatCompletion(request: ChatCompletionRequest, options?: { signal?: AbortSignal; streamIdleTimeoutMs?: number }): AsyncGenerator<any, void, unknown> {
+    request.stream = true
+    for await (const line of bgStream({ path: '/api/v1/chat/completions', method: 'POST', headers: { 'Content-Type': 'application/json' }, body: request, abortSignal: options?.signal, streamIdleTimeoutMs: options?.streamIdleTimeoutMs })) {
+      try {
+        const parsed = JSON.parse(line)
+        yield parsed
+      } catch (e) {
+        // Ignore non-JSON lines
+      }
+    }
+  }
+
+  // RAG Methods
+  async ragHealth(): Promise<any> {
+    return await this.request<any>({ path: '/api/v1/rag/health', method: 'GET' })
+  }
+
+  async ragSearch(query: string, options?: any): Promise<any> {
+    const { timeoutMs, ...rest } = options || {}
+    return await bgRequest<any>({ path: '/api/v1/rag/search', method: 'POST', headers: { 'Content-Type': 'application/json' }, body: { query, ...rest }, timeoutMs })
+  }
+
+  async ragSimple(query: string, options?: any): Promise<any> {
+    const { timeoutMs, ...rest } = options || {}
+    return await bgRequest<any>({ path: '/api/v1/rag/simple', method: 'POST', headers: { 'Content-Type': 'application/json' }, body: { query, ...rest }, timeoutMs })
+  }
+
+  // Research / Web search
+  async webSearch(options: any): Promise<any> {
+    const { timeoutMs, signal, ...rest } = options || {}
+    return await bgRequest<any>({
+      path: "/api/v1/research/websearch",
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: rest,
+      timeoutMs,
+      abortSignal: signal
+    })
+  }
+
+  // Media Methods
+  async addMedia(url: string, metadata?: any): Promise<any> {
+    const { timeoutMs, ...rest } = metadata || {}
+    return await bgRequest<any>({ path: '/api/v1/media/add', method: 'POST', headers: { 'Content-Type': 'application/json' }, body: { url, ...rest }, timeoutMs })
+  }
+
+  async addMediaForm(fields: Record<string, any>): Promise<any> {
+    // Multipart form for rich ingest parameters
+    // Accepts a flat fields map; callers may pass booleans/strings and they will be converted
+    const normalized: Record<string, any> = {}
+    for (const [k, v] of Object.entries(fields || {})) {
+      if (typeof v === 'undefined' || v === null) continue
+      if (typeof v === 'boolean') normalized[k] = v ? 'true' : 'false'
+      else normalized[k] = v
+    }
+    return await bgUpload<any>({ path: '/api/v1/media/add', method: 'POST', fields: normalized })
+  }
+
+  async uploadMedia(file: File, fields?: Record<string, any>): Promise<any> {
+    const data = await file.arrayBuffer()
+    const name = file.name || 'upload'
+    const type = file.type || 'application/octet-stream'
+    const normalized: Record<string, any> = {}
+    for (const [k, v] of Object.entries(fields || {})) {
+      if (typeof v === 'undefined' || v === null) continue
+      if (typeof v === 'boolean') normalized[k] = v ? 'true' : 'false'
+      else normalized[k] = v
+    }
+    return await bgUpload<any>({ path: '/api/v1/media/add', method: 'POST', fields: normalized, file: { name, type, data } })
+  }
+
+  async listMedia(
+    params?: {
+      page?: number
+      results_per_page?: number
+      include_keywords?: boolean
+    },
+    options?: { signal?: AbortSignal }
+  ): Promise<any> {
+    const query = this.buildQuery(params as Record<string, any>)
+    return await bgRequest<any>({
+      path: `/api/v1/media${query}`,
+      method: "GET",
+      abortSignal: options?.signal
+    })
+  }
+
+  async searchMedia(
+    payload: {
+      query?: string
+      fields?: string[]
+      exact_phrase?: string
+      media_types?: string[]
+      date_range?: Record<string, any>
+      must_have?: string[]
+      must_not_have?: string[]
+      sort_by?: string
+      boost_fields?: Record<string, number>
+    },
+    params?: { page?: number; results_per_page?: number },
+    options?: { signal?: AbortSignal }
+  ): Promise<any> {
+    const query = this.buildQuery(params as Record<string, any>)
+    return await bgRequest<any>({
+      path: `/api/v1/media/search${query}`,
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: payload,
+      abortSignal: options?.signal
+    })
+  }
+
+  async updateMediaKeywords(
+    mediaId: string | number,
+    payload: { keywords: string[]; mode?: "add" | "remove" | "set" }
+  ): Promise<{ media_id: number; keywords: string[] }> {
+    const id = encodeURIComponent(String(mediaId))
+    return await bgRequest<{ media_id: number; keywords: string[] }>({
+      path: `/api/v1/media/${id}/keywords`,
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: payload
+    })
+  }
+
+  // Notes Methods
+  async createNote(content: string, metadata?: any): Promise<any> {
+    return await bgRequest<any>({ path: '/api/v1/notes/', method: 'POST', headers: { 'Content-Type': 'application/json' }, body: { content, ...metadata } })
+  }
+
+  async searchNotes(query: string): Promise<any> {
+    // OpenAPI uses trailing slash for this path
+    return await bgRequest<any>({ path: '/api/v1/notes/search/', method: 'POST', headers: { 'Content-Type': 'application/json' }, body: { query } })
+  }
+  // Prompts Methods
+  async getPrompts(): Promise<any> {
+    const path = await this.resolveApiPath("prompts.list", [
+      "/api/v1/prompts",
+      "/api/v1/prompts/"
+    ])
+    return await bgRequest<any>({ path, method: 'GET' })
+  }
+
+  async searchPrompts(query: string): Promise<any> {
+    // TODO: confirm trailing slash per OpenAPI (`/api/v1/prompts/search` exists without slash)
+    return await bgRequest<any>({ path: '/api/v1/prompts/search', method: 'POST', headers: { 'Content-Type': 'application/json' }, body: { query } })
+  }
+
+  async createPrompt(payload: PromptPayload): Promise<any> {
+    const name = payload.name || payload.title || 'Untitled'
+    const system_prompt = payload.system_prompt ?? (payload.is_system ? payload.content : undefined)
+    const user_prompt = payload.user_prompt ?? (!payload.is_system ? payload.content : undefined)
+    const keywords = payload.keywords
+    const normalized: Record<string, any> = {
+      name,
+      author: payload.author,
+      details: payload.details,
+      system_prompt,
+      user_prompt,
+      keywords
+    }
+
+    Object.keys(normalized).forEach((key) => {
+      if (typeof normalized[key] === 'undefined') delete normalized[key]
+    })
+
+    const path = await this.resolveApiPath("prompts.create", [
+      "/api/v1/prompts",
+      "/api/v1/prompts/"
+    ])
+    return await bgRequest<any>({
+      path,
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: normalized
+    })
+  }
+
+  async updatePrompt(id: string | number, payload: PromptPayload): Promise<any> {
+    const pid = String(id)
+    const name = payload.name || payload.title || 'Untitled'
+    const system_prompt = payload.system_prompt ?? (payload.is_system ? payload.content : undefined)
+    const user_prompt = payload.user_prompt ?? (!payload.is_system ? payload.content : undefined)
+    const keywords = payload.keywords
+
+    const normalized: Record<string, any> = {
+      name,
+      author: payload.author,
+      details: payload.details,
+      system_prompt,
+      user_prompt,
+      keywords
+    }
+
+    Object.keys(normalized).forEach((key) => {
+      if (typeof normalized[key] === 'undefined') delete normalized[key]
+    })
+
+    // Path per OpenAPI: /api/v1/prompts/{prompt_identifier}
+    return await bgRequest<any>({ path: `/api/v1/prompts/${pid}`, method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: normalized })
+  }
+
+  // Characters API
+  async listCharacters(params?: Record<string, any>): Promise<any[]> {
+    const query = this.buildQuery(params)
+    const base = await this.resolveApiPath("characters.list", [
+      "/api/v1/characters",
+      "/api/v1/characters/"
+    ])
+    return await bgRequest<any[]>({
+      path: appendPathQuery(base, query),
+      method: 'GET'
+    })
+  }
+
+   async searchCharacters(query: string, params?: Record<string, any>): Promise<any[]> {
+    const qp = this.buildQuery({ query, ...(params || {}) })
+    const base = await this.resolveApiPath("characters.search", [
+      "/api/v1/characters/search",
+      "/api/v1/characters/search/"
+    ])
+    return await bgRequest<any[]>({
+      path: appendPathQuery(base, qp),
+      method: 'GET'
+    })
+  }
+
+  async filterCharactersByTags(
+    tags: string[],
+    options?: { match_all?: boolean; limit?: number; offset?: number }
+  ): Promise<any[]> {
+    const qp = this.buildQuery({
+      tags,
+      ...(options || {})
+    })
+    const base = await this.resolveApiPath("characters.filter", [
+      "/api/v1/characters/filter",
+      "/api/v1/characters/filter/"
+    ])
+    return await bgRequest<any[]>({
+      path: appendPathQuery(base, qp),
+      method: 'GET'
+    })
+  }
+
+  async getCharacter(id: string | number): Promise<any> {
+    const cid = String(id)
+    const cached = this.characterCache.get(cid)
+    if (cached && cached.expiresAt > Date.now()) {
+      return cached.value
+    }
+    const inFlight = this.characterInFlight.get(cid)
+    if (inFlight) return inFlight
+
+    const request = (async () => {
+      try {
+        const template = await this.resolveApiPath("characters.get", [
+          "/api/v1/characters/{id}",
+          "/api/v1/characters/{id}/"
+        ])
+        const path = this.fillPathParams(template, cid)
+        const value = await bgRequest<any>({
+          path,
+          method: 'GET'
+        })
+        this.characterCache.set(cid, {
+          value,
+          expiresAt: Date.now() + CHARACTER_CACHE_TTL_MS
+        })
+        return value
+      } finally {
+        this.characterInFlight.delete(cid)
+      }
+    })()
+
+    this.characterInFlight.set(cid, request)
+    return request
+  }
+
+  async createCharacter(payload: Record<string, any>): Promise<any> {
+    const path = await this.resolveApiPath("characters.create", [
+      "/api/v1/characters",
+      "/api/v1/characters/"
+    ])
+    return await bgRequest<any>({
+      path,
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: payload
+    })
+  }
+
+  async importCharacterFile(
+    file: File,
+    options?: { allowImageOnly?: boolean }
+  ): Promise<any> {
+    const buffer = await file.arrayBuffer()
+    const data = Array.from(new Uint8Array(buffer))
+    const name = file.name || "character-card"
+    const type = file.type || "application/octet-stream"
+    const path = await this.resolveApiPath("characters.import", [
+      "/api/v1/characters/import",
+      "/api/v1/characters/import/"
+    ])
+    const fields = options?.allowImageOnly
+      ? { allow_image_only: true }
+      : undefined
+    return await this.upload<any>({
+      path,
+      method: "POST",
+      fileFieldName: "character_file",
+      file: { name, type, data },
+      fields
+    })
+  }
+
+  async updateCharacter(id: string | number, payload: Record<string, any>, expectedVersion?: number): Promise<any> {
+    const cid = String(id)
+    const qp = expectedVersion != null ? `?expected_version=${encodeURIComponent(String(expectedVersion))}` : ''
+    const template = await this.resolveApiPath("characters.update", [
+      "/api/v1/characters/{id}",
+      "/api/v1/characters/{id}/"
+    ])
+    const path = appendPathQuery(this.fillPathParams(template, cid), qp)
+    const res = await bgRequest<any>({
+      path,
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: payload
+    })
+    this.characterCache.delete(cid)
+    return res
+  }
+
+  async deleteCharacter(id: string | number): Promise<void> {
+    const cid = String(id)
+    const template = await this.resolveApiPath("characters.delete", [
+      "/api/v1/characters/{id}",
+      "/api/v1/characters/{id}/"
+    ])
+    const path = this.fillPathParams(template, cid)
+    await bgRequest<void>({ path, method: 'DELETE' })
+    this.characterCache.delete(cid)
+  }
+
+  // Character chat sessions
+  async listCharacterChatSessions(): Promise<any[]> {
+    const path = await this.resolveApiPath("characterChatSessions.list", [
+      "/api/v1/character-chat/sessions",
+      "/api/v1/character_chat_sessions",
+      "/api/v1/character_chat_sessions/"
+    ])
+    return await bgRequest<any[]>({ path, method: 'GET' })
+  }
+
+  async createCharacterChatSession(character_id: string): Promise<any> {
+    const body = { character_id }
+    const path = await this.resolveApiPath("characterChatSessions.create", [
+      "/api/v1/character-chat/sessions",
+      "/api/v1/character_chat_sessions",
+      "/api/v1/character_chat_sessions/"
+    ])
+    return await bgRequest<any>({
+      path,
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body
+    })
+  }
+
+  async deleteCharacterChatSession(session_id: string | number): Promise<void> {
+    const sid = String(session_id)
+    const template = await this.resolveApiPath("characterChatSessions.delete", [
+      "/api/v1/character-chat/sessions/{session_id}",
+      "/api/v1/character_chat_sessions/{session_id}",
+      "/api/v1/character_chat_sessions/{session_id}/"
+    ])
+    const path = this.fillPathParams(template, sid)
+    await bgRequest<void>({ path, method: 'DELETE' })
+  }
+
+  // Character messages
+  async listCharacterMessages(session_id: string | number): Promise<any[]> {
+    const sid = String(session_id)
+    const query = this.buildQuery({ session_id: sid })
+    const template = await this.resolveApiPath("characterChatMessages.list", [
+      "/api/v1/character-chat/sessions/{session_id}/messages",
+      "/api/v1/character-messages",
+      "/api/v1/character_messages"
+    ])
+    const path = template.includes("{")
+      ? this.fillPathParams(template, sid)
+      : appendPathQuery(template, query)
+    return await bgRequest<any[]>({ path, method: 'GET' })
+  }
+
+  async sendCharacterMessage(session_id: string | number, content: string, options?: { extra?: Record<string, any> }): Promise<any> {
+    const sid = String(session_id)
+    const body = { content, session_id: sid, ...(options?.extra || {}) }
+    const template = await this.resolveApiPath("characterChatMessages.send", [
+      "/api/v1/character-chat/sessions/{session_id}/messages",
+      "/api/v1/character_messages",
+      "/api/v1/character-messages"
+    ])
+    const path = template.includes("{")
+      ? this.fillPathParams(template, sid)
+      : template
+    return await bgRequest<any>({
+      path,
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body
+    })
+  }
+
+  async * streamCharacterMessage(session_id: string | number, content: string, options?: { extra?: Record<string, any> }): AsyncGenerator<any> {
+    const sid = String(session_id)
+    const body = { content, session_id: sid, ...(options?.extra || {}) }
+    const template = await this.resolveApiPath("characterChatMessages.stream", [
+      "/api/v1/character-chat/sessions/{session_id}/messages/stream",
+      "/api/v1/character_messages/stream",
+      "/api/v1/character-messages/stream"
+    ])
+    const path = this.fillPathParams(template, sid)
+    for await (const line of bgStream({ path, method: 'POST', headers: { 'Content-Type': 'application/json' }, body })) {
+      try { yield JSON.parse(line) } catch {}
+    }
+  }
+
+  private normalizeChatSummary(input: any): ServerChatSummary {
+    const created_at = String(input?.created_at || input?.createdAt || "")
+    const updated_at =
+      input?.updated_at ??
+      input?.updatedAt ??
+      input?.last_modified ??
+      input?.lastModified ??
+      null
+    const state = input?.state ?? input?.conversation_state ?? null
+    return {
+      id: String(input?.id ?? ""),
+      title: String(input?.title || ""),
+      created_at,
+      updated_at: updated_at ? String(updated_at) : null,
+      source: input?.source ?? null,
+      state: state ? String(state) : null,
+      topic_label: input?.topic_label ?? input?.topicLabel ?? null,
+      cluster_id: input?.cluster_id ?? input?.clusterId ?? null,
+      external_ref: input?.external_ref ?? input?.externalRef ?? null,
+      bm25_norm:
+        typeof input?.bm25_norm === "number"
+          ? input?.bm25_norm
+          : typeof input?.relevance === "number"
+            ? input?.relevance
+            : null,
+      character_id: input?.character_id ?? input?.characterId ?? null,
+      parent_conversation_id:
+        input?.parent_conversation_id ?? input?.parentConversationId ?? null,
+      root_id: input?.root_id ?? input?.rootId ?? null,
+      version:
+        typeof input?.version === "number"
+          ? input.version
+          : typeof input?.expected_version === "number"
+            ? input.expected_version
+            : null
+    }
+  }
+
+  // Chats API (resource-based)
+  async listChatCommands(): Promise<any> {
+    return await bgRequest<any>({
+      path: "/api/v1/chat/commands",
+      method: "GET"
+    })
+  }
+
+  async listChats(
+    params?: Record<string, any>,
+    options?: { signal?: AbortSignal }
+  ): Promise<ServerChatSummary[]> {
+    const query = this.buildQuery(params)
+    const data = await bgRequest<any>({
+      path: `/api/v1/chats/${query}`,
+      method: "GET",
+      abortSignal: options?.signal
+    })
+
+    let list: any[] = []
+
+    if (Array.isArray(data)) {
+      list = data
+    } else if (data && typeof data === "object") {
+      const obj: any = data
+      if (Array.isArray(obj.chats)) {
+        list = obj.chats
+      } else if (Array.isArray(obj.items)) {
+        list = obj.items
+      } else if (Array.isArray(obj.results)) {
+        list = obj.results
+      } else if (Array.isArray(obj.data)) {
+        list = obj.data
+      }
+    }
+
+    return list.map((c) => this.normalizeChatSummary(c))
+  }
+
+  async listChatsWithMeta(
+    params?: Record<string, any>,
+    options?: { signal?: AbortSignal }
+  ): Promise<{ chats: ServerChatSummary[]; total: number }> {
+    const query = this.buildQuery(params)
+    const data = await bgRequest<any>({
+      path: `/api/v1/chats/${query}`,
+      method: "GET",
+      abortSignal: options?.signal
+    })
+
+    let list: any[] = []
+    let total: number | null = null
+
+    if (Array.isArray(data)) {
+      list = data
+    } else if (data && typeof data === "object") {
+      const obj: any = data
+      if (typeof obj.total === "number") {
+        total = obj.total
+      } else if (typeof obj.count === "number") {
+        total = obj.count
+      }
+      if (Array.isArray(obj.chats)) {
+        list = obj.chats
+      } else if (Array.isArray(obj.items)) {
+        list = obj.items
+      } else if (Array.isArray(obj.results)) {
+        list = obj.results
+      } else if (Array.isArray(obj.data)) {
+        list = obj.data
+      }
+    }
+
+    const chats = list.map((c) => this.normalizeChatSummary(c))
+    return {
+      chats,
+      total: typeof total === "number" ? total : chats.length
+    }
+  }
+
+  async createChat(payload: Record<string, any>): Promise<ServerChatSummary> {
+    const res = await bgRequest<any>({
+      path: "/api/v1/chats/",
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: payload
+    })
+    return this.normalizeChatSummary(res)
+  }
+
+  async getChat(chat_id: string | number): Promise<ServerChatSummary> {
+    const cid = String(chat_id)
+    const res = await bgRequest<any>({
+      path: `/api/v1/chats/${cid}`,
+      method: "GET"
+    })
+    return this.normalizeChatSummary(res)
+  }
+
+  async updateChat(
+    chat_id: string | number,
+    payload: Record<string, any>,
+    options?: { expectedVersion?: number }
+  ): Promise<ServerChatSummary> {
+    const cid = String(chat_id)
+    let expectedVersion = options?.expectedVersion
+    if (expectedVersion == null) {
+      try {
+        const current = await this.getChat(cid)
+        if (typeof current?.version === "number") {
+          expectedVersion = current.version
+        }
+      } catch {
+        // ignore and fall back to unversioned update
+      }
+    }
+    const qp =
+      typeof expectedVersion === "number"
+        ? `?expected_version=${encodeURIComponent(String(expectedVersion))}`
+        : ""
+    const res = await bgRequest<any>({
+      path: `/api/v1/chats/${cid}${qp}`,
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: payload
+    })
+    return this.normalizeChatSummary(res)
+  }
+
+  async deleteChat(chat_id: string | number): Promise<void> {
+    const cid = String(chat_id)
+    await bgRequest<void>({ path: `/api/v1/chats/${cid}`, method: 'DELETE' })
+  }
+
+  async listChatMessages(
+    chat_id: string | number,
+    params?: Record<string, any>,
+    options?: { signal?: AbortSignal }
+  ): Promise<ServerChatMessage[]> {
+    const cid = String(chat_id)
+    const query = this.buildQuery(params)
+    const cacheKey = this.getChatMessagesCacheKey(cid, query)
+    const cached = this.chatMessagesCache.get(cacheKey)
+    if (cached && cached.expiresAt > Date.now()) {
+      return cached.value
+    }
+    if (cached) {
+      this.chatMessagesCache.delete(cacheKey)
+    }
+
+    const inFlight = this.chatMessagesInFlight.get(cacheKey)
+    if (inFlight) {
+      return inFlight
+    }
+
+    const request = (async () => {
+      const data = await bgRequest<any>({
+        path: `/api/v1/chats/${cid}/messages${query}`,
+        method: "GET",
+        abortSignal: options?.signal
+      })
+
+      let list: any[] = []
+
+      if (Array.isArray(data)) {
+        list = data
+      } else if (data && typeof data === "object") {
+        const obj: any = data
+        if (Array.isArray(obj.messages)) {
+          list = obj.messages
+        } else if (Array.isArray(obj.items)) {
+          list = obj.items
+        } else if (Array.isArray(obj.results)) {
+          list = obj.results
+        } else if (Array.isArray(obj.data)) {
+          list = obj.data
+        }
+      }
+
+      const normalized = list.map((m) => {
+        const roleCandidate =
+          typeof m.role === "string"
+            ? m.role
+            : typeof m.sender === "string"
+              ? m.sender
+              : typeof m.author === "string"
+                ? m.author
+                : typeof (m as any)?.message?.role === "string"
+                  ? (m as any).message.role
+                  : typeof (m as any)?.message?.sender === "string"
+                    ? (m as any).message.sender
+                    : typeof (m as any)?.message?.author === "string"
+                      ? (m as any).message.author
+                      : undefined
+        const role =
+          typeof (m as any)?.is_bot === "boolean" ||
+          typeof (m as any)?.isBot === "boolean"
+            ? (m as any).is_bot || (m as any).isBot
+              ? "assistant"
+              : "user"
+            : normalizeChatRole(roleCandidate)
+        const created_at = String(
+          m.created_at || m.createdAt || m.timestamp || ""
+        )
+        return {
+          id: String(m.id),
+          role,
+          content: String(m.content ?? ""),
+          created_at,
+          version:
+            typeof m.version === "number"
+              ? m.version
+              : typeof m.expected_version === "number"
+                ? m.expected_version
+                : undefined
+        } as ServerChatMessage
+      })
+      this.chatMessagesCache.set(cacheKey, {
+        value: normalized,
+        expiresAt: Date.now() + CHAT_MESSAGES_CACHE_TTL_MS
+      })
+      return normalized
+    })()
+
+    this.chatMessagesInFlight.set(cacheKey, request)
+    try {
+      return await request
+    } finally {
+      this.chatMessagesInFlight.delete(cacheKey)
+    }
+  }
+
+  async addChatMessage(
+    chat_id: string | number,
+    payload: Record<string, any>
+  ): Promise<ServerChatMessage> {
+    const cid = String(chat_id)
+    const res = await bgRequest<ServerChatMessage>({
+      path: `/api/v1/chats/${cid}/messages`,
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: payload
+    })
+    this.invalidateChatMessagesCache(cid)
+    return res
+  }
+
+  async prepareCharacterCompletion(
+    chat_id: string | number,
+    payload?: Record<string, any>
+  ): Promise<any> {
+    const cid = String(chat_id)
+    return await bgRequest<any>({
+      path: `/api/v1/chats/${cid}/completions`,
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: payload || {}
+    })
+  }
+
+  async persistCharacterCompletion(
+    chat_id: string | number,
+    payload: Record<string, any>
+  ): Promise<any> {
+    const cid = String(chat_id)
+    const res = await bgRequest<any>({
+      path: `/api/v1/chats/${cid}/completions/persist`,
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: payload
+    })
+    this.invalidateChatMessagesCache(cid)
+    return res
+  }
+
+  async *streamCharacterChatCompletion(
+    chat_id: string | number,
+    payload?: Record<string, any>,
+    options?: { signal?: AbortSignal; streamIdleTimeoutMs?: number }
+  ): AsyncGenerator<any> {
+    const cid = String(chat_id)
+    const body = { ...(payload || {}), stream: true }
+    for await (const line of bgStream({
+      path: `/api/v1/chats/${cid}/complete-v2`,
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body,
+      abortSignal: options?.signal,
+      streamIdleTimeoutMs: options?.streamIdleTimeoutMs
+    })) {
+      if (!line) continue
+      try {
+        const parsed = JSON.parse(line)
+        yield parsed
+      } catch {
+        yield line
+      }
+    }
+  }
+
+  async searchChatMessages(chat_id: string | number, query: string, limit?: number): Promise<any> {
+    const cid = String(chat_id)
+    const qp = `?query=${encodeURIComponent(query)}${typeof limit === 'number' ? `&limit=${encodeURIComponent(String(limit))}` : ''}`
+    return await bgRequest<any>({ path: `/api/v1/chats/${cid}/messages/search${qp}`, method: 'GET' })
+  }
+
+  async completeChat(chat_id: string | number, payload?: Record<string, any>): Promise<any> {
+    const cid = String(chat_id)
+    return await bgRequest<any>({ path: `/api/v1/chats/${cid}/complete`, method: 'POST', headers: { 'Content-Type': 'application/json' }, body: payload || {} })
+  }
+
+  async * streamCompleteChat(chat_id: string | number, payload?: Record<string, any>): AsyncGenerator<any> {
+    const cid = String(chat_id)
+    for await (const line of bgStream({ path: `/api/v1/chats/${cid}/complete`, method: 'POST', headers: { 'Content-Type': 'application/json' }, body: payload || {} })) {
+      try { yield JSON.parse(line) } catch {}
+    }
+  }
+
+  // Message (single) APIs
+  async getMessage(message_id: string | number): Promise<any> {
+    const mid = String(message_id)
+    return await bgRequest<any>({ path: `/api/v1/messages/${mid}`, method: 'GET' })
+  }
+
+  async editMessage(
+    message_id: string | number,
+    content: string,
+    expectedVersion: number,
+    chatId?: string | number
+  ): Promise<any> {
+    const mid = String(message_id)
+    const qp = `?expected_version=${encodeURIComponent(String(expectedVersion))}`
+    const res = await bgRequest<any>({
+      path: `/api/v1/messages/${mid}${qp}`,
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: { content }
+    })
+    if (chatId != null) {
+      this.invalidateChatMessagesCache(chatId)
+    }
+    return res
+  }
+
+  async deleteMessage(
+    message_id: string | number,
+    expectedVersion: number,
+    chatId?: string | number
+  ): Promise<void> {
+    const mid = String(message_id)
+    const qp = `?expected_version=${encodeURIComponent(String(expectedVersion))}`
+    await bgRequest<void>({
+      path: `/api/v1/messages/${mid}${qp}`,
+      method: 'DELETE'
+    })
+    if (chatId != null) {
+      this.invalidateChatMessagesCache(chatId)
+    }
+  }
+
+  async saveChatKnowledge(payload: {
+    conversation_id: string | number
+    message_id: string | number
+    snippet: string
+    tags?: string[]
+    make_flashcard?: boolean
+  }): Promise<any> {
+    const body = {
+      ...payload,
+      conversation_id: String(payload.conversation_id),
+      message_id: String(payload.message_id)
+    }
+    return await bgRequest<any>({
+      path: "/api/v1/chat/knowledge/save",
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body
+    })
+  }
+
+  // World Books
+  async listWorldBooks(include_disabled?: boolean): Promise<any> {
+    const qp = include_disabled ? `?include_disabled=true` : ''
+    return await bgRequest<any>({ path: `/api/v1/characters/world-books${qp}`, method: 'GET' })
+  }
+
+  async createWorldBook(payload: Record<string, any>): Promise<any> {
+    return await bgRequest<any>({ path: '/api/v1/characters/world-books', method: 'POST', headers: { 'Content-Type': 'application/json' }, body: payload })
+  }
+
+  async updateWorldBook(world_book_id: number | string, payload: Record<string, any>): Promise<any> {
+    const wid = String(world_book_id)
+    return await bgRequest<any>({ path: `/api/v1/characters/world-books/${wid}`, method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: payload })
+  }
+
+  async deleteWorldBook(world_book_id: number | string): Promise<any> {
+    const wid = String(world_book_id)
+    return await bgRequest<any>({ path: `/api/v1/characters/world-books/${wid}`, method: 'DELETE' })
+  }
+
+  async listWorldBookEntries(world_book_id: number | string, enabled_only?: boolean): Promise<any> {
+    const wid = String(world_book_id)
+    const qp = enabled_only ? `?enabled_only=true` : ''
+    return await bgRequest<any>({ path: `/api/v1/characters/world-books/${wid}/entries${qp}`, method: 'GET' })
+  }
+
+  async addWorldBookEntry(world_book_id: number | string, payload: Record<string, any>): Promise<any> {
+    const wid = String(world_book_id)
+    return await bgRequest<any>({ path: `/api/v1/characters/world-books/${wid}/entries`, method: 'POST', headers: { 'Content-Type': 'application/json' }, body: payload })
+  }
+
+  async updateWorldBookEntry(entry_id: number | string, payload: Record<string, any>): Promise<any> {
+    const eid = String(entry_id)
+    return await bgRequest<any>({ path: `/api/v1/characters/world-books/entries/${eid}`, method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: payload })
+  }
+
+  async deleteWorldBookEntry(entry_id: number | string): Promise<any> {
+    const eid = String(entry_id)
+    return await bgRequest<any>({ path: `/api/v1/characters/world-books/entries/${eid}`, method: 'DELETE' })
+  }
+
+  async attachWorldBookToCharacter(character_id: number | string, world_book_id: number | string): Promise<any> {
+    const cid = String(character_id)
+    return await bgRequest<any>({ path: `/api/v1/characters/${cid}/world-books`, method: 'POST', headers: { 'Content-Type': 'application/json' }, body: { world_book_id: Number(world_book_id) } })
+  }
+
+  async detachWorldBookFromCharacter(character_id: number | string, world_book_id: number | string): Promise<any> {
+    const cid = String(character_id)
+    const wid = String(world_book_id)
+    return await bgRequest<any>({ path: `/api/v1/characters/${cid}/world-books/${wid}`, method: 'DELETE' })
+  }
+
+  async listCharacterWorldBooks(character_id: number | string): Promise<any> {
+    const cid = String(character_id)
+    return await bgRequest<any>({ path: `/api/v1/characters/${cid}/world-books`, method: 'GET' })
+  }
+
+  async exportWorldBook(world_book_id: number | string): Promise<any> {
+    const wid = String(world_book_id)
+    return await bgRequest<any>({ path: `/api/v1/characters/world-books/${wid}/export`, method: 'GET' })
+  }
+
+  async importWorldBook(request: { world_book: Record<string, any>; entries?: any[]; merge_on_conflict?: boolean }): Promise<any> {
+    return await bgRequest<any>({ path: '/api/v1/characters/world-books/import', method: 'POST', headers: { 'Content-Type': 'application/json' }, body: request })
+  }
+
+  async worldBookStatistics(world_book_id: number | string): Promise<any> {
+    const wid = String(world_book_id)
+    return await bgRequest<any>({ path: `/api/v1/characters/world-books/${wid}/statistics`, method: 'GET' })
+  }
+
+  // Chat Dictionaries
+  async createDictionary(payload: Record<string, any>): Promise<any> {
+    return await bgRequest<any>({ path: '/api/v1/chat/dictionaries', method: 'POST', headers: { 'Content-Type': 'application/json' }, body: payload })
+  }
+
+  async listDictionaries(include_inactive?: boolean): Promise<any> {
+    const qp = include_inactive ? `?include_inactive=true` : ''
+    return await bgRequest<any>({ path: `/api/v1/chat/dictionaries${qp}`, method: 'GET' })
+  }
+
+  async getDictionary(dictionary_id: number | string): Promise<any> {
+    const id = String(dictionary_id)
+    return await bgRequest<any>({ path: `/api/v1/chat/dictionaries/${id}`, method: 'GET' })
+  }
+
+  async updateDictionary(dictionary_id: number | string, payload: Record<string, any>): Promise<any> {
+    const id = String(dictionary_id)
+    return await bgRequest<any>({ path: `/api/v1/chat/dictionaries/${id}`, method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: payload })
+  }
+
+  async deleteDictionary(dictionary_id: number | string, hard_delete?: boolean): Promise<any> {
+    const id = String(dictionary_id)
+    const qp = hard_delete ? `?hard_delete=true` : ''
+    return await bgRequest<any>({ path: `/api/v1/chat/dictionaries/${id}${qp}`, method: 'DELETE' })
+  }
+
+  async listDictionaryEntries(dictionary_id: number | string, group?: string): Promise<any> {
+    const id = String(dictionary_id)
+    const qp = group ? `?group=${encodeURIComponent(group)}` : ''
+    return await bgRequest<any>({ path: `/api/v1/chat/dictionaries/${id}/entries${qp}`, method: 'GET' })
+    }
+
+  async addDictionaryEntry(dictionary_id: number | string, payload: Record<string, any>): Promise<any> {
+    const id = String(dictionary_id)
+    return await bgRequest<any>({ path: `/api/v1/chat/dictionaries/${id}/entries`, method: 'POST', headers: { 'Content-Type': 'application/json' }, body: payload })
+  }
+
+  async updateDictionaryEntry(entry_id: number | string, payload: Record<string, any>): Promise<any> {
+    const eid = String(entry_id)
+    return await bgRequest<any>({ path: `/api/v1/chat/dictionaries/entries/${eid}`, method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: payload })
+  }
+
+  async deleteDictionaryEntry(entry_id: number | string): Promise<any> {
+    const eid = String(entry_id)
+    return await bgRequest<any>({ path: `/api/v1/chat/dictionaries/entries/${eid}`, method: 'DELETE' })
+  }
+
+  async exportDictionaryMarkdown(dictionary_id: number | string): Promise<any> {
+    const id = String(dictionary_id)
+    return await bgRequest<any>({ path: `/api/v1/chat/dictionaries/${id}/export/markdown`, method: 'GET' })
+  }
+
+  async exportDictionaryJSON(dictionary_id: number | string): Promise<any> {
+    const id = String(dictionary_id)
+    return await bgRequest<any>({ path: `/api/v1/chat/dictionaries/${id}/export/json`, method: 'GET' })
+  }
+
+  async importDictionaryJSON(data: any, activate?: boolean): Promise<any> {
+    return await bgRequest<any>({ path: '/api/v1/chat/dictionaries/import/json', method: 'POST', headers: { 'Content-Type': 'application/json' }, body: { data, activate: !!activate } })
+  }
+
+  async validateDictionary(payload: {
+    data: Record<string, any>
+    schema_version?: number
+    strict?: boolean
+  }): Promise<any> {
+    return await bgRequest<any>({
+      path: "/api/v1/chat/dictionaries/validate",
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: payload
+    })
+  }
+
+  async processDictionary(payload: {
+    text: string
+    token_budget?: number
+    dictionary_id?: number | string
+    max_iterations?: number
+  }): Promise<any> {
+    return await bgRequest<any>({
+      path: "/api/v1/chat/dictionaries/process",
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: payload
+    })
+  }
+
+  async dictionaryStatistics(dictionary_id: number | string): Promise<any> {
+    const id = String(dictionary_id)
+    return await bgRequest<any>({ path: `/api/v1/chat/dictionaries/${id}/statistics`, method: 'GET' })
+  }
+
+  // Chat Documents
+  async generateChatDocument(payload: {
+    conversation_id: string | number
+    document_type: string
+    provider: string
+    model: string
+    specific_message?: string | null
+    custom_prompt?: string | null
+    stream?: boolean
+    async_generation?: boolean
+  }): Promise<any> {
+    const body = {
+      ...payload,
+      conversation_id: String(payload.conversation_id)
+    }
+    return await bgRequest<any>({
+      path: "/api/v1/chat/documents/generate",
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body
+    })
+  }
+
+  async listChatDocuments(params?: {
+    conversation_id?: string | number
+    document_type?: string
+    limit?: number
+  }): Promise<any> {
+    const query = this.buildQuery(params as Record<string, any>)
+    return await bgRequest<any>({
+      path: `/api/v1/chat/documents${query}`,
+      method: "GET"
+    })
+  }
+
+  async getChatDocument(document_id: number | string): Promise<any> {
+    const id = String(document_id)
+    return await bgRequest<any>({
+      path: `/api/v1/chat/documents/${id}`,
+      method: "GET"
+    })
+  }
+
+  async deleteChatDocument(document_id: number | string): Promise<any> {
+    const id = String(document_id)
+    return await bgRequest<any>({
+      path: `/api/v1/chat/documents/${id}`,
+      method: "DELETE"
+    })
+  }
+
+  async getChatDocumentJob(job_id: string): Promise<any> {
+    const id = String(job_id)
+    return await bgRequest<any>({
+      path: `/api/v1/chat/documents/jobs/${id}`,
+      method: "GET"
+    })
+  }
+
+  async cancelChatDocumentJob(job_id: string): Promise<any> {
+    const id = String(job_id)
+    return await bgRequest<any>({
+      path: `/api/v1/chat/documents/jobs/${id}`,
+      method: "DELETE"
+    })
+  }
+
+  async saveChatDocumentPrompt(payload: {
+    document_type: string
+    system_prompt: string
+    user_prompt: string
+    temperature?: number
+    max_tokens?: number
+  }): Promise<any> {
+    return await bgRequest<any>({
+      path: "/api/v1/chat/documents/prompts",
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: payload
+    })
+  }
+
+  async getChatDocumentPrompt(document_type: string): Promise<any> {
+    return await bgRequest<any>({
+      path: `/api/v1/chat/documents/prompts/${encodeURIComponent(document_type)}`,
+      method: "GET"
+    })
+  }
+
+  async chatDocumentStatistics(): Promise<any> {
+    return await bgRequest<any>({
+      path: "/api/v1/chat/documents/statistics",
+      method: "GET"
+    })
+  }
+
+  // Chatbooks
+  async exportChatbook(payload: {
+    name: string
+    description: string
+    content_selections: Record<string, string[]>
+    author?: string
+    include_media?: boolean
+    media_quality?: string
+    include_embeddings?: boolean
+    include_generated_content?: boolean
+    tags?: string[]
+    categories?: string[]
+    async_mode?: boolean
+  }): Promise<any> {
+    return await bgRequest<any>({
+      path: "/api/v1/chatbooks/export",
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: payload
+    })
+  }
+
+  async previewChatbook(file: File): Promise<any> {
+    const data = await file.arrayBuffer()
+    const name = file.name || "chatbook.zip"
+    const type = file.type || "application/zip"
+    return await bgUpload<any>({
+      path: "/api/v1/chatbooks/preview",
+      method: "POST",
+      file: { name, type, data }
+    })
+  }
+
+  async importChatbook(
+    file: File,
+    options?: {
+      conflict_resolution?: string
+      prefix_imported?: boolean
+      import_media?: boolean
+      import_embeddings?: boolean
+      async_mode?: boolean
+      content_selections?: Record<string, string[]>
+    }
+  ): Promise<any> {
+    const data = await file.arrayBuffer()
+    const name = file.name || "chatbook.zip"
+    const type = file.type || "application/zip"
+    const normalized: Record<string, any> = {}
+    for (const [k, v] of Object.entries(options || {})) {
+      if (typeof v === "undefined" || v === null) continue
+      normalized[k] = typeof v === "boolean" ? (v ? "true" : "false") : v
+    }
+    return await bgUpload<any>({
+      path: "/api/v1/chatbooks/import",
+      method: "POST",
+      fields: normalized,
+      file: { name, type, data }
+    })
+  }
+
+  async listChatbookExportJobs(params?: { limit?: number; offset?: number }): Promise<any> {
+    const query = this.buildQuery(params as Record<string, any>)
+    return await bgRequest<any>({
+      path: `/api/v1/chatbooks/export/jobs${query}`,
+      method: "GET"
+    })
+  }
+
+  async listChatbookImportJobs(params?: { limit?: number; offset?: number }): Promise<any> {
+    const query = this.buildQuery(params as Record<string, any>)
+    return await bgRequest<any>({
+      path: `/api/v1/chatbooks/import/jobs${query}`,
+      method: "GET"
+    })
+  }
+
+  async getChatbookExportJob(job_id: string): Promise<any> {
+    const id = String(job_id)
+    return await bgRequest<any>({
+      path: `/api/v1/chatbooks/export/jobs/${id}`,
+      method: "GET"
+    })
+  }
+
+  async getChatbookImportJob(job_id: string): Promise<any> {
+    const id = String(job_id)
+    return await bgRequest<any>({
+      path: `/api/v1/chatbooks/import/jobs/${id}`,
+      method: "GET"
+    })
+  }
+
+  async cancelChatbookExportJob(job_id: string): Promise<any> {
+    const id = String(job_id)
+    return await bgRequest<any>({
+      path: `/api/v1/chatbooks/export/jobs/${id}`,
+      method: "DELETE"
+    })
+  }
+
+  async cancelChatbookImportJob(job_id: string): Promise<any> {
+    const id = String(job_id)
+    return await bgRequest<any>({
+      path: `/api/v1/chatbooks/import/jobs/${id}`,
+      method: "DELETE"
+    })
+  }
+
+  async cleanupChatbooks(): Promise<any> {
+    return await bgRequest<any>({
+      path: "/api/v1/chatbooks/cleanup",
+      method: "POST"
+    })
+  }
+
+  async chatbooksHealth(): Promise<any> {
+    return await bgRequest<any>({
+      path: "/api/v1/chatbooks/health",
+      method: "GET"
+    })
+  }
+
+  async downloadChatbookExport(job_id: string): Promise<{ blob: Blob; filename: string }> {
+    await this.ensureConfigForRequest(true)
+    const response = await this.request<{
+      ok: boolean
+      status: number
+      data?: ArrayBuffer
+      error?: string
+      headers?: Record<string, string>
+    }>({
+      path: `/api/v1/chatbooks/download/${encodeURIComponent(job_id)}`,
+      method: "GET",
+      headers: { Accept: "application/octet-stream" },
+      responseType: "arrayBuffer",
+      returnResponse: true
+    })
+    if (!response) {
+      throw new Error("Download failed")
+    }
+    if (!response.ok) {
+      throw new Error(response.error || `Download failed: ${response.status}`)
+    }
+    const headers = new Headers(response.headers || {})
+    const blob = new Blob([response.data ?? new Uint8Array()], {
+      type: headers.get("content-type") || "application/octet-stream"
+    })
+    const disposition = headers.get("content-disposition")
+    let filename = `chatbook-${job_id}.zip`
+    if (disposition) {
+      const utfMatch = disposition.match(/filename\*=UTF-8''([^;]+)/i)
+      const plainMatch = disposition.match(/filename="?([^\";]+)"?/i)
+      const raw = utfMatch?.[1] || plainMatch?.[1]
+      if (raw) {
+        try {
+          filename = decodeURIComponent(raw)
+        } catch {
+          filename = raw
+        }
+      }
+    }
+    return { blob, filename }
+  }
+
+  async chatQueueStatus(): Promise<any> {
+    return await bgRequest<any>({
+      path: "/api/v1/chat/queue/status",
+      method: "GET"
+    })
+  }
+
+  async chatQueueActivity(limit?: number): Promise<any> {
+    const query = this.buildQuery(
+      typeof limit === "number" ? { limit } : undefined
+    )
+    return await bgRequest<any>({
+      path: `/api/v1/chat/queue/activity${query}`,
+      method: "GET"
+    })
+  }
+
+  // STT Methods
+  async getTranscriptionModels(): Promise<any> {
+    await this.ensureConfigForRequest(true)
+    return await bgRequest<any>({
+      path: "/api/v1/media/transcription-models",
+      method: "GET"
+    })
+  }
+
+  async getTranscriptionModelHealth(model: string): Promise<any> {
+    await this.ensureConfigForRequest(true)
+    const query = this.buildQuery({ model })
+    return await bgRequest<any>({
+      path: `/api/v1/audio/transcriptions/health${query}`,
+      method: "GET"
+    })
+  }
+
+  async transcribeAudio(audioFile: File | Blob, options?: any): Promise<any> {
+    await this.ensureConfigForRequest(true)
+    const fields: Record<string, any> = {}
+    if (options) {
+      if (options.model != null) fields.model = options.model
+      if (options.language != null) fields.language = options.language
+      if (options.prompt != null) fields.prompt = options.prompt
+      if (options.response_format != null) fields.response_format = options.response_format
+      if (options.temperature != null) fields.temperature = options.temperature
+      if (options.task != null) fields.task = options.task
+      if (options.timestamp_granularities != null) {
+        fields.timestamp_granularities = options.timestamp_granularities
+      }
+      if (options.segment != null) fields.segment = options.segment
+      if (options.seg_K != null) fields.seg_K = options.seg_K
+      if (options.seg_min_segment_size != null) {
+        fields.seg_min_segment_size = options.seg_min_segment_size
+      }
+      if (options.seg_lambda_balance != null) {
+        fields.seg_lambda_balance = options.seg_lambda_balance
+      }
+      if (options.seg_utterance_expansion_width != null) {
+        fields.seg_utterance_expansion_width = options.seg_utterance_expansion_width
+      }
+      if (options.seg_embeddings_provider != null) {
+        fields.seg_embeddings_provider = options.seg_embeddings_provider
+      }
+      if (options.seg_embeddings_model != null) {
+        fields.seg_embeddings_model = options.seg_embeddings_model
+      }
+    }
+    const data = await audioFile.arrayBuffer()
+    const name = (typeof File !== 'undefined' && audioFile instanceof File && (audioFile as File).name) ? (audioFile as File).name : 'audio'
+    const type = (audioFile as any)?.type || 'application/octet-stream'
+    return await this.upload<any>({ path: '/api/v1/audio/transcriptions', method: 'POST', fields, file: { name, type, data } })
+  }
+
+  async synthesizeSpeech(
+    text: string,
+    options?: {
+      voice?: string
+      model?: string
+      responseFormat?: string
+      speed?: number
+      language?: string
+      normalizationOptions?: Record<string, any>
+      extraParams?: Record<string, any>
+      stream?: boolean
+    }
+  ): Promise<ArrayBuffer> {
+    await this.ensureConfigForRequest(true)
+    const body: Record<string, any> = { input: text, text }
+    if (options?.voice) body.voice = options.voice
+    if (options?.model) body.model = options.model
+    if (options?.responseFormat) body.response_format = options.responseFormat
+    if (options?.speed != null) body.speed = options.speed
+    if (options?.language) body.lang_code = options.language
+    if (options?.normalizationOptions) {
+      body.normalization_options = options.normalizationOptions
+    }
+    if (options?.extraParams) body.extra_params = options.extraParams
+    if (options?.stream != null) body.stream = options.stream
+    const accept = (() => {
+      switch ((options?.responseFormat || "").trim().toLowerCase()) {
+        case "wav":
+          return "audio/wav"
+        case "opus":
+          return "audio/opus"
+        case "aac":
+          return "audio/aac"
+        case "flac":
+          return "audio/flac"
+        case "ogg":
+          return "audio/ogg"
+        case "webm":
+          return "audio/webm"
+        case "ulaw":
+          return "audio/basic"
+        case "pcm":
+          return "audio/L16; rate=24000; channels=1"
+        case "mp3":
+        default:
+          return "audio/mpeg"
+      }
+    })()
+    const data = await this.request<any>({
+      path: "/api/v1/audio/speech",
+      method: "POST",
+      headers: { Accept: accept },
+      body,
+      responseType: "arrayBuffer"
+    })
+
+    const normalizeArrayBuffer = async (value: unknown): Promise<ArrayBuffer | null> => {
+      if (!value) return null
+      if (value instanceof ArrayBuffer) return value
+      if (typeof SharedArrayBuffer !== "undefined" && value instanceof SharedArrayBuffer) {
+        return new Uint8Array(value).slice(0).buffer
+      }
+      if (ArrayBuffer.isView(value)) {
+        const view = value as ArrayBufferView
+        if (
+          typeof SharedArrayBuffer !== "undefined" &&
+          view.buffer instanceof SharedArrayBuffer
+        ) {
+          const copy = new Uint8Array(view.byteLength)
+          copy.set(new Uint8Array(view.buffer, view.byteOffset, view.byteLength))
+          return copy.buffer
+        }
+        if (view.buffer instanceof ArrayBuffer) {
+          return view.buffer.slice(view.byteOffset, view.byteOffset + view.byteLength)
+        }
+      }
+      if (typeof Blob !== "undefined" && value instanceof Blob) {
+        return await value.arrayBuffer()
+      }
+      const tag = Object.prototype.toString.call(value)
+      if (tag === "[object ArrayBuffer]" && typeof (value as any).slice === "function") {
+        return (value as any).slice(0)
+      }
+      if (Array.isArray(value) && value.every((entry) => typeof entry === "number")) {
+        return new Uint8Array(value).buffer
+      }
+      if (typeof value === "object") {
+        const record = value as Record<string, any>
+        if (
+          typeof record.type === "string" &&
+          record.type.toLowerCase() === "buffer" &&
+          Array.isArray(record.data)
+        ) {
+          return new Uint8Array(record.data).buffer
+        }
+        if (
+          typeof record.ok === "boolean" &&
+          Object.prototype.hasOwnProperty.call(record, "data")
+        ) {
+          const nested = await normalizeArrayBuffer(record.data)
+          if (nested) return nested
+        }
+        if (
+          typeof record.byteLength === "number" &&
+          typeof record.slice === "function"
+        ) {
+          try {
+            const sliced = record.slice(0)
+            if (
+              typeof SharedArrayBuffer !== "undefined" &&
+              sliced instanceof SharedArrayBuffer
+            ) {
+              return new Uint8Array(sliced).slice(0).buffer
+            }
+            return sliced
+          } catch {
+            // ignore and continue
+          }
+        }
+        if (typeof record.arrayBuffer === "function") {
+          return await record.arrayBuffer()
+        }
+        if (record.data !== undefined) {
+          const nested = await normalizeArrayBuffer(record.data)
+          if (nested) return nested
+        }
+        if (record.buffer !== undefined) {
+          const nested = await normalizeArrayBuffer(record.buffer)
+          if (nested) return nested
+        }
+        if (typeof record.length === "number") {
+          const maybeArray = Array.from(record as ArrayLike<unknown>)
+          if (maybeArray.length > 0 && maybeArray.every((entry) => typeof entry === "number")) {
+            return new Uint8Array(maybeArray).buffer
+          }
+        }
+      }
+      return null
+    }
+
+    const normalized = await normalizeArrayBuffer(data)
+    if (!normalized) {
+      // eslint-disable-next-line no-console
+      try {
+        // eslint-disable-next-line no-console
+        console.error("[tldw][tts] Invalid audio buffer from /api/v1/audio/speech", {
+          type: typeof data,
+          tag: Object.prototype.toString.call(data),
+          constructor:
+            typeof data === "object" && data ? (data as any).constructor?.name : undefined,
+          keys:
+            typeof data === "object" && data
+              ? Object.keys(data as object).slice(0, 10)
+              : [],
+          dataType: typeof (data as any)?.data,
+          dataTag:
+            typeof (data as any)?.data !== "undefined"
+              ? Object.prototype.toString.call((data as any).data)
+              : undefined,
+          dataKeys:
+            (data as any)?.data && typeof (data as any).data === "object"
+              ? Object.keys((data as any).data).slice(0, 10)
+              : undefined
+        })
+        if (typeof data === "object" && data) {
+          // eslint-disable-next-line no-console
+          console.error(
+            "[tldw][tts] Invalid audio buffer payload sample",
+            JSON.stringify(data, null, 2).slice(0, 2000)
+          )
+        }
+      } catch (e) {
+        // eslint-disable-next-line no-console
+        console.error("[tldw][tts] Failed to log invalid audio buffer payload", e)
+      }
+      throw new Error("TTS returned an invalid audio buffer.")
+    }
+    return normalized
+  }
+
+  // ─────────────────────────────────────────────────────────────────────────
+  // Data Tables API
+  // ─────────────────────────────────────────────────────────────────────────
+
+  async listDataTables(params?: {
+    page?: number
+    page_size?: number
+    limit?: number
+    offset?: number
+    search?: string
+    status?: string
+    workspace_tag?: string
+  }): Promise<{ tables: any[]; total: number }> {
+    const limit = params?.limit ?? params?.page_size ?? 20
+    const page = params?.page ?? 1
+    const offset = params?.offset ?? Math.max(0, (page - 1) * limit)
+    const query = this.buildQuery({
+      limit,
+      offset,
+      search: params?.search,
+      status_filter: params?.status,
+      workspace_tag: params?.workspace_tag
+    } as Record<string, any>)
+    const response = await bgRequest<any>({
+      path: `/api/v1/data-tables${query}`,
+      method: "GET"
+    })
+    return mapApiListToUi(response)
+  }
+
+  async getDataTable(
+    tableId: string,
+    params?: {
+      rows_limit?: number
+      rows_offset?: number
+      include_rows?: boolean
+      include_sources?: boolean
+    }
+  ): Promise<any> {
+    const id = encodeURIComponent(tableId)
+    const query = this.buildQuery({
+      rows_limit: params?.rows_limit,
+      rows_offset: params?.rows_offset,
+      include_rows: params?.include_rows,
+      include_sources: params?.include_sources
+    } as Record<string, any>)
+    const response = await bgRequest<any>({
+      path: `/api/v1/data-tables/${id}${query}`,
+      method: "GET"
+    })
+    return response?.table ? mapApiDetailToUi(response) : response
+  }
+
+  async generateDataTable(payload: {
+    name: string
+    prompt: string
+    workspace_tag?: string
+    sources: Array<{ type: string; id: string; title: string; snippet?: string }>
+    column_hints?: Array<{ name?: string; type?: string; description?: string; format?: string }>
+    model?: string
+    max_rows?: number
+  }): Promise<ApiDataTableGenerateResponse> {
+    const body = {
+      name: payload.name,
+      prompt: payload.prompt,
+      workspace_tag: payload.workspace_tag,
+      sources: payload.sources.map(mapUiSourceToApi),
+      column_hints: payload.column_hints,
+      model: payload.model,
+      max_rows: payload.max_rows
+    }
+    return await bgRequest<ApiDataTableGenerateResponse>({
+      path: "/api/v1/data-tables/generate",
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body
+    })
+  }
+
+  async updateDataTable(
+    tableId: string,
+    payload: { name?: string; description?: string }
+  ): Promise<any> {
+    const id = encodeURIComponent(tableId)
+    return await bgRequest<any>({
+      path: `/api/v1/data-tables/${id}`,
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: payload
+    })
+  }
+
+  async saveDataTableContent(
+    tableId: string,
+    payload: {
+      columns: DataTableColumn[]
+      rows: Record<string, any>[]
+    }
+  ): Promise<any> {
+    const id = encodeURIComponent(tableId)
+    const body = buildContentPayload(payload.columns, payload.rows)
+    const response = await bgRequest<any>({
+      path: `/api/v1/data-tables/${id}/content`,
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body
+    })
+    return response?.table ? mapApiDetailToUi(response) : response
+  }
+
+  async deleteDataTable(tableId: string): Promise<void> {
+    const id = encodeURIComponent(tableId)
+    await bgRequest<void>({
+      path: `/api/v1/data-tables/${id}`,
+      method: "DELETE"
+    })
+  }
+
+  async getDataTableJob(jobId: number): Promise<ApiDataTableJobStatus> {
+    return await bgRequest<ApiDataTableJobStatus>({
+      path: `/api/v1/data-tables/jobs/${encodeURIComponent(String(jobId))}`,
+      method: "GET"
+    })
+  }
+
+  async regenerateDataTable(
+    tableId: string,
+    payload?: { prompt?: string; model?: string; max_rows?: number }
+  ): Promise<ApiDataTableGenerateResponse> {
+    const id = encodeURIComponent(tableId)
+    return await bgRequest<ApiDataTableGenerateResponse>({
+      path: `/api/v1/data-tables/${id}/regenerate`,
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: payload || {}
+    })
+  }
+
+  async exportDataTable(
+    tableId: string,
+    format: "csv" | "xlsx" | "json"
+  ): Promise<{ blob: Blob; filename: string }> {
+    await this.ensureConfigForRequest(true)
+
+    const fallbackFilename = `data-table-${tableId}.${format}`
+    const resolveFilename = (res: Response) => {
+      const disposition = res.headers.get("content-disposition")
+      if (!disposition) return fallbackFilename
+      const utfMatch = disposition.match(/filename\*=UTF-8''([^;]+)/i)
+      const plainMatch = disposition.match(/filename="?([^\";]+)"?/i)
+      const raw = utfMatch?.[1] || plainMatch?.[1]
+      if (!raw) return fallbackFilename
+      try {
+        return decodeURIComponent(raw)
+      } catch {
+        return raw
+      }
+    }
+    const readErrorDetail = async (res: Response) => {
+      try {
+        const data = await res.json()
+        return data?.detail || data?.error || data?.message
+      } catch {
+        return undefined
+      }
+    }
+    const bytesToArrayBuffer = (bytes: Uint8Array): ArrayBuffer => {
+      if (bytes.buffer instanceof ArrayBuffer) {
+        return bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength)
+      }
+      return new Uint8Array(bytes).buffer as ArrayBuffer
+    }
+    const requestWithAuth = async (
+      path: PathOrUrl,
+      options?: {
+        method?: "GET" | "POST" | "PUT" | "DELETE"
+        body?: unknown
+        signal?: AbortSignal
+      }
+    ) => {
+      const response = await bgRequest<{
+        ok: boolean
+        status: number
+        data?: unknown
+        error?: string
+        headers?: Record<string, string>
+      }, PathOrUrl>({
+        path,
+        method: options?.method ?? "GET",
+        body: options?.body,
+        abortSignal: options?.signal,
+        responseType: "arrayBuffer",
+        returnResponse: true
+      })
+      if (!response) {
+        throw new Error(`Request failed (${options?.method ?? "GET"} ${path})`)
+      }
+      if (!response.ok && response.status === 0) {
+        throw new Error(response.error || "Network error")
+      }
+      const headers = new Headers(response.headers || {})
+      let body: BodyInit | null = null
+      if (response.data instanceof ArrayBuffer) {
+        body = response.data
+      } else if (response.data instanceof Uint8Array) {
+        body = bytesToArrayBuffer(response.data)
+      } else if (response.data instanceof Blob) {
+        body = response.data
+      } else if (typeof response.data === "string") {
+        body = response.data
+      } else if (response.data != null) {
+        body = JSON.stringify(response.data)
+        if (!headers.has("content-type")) {
+          headers.set("content-type", "application/json")
+        }
+      }
+      return new Response(body, { status: response.status, headers })
+    }
+    const readBlobResponse = async (res: Response) => {
+      const blob = await res.blob()
+      return { blob, filename: resolveFilename(res) }
+    }
+    const decodeBase64Blob = (data: string, contentType?: string | null) => {
+      const binary = atob(data)
+      const bytes = new Uint8Array(binary.length)
+      for (let i = 0; i < binary.length; i += 1) {
+        bytes[i] = binary.charCodeAt(i)
+      }
+      return new Blob([bytes], {
+        type: contentType || "application/octet-stream"
+      })
+    }
+    const waitForExportReady = async (fileId: number) => {
+      const timeoutMs = 5 * 60 * 1000
+      const intervalMs = 1500
+      const start = Date.now()
+      while (Date.now() - start < timeoutMs) {
+        const statusRes = await requestWithAuth(`/api/v1/files/${fileId}`)
+        if (!statusRes.ok) {
+          const detail = await readErrorDetail(statusRes)
+          throw new Error(detail || `Export status failed: ${statusRes.status}`)
+        }
+        const payload = await statusRes.json()
+        const exportInfo = payload?.artifact?.export || payload?.export
+        if (exportInfo?.status === "ready") {
+          return exportInfo
+        }
+        if (exportInfo?.status && exportInfo.status !== "pending") {
+          throw new Error("Export failed")
+        }
+        await new Promise((resolve) => setTimeout(resolve, intervalMs))
+      }
+      throw new Error("Export timed out")
+    }
+    const downloadFromUrl = async (url: string) => {
+      const resolved = url.startsWith("http")
+        ? (url as PathOrUrl)
+        : ((url.startsWith("/") ? url : `/${url}`) as PathOrUrl)
+      const fileRes = await requestWithAuth(resolved)
+      if (!fileRes.ok) {
+        const detail = await readErrorDetail(fileRes)
+        throw new Error(detail || `Export download failed: ${fileRes.status}`)
+      }
+      return await readBlobResponse(fileRes)
+    }
+    const exportViaArtifact = async () => {
+      const exportUrl =
+        `/api/v1/data-tables/${encodeURIComponent(tableId)}/export?format=${encodeURIComponent(
+          format
+        )}&async_mode=auto&mode=url` as AllowedPath
+      const exportRes = await requestWithAuth(exportUrl)
+      if (!exportRes.ok) {
+        const detail = await readErrorDetail(exportRes)
+        throw new Error(detail || `Export failed: ${exportRes.status}`)
+      }
+      const contentType = exportRes.headers.get("content-type") || ""
+      if (!contentType.includes("application/json")) {
+        return await readBlobResponse(exportRes)
+      }
+      const payload = await exportRes.json()
+      const exportInfo = payload?.export || payload?.artifact?.export
+      const fileId = payload?.file_id || payload?.artifact?.file_id
+      if (exportInfo?.content_b64) {
+        const blob = decodeBase64Blob(
+          exportInfo.content_b64,
+          exportInfo.content_type
+        )
+        return { blob, filename: resolveFilename(exportRes) }
+      }
+      if (!fileId) {
+        throw new Error("Export response missing file id")
+      }
+      const resolvedExport =
+        exportInfo?.status === "pending" ? await waitForExportReady(fileId) : exportInfo
+      if (!resolvedExport?.url) {
+        throw new Error("Export URL missing")
+      }
+      return await downloadFromUrl(resolvedExport.url)
+    }
+
+    const url =
+      `/api/v1/data-tables/${encodeURIComponent(tableId)}/export?format=${encodeURIComponent(
+        format
+      )}&download=true` as AllowedPath
+    const res = await requestWithAuth(url)
+
+    if (!res.ok) {
+      const detail = await readErrorDetail(res)
+      if (res.status === 422 && detail === "export_size_exceeded") {
+        return await exportViaArtifact()
+      }
+      throw new Error(detail || `Export failed: ${res.status}`)
+    }
+
+    return await readBlobResponse(res)
+  }
+
+  // ─────────────────────────────────────────────────────────────────────────────
+  // File Artifacts
+  // ─────────────────────────────────────────────────────────────────────────────
+
+  async createImageArtifact(request: ImageArtifactRequest): Promise<FileCreateResponse> {
+    const payload: Record<string, unknown> = {
+      backend: request.backend,
+      prompt: request.prompt
+    }
+    if (request.negativePrompt) payload.negative_prompt = request.negativePrompt
+    if (typeof request.width === "number") payload.width = request.width
+    if (typeof request.height === "number") payload.height = request.height
+    if (typeof request.steps === "number") payload.steps = request.steps
+    if (typeof request.cfgScale === "number") payload.cfg_scale = request.cfgScale
+    if (typeof request.seed === "number") payload.seed = request.seed
+    if (request.sampler) payload.sampler = request.sampler
+    if (request.model) payload.model = request.model
+    if (request.extraParams) payload.extra_params = request.extraParams
+
+    const body: Record<string, unknown> = {
+      file_type: "image",
+      payload,
+      export: {
+        format: request.format || "png",
+        mode: "inline",
+        async_mode: "sync"
+      },
+      options: {
+        persist: typeof request.persist === "boolean" ? request.persist : true
+      }
+    }
+    if (request.title) {
+      body.title = request.title
+    }
+
+    return await this.request<FileCreateResponse>({
+      path: "/api/v1/files/create",
+      method: "POST",
+      body,
+      timeoutMs: request.timeoutMs
+    })
+  }
+
+  // ─────────────────────────────────────────────────────────────────────────────
+  // Collections / Reading List API
+  // ─────────────────────────────────────────────────────────────────────────────
+
+  async getReadingList(params?: {
+    page?: number
+    size?: number
+    q?: string
+    status?: string | string[]
+    tags?: string[]
+    favorite?: boolean
+    sort?: string
+    domain?: string
+    date_from?: string
+    date_to?: string
+  }): Promise<any> {
+    const query = new URLSearchParams()
+    if (params?.page) query.set("page", String(params.page))
+    if (params?.size) query.set("size", String(params.size))
+    if (params?.q) query.set("q", params.q)
+    if (params?.status) {
+      const statuses = Array.isArray(params.status) ? params.status : [params.status]
+      statuses.filter(Boolean).forEach((status) => query.append("status", status))
+    }
+    if (params?.tags?.length) params.tags.forEach((tag) => query.append("tags", tag))
+    if (params?.favorite !== undefined) query.set("favorite", String(params.favorite))
+    if (params?.sort) query.set("sort", params.sort)
+    if (params?.domain) query.set("domain", params.domain)
+    if (params?.date_from) query.set("date_from", params.date_from)
+    if (params?.date_to) query.set("date_to", params.date_to)
+    const qs = query.toString()
+    const path = `/api/v1/reading/items${qs ? `?${qs}` : ""}` as const
+    const data = await bgRequest<any>({ path, method: "GET" })
+    const items = Array.isArray(data?.items)
+      ? data.items.map((item: any) => ({
+          id: String(item.id),
+          title: item.title || item.url || "Untitled",
+          url: item.url,
+          canonical_url: item.canonical_url,
+          domain: item.domain,
+          summary: item.summary ?? undefined,
+          notes: item.notes ?? undefined,
+          status: item.status ?? "saved",
+          favorite: Boolean(item.favorite),
+          tags: Array.isArray(item.tags) ? item.tags : [],
+          reading_time_minutes: item.reading_time_minutes,
+          created_at: item.created_at,
+          updated_at: item.updated_at,
+          published_at: item.published_at
+        }))
+      : []
+    return {
+      ...data,
+      items,
+      total: data?.total ?? items.length,
+      page: data?.page ?? params?.page ?? 1,
+      size: data?.size ?? params?.size ?? items.length
+    }
+  }
+
+  async getReadingItem(itemId: string): Promise<any> {
+    const path = `/api/v1/reading/items/${encodeURIComponent(itemId)}` as const
+    const item = await bgRequest<any>({ path, method: "GET" })
+    return {
+      ...item,
+      id: String(item?.id),
+      media_id: item?.media_id ? String(item.media_id) : undefined,
+      favorite: Boolean(item?.favorite),
+      tags: Array.isArray(item?.tags) ? item.tags : []
+    }
+  }
+
+  async addReadingItem(data: {
+    url: string
+    title?: string
+    tags?: string[]
+    notes?: string
+    status?: string
+    favorite?: boolean
+    summary?: string
+    content?: string
+  }): Promise<any> {
+    return await bgRequest<any>({
+      path: "/api/v1/reading/save",
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: data
+    })
+  }
+
+  async updateReadingItem(
+    itemId: string,
+    data: {
+      status?: string
+      favorite?: boolean
+      tags?: string[]
+      notes?: string
+      title?: string
+    }
+  ): Promise<any> {
+    const path = `/api/v1/reading/items/${encodeURIComponent(itemId)}` as const
+    return await bgRequest<any>({
+      path,
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: data
+    })
+  }
+
+  async deleteReadingItem(itemId: string, options?: { hard?: boolean }): Promise<void> {
+    const query = new URLSearchParams()
+    if (options?.hard !== undefined) query.set("hard", String(options.hard))
+    const qs = query.toString()
+    const path = `/api/v1/reading/items/${encodeURIComponent(itemId)}${qs ? `?${qs}` : ""}` as const
+    await bgRequest<void>({ path, method: "DELETE" })
+  }
+
+  async summarizeReadingItem(
+    itemId: string,
+    options?: {
+      provider?: string
+      model?: string
+      prompt?: string
+      system_prompt?: string
+      temperature?: number
+      recursive?: boolean
+      chunked?: boolean
+    }
+  ): Promise<{ summary: string; provider: string; model?: string }> {
+    const path = `/api/v1/reading/items/${encodeURIComponent(itemId)}/summarize` as const
+    return await bgRequest<any>({
+      path,
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: options || {}
+    })
+  }
+
+  async generateReadingItemTts(
+    itemId: string,
+    options?: { voice?: string }
+  ): Promise<{ audio_url: string }> {
+    const path = `/api/v1/reading/items/${encodeURIComponent(itemId)}/tts` as const
+    const data = await bgRequest<ArrayBuffer>({
+      path,
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: {
+        response_format: "mp3",
+        stream: false,
+        ...(options || {})
+      },
+      responseType: "arrayBuffer"
+    })
+    const blob = new Blob([data], { type: "audio/mpeg" })
+    return { audio_url: URL.createObjectURL(blob) }
+  }
+
+  // Highlights
+  async getHighlights(itemId: string): Promise<any[]> {
+    const path = `/api/v1/reading/items/${encodeURIComponent(itemId)}/highlights` as const
+    const data = await bgRequest<any>({ path, method: "GET" })
+    return Array.isArray(data)
+      ? data.map((highlight) => ({
+          ...highlight,
+          id: String(highlight.id),
+          item_id: String(highlight.item_id),
+          color: highlight.color || "yellow",
+          anchor_strategy: highlight.anchor_strategy || "fuzzy_quote"
+        }))
+      : []
+  }
+
+  async createHighlight(data: {
+    item_id: string
+    quote: string
+    note?: string
+    color?: string
+    start_offset?: number
+    end_offset?: number
+    anchor_strategy?: string
+  }): Promise<any> {
+    const path = `/api/v1/reading/items/${encodeURIComponent(data.item_id)}/highlight` as const
+    const payload = {
+      item_id: Number(data.item_id),
+      quote: data.quote,
+      note: data.note,
+      color: data.color,
+      start_offset: data.start_offset,
+      end_offset: data.end_offset,
+      anchor_strategy: data.anchor_strategy
+    }
+    const highlight = await bgRequest<any>({
+      path,
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: payload
+    })
+    return {
+      ...highlight,
+      id: String(highlight.id),
+      item_id: String(highlight.item_id),
+      color: highlight.color || "yellow",
+      anchor_strategy: highlight.anchor_strategy || "fuzzy_quote"
+    }
+  }
+
+  async updateHighlight(
+    highlightId: string,
+    data: { note?: string; color?: string; state?: string }
+  ): Promise<any> {
+    const path = `/api/v1/reading/highlights/${encodeURIComponent(highlightId)}` as const
+    const highlight = await bgRequest<any>({
+      path,
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: data
+    })
+    return {
+      ...highlight,
+      id: String(highlight.id),
+      item_id: String(highlight.item_id),
+      color: highlight.color || "yellow",
+      anchor_strategy: highlight.anchor_strategy || "fuzzy_quote"
+    }
+  }
+
+  async deleteHighlight(highlightId: string): Promise<void> {
+    const path = `/api/v1/reading/highlights/${encodeURIComponent(highlightId)}` as const
+    await bgRequest<void>({ path, method: "DELETE" })
+  }
+
+  // Output Templates
+  async getOutputTemplates(params?: {
+    q?: string
+    limit?: number
+    offset?: number
+  }): Promise<any> {
+    const query = new URLSearchParams()
+    if (params?.q) query.set("q", params.q)
+    if (params?.limit) query.set("limit", String(params.limit))
+    if (params?.offset !== undefined) query.set("offset", String(params.offset))
+    const qs = query.toString()
+    const path = `/api/v1/outputs/templates${qs ? `?${qs}` : ""}` as const
+    const data = await bgRequest<any>({ path, method: "GET" })
+    const items = Array.isArray(data?.items)
+      ? data.items.map((template: any) => ({
+          ...template,
+          id: String(template.id)
+        }))
+      : []
+    return {
+      ...data,
+      items,
+      total: data?.total ?? items.length
+    }
+  }
+
+  async createOutputTemplate(data: {
+    name: string
+    description?: string
+    type: string
+    format: string
+    body: string
+    is_default?: boolean
+  }): Promise<any> {
+    const template = await bgRequest<any>({
+      path: "/api/v1/outputs/templates",
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: data
+    })
+    return { ...template, id: String(template.id) }
+  }
+
+  async updateOutputTemplate(
+    templateId: string,
+    data: {
+      name?: string
+      description?: string
+      body?: string
+      is_default?: boolean
+      type?: string
+      format?: string
+    }
+  ): Promise<any> {
+    const path = `/api/v1/outputs/templates/${encodeURIComponent(templateId)}` as const
+    const template = await bgRequest<any>({
+      path,
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: data
+    })
+    return { ...template, id: String(template.id) }
+  }
+
+  async deleteOutputTemplate(templateId: string): Promise<void> {
+    const path = `/api/v1/outputs/templates/${encodeURIComponent(templateId)}` as const
+    await bgRequest<void>({ path, method: "DELETE" })
+  }
+
+  async previewTemplate(data: {
+    template_id: string
+    item_ids?: string[]
+    run_id?: string
+    limit?: number
+    data?: Record<string, unknown>
+  }): Promise<{ rendered: string; format: string }> {
+    const path = `/api/v1/outputs/templates/${encodeURIComponent(data.template_id)}/preview` as const
+    return await bgRequest<any>({
+      path,
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: {
+        template_id: Number(data.template_id),
+        item_ids: data.item_ids?.map((id) => Number(id)),
+        run_id: data.run_id ? Number(data.run_id) : undefined,
+        limit: data.limit,
+        data: data.data
+      }
+    })
+  }
+
+  async listOutputs(params?: {
+    page?: number
+    size?: number
+    job_id?: number
+    run_id?: number
+    type?: string
+    workspace_tag?: string
+    include_deleted?: boolean
+  }): Promise<{ items: any[]; total: number; page?: number; size?: number }> {
+    const query = this.buildQuery(params as Record<string, any>)
+    const response = await bgRequest<any>({
+      path: `/api/v1/outputs${query}`,
+      method: "GET"
+    })
+    const items = Array.isArray(response?.items)
+      ? response.items.map((item: any) => ({
+          ...item,
+          id: String(item.id),
+          media_item_id:
+            item.media_item_id === null || typeof item.media_item_id === "undefined"
+              ? undefined
+              : String(item.media_item_id)
+        }))
+      : []
+    return {
+      ...response,
+      items,
+      total: response?.total ?? items.length
+    }
+  }
+
+  async generateOutput(data: {
+    template_id: string
+    item_ids?: string[]
+    run_id?: string
+    title?: string
+    workspace_tag?: string
+    data?: Record<string, unknown>
+  }): Promise<any> {
+    const output = await bgRequest<any>({
+      path: "/api/v1/outputs",
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: {
+        template_id: Number(data.template_id),
+        item_ids: data.item_ids?.map((id) => Number(id)),
+        run_id: data.run_id ? Number(data.run_id) : undefined,
+        title: data.title,
+        workspace_tag: data.workspace_tag,
+        data: data.data
+      }
+    })
+    return { ...output, id: String(output.id) }
+  }
+
+  async downloadOutput(outputId: string, format?: string): Promise<Blob> {
+    const path = `/api/v1/outputs/${encodeURIComponent(outputId)}/download` as const
+    const data = await bgRequest<ArrayBuffer>({
+      path,
+      method: "GET",
+      responseType: "arrayBuffer"
+    })
+    const mime =
+      format === "html"
+        ? "text/html"
+        : format === "md"
+          ? "text/markdown"
+          : format === "mp3"
+            ? "audio/mpeg"
+            : "application/octet-stream"
+    return new Blob([data], { type: mime })
+  }
+
+  // Import/Export
+  async importReadingList(data: {
+    source: string
+    file: File
+    merge_tags?: boolean
+  }): Promise<any> {
+    const buffer = await data.file.arrayBuffer()
+    const fileData = Array.from(new Uint8Array(buffer))
+    return await this.upload<any>({
+      path: "/api/v1/reading/import",
+      method: "POST",
+      fileFieldName: "file",
+      file: {
+        name: data.file.name,
+        type: data.file.type || "application/octet-stream",
+        data: fileData
+      },
+      fields: {
+        source: data.source,
+        merge_tags: data.merge_tags ?? true
+      }
+    })
+  }
+
+  async exportReadingList(params: {
+    format: string
+    status?: string[]
+    tags?: string[]
+    favorite?: boolean
+    q?: string
+    domain?: string
+    page?: number
+    size?: number
+  }): Promise<{ blob: Blob; filename: string }> {
+    const query = new URLSearchParams()
+    query.set("format", params.format)
+    if (params?.status?.length) params.status.forEach((status) => query.append("status", status))
+    if (params?.tags?.length) params.tags.forEach((tag) => query.append("tags", tag))
+    if (params?.favorite !== undefined) query.set("favorite", String(params.favorite))
+    if (params?.q) query.set("q", params.q)
+    if (params?.domain) query.set("domain", params.domain)
+    if (params?.page) query.set("page", String(params.page))
+    if (params?.size) query.set("size", String(params.size))
+    const qs = query.toString()
+    const path = `/api/v1/reading/export${qs ? `?${qs}` : ""}` as const
+    const response = await bgRequest<any>({
+      path,
+      method: "GET",
+      responseType: "arrayBuffer",
+      returnResponse: true
+    })
+    if (!response) {
+      throw new Error("Export failed")
+    }
+    if (!response.ok) {
+      const msg = response.error || `Export failed: ${response.status}`
+      throw new Error(msg)
+    }
+    const headers = new Headers(response.headers || {})
+    const contentDisposition = headers.get("content-disposition") || ""
+    const filenameMatch = /filename="?([^"]+)"?/i.exec(contentDisposition)
+    const filename = filenameMatch?.[1] || "reading_export.jsonl"
+    const blob = new Blob([response.data], { type: headers.get("content-type") || "application/octet-stream" })
+    return { blob, filename }
+  }
+
+  // ─────────────────────────────────────────────────────────────────────────────
+  // Slides / Presentations API
+  // ─────────────────────────────────────────────────────────────────────────────
+
+  async generateSlidesFromMedia(
+    mediaId: number,
+    options?: {
+      titleHint?: string
+      theme?: string
+      provider?: string
+      model?: string
+      temperature?: number
+    }
+  ): Promise<{
+    id: string
+    title: string
+    description?: string
+    theme: string
+    slides: Array<{
+      order: number
+      layout: string
+      title?: string
+      content: string
+      speaker_notes?: string
+    }>
+    version: number
+    created_at: string
+  }> {
+    const body: Record<string, unknown> = { media_id: mediaId }
+    if (options?.titleHint) body.title_hint = options.titleHint
+    if (options?.theme) body.theme = options.theme
+    if (options?.provider) body.provider = options.provider
+    if (options?.model) body.model = options.model
+    if (options?.temperature != null) body.temperature = options.temperature
+    return await this.request<any>({
+      path: "/api/v1/slides/generate/from-media",
+      method: "POST",
+      body
+    })
+  }
+
+  async getPresentation(presentationId: string): Promise<{
+    id: string
+    title: string
+    description?: string
+    theme: string
+    slides: Array<{
+      order: number
+      layout: string
+      title?: string
+      content: string
+      speaker_notes?: string
+    }>
+    version: number
+    created_at: string
+    last_modified: string
+  }> {
+    return await this.request<any>({
+      path: `/api/v1/slides/presentations/${encodeURIComponent(presentationId)}`,
+      method: "GET"
+    })
+  }
+
+  async exportPresentation(
+    presentationId: string,
+    format: "revealjs" | "markdown" | "json" | "pdf"
+  ): Promise<Blob> {
+    await this.ensureConfigForRequest(true)
+
+    const response = await this.request<any>({
+      path: `/api/v1/slides/presentations/${encodeURIComponent(presentationId)}/export?format=${encodeURIComponent(format)}`,
+      method: "GET",
+      responseType: "arrayBuffer",
+      returnResponse: true
+    })
+
+    if (!response) {
+      throw new Error("Export failed")
+    }
+
+    // Handle response data
+    let data: ArrayBuffer
+    if (response.data instanceof ArrayBuffer) {
+      data = response.data
+    } else if (response.data instanceof Uint8Array) {
+      data = response.data.buffer.slice(
+        response.data.byteOffset,
+        response.data.byteOffset + response.data.byteLength
+      )
+    } else if (typeof response.data === "string") {
+      const encoder = new TextEncoder()
+      data = encoder.encode(response.data).buffer
+    } else if (response.data && typeof response.data === "object") {
+      // Handle JSON response
+      const encoder = new TextEncoder()
+      data = encoder.encode(JSON.stringify(response.data)).buffer
+    } else {
+      throw new Error("Invalid export response")
+    }
+
+    // Determine MIME type based on format
+    let mimeType: string
+    switch (format) {
+      case "revealjs":
+        mimeType = "application/zip"
+        break
+      case "markdown":
+        mimeType = "text/markdown"
+        break
+      case "json":
+        mimeType = "application/json"
+        break
+      case "pdf":
+        mimeType = "application/pdf"
+        break
+      default:
+        mimeType = "application/octet-stream"
+    }
+
+    return new Blob([data], { type: mimeType })
+  }
+}
+
+// Singleton instance
+export const tldwClient = new TldwApiClient()

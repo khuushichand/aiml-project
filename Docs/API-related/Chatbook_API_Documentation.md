@@ -307,7 +307,37 @@ Signed URLs (optional):
 }
 ```
 
-### 11. Cleanup Expired Exports
+### 11. Remove Export Job
+
+**Endpoint**: `DELETE /api/v1/chatbooks/export/jobs/{job_id}/remove`
+
+Removes a completed or cancelled export job (and deletes the exported archive).
+
+**Response**:
+```json
+{
+  "success": true,
+  "message": "Export job 0c9d9a3a-6d1c-4c8f-9c84-9a0c2c2d8f77 removed",
+  "job_id": "0c9d9a3a-6d1c-4c8f-9c84-9a0c2c2d8f77"
+}
+```
+
+### 12. Remove Import Job
+
+**Endpoint**: `DELETE /api/v1/chatbooks/import/jobs/{job_id}/remove`
+
+Removes a completed or cancelled import job.
+
+**Response**:
+```json
+{
+  "success": true,
+  "message": "Import job cb_import_20240115_def456 removed",
+  "job_id": "cb_import_20240115_def456"
+}
+```
+
+### 13. Cleanup Expired Exports
 
 **Endpoint**: `POST /api/v1/chatbooks/cleanup`
 
@@ -321,7 +351,7 @@ Scheduled cleanup runs via the Chatbooks worker; use this endpoint to trigger a 
 }
 ```
 
-### 12. Service Health
+### 14. Service Health
 
 Lightweight liveness check for the Chatbooks subsystem.
 

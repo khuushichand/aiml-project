@@ -1,3 +1,5 @@
+"""Workflow step adapters for executing registered workflow steps."""
+
 from __future__ import annotations
 
 import asyncio
@@ -20,7 +22,16 @@ from tldw_Server_API.app.core.Workflows.subprocess_utils import start_process, t
 from tldw_Server_API.app.core.Metrics import start_async_span as _start_span
 from tldw_Server_API.app.core.Security.egress import is_url_allowed, is_url_allowed_for_tenant
 from tldw_Server_API.app.core.http_client import create_client as _wf_create_client
+from tldw_Server_API.app.core.Workflows.constants import MAP_SUBSTEP_TYPES
 from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import resolve_user_id_value
+from tldw_Server_API.app.core.DB_Management.Kanban_DB import (
+    KanbanDB,
+    KanbanDBError,
+    InputError,
+    ConflictError,
+    NotFoundError,
+)
+from tldw_Server_API.app.core.DB_Management.db_path_utils import DatabasePaths
 
 
 def _extract_openai_content(response: Any) -> Optional[str]:
@@ -453,6 +464,204 @@ async def run_prompt_adapter(config: Dict[str, Any], context: Dict[str, Any]) ->
     except Exception as e:
         logger.debug(f"Prompt adapter: failed to persist prompt artifact: {e}", exc_info=True)
     return {"text": rendered}
+
+
+async def run_llm_adapter(config: Dict[str, Any], context: Dict[str, Any]) -> Dict[str, Any]:
+    """Execute an LLM chat completion via the adapter registry.
+
+    Config (subset; additional keys passed through):
+      - provider/api_provider/api_endpoint: str
+      - model: str (optional for local providers)
+      - prompt: str (templated) or messages: list[dict] (templated)
+      - system_message/system/system_prompt: str (templated)
+      - temperature, top_p, max_tokens, stop, tools, tool_choice, response_format, seed
+      - stream: bool (optional)
+      - include_response: bool (default false)
+    Output:
+      - text: str
+      - metadata: token_usage/cost if available
+      - response: raw provider response (optional)
+    """
+    from tldw_Server_API.app.core.Chat.chat_service import perform_chat_api_call_async
+    from tldw_Server_API.app.api.v1.schemas.chat_request_schemas import DEFAULT_LLM_PROVIDER
+    from tldw_Server_API.app.core.Chat.prompt_template_manager import apply_template_to_string as _tmpl
+    import json as _json
+    import os as _os
+
+    def _render_str(val: Any) -> Any:
+        if isinstance(val, str):
+            try:
+                return _tmpl(val, context) or val
+            except Exception as exc:
+                snippet = val.strip().replace("\n", "\\n")
+                if len(snippet) > 120:
+                    snippet = f"{snippet[:120]}..."
+                logger.debug(f"LLM adapter: template rendering failed for value '{snippet}': {exc}")
+                return val
+        return val
+
+    def _render_message(msg: Any) -> Optional[Dict[str, Any]]:
+        if isinstance(msg, dict):
+            out = dict(msg)
+            if isinstance(out.get("content"), str):
+                out["content"] = _render_str(out["content"])
+            return out
+        if isinstance(msg, str):
+            return {"role": "user", "content": _render_str(msg)}
+        return None
+
+    provider_raw = (
+        config.get("provider")
+        or config.get("api_provider")
+        or config.get("api_endpoint")
+        or DEFAULT_LLM_PROVIDER
+    )
+    provider = str(_render_str(provider_raw) or "").strip().lower()
+    if not provider:
+        raise AdapterError("missing_provider")
+
+    model = config.get("model") or config.get("model_id")
+    model = _render_str(model) if model is not None else None
+
+    system_message = (
+        config.get("system_message")
+        or config.get("system")
+        or config.get("system_prompt")
+    )
+    system_message = _render_str(system_message) if system_message is not None else None
+    if isinstance(system_message, str) and not system_message.strip():
+        system_message = None
+
+    messages_cfg = config.get("messages") or config.get("messages_payload")
+    prompt = config.get("prompt") or config.get("input") or config.get("template")
+    messages: List[Dict[str, Any]] = []
+
+    if messages_cfg is None:
+        if not prompt:
+            raise AdapterError("missing_prompt")
+        rendered_prompt = _render_str(str(prompt))
+        messages = [{"role": "user", "content": rendered_prompt}]
+    elif isinstance(messages_cfg, str):
+        raw = _render_str(messages_cfg)
+        parsed = None
+        try:
+            parsed = _json.loads(raw)
+        except Exception:
+            parsed = None
+        if isinstance(parsed, list):
+            for item in parsed:
+                rendered = _render_message(item)
+                if rendered:
+                    messages.append(rendered)
+        elif str(raw).strip():
+            messages = [{"role": "user", "content": raw}]
+        if not messages:
+            raise AdapterError("missing_messages")
+    elif isinstance(messages_cfg, list):
+        for item in messages_cfg:
+            rendered = _render_message(item)
+            if rendered:
+                messages.append(rendered)
+        if not messages:
+            raise AdapterError("missing_messages")
+    else:
+        raise AdapterError("invalid_messages")
+
+    # Short-circuit in tests to avoid outbound LLM calls
+    if _os.getenv("TEST_MODE", "").lower() in {"1", "true", "yes", "on"}:
+        preview = ""
+        for msg in reversed(messages):
+            if msg.get("role") == "user" and isinstance(msg.get("content"), str):
+                preview = msg["content"]
+                break
+        if not preview:
+            try:
+                preview = str(messages[-1].get("content") or "")
+            except Exception:
+                preview = ""
+        return {
+            "text": preview,
+            "provider": provider,
+            "model": model,
+            "simulated": True,
+        }
+
+    stream = bool(config.get("stream", False))
+    include_response = bool(config.get("include_response", False))
+
+    call_args: Dict[str, Any] = {
+        "api_endpoint": provider,
+        "messages_payload": messages,
+        "system_message": system_message,
+        "model": model,
+        "stream": stream,
+        "temperature": config.get("temperature"),
+        "top_p": config.get("top_p"),
+        "max_tokens": config.get("max_tokens"),
+        "max_completion_tokens": config.get("max_completion_tokens"),
+        "stop": config.get("stop"),
+        "tools": config.get("tools"),
+        "tool_choice": config.get("tool_choice"),
+        "response_format": config.get("response_format"),
+        "seed": config.get("seed"),
+        "n": config.get("n"),
+        "logit_bias": config.get("logit_bias"),
+        "user": config.get("user") or context.get("user_id"),
+        "api_key": _render_str(config.get("api_key")) if config.get("api_key") is not None else None,
+    }
+    # Drop None values for cleaner adapter inputs
+    call_args = {k: v for k, v in call_args.items() if v is not None}
+
+    if stream:
+        stream_iter = await perform_chat_api_call_async(**call_args)
+        text = ""
+        async for line in stream_iter:
+            if not line:
+                continue
+            raw = line.decode("utf-8", errors="replace") if isinstance(line, (bytes, bytearray)) else str(line)
+            raw = raw.strip()
+            if not raw:
+                continue
+            if raw.lower() == "data: [done]":
+                break
+            if raw.startswith("data:"):
+                payload = raw[5:].strip()
+                try:
+                    data = _json.loads(payload)
+                except Exception:
+                    data = None
+                if isinstance(data, dict):
+                    choices = data.get("choices") or []
+                    if choices:
+                        delta = choices[0].get("delta") or {}
+                        chunk = delta.get("content")
+                        if isinstance(chunk, str) and chunk:
+                            text += chunk
+                            try:
+                                if callable(context.get("append_event")):
+                                    context["append_event"]("llm_stream", {"delta": chunk})
+                            except Exception as e:
+                                logger.debug(f"LLM stream event dispatch failed: {e}")
+                    continue
+            # Fallback: treat as plain text chunk
+            text += raw
+        return {"text": text, "streamed": True}
+
+    response = await perform_chat_api_call_async(**call_args)
+    text = _extract_openai_content(response) or ""
+    out: Dict[str, Any] = {"text": text}
+    metadata: Dict[str, Any] = {}
+    if isinstance(response, dict):
+        usage = response.get("usage")
+        if isinstance(usage, dict):
+            metadata["token_usage"] = usage
+        if "cost_usd" in response:
+            metadata["cost_usd"] = response.get("cost_usd")
+    if metadata:
+        out["metadata"] = metadata
+    if include_response:
+        out["response"] = response
+    return out
 
 
 async def run_rag_search_adapter(config: Dict[str, Any], context: Dict[str, Any]) -> Dict[str, Any]:
@@ -982,6 +1191,493 @@ async def run_media_ingest_adapter(config: Dict[str, Any], context: Dict[str, An
                 pass
 
     return out
+
+
+async def run_kanban_adapter(config: Dict[str, Any], context: Dict[str, Any]) -> Dict[str, Any]:
+    """Read/write Kanban boards, lists, and cards for workflow steps.
+
+    Config:
+      - action: str (required) e.g. board.list, board.create, list.create, card.update
+      - entity ids: board_id, list_id, card_id
+      - include flags: include_archived, include_deleted, include_details
+      - create/update fields: name, description, title, metadata, activity_retention_days
+      - card fields: due_date, start_date, due_complete, priority, position
+      - move/copy: target_list_id, new_client_id, new_title, copy_checklists, copy_labels
+      - search/filter: query, label_ids, priority, limit, offset
+    Output: action-specific payload (board/list/card/etc.)
+    """
+    action = str(config.get("action") or "").strip().lower()
+    if not action:
+        return {"error": "missing_action"}
+
+    user_id = _resolve_context_user_id(context)
+    if not user_id:
+        try:
+            user_id = str(DatabasePaths.get_single_user_id())
+        except Exception:
+            return {"error": "missing_user_id"}
+    user_id = str(user_id)
+
+    def _render(value: Any) -> Any:
+        if isinstance(value, str):
+            return apply_template_to_string(value, context) or value
+        return value
+
+    def _coerce_bool(value: Any, default: bool = False) -> bool:
+        if value is None:
+            return default
+        if isinstance(value, bool):
+            return value
+        if isinstance(value, str):
+            return value.strip().lower() in {"1", "true", "yes", "on"}
+        return bool(value)
+
+    def _coerce_optional_bool(value: Any) -> Optional[bool]:
+        if value is None:
+            return None
+        if isinstance(value, bool):
+            return value
+        if isinstance(value, str):
+            raw = value.strip().lower()
+            if raw in {"1", "true", "yes", "on"}:
+                return True
+            if raw in {"0", "false", "no", "off"}:
+                return False
+        return bool(value)
+
+    def _coerce_int(value: Any, field: str, allow_none: bool = False) -> Optional[int]:
+        if value is None or value == "":
+            if allow_none:
+                return None
+            raise AdapterError(f"missing_{field}")
+        if isinstance(value, bool):
+            raise AdapterError(f"invalid_{field}")
+        try:
+            return int(value)
+        except (TypeError, ValueError) as exc:
+            raise AdapterError(f"invalid_{field}") from exc
+
+    def _coerce_int_list(value: Any) -> List[int]:
+        if value is None:
+            return []
+        raw_value = _render(value) if isinstance(value, str) else value
+        items: List[Any] = []
+        if isinstance(raw_value, list):
+            items = raw_value
+        elif isinstance(raw_value, str):
+            try:
+                parsed = json.loads(raw_value)
+            except Exception:
+                parsed = None
+            if isinstance(parsed, list):
+                items = parsed
+            else:
+                items = [s.strip() for s in raw_value.split(",") if s.strip()]
+        else:
+            items = [raw_value]
+        out: List[int] = []
+        for item in items:
+            try:
+                out.append(int(item))
+            except (TypeError, ValueError):
+                continue
+        return out
+
+    def _coerce_limit(value: Any, default: int) -> int:
+        try:
+            parsed = int(value) if value is not None else default
+        except (TypeError, ValueError):
+            parsed = default
+        return max(1, parsed)
+
+    def _coerce_date_str(value: Any) -> Optional[str]:
+        if value is None:
+            return None
+        if isinstance(value, str):
+            cleaned = value.strip()
+            return cleaned or None
+        try:
+            rendered = str(value)
+        except Exception:
+            return None
+        return rendered.strip() or None
+
+    try:
+        user_id_int: Any = int(user_id) if str(user_id).isdigit() else user_id
+    except Exception:
+        user_id_int = user_id
+
+    db_path = DatabasePaths.get_kanban_db_path(user_id_int)
+    db = KanbanDB(db_path=str(db_path), user_id=user_id)
+
+    try:
+        if action == "board.list":
+            include_archived = _coerce_bool(config.get("include_archived"), False)
+            include_deleted = _coerce_bool(config.get("include_deleted"), False)
+            limit = _coerce_limit(_render(config.get("limit")), 50)
+            offset = max(0, _coerce_int(_render(config.get("offset", 0)), "offset", allow_none=True) or 0)
+            boards, total = db.list_boards(
+                include_archived=include_archived,
+                include_deleted=include_deleted,
+                limit=limit,
+                offset=offset,
+            )
+            return {"boards": boards, "total": total, "limit": limit, "offset": offset}
+
+        if action == "board.get":
+            board_id = _coerce_int(_render(config.get("board_id")), "board_id")
+            include_children = _coerce_bool(config.get("include_children"), True)
+            include_archived = _coerce_bool(config.get("include_archived"), False)
+            include_deleted = _coerce_bool(config.get("include_deleted"), False)
+            if include_children:
+                board = db.get_board_with_lists_and_cards(board_id, include_archived=include_archived)
+            else:
+                board = db.get_board(board_id, include_deleted=include_deleted)
+            if not board:
+                return {"error": "not_found", "entity": "board", "entity_id": board_id}
+            return {"board": board}
+
+        if action == "board.create":
+            name = str(_render(config.get("name") or "")).strip()
+            if not name:
+                return {"error": "missing_name"}
+            client_id = str(_render(config.get("client_id") or "")).strip()
+            if not client_id:
+                import uuid as _uuid
+                client_id = f"wf_{_uuid.uuid4().hex}"
+            description = _render(config.get("description"))
+            activity_retention_days = _coerce_int(
+                _render(config.get("activity_retention_days")),
+                "activity_retention_days",
+                allow_none=True,
+            )
+            metadata = config.get("metadata") if isinstance(config.get("metadata"), dict) else None
+            board = db.create_board(
+                name=name,
+                client_id=client_id,
+                description=str(description) if isinstance(description, str) else description,
+                activity_retention_days=activity_retention_days,
+                metadata=metadata,
+            )
+            return {"board": board}
+
+        if action == "board.update":
+            board_id = _coerce_int(_render(config.get("board_id")), "board_id")
+            name = _render(config.get("name"))
+            description = _render(config.get("description"))
+            activity_retention_days = _coerce_int(
+                _render(config.get("activity_retention_days")),
+                "activity_retention_days",
+                allow_none=True,
+            )
+            metadata = config.get("metadata") if isinstance(config.get("metadata"), dict) else None
+            expected_version = _coerce_int(_render(config.get("expected_version")), "expected_version", allow_none=True)
+            board = db.update_board(
+                board_id=board_id,
+                name=str(name) if isinstance(name, str) else name,
+                description=str(description) if isinstance(description, str) else description,
+                activity_retention_days=activity_retention_days,
+                metadata=metadata,
+                expected_version=expected_version,
+            )
+            return {"board": board}
+
+        if action in {"board.archive", "board.unarchive"}:
+            board_id = _coerce_int(_render(config.get("board_id")), "board_id")
+            archive_flag = action != "board.unarchive"
+            if "archive" in config:
+                archive_flag = _coerce_bool(config.get("archive"), archive_flag)
+            board = db.archive_board(board_id, archive=archive_flag)
+            return {"board": board}
+
+        if action == "board.delete":
+            board_id = _coerce_int(_render(config.get("board_id")), "board_id")
+            hard_delete = _coerce_bool(config.get("hard_delete"), False)
+            success = db.delete_board(board_id, hard_delete=hard_delete)
+            return {"success": success}
+
+        if action == "board.restore":
+            board_id = _coerce_int(_render(config.get("board_id")), "board_id")
+            board = db.restore_board(board_id)
+            return {"board": board}
+
+        if action == "list.list":
+            board_id = _coerce_int(_render(config.get("board_id")), "board_id")
+            include_archived = _coerce_bool(config.get("include_archived"), False)
+            include_deleted = _coerce_bool(config.get("include_deleted"), False)
+            lists = db.list_lists(
+                board_id=board_id,
+                include_archived=include_archived,
+                include_deleted=include_deleted,
+            )
+            return {"lists": lists}
+
+        if action == "list.get":
+            list_id = _coerce_int(_render(config.get("list_id")), "list_id")
+            include_deleted = _coerce_bool(config.get("include_deleted"), False)
+            lst = db.get_list(list_id, include_deleted=include_deleted)
+            if not lst:
+                return {"error": "not_found", "entity": "list", "entity_id": list_id}
+            return {"list": lst}
+
+        if action == "list.create":
+            board_id = _coerce_int(_render(config.get("board_id")), "board_id")
+            name = str(_render(config.get("name") or "")).strip()
+            if not name:
+                return {"error": "missing_name"}
+            client_id = str(_render(config.get("client_id") or "")).strip()
+            if not client_id:
+                import uuid as _uuid
+                client_id = f"wf_{_uuid.uuid4().hex}"
+            position = _coerce_int(_render(config.get("position")), "position", allow_none=True)
+            lst = db.create_list(
+                board_id=board_id,
+                name=name,
+                client_id=client_id,
+                position=position,
+            )
+            return {"list": lst}
+
+        if action == "list.update":
+            list_id = _coerce_int(_render(config.get("list_id")), "list_id")
+            name = _render(config.get("name"))
+            expected_version = _coerce_int(_render(config.get("expected_version")), "expected_version", allow_none=True)
+            lst = db.update_list(
+                list_id=list_id,
+                name=str(name) if isinstance(name, str) else name,
+                expected_version=expected_version,
+            )
+            return {"list": lst}
+
+        if action == "list.reorder":
+            board_id = _coerce_int(_render(config.get("board_id")), "board_id")
+            list_ids = _coerce_int_list(config.get("list_ids") or config.get("ids"))
+            if not list_ids:
+                return {"error": "missing_list_ids"}
+            db.reorder_lists(board_id=board_id, list_ids=list_ids)
+            return {"success": True, "count": len(list_ids)}
+
+        if action in {"list.archive", "list.unarchive"}:
+            list_id = _coerce_int(_render(config.get("list_id")), "list_id")
+            archive_flag = action != "list.unarchive"
+            if "archive" in config:
+                archive_flag = _coerce_bool(config.get("archive"), archive_flag)
+            lst = db.archive_list(list_id, archive=archive_flag)
+            return {"list": lst}
+
+        if action == "list.delete":
+            list_id = _coerce_int(_render(config.get("list_id")), "list_id")
+            hard_delete = _coerce_bool(config.get("hard_delete"), False)
+            success = db.delete_list(list_id, hard_delete=hard_delete)
+            return {"success": success}
+
+        if action == "list.restore":
+            list_id = _coerce_int(_render(config.get("list_id")), "list_id")
+            lst = db.restore_list(list_id)
+            return {"list": lst}
+
+        if action == "card.list":
+            list_id = _coerce_int(_render(config.get("list_id")), "list_id")
+            include_archived = _coerce_bool(config.get("include_archived"), False)
+            include_deleted = _coerce_bool(config.get("include_deleted"), False)
+            cards = db.list_cards(
+                list_id=list_id,
+                include_archived=include_archived,
+                include_deleted=include_deleted,
+            )
+            return {"cards": cards}
+
+        if action == "card.get":
+            card_id = _coerce_int(_render(config.get("card_id")), "card_id")
+            include_details = _coerce_bool(config.get("include_details"), True)
+            include_deleted = _coerce_bool(config.get("include_deleted"), False)
+            if include_details:
+                card = db.get_card_with_details(card_id, include_deleted=include_deleted)
+            else:
+                card = db.get_card(card_id, include_deleted=include_deleted)
+            if not card:
+                return {"error": "not_found", "entity": "card", "entity_id": card_id}
+            return {"card": card}
+
+        if action == "card.create":
+            list_id = _coerce_int(_render(config.get("list_id")), "list_id")
+            title = str(_render(config.get("title") or "")).strip()
+            if not title:
+                return {"error": "missing_title"}
+            client_id = str(_render(config.get("client_id") or "")).strip()
+            if not client_id:
+                import uuid as _uuid
+                client_id = f"wf_{_uuid.uuid4().hex}"
+            description = _render(config.get("description"))
+            position = _coerce_int(_render(config.get("position")), "position", allow_none=True)
+            due_date = _coerce_date_str(_render(config.get("due_date")))
+            start_date = _coerce_date_str(_render(config.get("start_date")))
+            priority = _render(config.get("priority"))
+            metadata = config.get("metadata") if isinstance(config.get("metadata"), dict) else None
+            card = db.create_card(
+                list_id=list_id,
+                title=title,
+                client_id=client_id,
+                description=str(description) if isinstance(description, str) else description,
+                position=position,
+                due_date=due_date,
+                start_date=start_date,
+                priority=str(priority) if isinstance(priority, str) and priority.strip() else None,
+                metadata=metadata,
+            )
+            return {"card": card}
+
+        if action == "card.update":
+            card_id = _coerce_int(_render(config.get("card_id")), "card_id")
+            title = _render(config.get("title"))
+            description = _render(config.get("description"))
+            due_date = _coerce_date_str(_render(config.get("due_date")))
+            due_complete = _coerce_optional_bool(config.get("due_complete"))
+            start_date = _coerce_date_str(_render(config.get("start_date")))
+            priority = _render(config.get("priority"))
+            metadata = config.get("metadata") if isinstance(config.get("metadata"), dict) else None
+            expected_version = _coerce_int(_render(config.get("expected_version")), "expected_version", allow_none=True)
+            card = db.update_card(
+                card_id=card_id,
+                title=str(title) if isinstance(title, str) else title,
+                description=str(description) if isinstance(description, str) else description,
+                due_date=due_date,
+                due_complete=due_complete,
+                start_date=start_date,
+                priority=str(priority) if isinstance(priority, str) and priority.strip() else None,
+                metadata=metadata,
+                expected_version=expected_version,
+            )
+            return {"card": card}
+
+        if action == "card.reorder":
+            list_id = _coerce_int(_render(config.get("list_id")), "list_id")
+            card_ids = _coerce_int_list(config.get("card_ids") or config.get("ids"))
+            if not card_ids:
+                return {"error": "missing_card_ids"}
+            db.reorder_cards(list_id=list_id, card_ids=card_ids)
+            return {"success": True, "count": len(card_ids)}
+
+        if action == "card.move":
+            card_id = _coerce_int(_render(config.get("card_id")), "card_id")
+            target_list_id = _coerce_int(_render(config.get("target_list_id")), "target_list_id")
+            position = _coerce_int(_render(config.get("position")), "position", allow_none=True)
+            card = db.move_card(card_id=card_id, target_list_id=target_list_id, position=position)
+            return {"card": card}
+
+        if action == "card.copy":
+            card_id = _coerce_int(_render(config.get("card_id")), "card_id")
+            target_list_id = _coerce_int(_render(config.get("target_list_id")), "target_list_id")
+            new_client_id = str(_render(config.get("new_client_id") or "")).strip()
+            if not new_client_id:
+                import uuid as _uuid
+                new_client_id = f"wf_{_uuid.uuid4().hex}"
+            new_title = _render(config.get("new_title"))
+            position = _coerce_int(_render(config.get("position")), "position", allow_none=True)
+            copy_checklists = _coerce_bool(config.get("copy_checklists"), True)
+            copy_labels = _coerce_bool(config.get("copy_labels"), True)
+            card = db.copy_card_with_checklists(
+                card_id=card_id,
+                target_list_id=target_list_id,
+                new_client_id=new_client_id,
+                position=position,
+                new_title=str(new_title) if isinstance(new_title, str) and new_title.strip() else None,
+                copy_checklists=copy_checklists,
+                copy_labels=copy_labels,
+            )
+            return {"card": card}
+
+        if action in {"card.archive", "card.unarchive"}:
+            card_id = _coerce_int(_render(config.get("card_id")), "card_id")
+            archive_flag = action != "card.unarchive"
+            if "archive" in config:
+                archive_flag = _coerce_bool(config.get("archive"), archive_flag)
+            card = db.archive_card(card_id, archive=archive_flag)
+            return {"card": card}
+
+        if action == "card.delete":
+            card_id = _coerce_int(_render(config.get("card_id")), "card_id")
+            hard_delete = _coerce_bool(config.get("hard_delete"), False)
+            success = db.delete_card(card_id, hard_delete=hard_delete)
+            return {"success": success}
+
+        if action == "card.restore":
+            card_id = _coerce_int(_render(config.get("card_id")), "card_id")
+            card = db.restore_card(card_id)
+            return {"card": card}
+
+        if action == "card.search":
+            query = str(_render(config.get("query") or "")).strip()
+            if not query:
+                return {"error": "missing_query"}
+            board_id = _coerce_int(_render(config.get("board_id")), "board_id", allow_none=True)
+            label_ids = _coerce_int_list(config.get("label_ids"))
+            priority = _render(config.get("priority"))
+            include_archived = _coerce_bool(config.get("include_archived"), False)
+            limit = _coerce_limit(_render(config.get("limit")), 50)
+            offset = max(0, _coerce_int(_render(config.get("offset", 0)), "offset", allow_none=True) or 0)
+            cards, total = db.search_cards(
+                query=query,
+                board_id=board_id,
+                label_ids=label_ids or None,
+                priority=str(priority) if isinstance(priority, str) and priority.strip() else None,
+                include_archived=include_archived,
+                limit=limit,
+                offset=offset,
+            )
+            return {"cards": cards, "total": total, "limit": limit, "offset": offset}
+
+        if action in {"board.cards.filter", "cards.filter"}:
+            board_id = _coerce_int(_render(config.get("board_id")), "board_id")
+            filters = config.get("filters") if isinstance(config.get("filters"), dict) else {}
+            def _f(key: str) -> Any:
+                return config.get(key) if key in config else filters.get(key)
+            label_ids = _coerce_int_list(_f("label_ids"))
+            priority = _render(_f("priority"))
+            due_before = _render(_f("due_before"))
+            due_after = _render(_f("due_after"))
+            overdue = _coerce_optional_bool(_f("overdue"))
+            has_due_date = _coerce_optional_bool(_f("has_due_date"))
+            has_checklist = _coerce_optional_bool(_f("has_checklist"))
+            is_complete = _coerce_optional_bool(_f("is_complete"))
+            include_archived = _coerce_bool(_f("include_archived"), False)
+            include_deleted = _coerce_bool(_f("include_deleted"), False)
+            limit = _coerce_limit(_render(_f("limit") or _f("per_page")), 50)
+            offset = _coerce_int(_render(_f("offset")), "offset", allow_none=True)
+            if offset is None:
+                page = _coerce_int(_render(_f("page")), "page", allow_none=True)
+                if page is not None and page > 0:
+                    offset = (page - 1) * limit
+                else:
+                    offset = 0
+            cards, total = db.get_board_cards_filtered(
+                board_id=board_id,
+                label_ids=label_ids or None,
+                priority=str(priority) if isinstance(priority, str) and priority.strip() else None,
+                due_before=str(due_before) if isinstance(due_before, str) and due_before.strip() else None,
+                due_after=str(due_after) if isinstance(due_after, str) and due_after.strip() else None,
+                overdue=overdue,
+                has_due_date=has_due_date,
+                has_checklist=has_checklist,
+                is_complete=is_complete,
+                include_archived=include_archived,
+                include_deleted=include_deleted,
+                limit=limit,
+                offset=offset,
+            )
+            return {"cards": cards, "total": total, "limit": limit, "offset": offset}
+
+        return {"error": f"unsupported_action:{action}"}
+
+    except AdapterError as exc:
+        return {"error": str(exc) or "adapter_error"}
+    except (InputError, ConflictError, NotFoundError, KanbanDBError) as exc:
+        return {"error": "kanban_error", "error_type": exc.__class__.__name__, "detail": str(exc)}
+    finally:
+        try:
+            db.close()
+        except Exception:
+            pass
 
 
 async def run_delay_adapter(config: Dict[str, Any], context: Dict[str, Any]) -> Dict[str, Any]:
@@ -1852,6 +2548,7 @@ async def run_stt_transcribe_adapter(config: Dict[str, Any], context: Dict[str, 
       - file_uri: file:// path to audio/video file
       - model: whisper model name (default 'large-v3')
       - language: source language code (optional)
+      - hotwords: optional list/CSV/JSON string of hotwords
       - diarize: bool (default false)
       - word_timestamps: bool (default false)
 
@@ -1866,6 +2563,7 @@ async def run_stt_transcribe_adapter(config: Dict[str, Any], context: Dict[str, 
         return {"error": str(e)}
     model = str(config.get("model") or "large-v3")
     language = config.get("language") or None
+    hotwords = config.get("hotwords") or None
     diarize = bool(config.get("diarize", False))
     word_ts = bool(config.get("word_timestamps", False))
     try:
@@ -1879,6 +2577,7 @@ async def run_stt_transcribe_adapter(config: Dict[str, Any], context: Dict[str, 
             diarize=diarize,
             word_timestamps=word_ts,
             return_language=True,
+            hotwords=hotwords,
         )
         if isinstance(segs_or_pair, tuple) and len(segs_or_pair) == 2:
             segments, lang = segs_or_pair
@@ -2036,7 +2735,8 @@ async def run_map_adapter(config: Dict[str, Any], context: Dict[str, Any]) -> Di
       - step: {type, config}
       - concurrency: int (default 4)
     Output: { "results": [ ... ], "count": n }
-    Limitations: Supported nested step types are a subset: prompt, log, delay, rag_search, media_ingest, mcp_tool, webhook.
+    Limitations: Supported nested step types are a subset: prompt, log, delay, rag_search, media_ingest, mcp_tool, webhook, kanban.
+                 Unsupported sub-steps raise AdapterError.
     """
     items_cfg = config.get("items")
     items: list
@@ -2055,6 +2755,10 @@ async def run_map_adapter(config: Dict[str, Any], context: Dict[str, Any]) -> Di
     sub = config.get("step") or {}
     sub_type = str(sub.get("type") or "").strip()
     sub_cfg = sub.get("config") or {}
+    if not sub_type:
+        raise AdapterError("missing_substep_type")
+    if sub_type not in MAP_SUBSTEP_TYPES:
+        raise AdapterError(f"unsupported_substep_type:{sub_type}")
     concurrency = max(1, int(config.get("concurrency", 4)))
 
     sem = asyncio.Semaphore(concurrency)
@@ -2095,6 +2799,8 @@ async def run_map_adapter(config: Dict[str, Any], context: Dict[str, Any]) -> Di
                         return await run_mcp_tool_adapter(sub_cfg, sub_ctx)
                     if sub_type == "webhook":
                         return await run_webhook_adapter(sub_cfg, sub_ctx)
+                    if sub_type == "kanban":
+                        return await run_kanban_adapter(sub_cfg, sub_ctx)
                     return {"error": f"unsupported_substep:{sub_type}"}
             except Exception:
                 # If tracing fails, still attempt the sub-step
@@ -2112,10 +2818,69 @@ async def run_map_adapter(config: Dict[str, Any], context: Dict[str, Any]) -> Di
                     return await run_mcp_tool_adapter(sub_cfg, sub_ctx)
                 if sub_type == "webhook":
                     return await run_webhook_adapter(sub_cfg, sub_ctx)
+                if sub_type == "kanban":
+                    return await run_kanban_adapter(sub_cfg, sub_ctx)
                 return {"error": f"unsupported_substep:{sub_type}"}
 
     results = await asyncio.gather(*[_run_one(i, it) for i, it in enumerate(items)], return_exceptions=False)
     return {"results": results, "count": len(results)}
+
+
+def _normalize_str_list(value: Any) -> List[str]:
+    if value is None:
+        return []
+    if isinstance(value, str):
+        raw = value.strip()
+        if not raw:
+            return []
+        return [s.strip() for s in raw.split(",") if s.strip()]
+    if isinstance(value, (list, tuple, set)):
+        out = []
+        for item in value:
+            if item is None:
+                continue
+            s = str(item).strip()
+            if s:
+                out.append(s)
+        return out
+    return [str(value).strip()]
+
+
+def _extract_mcp_policy(context: Dict[str, Any]) -> Dict[str, Any]:
+    policy = context.get("workflow_mcp_policy")
+    if not isinstance(policy, dict):
+        policy = None
+    if policy is None:
+        meta = context.get("workflow_metadata")
+        if isinstance(meta, dict):
+            candidate = meta.get("mcp") or meta.get("mcp_policy")
+            if isinstance(candidate, dict):
+                policy = candidate
+    return policy or {}
+
+
+def _tool_matches_allowlist(tool_name: str, allowlist: List[str]) -> bool:
+    if not allowlist:
+        return True
+    if "*" in allowlist:
+        return True
+    for entry in allowlist:
+        if entry == tool_name:
+            return True
+        if entry.endswith("*") and tool_name.startswith(entry[:-1]):
+            return True
+    return False
+
+
+def _extract_tool_scopes(tool_def: Optional[Dict[str, Any]]) -> List[str]:
+    if not isinstance(tool_def, dict):
+        return []
+    raw = tool_def.get("scopes") or tool_def.get("scope")
+    if raw is None:
+        meta = tool_def.get("metadata") or {}
+        if isinstance(meta, dict):
+            raw = meta.get("scopes") or meta.get("scope") or meta.get("capabilities") or meta.get("capability")
+    return _normalize_str_list(raw)
 
 
 async def run_mcp_tool_adapter(config: Dict[str, Any], context: Dict[str, Any]) -> Dict[str, Any]:
@@ -2131,6 +2896,11 @@ async def run_mcp_tool_adapter(config: Dict[str, Any], context: Dict[str, Any]) 
     arguments = config.get("arguments") or {}
     if not tool_name:
         return {"error": "missing_tool_name"}
+    policy = _extract_mcp_policy(context)
+    allowlist = _normalize_str_list(policy.get("allowlist") or policy.get("allowed_tools"))
+    if allowlist and not _tool_matches_allowlist(tool_name, allowlist):
+        raise AdapterError("mcp_tool_not_allowed")
+    allowed_scopes = _normalize_str_list(policy.get("scopes") or policy.get("allow_scopes") or policy.get("capabilities"))
     server = get_mcp_server()
     # Find module by tool registry
     module_id = server.module_registry._tool_registry.get(tool_name)  # type: ignore[attr-defined]
@@ -2151,6 +2921,24 @@ async def run_mcp_tool_adapter(config: Dict[str, Any], context: Dict[str, Any]) 
                     continue
         except Exception:
             pass
+    tool_def = None
+    if module is not None:
+        try:
+            tool_defs = await module.get_tools()
+            for tool in tool_defs:
+                if tool.get("name") == tool_name:
+                    tool_def = tool
+                    break
+        except Exception as exc:
+            logger.debug(f"MCP tool adapter: failed to get tool definitions for {tool_name}: {exc}")
+    required_scopes = _extract_tool_scopes(tool_def)
+    if required_scopes:
+        if not allowed_scopes:
+            raise AdapterError("mcp_tool_scope_denied")
+        if "*" not in allowed_scopes:
+            missing = [s for s in required_scopes if s not in allowed_scopes]
+            if missing:
+                raise AdapterError("mcp_tool_scope_denied")
     if module is None:
         # Test-friendly fallback for echo
         if tool_name == "echo":
@@ -2258,6 +3046,85 @@ async def run_webhook_adapter(config: Dict[str, Any], context: Dict[str, Any]) -
         if isinstance(obj, dict):
             return {k: _inject_json_specials(v) for k, v in obj.items()}
         return obj
+
+    def _normalize_policy_hosts(entries: Any) -> list[str]:
+        from urllib.parse import urlparse
+        out: list[str] = []
+        if not entries:
+            return out
+        if isinstance(entries, str):
+            entries = [entries]
+        for raw in entries:
+            if raw is None:
+                continue
+            entry = str(raw).strip().lower()
+            if not entry:
+                continue
+            host = ""
+            if "://" in entry:
+                try:
+                    host = urlparse(entry).hostname or ""
+                except Exception:
+                    host = ""
+            else:
+                # Strip path if present
+                if "/" in entry:
+                    entry = entry.split("/", 1)[0]
+                host = entry
+            host = host.strip()
+            if host.startswith("*."):
+                host = host[2:]
+            if host.startswith("."):
+                host = host[1:]
+            if host.count(":") == 1 and host.rsplit(":", 1)[-1].isdigit():
+                host = host.rsplit(":", 1)[0]
+            if host:
+                out.append(host)
+        return out
+
+    def _resolve_signing_secret(ref: str) -> Optional[str]:
+        if not ref:
+            return None
+        try:
+            secrets = context.get("secrets") if isinstance(context, dict) else None
+            if isinstance(secrets, dict) and ref in secrets:
+                return str(secrets.get(ref))
+        except Exception:
+            pass
+        try:
+            import os as _os
+            val = _os.getenv(ref, "")
+            return val if val else None
+        except Exception:
+            return None
+
+    def _policy_allows(url_val: str) -> tuple[bool, Optional[str]]:
+        policy_cfg = config.get("egress_policy") or config.get("egress") or {}
+        if not isinstance(policy_cfg, dict) or not policy_cfg:
+            return True, None
+        allowlist = _normalize_policy_hosts(policy_cfg.get("allowlist") or policy_cfg.get("allow") or [])
+        denylist = _normalize_policy_hosts(policy_cfg.get("denylist") or policy_cfg.get("deny") or [])
+        block_private = policy_cfg.get("block_private")
+        try:
+            from tldw_Server_API.app.core.Security.egress import evaluate_url_policy
+            result = evaluate_url_policy(
+                url_val,
+                allowlist=allowlist or None,
+                denylist=denylist or None,
+                block_private_override=block_private if isinstance(block_private, bool) else None,
+            )
+            return result.allowed, result.reason
+        except Exception as e:
+            return False, str(e)
+
+    def _record_blocked(url_val: str) -> None:
+        try:
+            from urllib.parse import urlparse as _urlparse
+            host = _urlparse(url_val).hostname or ""
+            from tldw_Server_API.app.core.Metrics import increment_counter as _inc
+            _inc("workflows_webhook_deliveries_total", labels={"status": "blocked", "host": host})
+        except Exception:
+            pass
     from tldw_Server_API.app.core.Evaluations.webhook_manager import webhook_manager, WebhookEvent
     user_id = _resolve_context_user_id(context)
     if not user_id:
@@ -2271,23 +3138,14 @@ async def run_webhook_adapter(config: Dict[str, Any], context: Dict[str, Any]) -
         return {"dispatched": False, "test_mode": True}
 
     if url:
-        # Prefer tenant-scoped policy when available
-        try:
-            from tldw_Server_API.app.core.Security.egress import is_webhook_url_allowed_for_tenant
-            tenant_id = str(context.get("tenant_id") or "default")
-            allowed = is_webhook_url_allowed_for_tenant(url, tenant_id)
-        except Exception:
-            allowed = is_url_allowed(url)
-        if not allowed:
-            # Metrics for blocked deliveries
+        tenant_id = str(context.get("tenant_id") or "default")
+        def _global_allows(url_val: str) -> bool:
             try:
-                from urllib.parse import urlparse as _urlparse
-                host = _urlparse(url).hostname or ""
-                from tldw_Server_API.app.core.Metrics import increment_counter as _inc
-                _inc("workflows_webhook_deliveries_total", labels={"status": "blocked", "host": host})
+                from tldw_Server_API.app.core.Security.egress import is_webhook_url_allowed_for_tenant
+                return is_webhook_url_allowed_for_tenant(url_val, tenant_id)
             except Exception:
-                pass
-            return {"dispatched": False, "error": "blocked_egress"}
+                return is_url_allowed(url_val)
+
         try:
             import hmac, hashlib
             # Method, headers, timeout
@@ -2295,6 +3153,9 @@ async def run_webhook_adapter(config: Dict[str, Any], context: Dict[str, Any]) -
             headers_cfg = config.get("headers") or {}
             # Templating for url and headers
             url_t = _render_value(url) or url
+            url_t = str(url_t).strip()
+            if not url_t:
+                return {"dispatched": False, "error": "missing_url"}
             headers_r: Dict[str, str] = {}
             if isinstance(headers_cfg, dict):
                 for hk, hv in headers_cfg.items():
@@ -2324,6 +3185,14 @@ async def run_webhook_adapter(config: Dict[str, Any], context: Dict[str, Any]) -
             # Ensure content-type unless provided
             if "content-type" not in {k.lower(): v for k, v in headers_r.items()}:
                 headers_r["Content-Type"] = "application/json"
+            # Per-step allow/deny policy
+            try:
+                step_allowed, reason = _policy_allows(url_t)
+            except Exception:
+                step_allowed, reason = (False, "policy_error")
+            if not _global_allows(url_t) or not step_allowed:
+                _record_blocked(url_t)
+                return {"dispatched": False, "error": "blocked_egress", "reason": reason}
             # Default auth fallbacks for scheduled runs (optional)
             try:
                 _had_auth = any(k.lower() == "authorization" for k in headers_r.keys()) or any(k.lower() == "x-api-key" for k in headers_r.keys())
@@ -2380,32 +3249,132 @@ async def run_webhook_adapter(config: Dict[str, Any], context: Dict[str, Any]) -
                 else:
                     req_kwargs["content"] = json.dumps(payload)
                     body_json_str = req_kwargs["content"]
+            # Optional per-step signing config overrides
+            try:
+                signing_cfg = config.get("signing")
+                if signing_cfg is False or str(signing_cfg).lower() in {"0", "false", "none", "off"}:
+                    secret = ""
+                elif isinstance(signing_cfg, dict):
+                    stype = str(signing_cfg.get("type") or "hmac-sha256").lower()
+                    if stype in {"none", "off"}:
+                        secret = ""
+                    elif stype not in {"hmac-sha256", "hmac_sha256", "hmacsha256"}:
+                        return {"dispatched": False, "error": "unsupported_signing_type"}
+                    else:
+                        sref = str(signing_cfg.get("secret_ref") or "").strip()
+                        sdirect = signing_cfg.get("secret")
+                        if sref:
+                            secret = _resolve_signing_secret(sref) or ""
+                        elif sdirect:
+                            secret = str(sdirect)
+                        if not secret:
+                            return {"dispatched": False, "error": "missing_signing_secret"}
+                elif signing_cfg:
+                    # Truthy non-dict => fall back to env secret if available
+                    secret = os.getenv("WORKFLOWS_WEBHOOK_SECRET", "")
+            except Exception:
+                pass
             if secret:
                 sig = hmac.new(secret.encode("utf-8"), (body_json_str or "").encode("utf-8"), hashlib.sha256).hexdigest()
                 headers_r["X-Workflows-Signature"] = sig
                 headers_r["X-Hub-Signature-256"] = f"sha256={sig}"
+
             timeout = float(config.get("timeout_seconds") or os.getenv("WORKFLOWS_WEBHOOK_TIMEOUT", "10"))
+            follow_redirects = bool(config.get("follow_redirects") or config.get("allow_redirects") or False)
+            try:
+                max_redirects = int(config.get("max_redirects") or os.getenv("HTTP_MAX_REDIRECTS", "5"))
+            except Exception:
+                max_redirects = int(os.getenv("HTTP_MAX_REDIRECTS", "5"))
+            try:
+                max_bytes = int(config.get("max_bytes")) if config.get("max_bytes") is not None else None
+            except Exception:
+                max_bytes = None
             try:
                 client_ctx = _wf_create_client(timeout=timeout, trust_env=False)
             except TypeError:
                 client_ctx = _wf_create_client(timeout=timeout)
             with client_ctx as client:
-                # Dispatch
-                req_fn = client.post
-                if method == "GET":
-                    req_fn = client.get
-                elif method == "PUT":
-                    req_fn = client.put
-                elif method == "PATCH":
-                    req_fn = client.patch
-                elif method == "DELETE":
-                    req_fn = client.delete
-                resp = req_fn(url_t, headers=headers_r, **req_kwargs)
+                # Dispatch with explicit redirect handling
+                cur_url = url_t
+                resp = None
+                redirects = 0
+                method_cur = method
+                req_kwargs_cur = dict(req_kwargs)
+                while True:
+                    if not _global_allows(cur_url):
+                        _record_blocked(cur_url)
+                        return {"dispatched": False, "error": "blocked_egress"}
+                    step_allowed, reason = _policy_allows(cur_url)
+                    if not step_allowed:
+                        _record_blocked(cur_url)
+                        return {"dispatched": False, "error": "blocked_egress", "reason": reason}
+                    resp = client.request(method_cur, cur_url, headers=headers_r, follow_redirects=False, **req_kwargs_cur)
+                    if not follow_redirects or resp.status_code not in (301, 302, 303, 307, 308):
+                        break
+                    location = resp.headers.get("location")
+                    try:
+                        resp.close()
+                    except Exception:
+                        pass
+                    if not location:
+                        return {"dispatched": False, "error": "redirect_missing_location"}
+                    redirects += 1
+                    if redirects > max_redirects:
+                        return {"dispatched": False, "error": "redirects_exceeded"}
+                    try:
+                        from urllib.parse import urljoin
+                        cur_url = urljoin(cur_url, location)
+                    except Exception:
+                        cur_url = location
+                    if resp.status_code in (301, 302, 303) and method_cur not in ("GET", "HEAD"):
+                        method_cur = "GET"
+                        req_kwargs_cur = {k: v for k, v in req_kwargs_cur.items() if k == "params"}
+                if resp is None:
+                    return {"dispatched": False, "error": "webhook_no_response"}
+                # Optional response size guard
+                def _read_response_bytes(r) -> bytes:
+                    if max_bytes is not None:
+                        clen = r.headers.get("content-length")
+                        if clen:
+                            try:
+                                if int(clen) > max_bytes:
+                                    try:
+                                        r.close()
+                                    except Exception:
+                                        pass
+                                    raise ValueError("response_too_large")
+                            except ValueError:
+                                raise
+                            except Exception:
+                                pass
+                    buf = bytearray()
+                    if max_bytes is None:
+                        try:
+                            data = r.read()
+                            return data if data is not None else b""
+                        except Exception:
+                            return b""
+                        finally:
+                            try:
+                                r.close()
+                            except Exception:
+                                pass
+                    try:
+                        for chunk in r.iter_bytes():
+                            buf.extend(chunk)
+                            if max_bytes is not None and len(buf) > max_bytes:
+                                raise ValueError("response_too_large")
+                    finally:
+                        try:
+                            r.close()
+                        except Exception:
+                            pass
+                    return bytes(buf)
                 ok = 200 <= resp.status_code < 300
                 # Metrics for success/failure
                 try:
                     from urllib.parse import urlparse as _urlparse
-                    host = _urlparse(url).hostname or ""
+                    host = _urlparse(cur_url).hostname or ""
                     from tldw_Server_API.app.core.Metrics import increment_counter as _inc
                     _inc("workflows_webhook_deliveries_total", labels={"status": ("delivered" if ok else "failed"), "host": host})
                 except Exception:
@@ -2457,12 +3426,24 @@ async def run_webhook_adapter(config: Dict[str, Any], context: Dict[str, Any]) -
                 # Build outputs
                 out: Dict[str, Any] = {"dispatched": ok, "status_code": resp.status_code}
                 try:
-                    out["response_json"] = resp.json()
+                    body_bytes = _read_response_bytes(resp)
+                except ValueError:
+                    out["dispatched"] = False
+                    out["error"] = "response_too_large"
+                    return out
+                try:
+                    enc = resp.encoding or "utf-8"
                 except Exception:
-                    try:
-                        out["response_text"] = resp.text
-                    except Exception:
-                        pass
+                    enc = "utf-8"
+                try:
+                    text = body_bytes.decode(enc, errors="replace")
+                except Exception:
+                    text = ""
+                try:
+                    out["response_json"] = json.loads(text) if text else None
+                except Exception:
+                    if text:
+                        out["response_text"] = text
                 return out
         except Exception as e:
             return {"dispatched": False, "error": str(e)}

@@ -1,16 +1,16 @@
 # Environment Variables - tldw_server (v0.1)
 
-This reference lists environment variables recognized by the server. Environment variables take precedence over values from `Config_Files/.env`, which in turn take precedence over `Config_Files/config.txt` (where supported).
+This reference lists environment variables recognized by the server. Environment variables take precedence over values from `tldw_Server_API/Config_Files/.env`, which in turn take precedence over `tldw_Server_API/Config_Files/config.txt` (where supported).
 
 Precedence (highest → lowest):
 - Process environment variables
-- `.env` (Pydantic / dotenv)
-- `config.txt` (sections parsed by the app; not all settings support file overrides)
+- `.env` (Pydantic / dotenv; default `tldw_Server_API/Config_Files/.env`)
+- `config.txt` (sections parsed by the app; not all settings support file overrides; default `tldw_Server_API/Config_Files/config.txt`)
 
 Note: Secrets should be set via environment or `.env`. `config.txt` is supported for convenience in dev; prefer env in production.
 
 ## Core Server
-- `tldw_production`: Enable production guards (`true|false`). Masks API key in logs, hardens WebUI config, enforces DB/secret checks.
+- `tldw_production`: Enable production guards (`true|false`). Masks API key in logs and enforces DB/secret checks.
 - `ENABLE_OPENAPI`: Show OpenAPI/Swagger UI when `true`. Defaults to hidden in production unless explicitly enabled.
 - `ALLOWED_ORIGINS`: CORS allowlist. Comma-separated or JSON array.
 - `TLDW_CONFIG_PATH`: Absolute path to the primary `config.txt`. When set, the parent directory is treated as the config root for auxiliary assets (e.g., `Synonyms/`).
@@ -24,6 +24,29 @@ Note: Secrets should be set via environment or `.env`. `config.txt` is supported
 - `USER_DB_BASE_DIR`: Base directory for per-user DBs and assets (defined in `tldw_Server_API.app.core.config`). Defaults to `Databases/user_databases` under the repo root; relative paths resolve from repo root and `~` expands. Override via environment variable or `Config_Files/config.txt` as needed.
 - `USER_DB_BASE_DIR_ALLOWED_ROOTS` / `TLDW_USER_DB_BASE_DIR_ALLOWED_ROOTS`: Optional allowlist for setup-time changes to `USER_DB_BASE_DIR`. Comma- or colon-separated list of parent directories permitted for the new base.
 - `USER_DB_BASE`: Deprecated alias for `USER_DB_BASE_DIR` (used only by rewrite cache resolution).
+
+## OCR (PDF pipeline)
+- `OCR_PAGE_CONCURRENCY`: Per-page OCR concurrency (default `1`).
+
+### Dolphin OCR
+- `DOLPHIN_MODE`: `auto` | `transformers` | `remote`.
+- `DOLPHIN_PROMPT`, `DOLPHIN_PROMPT_PRESET`: main prompt override/preset (`general|doc|table|json`).
+- `DOLPHIN_JSON_PROMPT`: override JSON prompt (empty disables). `DOLPHIN_DISABLE_JSON=true` disables JSON pass.
+- `DOLPHIN_URL`: remote server base URL.
+- `DOLPHIN_REMOTE_MODE`: `dolphin_vllm` | `dolphin_trt` | `openai`.
+- `DOLPHIN_ENCODER_PROMPT`, `DOLPHIN_DECODER_PROMPT`: remote prompt overrides.
+- `DOLPHIN_REMOTE_MODEL`: model name for OpenAI-compatible mode.
+- `DOLPHIN_TIMEOUT`: request timeout seconds (default `60`).
+- `DOLPHIN_USE_DATA_URL`: `true` to send base64 image URLs (recommended for remote).
+- `DOLPHIN_MODEL_PATH`: local model id/path (default `ByteDance/Dolphin-v2`).
+- `DOLPHIN_DEVICE`: override device (`cuda`, `cpu`, etc.).
+- Generation: `DOLPHIN_MAX_NEW_TOKENS`, `DOLPHIN_MAX_LENGTH`, `DOLPHIN_TEMPERATURE`, `DOLPHIN_TOP_P`,
+  `DOLPHIN_TOP_K`, `DOLPHIN_REPETITION_PENALTY`, `DOLPHIN_DO_SAMPLE`, `DOLPHIN_NUM_BEAMS`.
+
+Config file overrides (`Config_Files/config.txt`)
+- `[OCR] backend_priority`: comma-separated list or JSON array of backends for auto selection.
+  - Example: `backend_priority = ["dolphin", "hunyuan", "points", "dots", "tesseract"]`
+  - When set, this list is used for both `auto` and `auto_high_quality` resolution.
 
 ## Testing & CI Controls
 - `TEST_MODE`: Enables test-friendly behaviors (`true|1|yes`). Used across modules to:
@@ -236,8 +259,9 @@ Pytest markers
 
 Config file support (optional):
 - Section `[AuthNZ]` in `Config_Files/config.txt` can define: `auth_mode`, `database_url`, `jwt_secret_key`, `single_user_api_key`, `enable_registration`, `require_registration_code`, `rate_limit_enabled`, `rate_limit_per_minute`, `rate_limit_burst`, `access_token_expire_minutes`, `refresh_token_expire_days`, `redis_url`, plus security alert keys (`security_alerts_enabled`, `security_alert_min_severity`, `security_alert_file_path`, `security_alert_webhook_url`, `security_alert_webhook_headers`, `security_alert_email_to`, `security_alert_email_from`, `security_alert_email_subject_prefix`, `security_alert_smtp_host`, `security_alert_smtp_port`, `security_alert_smtp_starttls`, `security_alert_smtp_username`, `security_alert_smtp_password`, `security_alert_smtp_timeout`, `security_alert_file_min_severity`, `security_alert_webhook_min_severity`, `security_alert_email_min_severity`).
+- Section `[Image-Generation]` in `Config_Files/config.txt` can define: `default_backend`, `enabled_backends`, `max_width`, `max_height`, `max_pixels`, `max_steps`, `max_prompt_length`, `inline_max_bytes`, `sd_cpp_binary_path`, `sd_cpp_diffusion_model_path`, `sd_cpp_model_path`, `sd_cpp_llm_path`, `sd_cpp_vae_path`, `sd_cpp_lora_paths`, `sd_cpp_allowed_extra_params`, `sd_cpp_default_steps`, `sd_cpp_default_cfg_scale`, `sd_cpp_default_sampler`, `sd_cpp_device`, `sd_cpp_timeout_seconds`.
 
-## Chat / WebUI
+## Chat / UI
 - `CHAT_SAVE_DEFAULT`: Persist new chats by default (`true|false`).
 - `DEFAULT_CHAT_SAVE`: Legacy alias; same as above.
 - `CHAT_STREAM_INCLUDE_METADATA`: Include `tldw_*` IDs in chat SSE streaming chunks (`true|false`, default `true`). Set `false` for strict OpenAI streaming compatibility.
@@ -254,7 +278,7 @@ Runtime overrides (non-persistent) are available via API:
 
 ## Usage Logging & Aggregators
 - `USAGE_LOG_ENABLED`: Enable lightweight HTTP usage logging middleware (`true|false`, default `false`).
-- `USAGE_LOG_EXCLUDE_PREFIXES`: JSON array of path prefixes to skip (default includes `/docs`, `/metrics`, `/static`, `/webui`). Example: `USAGE_LOG_EXCLUDE_PREFIXES='["/docs","/metrics"]'`.
+- `USAGE_LOG_EXCLUDE_PREFIXES`: JSON array of path prefixes to skip (default includes `/docs`, `/metrics`, `/static`). Example: `USAGE_LOG_EXCLUDE_PREFIXES='["/docs","/metrics"]'`.
 - `USAGE_AGGREGATOR_INTERVAL_MINUTES`: Background aggregation cadence for `usage_daily` (default `60`).
 - `USAGE_LOG_RETENTION_DAYS`: Retain `usage_log` rows for this many days; daily job prunes older rows (default `180`).
 - `USAGE_LOG_DISABLE_META`: When `true`, do not store IP/User-Agent in `usage_log.meta` (stores `{}`) regardless of `PII_REDACT_LOGS`.
@@ -287,7 +311,7 @@ Runtime overrides (non-persistent) are available via API:
 
 ## Embeddings
 - `EMBEDDINGS_DEDUPE_TTL_SECONDS`: Dedupe window for worker replay suppression. Defaults to `3600` seconds. Workers compute a stage-specific dedupe key (or use `dedupe_key`/`idempotency_key` if provided) and suppress processing if the same key was seen within this TTL.
-- `TRUSTED_HF_REMOTE_CODE_MODELS`: Comma-separated allowlist patterns for models that require `trust_remote_code=True` (e.g., `NovaSearch/stella_en_400M_v5,BAAI/*bge*`).
+- `TRUSTED_HF_REMOTE_CODE_MODELS`: Comma-separated allowlist patterns for models that require `trust_remote_code=True` (e.g., `NovaSearch/stella_en_400M_v5,BAAI/*bge*`). This allowlist is also consulted by the Transformers reranker; `mxbai-rerank*` models are auto-enabled for reranking without extra config.
 - `ALLOW_ZERO_EMBEDDINGS_MEDIA_TYPES`: Comma-separated media types that may legitimately yield zero embeddings (e.g., `audio,video`). When set, media-embeddings jobs for these types complete successfully even if no vectors are stored.
 
 ### Backpressure & Quotas
@@ -347,6 +371,36 @@ Quick start (local dev):
 - `POINTS_SGLANG_URL`: SGLang chat/completions endpoint (e.g., `http://127.0.0.1:8081/v1/chat/completions`).
 - `POINTS_SGLANG_MODEL`: Model name in SGLang server (e.g., `WePoints`).
 
+## OCR - HunyuanOCR (optional)
+- `HUNYUAN_MODE`: `auto` | `vllm` | `transformers` (default: `auto`).
+- `HUNYUAN_PROMPT`: Prompt override (free-form).
+- `HUNYUAN_PROMPT_PRESET`: `general|doc|table|spotting|json` (used when `HUNYUAN_PROMPT` is unset).
+- vLLM:
+  - `HUNYUAN_VLLM_URL`: OpenAI-compatible `/v1/chat/completions` endpoint.
+  - `HUNYUAN_VLLM_MODEL`: Model name (served-model-name).
+  - `HUNYUAN_VLLM_TIMEOUT`: Request timeout seconds (default `60`).
+  - `HUNYUAN_VLLM_USE_DATA_URL`: `true|false` (default `true`).
+- Transformers:
+  - `HUNYUAN_MODEL_PATH`: HF model id or local path (default: `tencent/HunyuanOCR`).
+  - `HUNYUAN_DEVICE`: Optional device override (`cuda`, `cpu`, etc.).
+- Generation:
+  - `HUNYUAN_MAX_NEW_TOKENS`, `HUNYUAN_TEMPERATURE`, `HUNYUAN_DO_SAMPLE`.
+- Post-processing:
+  - `HUNYUAN_CLEAN_REPEATS`: `true|false` (default `true`).
+
+## OCR - DeepSeek (optional)
+- `DEEPSEEK_OCR_MODEL_ID`: HF model id or local path (default: `deepseek-ai/DeepSeek-OCR`).
+- `DEEPSEEK_OCR_PROMPT`: Prompt override (default: layout-aware markdown conversion).
+- `DEEPSEEK_OCR_BASE_SIZE`: Base resolution size (default: `1024`).
+- `DEEPSEEK_OCR_IMAGE_SIZE`: Secondary resolution size (default: `640`).
+- `DEEPSEEK_OCR_CROP_MODE`: `true|false` (default: `true`).
+- `DEEPSEEK_OCR_SAVE_RESULTS`: `true|false` (default: `false`).
+- `DEEPSEEK_OCR_TEST_COMPRESS`: `true|false` (default: `false`).
+- `DEEPSEEK_OCR_DTYPE`: `bfloat16|float16|float32` (default: `bfloat16`).
+- `DEEPSEEK_OCR_ATTN_IMPL`: Attention implementation (default: `flash_attention_2`).
+- `DEEPSEEK_OCR_DEVICE`: `cuda|cpu` (default: `cuda`).
+- `DEEPSEEK_OCR_OUTPUT_DIR`: Optional output directory used when `DEEPSEEK_OCR_SAVE_RESULTS=true`.
+
 ## Workflows (File Access)
 - `WORKFLOWS_FILE_BASE_DIR`: Base directory for workflow `file://` access. Relative paths resolve from the project root; defaults to the per-user base dir under `USER_DB_BASE_DIR` (with a `Databases/` fallback).
 - `WORKFLOWS_ALLOW_UNSAFE_FILE_ACCESS`: `true|false` - allow workflow file access outside the per-user base dir, but only under allowlisted base directories (default `false`).
@@ -377,7 +431,7 @@ Quick start (local dev):
   - `ENABLE_TRACING`: Enable tracing pipeline (`true|false`, default `true`).
   - `ENABLE_OTEL_LOGGING`: Enable OTEL logging integration (`true|false`, default `false`).
   - `ENABLE_OTEL_CONSOLE_METRICS_EXPORTER`: Add the console metrics exporter (`true|false`, default `false`).
-  - `METRICS_RING_BUFFER_MAXLEN`: Rolling metrics sample window size (default `10000`). Set `0` or a negative value to disable the limit.
+  - `METRICS_RING_BUFFER_MAXLEN_OR_UNBOUNDED`: Rolling metrics sample window size (default `10000`). Set `0` or a negative value for an unbounded buffer.
   - `OTEL_METRICS_EXPORTER`: Comma list of metrics exporters (`prometheus` by default).
   - `OTEL_TRACES_EXPORTER`: Comma list of traces exporters (`console` by default).
 
@@ -407,7 +461,7 @@ Notes
 | `ENABLE_TRACING`                | `true`              | Enable tracing pipeline |
 | `ENABLE_OTEL_LOGGING`           | `false`             | Enable OTEL logging integration |
 | `ENABLE_OTEL_CONSOLE_METRICS_EXPORTER` | `false`      | Add console metrics exporter |
-| `METRICS_RING_BUFFER_MAXLEN`    | `10000`             | Rolling metrics sample window size |
+| `METRICS_RING_BUFFER_MAXLEN_OR_UNBOUNDED` | `10000`    | Rolling metrics sample window size |
 | `OTEL_METRICS_EXPORTER`         | `prometheus`        | Comma-separated exporters |
 | `OTEL_TRACES_EXPORTER`          | `console`           | Comma-separated exporters |
 | `PROMETHEUS_HOST`               | `0.0.0.0`           | Bind host for Prometheus exporter |

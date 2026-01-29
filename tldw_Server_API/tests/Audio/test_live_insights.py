@@ -1,4 +1,5 @@
 import asyncio
+import gc
 import json
 from typing import Any, Dict, List
 
@@ -109,3 +110,44 @@ async def test_live_insights_final_summary():
     final_msg = insight_messages[-1]
     assert final_msg["stage"] == "final"
     assert final_msg["summary"]
+
+
+@pytest.mark.asyncio
+async def test_live_insights_task_exceptions_retrieved():
+    websocket = _DummyWebSocket()
+    settings = LiveInsightSettings(
+        enabled=True,
+        provider="openai",
+        model="test-model",
+        live_updates=True,
+        summary_interval_seconds=0.0,
+    )
+    engine = LiveMeetingInsights(websocket, settings, chat_call=_FakeLLM())
+
+    loop = asyncio.get_running_loop()
+    errors: List[Dict[str, Any]] = []
+    previous_handler = loop.get_exception_handler()
+
+    def _handler(_loop, context):  # type: ignore[no-untyped-def]
+        errors.append(context)
+
+    loop.set_exception_handler(_handler)
+
+    async def _boom():
+        raise RuntimeError("boom")
+
+    engine._schedule_task(_boom)
+    await asyncio.sleep(0.05)
+    gc.collect()
+    await asyncio.sleep(0.05)
+    await engine.close()
+
+    if previous_handler:
+        loop.set_exception_handler(previous_handler)
+    else:
+        loop.set_exception_handler(None)
+
+    assert not any(
+        "Task exception was never retrieved" in str(ctx.get("message", ""))
+        for ctx in errors
+    )

@@ -8,7 +8,6 @@ import type {
   IncidentsResponse,
   RegistrationCode,
   RetentionPoliciesResponse,
-  User,
   UserWithKeyCount,
 } from '@/types';
 export { ApiError };
@@ -411,11 +410,11 @@ export const api = {
   // Monitoring
   // ============================================
   getWatchlists: () => requestJson('/monitoring/watchlists'),
-  createWatchlist: (data: Record<string, unknown>) => requestJson('/monitoring/watchlists', {
+  createWatchlist: <T extends object>(data: T) => requestJson('/monitoring/watchlists', {
     method: 'POST',
     body: JSON.stringify(data),
   }),
-  updateWatchlist: (watchlistId: string, data: Record<string, unknown>) => requestJson(`/monitoring/watchlists/${watchlistId}`, {
+  updateWatchlist: <T extends object>(watchlistId: string, data: T) => requestJson(`/monitoring/watchlists/${watchlistId}`, {
     method: 'PUT',
     body: JSON.stringify(data),
   }),
@@ -489,6 +488,281 @@ export const api = {
     const queryParams = params ? new URLSearchParams(params).toString() : '';
     return requestJson(`/admin/llm-usage/top-spenders${queryParams ? `?${queryParams}` : ''}`);
   },
+
+  // ============================================
+  // Resource Governor
+  // ============================================
+  getResourceGovernorPolicy: (params?: { include_ids?: boolean }, signal?: AbortSignal) => {
+    const queryParams = params ? new URLSearchParams(
+      Object.entries(params).map(([k, v]) => [k, String(v)])
+    ).toString() : '';
+    return requestJson(`/resource-governor/policy${queryParams ? `?${queryParams}` : ''}`, { signal });
+  },
+  updateResourceGovernorPolicy: (data: Record<string, unknown>) =>
+    requestJson('/resource-governor/policy', {
+      method: 'PUT',
+      body: JSON.stringify(data),
+    }),
+  deleteResourceGovernorPolicy: (policyId: string) =>
+    requestJson(`/resource-governor/policy/${encodeURIComponent(policyId)}`, {
+      method: 'DELETE',
+    }),
+
+  // ============================================
+  // Rate Limiting
+  // ============================================
+  setRoleRateLimits: (roleId: string, data: { resource: string; limit_per_min?: number | null; burst?: number | null }) =>
+    requestJson(`/admin/roles/${encodeURIComponent(roleId)}/rate-limits`, {
+      method: 'POST',
+      body: JSON.stringify(data),
+    }),
+  clearRoleRateLimits: (roleId: string) =>
+    requestJson(`/admin/roles/${encodeURIComponent(roleId)}/rate-limits`, {
+      method: 'DELETE',
+    }),
+  getUserRateLimits: (userId: string) =>
+    requestJson(`/admin/users/${encodeURIComponent(userId)}/rate-limits`),
+  setUserRateLimits: (userId: string, data: { resource: string; limit_per_min?: number | null; burst?: number | null }) =>
+    requestJson(`/admin/users/${encodeURIComponent(userId)}/rate-limits`, {
+      method: 'POST',
+      body: JSON.stringify(data),
+    }),
+
+  // ============================================
+  // Notification Settings
+  // ============================================
+  getNotificationSettings: () => requestJson('/monitoring/notifications/settings'),
+  updateNotificationSettings: (data: Record<string, unknown>) =>
+    requestJson('/monitoring/notifications/settings', {
+      method: 'PUT',
+      body: JSON.stringify(data),
+    }),
+  testNotification: () =>
+    requestJson('/monitoring/notifications/test', {
+      method: 'POST',
+    }),
+  getRecentNotifications: () => requestJson('/monitoring/notifications/recent'),
+
+  // ============================================
+  // User Permission Overrides
+  // ============================================
+  getUserPermissionOverrides: (userId: string) =>
+    requestJson(`/admin/users/${encodeURIComponent(userId)}/overrides`),
+  addUserPermissionOverride: (userId: string, data: { permission_id: number; grant: boolean }) =>
+    requestJson(`/admin/users/${encodeURIComponent(userId)}/overrides`, {
+      method: 'POST',
+      body: JSON.stringify(data),
+    }),
+  removeUserPermissionOverride: (userId: string, permissionId: string) =>
+    requestJson(`/admin/users/${encodeURIComponent(userId)}/overrides/${encodeURIComponent(permissionId)}`, {
+      method: 'DELETE',
+    }),
+
+  // ============================================
+  // Shared Provider Keys (Org/Team BYOK)
+  // ============================================
+  getSharedProviderKeys: (params?: { scope_type?: string; scope_id?: number; provider?: string }) => {
+    const queryParams = params ? new URLSearchParams(
+      Object.entries(params)
+        .filter(([, v]) => v !== undefined)
+        .map(([k, v]) => [k, String(v)])
+    ).toString() : '';
+    return requestJson(`/admin/keys/shared${queryParams ? `?${queryParams}` : ''}`);
+  },
+  createSharedProviderKey: (data: { scope_type: string; scope_id: number; provider: string; api_key: string }) =>
+    requestJson('/admin/keys/shared', {
+      method: 'POST',
+      body: JSON.stringify(data),
+    }),
+  deleteSharedProviderKey: (scopeType: string, scopeId: number, provider: string) =>
+    requestJson(`/admin/keys/shared/${encodeURIComponent(scopeType)}/${encodeURIComponent(String(scopeId))}/${encodeURIComponent(provider)}`, {
+      method: 'DELETE',
+    }),
+  testSharedProviderKey: (data: { scope_type: string; scope_id: number; provider: string; model?: string }) =>
+    requestJson('/admin/keys/shared/test', {
+      method: 'POST',
+      body: JSON.stringify(data),
+    }),
+
+  // ============================================
+  // Security Health
+  // ============================================
+  getSecurityHealth: () => requestJson('/health/security'),
+  getSecurityAlertStatus: () => requestJson('/admin/security/alert-status'),
+
+  // ============================================
+  // Virtual API Keys
+  // ============================================
+  getUserVirtualKeys: (userId: string) =>
+    requestJson(`/admin/users/${encodeURIComponent(userId)}/virtual-keys`),
+  createUserVirtualKey: (userId: string, data: { name: string; scopes: string[] }) =>
+    requestJson(`/admin/users/${encodeURIComponent(userId)}/virtual-keys`, {
+      method: 'POST',
+      body: JSON.stringify(data),
+    }),
+
+  // ============================================
+  // Tool Permissions (Role-specific)
+  // ============================================
+  getRoleToolPermissions: (roleId: string) =>
+    requestJson(`/admin/roles/${encodeURIComponent(roleId)}/permissions/tools`),
+  batchGrantToolPermissions: (roleId: string, data: { tools: string[] }) =>
+    requestJson(`/admin/roles/${encodeURIComponent(roleId)}/permissions/tools/batch`, {
+      method: 'POST',
+      body: JSON.stringify(data),
+    }),
+  batchRevokeToolPermissions: (roleId: string, data: { tools: string[] }) =>
+    requestJson(`/admin/roles/${encodeURIComponent(roleId)}/permissions/tools/batch/revoke`, {
+      method: 'POST',
+      body: JSON.stringify(data),
+    }),
+  grantToolPermissionsByPrefix: (roleId: string, prefix: string) =>
+    requestJson(`/admin/roles/${encodeURIComponent(roleId)}/permissions/tools/prefix/grant`, {
+      method: 'POST',
+      body: JSON.stringify({ prefix }),
+    }),
+  revokeToolPermissionsByPrefix: (roleId: string, prefix: string) =>
+    requestJson(`/admin/roles/${encodeURIComponent(roleId)}/permissions/tools/prefix/revoke`, {
+      method: 'POST',
+      body: JSON.stringify({ prefix }),
+    }),
+
+  // ============================================
+  // Cleanup Settings
+  // ============================================
+  getCleanupSettings: () => requestJson('/admin/cleanup-settings'),
+  updateCleanupSettings: (data: Record<string, unknown>) =>
+    requestJson('/admin/cleanup-settings', {
+      method: 'POST',
+      body: JSON.stringify(data),
+    }),
+
+  // ============================================
+  // Notes Title Settings
+  // ============================================
+  getNotesTitleSettings: () => requestJson('/admin/notes/title-settings'),
+  updateNotesTitleSettings: (data: Record<string, unknown>) =>
+    requestJson('/admin/notes/title-settings', {
+      method: 'POST',
+      body: JSON.stringify(data),
+    }),
+
+  // ============================================
+  // Kanban FTS Maintenance
+  // ============================================
+  runKanbanFtsMaintenance: () =>
+    requestJson('/admin/kanban/fts-maintenance', {
+      method: 'POST',
+    }),
+
+  // ============================================
+  // Job SLA & Attachments
+  // ============================================
+  getJobSlaPolicies: () => requestJson('/admin/jobs/sla/policies'),
+  createJobSlaPolicy: (data: Record<string, unknown>) =>
+    requestJson('/admin/jobs/sla/policy', {
+      method: 'POST',
+      body: JSON.stringify(data),
+    }),
+  getJobAttachments: (jobId: string | number, params?: Record<string, string>) => {
+    const queryParams = params ? new URLSearchParams(params).toString() : '';
+    return requestJson(`/admin/jobs/${encodeURIComponent(String(jobId))}/attachments${queryParams ? `?${queryParams}` : ''}`);
+  },
+  addJobAttachment: (jobId: string, data: FormData) =>
+    requestJson(`/admin/jobs/${encodeURIComponent(jobId)}/attachments`, {
+      method: 'POST',
+      body: data,
+    }),
+  rotateJobCrypto: () =>
+    requestJson('/admin/jobs/crypto/rotate', {
+      method: 'POST',
+    }),
+
+  // ============================================
+  // Organization Watchlist Settings
+  // ============================================
+  getOrgWatchlistSettings: (orgId: string) =>
+    requestJson(`/admin/orgs/${encodeURIComponent(orgId)}/watchlists/settings`),
+  updateOrgWatchlistSettings: (orgId: string, data: Record<string, unknown>) =>
+    requestJson(`/admin/orgs/${encodeURIComponent(orgId)}/watchlists/settings`, {
+      method: 'PATCH',
+      body: JSON.stringify(data),
+    }),
+
+  // ============================================
+  // Debug Tools
+  // ============================================
+  debugResolveApiKey: (apiKey: string) =>
+    requestJson('/authnz/debug/api-key-id', {
+      headers: { 'X-API-KEY': apiKey },
+    }),
+  debugGetBudgetSummary: (apiKey: string) =>
+    requestJson('/authnz/debug/budget-summary', {
+      headers: { 'X-API-KEY': apiKey },
+    }),
+
+  // ============================================
+  // Voice Commands & Assistant
+  // ============================================
+  getVoiceCommands: async (params?: Record<string, string>) => {
+    const queryParams = params ? new URLSearchParams(params).toString() : '';
+    return requestJson(`/voice/commands${queryParams ? `?${queryParams}` : ''}`);
+  },
+  getVoiceCommand: (commandId: string, signal?: AbortSignal) =>
+    requestJson(`/voice/commands/${encodeURIComponent(commandId)}`, { signal }),
+  createVoiceCommand: (data: Record<string, unknown>) =>
+    requestJson('/voice/commands', {
+      method: 'POST',
+      body: JSON.stringify(data),
+    }),
+  updateVoiceCommand: (commandId: string, data: Record<string, unknown>) =>
+    requestJson(`/voice/commands/${encodeURIComponent(commandId)}`, {
+      method: 'PUT',
+      body: JSON.stringify(data),
+    }),
+  deleteVoiceCommand: (commandId: string) =>
+    requestJson(`/voice/commands/${encodeURIComponent(commandId)}`, {
+      method: 'DELETE',
+    }),
+  toggleVoiceCommand: (commandId: string, enabled: boolean) =>
+    requestJson(`/voice/commands/${encodeURIComponent(commandId)}/toggle`, {
+      method: 'POST',
+      body: JSON.stringify({ enabled }),
+    }),
+
+  // Voice Sessions
+  getVoiceSessions: (params?: Record<string, string>) => {
+    const queryParams = params ? new URLSearchParams(params).toString() : '';
+    return requestJson(`/voice/sessions${queryParams ? `?${queryParams}` : ''}`);
+  },
+  getVoiceSession: (sessionId: string) =>
+    requestJson(`/voice/sessions/${encodeURIComponent(sessionId)}`),
+  deleteVoiceSession: (sessionId: string) =>
+    requestJson(`/voice/sessions/${encodeURIComponent(sessionId)}`, {
+      method: 'DELETE',
+    }),
+
+  // Voice Analytics
+  getVoiceAnalytics: (params?: { days?: number; user_id?: number }) => {
+    const queryParams = params ? new URLSearchParams(
+      Object.entries(params)
+        .filter(([, v]) => v !== undefined)
+        .map(([k, v]) => [k, String(v)])
+    ).toString() : '';
+    return requestJson(`/voice/analytics${queryParams ? `?${queryParams}` : ''}`);
+  },
+  getVoiceCommandUsage: (commandId: string, params?: { days?: number }, signal?: AbortSignal) => {
+    const queryParams = params ? new URLSearchParams(
+      Object.entries(params)
+        .filter(([, v]) => v !== undefined)
+        .map(([k, v]) => [k, String(v)])
+    ).toString() : '';
+    return requestJson(`/voice/commands/${encodeURIComponent(commandId)}/usage${queryParams ? `?${queryParams}` : ''}`, { signal });
+  },
+
+  // Voice Workflow Templates
+  getVoiceWorkflowTemplates: () =>
+    requestJson('/voice/workflows/templates'),
 };
 
 export default api;

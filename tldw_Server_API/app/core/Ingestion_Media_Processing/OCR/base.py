@@ -3,6 +3,11 @@ from __future__ import annotations
 from abc import ABC, abstractmethod
 from typing import Optional
 
+from tldw_Server_API.app.core.Ingestion_Media_Processing.OCR.types import (
+    OCRResult,
+    normalize_ocr_format,
+)
+
 
 class OCRBackend(ABC):
     """
@@ -24,3 +29,28 @@ class OCRBackend(ABC):
     def ocr_image(self, image_bytes: bytes, lang: Optional[str] = None) -> str:
         """Run OCR on an image (bytes) and return extracted text (UTF-8)."""
         raise NotImplementedError
+
+    def ocr_image_structured(
+        self,
+        image_bytes: bytes,
+        lang: Optional[str] = None,
+        output_format: Optional[str] = None,
+        prompt_preset: Optional[str] = None,
+    ) -> OCRResult:
+        """
+        Best-effort structured OCR result. Backends can override for richer output.
+        """
+        text = self.ocr_image(image_bytes, lang)
+        fmt = normalize_ocr_format(output_format)
+        if fmt == "unknown":
+            fmt = "text"
+        return OCRResult(
+            text=text or "",
+            format=fmt,
+            raw=None,
+            meta={
+                "backend": getattr(self, "name", type(self).__name__),
+                "prompt_preset": prompt_preset,
+                "output_format": output_format,
+            },
+        )

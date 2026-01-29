@@ -60,6 +60,16 @@ vi.mock('@/components/ui/toast', () => ({
   }),
 }));
 
+vi.mock('next/navigation', () => ({
+  useRouter: () => ({
+    push: vi.fn(),
+    replace: vi.fn(),
+    prefetch: vi.fn(),
+  }),
+  usePathname: () => '/users',
+  useSearchParams: () => new URLSearchParams(),
+}));
+
 vi.mock('@/components/OrgContextSwitcher', () => ({
   useOrgContext: () => ({ selectedOrg: null }),
   OrgContextSwitcher: () => <div data-testid="org-switcher" />,

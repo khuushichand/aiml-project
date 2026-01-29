@@ -35,6 +35,7 @@ from ....core.Chatbooks.chatbook_validators import ChatbookValidator
 from ..API_Deps.ChaCha_Notes_DB_Deps import get_chacha_db_for_user as get_chacha_db
 from ..schemas.chatbook_schemas import (
     CancelJobResponse,
+    RemoveJobResponse,
     ChatbookManifestResponse,
     ChatbookVersion as SchemaChatbookVersion,
     CleanupExpiredExportsResponse,
@@ -284,11 +285,24 @@ async def create_chatbook(
                     download_url=download_url,
                     expires_at=expires_at,
                 )
+                save_ok = True
                 try:
                     # Save job using the service helper
                     service._save_export_job(job)  # noqa: SLF001 (internal helper is appropriate here)
                 except Exception as _e:
+                    save_ok = False
                     logger.warning(f"Failed to persist completed export job for sync path: {_e}")
+                if not save_ok:
+                    # Best-effort cleanup to avoid orphaned exports
+                    try:
+                        if file_path and file_path.exists():
+                            file_path.unlink()
+                    except Exception as cleanup_err:
+                        logger.warning(f"Failed to remove export archive after job persistence failure: {cleanup_err}")
+                    raise HTTPException(
+                        status_code=500,
+                        detail="Export completed but failed to persist job metadata",
+                    )
 
                 # Audit completed export in sync path
                 try:
@@ -316,6 +330,13 @@ async def create_chatbook(
                     download_url=download_url
                 )
         else:
+            # For async jobs, return a failure response with job_id so clients can inspect status.
+            if request_data.async_mode and result:
+                return CreateChatbookResponse(
+                    success=False,
+                    message=message,
+                    job_id=result
+                )
             raise HTTPException(status_code=400, detail=message)
 
     except HTTPException:
@@ -511,6 +532,24 @@ async def import_chatbook(
                     warnings=warnings_out
                 )
         else:
+            # For async jobs, return a failure response with job_id so clients can inspect status.
+            if import_request.async_mode and result:
+                # Enqueue failed; cleanup temp file since no worker will consume it.
+                if temp_file is not None and temp_file.exists():
+                    try:
+                        temp_file.unlink()
+                    except Exception as e:
+                        logger.warning(f"Cleanup of temp import file failed after enqueue failure: path={temp_file}, user={user.id}, error={e}")
+                        _safe_increment_metric(
+                            "app_warning_events_total",
+                            labels={"component": "chatbooks", "event": "import_cleanup_failed"},
+                            error_context="chatbooks import_cleanup_failed",
+                        )
+                return ImportChatbookResponse(
+                    success=False,
+                    message=message,
+                    job_id=result
+                )
             raise HTTPException(status_code=400, detail=message)
 
     except HTTPException:
@@ -559,6 +598,7 @@ async def preview_chatbook(
     Returns:
         PreviewChatbookResponse with manifest information
     """
+    temp_file: Optional[Path] = None
     try:
         # Validate file
         if not file.filename:
@@ -693,6 +733,18 @@ async def preview_chatbook(
             traceparent=ensure_traceparent(request),
         ).exception(f"Error previewing chatbook for user {user.id}")
         raise HTTPException(status_code=500, detail="An error occurred while previewing the chatbook")
+    finally:
+        # Ensure preview upload cleanup on all paths
+        if temp_file is not None and temp_file.exists():
+            try:
+                temp_file.unlink()
+            except Exception as e:
+                logger.warning(f"Cleanup of preview temp file failed: path={temp_file}, user={user.id}, error={e}")
+                _safe_increment_metric(
+                    "app_warning_events_total",
+                    labels={"component": "chatbooks", "event": "preview_cleanup_failed"},
+                    error_context="chatbooks preview_cleanup_failed",
+                )
 
 
 @router.get("/export/jobs", response_model=ListExportJobsResponse)
@@ -716,11 +768,8 @@ async def list_export_jobs(
         ListExportJobsResponse with list of export jobs
     """
     try:
-        jobs = service.list_export_jobs()
-
-        # Apply pagination
-        total = len(jobs)
-        jobs = jobs[offset:offset + limit]
+        total = service.count_export_jobs()
+        jobs = service.list_export_jobs(limit=limit, offset=offset)
 
         # Convert to response models
         job_responses = []
@@ -841,11 +890,8 @@ async def list_import_jobs(
         ListImportJobsResponse with list of import jobs
     """
     try:
-        jobs = service.list_import_jobs()
-
-        # Apply pagination
-        total = len(jobs)
-        jobs = jobs[offset:offset + limit]
+        total = service.count_import_jobs()
+        jobs = service.list_import_jobs(limit=limit, offset=offset)
 
         # Convert to response models
         job_responses = []
@@ -1264,4 +1310,102 @@ async def cancel_import_job(
         raise HTTPException(
             status_code=500,
             detail="An error occurred while cancelling the import job",
+        ) from None
+
+
+@router.delete("/export/jobs/{job_id}/remove", response_model=RemoveJobResponse)
+async def remove_export_job(
+    job_id: str,
+    request: Request,
+    service: ChatbookService = Depends(get_chatbook_service),
+    user: User = Depends(get_request_user),
+    audit_service=Depends(get_audit_service_for_user),
+):
+    """
+    Remove a completed or cancelled export job.
+
+    Args:
+        job_id: The export job ID to remove
+    """
+    try:
+        ok = service.delete_export_job(job_id)
+        if not ok:
+            raise HTTPException(status_code=400, detail="Only cancelled or completed jobs can be removed")
+        try:
+            context = AuditContext(
+                user_id=str(user.id),
+                endpoint="/chatbooks/export/jobs/{job_id}/remove",
+                method="DELETE",
+                ip_address=request.client.host if request and hasattr(request, 'client') else None,
+            )
+            await audit_service.log_event(
+                event_type=AuditEventType.DATA_DELETE,
+                context=context,
+                resource_type="chatbook_export_job",
+                resource_id=job_id,
+                action="chatbook_export_job_removed",
+            )
+        except Exception as audit_err:
+            logger.warning(f"Failed to log audit event for export job removal: {audit_err}")
+        return RemoveJobResponse(
+            success=True,
+            message=f"Export job {job_id} removed",
+            job_id=job_id,
+        )
+    except HTTPException:
+        raise
+    except Exception:
+        logger.exception(f"Error removing export job {job_id} for user {user.id}")
+        raise HTTPException(
+            status_code=500,
+            detail="An error occurred while removing the export job",
+        ) from None
+
+
+@router.delete("/import/jobs/{job_id}/remove", response_model=RemoveJobResponse)
+async def remove_import_job(
+    job_id: str,
+    request: Request,
+    service: ChatbookService = Depends(get_chatbook_service),
+    user: User = Depends(get_request_user),
+    audit_service=Depends(get_audit_service_for_user),
+):
+    """
+    Remove a completed or cancelled import job.
+
+    Args:
+        job_id: The import job ID to remove
+    """
+    try:
+        ok = service.delete_import_job(job_id)
+        if not ok:
+            raise HTTPException(status_code=400, detail="Only cancelled or completed jobs can be removed")
+        try:
+            context = AuditContext(
+                user_id=str(user.id),
+                endpoint="/chatbooks/import/jobs/{job_id}/remove",
+                method="DELETE",
+                ip_address=request.client.host if request and hasattr(request, 'client') else None,
+            )
+            await audit_service.log_event(
+                event_type=AuditEventType.DATA_DELETE,
+                context=context,
+                resource_type="chatbook_import_job",
+                resource_id=job_id,
+                action="chatbook_import_job_removed",
+            )
+        except Exception as audit_err:
+            logger.warning(f"Failed to log audit event for import job removal: {audit_err}")
+        return RemoveJobResponse(
+            success=True,
+            message=f"Import job {job_id} removed",
+            job_id=job_id,
+        )
+    except HTTPException:
+        raise
+    except Exception:
+        logger.exception(f"Error removing import job {job_id} for user {user.id}")
+        raise HTTPException(
+            status_code=500,
+            detail="An error occurred while removing the import job",
         ) from None

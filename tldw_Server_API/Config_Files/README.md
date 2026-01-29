@@ -18,7 +18,7 @@ How to apply changes
 
 ## Diagnostics
 - Admin network diagnostics endpoint: `GET /api/v1/admin/network-info`
-  - Returns resolved client IP, proxy headers used, and access decisions for WebUI/Setup based on toggles and IP lists.
+  - Returns resolved client IP, proxy headers used, and access decisions for Setup based on toggles and IP lists.
   - Requires admin role. Useful when configuring `trusted_proxies`, allow/deny lists, or remote toggles.
 
 ## [Setup]
@@ -30,20 +30,15 @@ How to apply changes
  - `setup_ip_denylist` (csv): Optional IPs/CIDRs to explicitly block from `/setup`.
    - Env override: `TLDW_SETUP_DENYLIST="0.0.0.0/0"`
 
+## [UI]
+- `quickstart_url` (str): Optional quickstart target for `/api/v1/config/quickstart`.
+  - Accepts absolute URLs (`https://...`) or same-origin paths (`/docs`, `/login`, etc.).
+
 ## [Server]
 - `disable_cors` (bool): Disable CORS protections for development.
-- `allow_remote_webui_access` (bool): Allow remote clients (non-localhost) to load `/webui`.
-  - Security: Only enable on trusted networks and with proper auth. When enabled, run the server
-    listening on a public interface (e.g., `uvicorn ... --host 0.0.0.0`).
-  - Env override: set `TLDW_WEBUI_ALLOW_REMOTE=1` (or `WEBUI_ALLOW_REMOTE=1`).
- - `webui_ip_allowlist` (csv): Optional IPs/CIDRs allowed to access `/webui` remotely.
-   - Examples: `192.168.1.0/24, 10.0.0.5, 2001:db8::/32`
-   - Env override: `TLDW_WEBUI_ALLOWLIST="192.168.1.0/24,10.0.0.5"`
- - `webui_ip_denylist` (csv): Optional IPs/CIDRs to explicitly block from `/webui`.
-   - Env override: `TLDW_WEBUI_DENYLIST="203.0.113.4,198.51.100.0/24"`
- - `trusted_proxies` (csv): Proxy IPs/CIDRs trusted for X-Forwarded-For/X-Real-IP processing.
-   - If the socket peer is in this list, the server uses the leftmost X-Forwarded-For IP as the client.
-   - Env override: `TLDW_TRUSTED_PROXIES="10.0.0.0/8,192.168.0.0/16,127.0.0.1"`
+- `trusted_proxies` (csv): Proxy IPs/CIDRs trusted for X-Forwarded-For/X-Real-IP processing.
+  - If the socket peer is in this list, the server uses the leftmost X-Forwarded-For IP as the client.
+  - Env override: `TLDW_TRUSTED_PROXIES="10.0.0.0/8,192.168.0.0/16,127.0.0.1"`
 
 ## [Audit]
 - `export_stream_auto_max_rows` (int): Auto-switch audit exports to streaming when `max_rows` is above this value (env: `AUDIT_EXPORT_STREAM_AUTO_MAX_ROWS`). Keeps large CSV/JSON/JSONL exports from buffering entirely in memory.
@@ -221,6 +216,8 @@ For each type in `chunking_types` (`article|audio|book|document|mediawiki_articl
 - `semantic_cache_enabled` (bool) & `cache_similarity_threshold` (float)
 - `enable_reranking` (bool) & `rerank_top_k` (int)
 - Rerankers: `llm_reranker_*`, `llama_reranker_*`, `transformers_reranker_model` (str)
+  - Transformers reranker examples: `BAAI/bge-reranker-v2-m3`,
+    `mixedbread-ai/mxbai-rerank-large-v2` (auto-enables `trust_remote_code`)
 - Feature flags (phased rollout):
   - `enable_structure_index` (bool)
   - `strict_extractive` (bool)
@@ -296,6 +293,13 @@ VibeVoice:
 - `search_result_save_to_db` (bool)
 - `search_result_analysis_tone` (str)
 - Per-engine keys: API keys/IDs/region/language filters and router URLs.
+  - Examples:
+    - Google: `search_engine_api_key_google`, `search_engine_id_google`, `search_engine_api_url_google`
+    - Brave: `search_engine_api_key_brave_regular`, `search_engine_api_key_brave_ai`
+    - Searx: `search_engine_searx_api`
+    - Tavily: `search_engine_api_key_tavily`
+    - Exa: `search_engine_api_key_exa`, `search_engine_api_url_exa`
+    - Firecrawl: `search_engine_api_key_firecrawl`, `search_engine_api_url_firecrawl`
 
 ## [Web-Scraper]
 - `web_scraper_api_key|web_scraper_api_url` (str)
@@ -613,7 +617,7 @@ Environment overrides
 - `ROUTES_EXPERIMENTAL="workflows,scheduler"`
 
 Known route keys (not exhaustive)
-`health, metrics, monitoring, moderation, audit, auth, auth-enhanced, users, privileges, admin, mcp-catalogs, media, audio, audio-jobs, audio-websocket, chat, characters, character-chat-sessions, character-messages, chunking, chunking-templates, outputs-templates, outputs, embeddings, vector-stores, connectors, claims, media-embeddings, items, reading, watchlists, subscriptions-deprecated, notes, prompts, reading-highlights, prompt-studio, rag-health, rag-unified, workflows, scheduler, research, paper-search, evaluations, ocr, vlm, benchmarks, setup, config, jobs, sync, tools, sandbox, flashcards, personalization, persona, mcp-unified, chatbooks, llm, llamacpp, web-scraping, webui`
+`health, metrics, monitoring, moderation, audit, auth, auth-enhanced, users, privileges, admin, mcp-catalogs, media, audio, audio-jobs, audio-websocket, chat, characters, character-chat-sessions, character-messages, chunking, chunking-templates, outputs-templates, outputs, embeddings, vector-stores, connectors, claims, media-embeddings, items, reading, watchlists, subscriptions-deprecated, notes, prompts, reading-highlights, prompt-studio, rag-health, rag-unified, workflows, scheduler, research, paper-search, evaluations, ocr, vlm, benchmarks, setup, config, jobs, sync, tools, sandbox, flashcards, personalization, persona, mcp-unified, chatbooks, llm, llamacpp, web-scraping`
 
 Curated experimental set (gated by `stable_only=true` unless explicitly enabled)
 `sandbox, connectors, workflows, scheduler, flashcards, personalization, persona, jobs, benchmarks`
@@ -629,5 +633,4 @@ Notes
 - Control-plane endpoints are also gated:
   - `metrics` key: gates both `/metrics` (Prometheus text) and `/api/v1/metrics` (JSON).
   - `health` key: gates `/health`, `/ready`, and `/health/ready`, as well as health routers (`/healthz`, `/readyz`).
-  - `webui` key: gates the WebUI static mount (`/webui`) and `/webui/config.json`.
   - `setup` key: gates the Setup UI (`/setup`) and the setup API routes; root (`/`) only redirects to `/setup` when this key is enabled and setup is required.

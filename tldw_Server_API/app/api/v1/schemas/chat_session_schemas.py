@@ -226,7 +226,11 @@ class CharacterChatCompletionPrepRequest(BaseModel):
     include_character_context: bool = Field(True, description="Include character system context")
     limit: int = Field(100, ge=1, le=1000, description="Max messages to include")
     offset: int = Field(0, ge=0, description="Messages offset")
-    append_user_message: Optional[str] = Field(None, description="Optional user message to append to the end")
+    append_user_message: Optional[str] = Field(
+        None,
+        description="Optional user message to append to the end",
+        max_length=1_000_000,
+    )
 
 
 class CharacterChatCompletionPrepResponse(BaseModel):
@@ -248,7 +252,11 @@ class CharacterChatCompletionV2Request(BaseModel):
     include_character_context: bool = Field(True, description="Include character system context")
     limit: int = Field(100, ge=1, le=1000, description="Max messages to include")
     offset: int = Field(0, ge=0, description="Messages offset")
-    append_user_message: Optional[str] = Field(None, description="Optional user message to append and (optionally) persist")
+    append_user_message: Optional[str] = Field(
+        None,
+        description="Optional user message to append and (optionally) persist",
+        max_length=1_000_000,
+    )
     save_to_db: Optional[bool] = Field(None, description="Persist appended user and assistant messages to this chat")
     # LLM controls
     provider: Optional[str] = Field(None, description="LLM provider (e.g., openai, anthropic, local-llm). Defaults to local-llm if omitted.")

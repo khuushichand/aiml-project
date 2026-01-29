@@ -14,7 +14,7 @@ All features are designed to run locally on your device, ensuring privacy and da
 
 It has now been rewritten as a FastAPI Python server to support larger deployments and multiple users. This includes:
 
-- A modern FastAPI backend with OpenAPI docs and integrated WebUI
+- A modern FastAPI backend with OpenAPI docs and a Next.js WebUI
 - OpenAI-compatible Chat, Embeddings, STT/TTS endpoints
 - AuthNZ module with single-user (API key) and multi-user (JWT) modes
 - Hybrid RAG (FTS5 + vector + re-ranking) and a unified RAG API

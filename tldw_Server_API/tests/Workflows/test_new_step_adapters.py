@@ -134,6 +134,46 @@ def test_notify_step_test_mode(client_with_wf: TestClient):
     assert out.get("test_mode") is True
 
 
+def test_llm_step_test_mode(client_with_wf: TestClient):
+    client = client_with_wf
+    definition = {
+        "name": "llm",
+        "version": 1,
+        "steps": [
+            {"id": "l1", "type": "llm", "config": {"provider": "openai", "prompt": "Hello {{ inputs.name }}"}},
+        ],
+    }
+    wid = client.post("/api/v1/workflows", json=definition).json()["id"]
+    run_id = client.post(f"/api/v1/workflows/{wid}/run", json={"inputs": {"name": "Rui"}}).json()["run_id"]
+    data = _wait_terminal(client, run_id)
+    assert data["status"] == "succeeded"
+    out = data.get("outputs") or {}
+    assert out.get("simulated") is True
+    assert "Rui" in (out.get("text") or "")
+
+
+def test_kanban_step_crud(client_with_wf: TestClient):
+    client = client_with_wf
+    definition = {
+        "name": "kanban-crud",
+        "version": 1,
+        "steps": [
+            {"id": "b", "type": "kanban", "config": {"action": "board.create", "name": "Board {{ inputs.name }}", "client_id": "wf-board-1"}},
+            {"id": "l", "type": "kanban", "config": {"action": "list.create", "board_id": "{{ last.board.id }}", "name": "To Do", "client_id": "wf-list-1"}},
+            {"id": "c", "type": "kanban", "config": {"action": "card.create", "list_id": "{{ last.list.id }}", "title": "Card {{ inputs.name }}", "client_id": "wf-card-1"}},
+            {"id": "g", "type": "kanban", "config": {"action": "card.get", "card_id": "{{ last.card.id }}", "include_details": True}},
+        ],
+    }
+    wid = client.post("/api/v1/workflows", json=definition).json()["id"]
+    run_id = client.post(f"/api/v1/workflows/{wid}/run", json={"inputs": {"name": "Kanban"}}).json()["run_id"]
+    data = _wait_terminal(client, run_id)
+    assert data["status"] == "succeeded"
+    out = data.get("outputs") or {}
+    card = out.get("card") or {}
+    assert card.get("title") == "Card Kanban"
+    assert isinstance(card.get("checklists"), list)
+
+
 def test_diff_change_detector(client_with_wf: TestClient):
     client = client_with_wf
     definition = {
@@ -160,8 +200,19 @@ def test_stt_transcribe_with_mock(monkeypatch, tmp_path, client_with_wf: TestCli
 
     # Patch speech_to_text to avoid heavy deps
     import tldw_Server_API.app.core.Ingestion_Media_Processing.Audio.Audio_Transcription_Lib as ATL
-    def _fake_stt(path, whisper_model='large-v3', selected_source_lang=None, vad_filter=False, diarize=False, *, word_timestamps=False, return_language=False):
-             # Workflow adapter should pass None when language is omitted,
+    def _fake_stt(
+        path,
+        whisper_model="large-v3",
+        selected_source_lang=None,
+        vad_filter=False,
+        diarize=False,
+        *,
+        word_timestamps=False,
+        return_language=False,
+        hotwords=None,
+        **kwargs,
+    ):
+        # Workflow adapter should pass None when language is omitted,
         # allowing the STT backend to auto-detect.
         assert selected_source_lang is None
         segments = [{"Text": "hello world", "start_seconds": 0.0, "end_seconds": 1.0}]

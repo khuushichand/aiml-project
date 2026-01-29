@@ -80,6 +80,32 @@ Response:
 }
 ```
 
+### Retrieve Artifact
+`GET /api/v1/files/{file_id}`
+
+Response (metadata; export bytes omitted unless stored):
+```json
+{
+  "artifact": {
+    "file_id": 123,
+    "file_type": "data_table",
+    "title": "Scores",
+    "structured": { "...": "..." },
+    "validation": { "ok": true, "warnings": [] },
+    "export": {
+      "status": "none",
+      "format": "csv",
+      "content_type": "text/csv",
+      "bytes": null,
+      "job_id": "optional",
+      "expires_at": "optional"
+    },
+    "created_at": "2026-01-01T12:00:00Z",
+    "updated_at": "2026-01-01T12:00:00Z"
+  }
+}
+```
+
 ### Export Artifact
 `GET /api/v1/files/{file_id}/export?format=ics|md|html|xlsx|csv|json`
 - Returns a binary file response with safe `Content-Type` and `Content-Disposition`.
@@ -171,6 +197,7 @@ Notes:
 - Exports are stored transiently (per-user temp outputs path) and expire via TTL.
 - `mode=inline` returns base64 content for small exports; otherwise returns a URL.
 - Inline exports are capped (default 256KB). Configure via `config.txt` `[Files] inline_max_bytes` or `FILES_INLINE_MAX_BYTES`.
+- When no export bytes are stored, `content_b64` is omitted and `bytes` is `null`.
 
 ## Operations
 - Async exports require a Jobs worker to complete:

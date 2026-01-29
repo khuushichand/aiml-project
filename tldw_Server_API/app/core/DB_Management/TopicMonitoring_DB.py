@@ -50,7 +50,7 @@ def _utcnow_iso() -> str:
 
 @dataclass
 class TopicAlert:
-    user_id: str
+    user_id: Optional[str]
     scope_type: str
     scope_id: Optional[str]
     source: str
@@ -153,7 +153,7 @@ class TopicMonitoringDB:
                 conn.execute(
                     """
                     CREATE TABLE IF NOT EXISTS monitoring_watchlist_rules (
-                        rule_id TEXT PRIMARY KEY,
+                        rule_id TEXT NOT NULL,
                         watchlist_id TEXT NOT NULL,
                         pattern TEXT NOT NULL,
                         category TEXT,
@@ -162,6 +162,7 @@ class TopicMonitoringDB:
                         tags TEXT,
                         created_at TEXT,
                         updated_at TEXT,
+                        PRIMARY KEY (watchlist_id, rule_id),
                         FOREIGN KEY(watchlist_id) REFERENCES monitoring_watchlists(id) ON DELETE CASCADE
                     )
                     """
@@ -171,9 +172,6 @@ class TopicMonitoringDB:
                 )
                 conn.execute(
                     "CREATE INDEX IF NOT EXISTS idx_monitoring_watchlists_enabled ON monitoring_watchlists(enabled)"
-                )
-                conn.execute(
-                    "CREATE INDEX IF NOT EXISTS idx_monitoring_watchlist_rules_watchlist ON monitoring_watchlist_rules(watchlist_id)"
                 )
                 conn.execute(
                     """
@@ -199,6 +197,11 @@ class TopicMonitoringDB:
                     )
                     """
                 )
+                if self._watchlist_rules_pk_needs_migration(conn):
+                    self._migrate_watchlist_rules_schema(conn)
+                conn.execute(
+                    "CREATE INDEX IF NOT EXISTS idx_monitoring_watchlist_rules_watchlist ON monitoring_watchlist_rules(watchlist_id)"
+                )
                 if not self._column_exists(conn, "topic_alerts", "rule_id"):
                     conn.execute("ALTER TABLE topic_alerts ADD COLUMN rule_id TEXT")
                 if not self._column_exists(conn, "topic_alerts", "source_id"):
@@ -216,6 +219,60 @@ class TopicMonitoringDB:
                 conn.commit()
             finally:
                 conn.close()
+
+    @staticmethod
+    def _watchlist_rules_pk_needs_migration(conn: sqlite3.Connection) -> bool:
+        try:
+            rows = conn.execute("PRAGMA table_info(monitoring_watchlist_rules)").fetchall()
+        except Exception:
+            return False
+        if not rows:
+            return False
+        pk_cols = [
+            row["name"]
+            for row in sorted(rows, key=lambda r: r["pk"])
+            if row["pk"]
+        ]
+        return pk_cols == ["rule_id"]
+
+    def _migrate_watchlist_rules_schema(self, conn: sqlite3.Connection) -> None:
+        logger.info("Migrating monitoring_watchlist_rules schema to composite primary key")
+        try:
+            conn.execute("BEGIN")
+            conn.execute("DROP INDEX IF EXISTS idx_monitoring_watchlist_rules_watchlist")
+            conn.execute("ALTER TABLE monitoring_watchlist_rules RENAME TO monitoring_watchlist_rules_old")
+            conn.execute(
+                """
+                CREATE TABLE monitoring_watchlist_rules (
+                    rule_id TEXT NOT NULL,
+                    watchlist_id TEXT NOT NULL,
+                    pattern TEXT NOT NULL,
+                    category TEXT,
+                    severity TEXT,
+                    note TEXT,
+                    tags TEXT,
+                    created_at TEXT,
+                    updated_at TEXT,
+                    PRIMARY KEY (watchlist_id, rule_id),
+                    FOREIGN KEY(watchlist_id) REFERENCES monitoring_watchlists(id) ON DELETE CASCADE
+                )
+                """
+            )
+            conn.execute(
+                """
+                INSERT INTO monitoring_watchlist_rules (
+                    rule_id, watchlist_id, pattern, category, severity, note, tags, created_at, updated_at
+                )
+                SELECT rule_id, watchlist_id, pattern, category, severity, note, tags, created_at, updated_at
+                FROM monitoring_watchlist_rules_old
+                """
+            )
+            conn.execute("DROP TABLE monitoring_watchlist_rules_old")
+            conn.commit()
+        except Exception as exc:
+            conn.rollback()
+            logger.error("Failed migrating monitoring_watchlist_rules schema: {}", exc)
+            raise
 
     @staticmethod
     def _normalize_tags(tags: Optional[Iterable[str]]) -> Optional[List[str]]:
@@ -420,6 +477,7 @@ class TopicMonitoringDB:
         with self._lock:
             conn = self._connect()
             try:
+                conn.execute("BEGIN")
                 conn.execute(
                     "DELETE FROM monitoring_watchlist_rules WHERE watchlist_id = ?",
                     (str(watchlist_id),),
@@ -445,6 +503,9 @@ class TopicMonitoringDB:
                         ),
                     )
                 conn.commit()
+            except Exception:
+                conn.rollback()
+                raise
             finally:
                 conn.close()
 
@@ -494,7 +555,7 @@ class TopicMonitoringDB:
 
     def recent_duplicate_exists(
         self,
-        user_id: str,
+        user_id: Optional[str],
         watchlist_id: str,
         source: str,
         *,
@@ -509,8 +570,13 @@ class TopicMonitoringDB:
         with self._lock:
             conn = self._connect()
             try:
-                clauses = ["user_id = ?", "watchlist_id = ?", "source = ?", "created_at >= ?"]
-                params: List[Any] = [str(user_id), str(watchlist_id), str(source), threshold]
+                clauses = ["watchlist_id = ?", "source = ?", "created_at >= ?"]
+                params: List[Any] = [str(watchlist_id), str(source), threshold]
+                if user_id is None:
+                    clauses.append("user_id IS NULL")
+                else:
+                    clauses.append("user_id = ?")
+                    params.append(str(user_id))
                 if rule_id:
                     clauses.append("rule_id = ?")
                     params.append(str(rule_id))
@@ -545,7 +611,7 @@ class TopicMonitoringDB:
     ) -> List[Dict[str, Any]]:
         clauses = []
         params: List[Any] = []
-        if user_id:
+        if user_id is not None:
             clauses.append("user_id = ?")
             params.append(str(user_id))
         if source:

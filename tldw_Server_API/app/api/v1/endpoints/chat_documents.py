@@ -55,10 +55,10 @@ router = APIRouter()
 )
 async def generate_document(
     request: GenerateDocumentRequest,
+    http_request: Request,
     db: CharactersRAGDB = Depends(get_chacha_db_for_user),
     service_cls: Type[DocumentGeneratorService] = Depends(get_document_generator_service),
     current_user: Dict[str, Any] = Depends(get_current_active_user),
-    http_request: Request = None,
 ) -> Union[GenerateDocumentResponse, AsyncGenerationResponse]:
     """Generate a document from a conversation."""
     try:

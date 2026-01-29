@@ -67,6 +67,16 @@ services:
     container_name: tldw-worker-media-ingest
     command: python -m tldw_Server_API.app.services.media_ingest_jobs_worker
 
+  worker-reading-import:
+    <<: *worker-base
+    container_name: tldw-worker-reading-import
+    command: python -m tldw_Server_API.app.core.Collections.reading_import_jobs_worker
+
+  worker-reading-digest:
+    <<: *worker-base
+    container_name: tldw-worker-reading-digest
+    command: python -m tldw_Server_API.app.core.Collections.reading_digest_jobs_worker
+
   worker-evals-abtest:
     <<: *worker-base
     container_name: tldw-worker-evals-abtest

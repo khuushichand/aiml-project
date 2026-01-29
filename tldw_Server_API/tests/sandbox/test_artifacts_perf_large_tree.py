@@ -32,7 +32,6 @@ def test_artifacts_list_perf_large_tree(tmp_path: Path, monkeypatch) -> None:
             "base_image": "python:3.11-slim",
             "command": ["bash", "-lc", "echo done"],
             "timeout_sec": 5,
-            "capture_patterns": ["**/*.txt"],
         }
         r = client.post("/api/v1/sandbox/runs", json=body)
         assert r.status_code == 200

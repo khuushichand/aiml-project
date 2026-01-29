@@ -111,6 +111,7 @@ nav:
       - Providers API: API-related/Providers_API_Documentation.md
       - RAG API: API-related/RAG_API_Documentation.md
       - RAG API Guide: API-related/RAG-API-Guide.md
+      - Slides API: API/Slides.md
       - Orgs & Billing API: API-related/Orgs_Billing_API.md
       - Transcript Segmentation API: API-related/Transcript_Segmentation_API.md
       - User Registration API: API-related/User_Registration_API_Documentation.md
@@ -163,6 +164,7 @@ nav:
   - User Guides:
       - Overview: User_Guides/index.md
       - Media→Embeddings→RAG→Evals Workflow: User_Guides/Media_to_RAG_Evals_Workflow.md
+      - Web Scraping and Ingestion: User_Guides/Web_Scraping_Ingestion_Guide.md
       - WebUI - Vector Backends: User_Guides/WebUI_Vector_Backends.md
       - Usage Module: User_Guides/Usage_Module.md
       - Authentication Setup: User_Guides/Authentication_Setup.md

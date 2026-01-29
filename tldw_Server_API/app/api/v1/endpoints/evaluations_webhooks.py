@@ -23,6 +23,9 @@ from tldw_Server_API.app.core.Evaluations.webhook_manager import (
     WebhookEvent,
     webhook_manager,
 )
+from tldw_Server_API.app.core.Evaluations.webhook_identity import (
+    webhook_user_id_from_user,
+)
 from tldw_Server_API.app.api.v1.schemas.evaluation_schemas_unified import (
     WebhookRegistrationRequest, WebhookRegistrationResponse,
     WebhookUpdateRequest, WebhookStatusResponse,
@@ -85,10 +88,11 @@ async def register_webhook(
 ):
     try:
         wm = _get_webhook_manager_for_user(current_user.id)
+        webhook_user_id = webhook_user_id_from_user(current_user)
         url = str(request.url)
         events = [WebhookEvent(e.value) if not isinstance(e, WebhookEvent) else e for e in request.events]
         _res = wm.register_webhook(
-            user_id=user_id,
+            user_id=webhook_user_id,
             url=url,
             secret=request.secret,
             events=events,
@@ -115,7 +119,8 @@ async def list_webhooks(
 ):
     try:
         wm = _get_webhook_manager_for_user(current_user.id)
-        _res = wm.get_webhook_status(user_id=user_id)
+        webhook_user_id = webhook_user_id_from_user(current_user)
+        _res = wm.get_webhook_status(user_id=webhook_user_id)
         try:
             records = await _res if inspect.isawaitable(_res) else _res
         except Exception:
@@ -138,7 +143,8 @@ async def unregister_webhook(
 ):
     try:
         wm = _get_webhook_manager_for_user(current_user.id)
-        _res = wm.unregister_webhook(user_id, url)
+        webhook_user_id = webhook_user_id_from_user(current_user)
+        _res = wm.unregister_webhook(webhook_user_id, url)
         try:
             if inspect.isawaitable(_res):
                 await _res
@@ -161,7 +167,8 @@ async def test_webhook(
 ):
     try:
         wm = _get_webhook_manager_for_user(current_user.id)
-        _res = wm.test_webhook(user_id=user_id, url=str(payload.url))
+        webhook_user_id = webhook_user_id_from_user(current_user)
+        _res = wm.test_webhook(user_id=webhook_user_id, url=str(payload.url))
         try:
             result = await _res if inspect.isawaitable(_res) else _res
         except Exception:

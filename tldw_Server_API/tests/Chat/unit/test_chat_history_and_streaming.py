@@ -46,6 +46,17 @@ class DummyChatDB:
         raise RuntimeError("not needed")
 
 
+class DummyChatDBWithMetadata(DummyChatDB):
+    def get_message_metadata(self, message_id: str):
+        return {
+            "tool_calls": None,
+            "extra": {
+                "sender_role": "system",
+                "sender_name": "system-command",
+            },
+        }
+
+
 @pytest.mark.asyncio
 async def test_build_context_uses_history_knobs():
     records = [
@@ -77,7 +88,7 @@ async def test_build_context_uses_history_knobs():
 
     history = result[4]
     assert len(history) == 3
-    # Expect oldest to newest ordering even when fetching via DESC
+    # History is normalized to chronological order in the payload
     timestamps = [msg_part["content"][0]["text"].split("-")[-1] for msg_part in history if msg_part["content"]]
     assert timestamps == ["7", "8", "9"]
 
@@ -135,6 +146,44 @@ async def test_build_context_skips_tool_placeholder_replacement():
 
 
 @pytest.mark.asyncio
+async def test_build_context_honors_sender_role_metadata():
+    records = [
+        {
+            "id": "msg-system-1",
+            "sender": "system-command",
+            "content": "System note",
+            "timestamp": 1,
+            "images": [],
+        }
+    ]
+    db = DummyChatDBWithMetadata(records)
+    request_data = DummyRequestData(history_message_limit=5, history_message_order="asc")
+    request_data.messages = []
+    loop = asyncio.get_running_loop()
+
+    class DummyMetrics:
+        def track_character_access(self, *args, **kwargs):
+            pass
+
+        def track_conversation(self, *args, **kwargs):
+            pass
+
+    result = await chat_service.build_context_and_messages(
+        chat_db=db,
+        request_data=request_data,
+        loop=loop,
+        metrics=DummyMetrics(),
+        default_save_to_db=False,
+        final_conversation_id="conv",
+        save_message_fn=AsyncMock(),
+    )
+
+    history = result[4]
+    assert history
+    assert history[0]["role"] == "system"
+
+
+@pytest.mark.asyncio
 async def test_build_context_persists_full_transcript_when_enabled():
     class DummyChatDBWithConversation(DummyChatDB):
         def get_conversation_by_id(self, conversation_id: str):
@@ -178,6 +227,53 @@ async def test_build_context_persists_full_transcript_when_enabled():
 
     roles = [call.args[2]["role"] for call in save_message_fn.call_args_list]
     assert roles == ["user", "assistant", "tool"]
+
+
+@pytest.mark.asyncio
+async def test_build_context_sanitizes_message_names():
+    class DummyChatDBWithConversation(DummyChatDB):
+        def get_conversation_by_id(self, conversation_id: str):
+            return {"id": conversation_id, "character_id": 1, "client_id": self.client_id}
+
+    class DummyMessage:
+        def __init__(self, role: str, content: Any, name: Optional[str]):
+            self.role = role
+            self.content = content
+            self.name = name
+
+        def model_dump(self, exclude_none: bool = True):
+            data = {"role": self.role, "content": self.content}
+            if self.name is not None:
+                data["name"] = self.name
+            return data
+
+    db = DummyChatDBWithConversation([])
+    request_data = DummyRequestData(save_to_db=False)
+    request_data.messages = [
+        DummyMessage("user", "hi", "User Name/Bad"),
+    ]
+    loop = asyncio.get_running_loop()
+
+    class DummyMetrics:
+        def track_character_access(self, *args, **kwargs):
+            pass
+
+        def track_conversation(self, *args, **kwargs):
+            pass
+
+    result = await chat_service.build_context_and_messages(
+        chat_db=db,
+        request_data=request_data,
+        loop=loop,
+        metrics=DummyMetrics(),
+        default_save_to_db=False,
+        final_conversation_id="conv",
+        save_message_fn=AsyncMock(),
+    )
+
+    llm_messages = result[4]
+    assert llm_messages
+    assert llm_messages[0]["name"] == "User_NameBad"
 
 
 @pytest.mark.asyncio

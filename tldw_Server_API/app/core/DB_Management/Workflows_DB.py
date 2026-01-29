@@ -144,6 +144,7 @@ CREATE TABLE IF NOT EXISTS workflow_artifacts (
 
 CREATE INDEX IF NOT EXISTS idx_workflows_owner ON workflows(owner_id);
 CREATE INDEX IF NOT EXISTS idx_runs_status ON workflow_runs(status);
+CREATE INDEX IF NOT EXISTS idx_runs_idempotency_lookup ON workflow_runs(tenant_id, user_id, idempotency_key, created_at);
     CREATE INDEX IF NOT EXISTS idx_events_run_seq ON workflow_events(run_id, event_seq);
 
 -- Ensure uniqueness of per-run event sequence
@@ -178,6 +179,17 @@ CREATE INDEX IF NOT EXISTS idx_runs_status ON workflow_runs(status);
 
 def _utcnow_iso() -> str:
     return datetime.utcnow().replace(tzinfo=timezone.utc).isoformat()
+
+
+def _workflows_idempotency_ttl_hours() -> int:
+    """Return idempotency TTL in hours for workflow runs."""
+    raw = os.getenv("WORKFLOWS_IDEMPOTENCY_TTL_HOURS", "24")
+    try:
+        ttl = int(raw)
+    except (TypeError, ValueError):
+        logger.warning("Invalid WORKFLOWS_IDEMPOTENCY_TTL_HOURS=%r; defaulting to 24", raw)
+        ttl = 24
+    return max(1, ttl)
 
 
 class WorkflowRowAdapter:
@@ -423,7 +435,7 @@ class WorkflowRun:
 
 
 class WorkflowsDatabase:
-    _CURRENT_SCHEMA_VERSION = 5
+    _CURRENT_SCHEMA_VERSION = 6
     """Workflow persistence adapter supporting SQLite and DatabaseBackend instances."""
 
     def __init__(
@@ -674,6 +686,7 @@ class WorkflowsDatabase:
             3: self._backend_migrate_to_v3,
             4: self._backend_migrate_to_v4,
             5: self._backend_migrate_to_v5,
+            6: self._backend_migrate_to_v6,
         }
 
     def _backend_migrate_to_v1(self, conn) -> None:
@@ -882,6 +895,21 @@ class WorkflowsDatabase:
         except Exception:
             pass
 
+    def _backend_migrate_to_v6(self, conn) -> None:
+        if not self.backend:
+            return
+        backend = self.backend
+        ident = backend.escape_identifier
+        try:
+            backend.execute(
+                f"CREATE INDEX IF NOT EXISTS {ident('idx_runs_idempotency_lookup')} "
+                f"ON {ident('workflow_runs')} ({ident('tenant_id')}, {ident('user_id')}, "
+                f"{ident('idempotency_key')}, {ident('created_at')})",
+                connection=conn,
+            )
+        except Exception:
+            pass
+
     def _initialize_schema_backend(self) -> None:
         if not self.backend:
             return
@@ -1025,6 +1053,9 @@ class WorkflowsDatabase:
         # Indices
         cur.execute("CREATE INDEX IF NOT EXISTS idx_workflows_owner ON workflows(owner_id)")
         cur.execute("CREATE INDEX IF NOT EXISTS idx_runs_status ON workflow_runs(status)")
+        cur.execute(
+            "CREATE INDEX IF NOT EXISTS idx_runs_idempotency_lookup ON workflow_runs(tenant_id, user_id, idempotency_key, created_at)"
+        )
         # Partial indexes for frequently accessed statuses (supported on modern SQLite)
         try:
             cur.execute("CREATE INDEX IF NOT EXISTS idx_runs_status_running ON workflow_runs(status) WHERE status = 'running'")
@@ -1901,9 +1932,133 @@ class WorkflowsDatabase:
         row = self._conn.cursor().execute(query, (run_id,)).fetchone()
         return row[0] if row else None
 
+    def get_last_completed_step_run(
+        self,
+        *,
+        run_id: str,
+        before_ts: Optional[str] = None,
+    ) -> Optional[Dict[str, Any]]:
+        """Return the most recent succeeded step run, optionally before a timestamp."""
+        query = "SELECT * FROM workflow_step_runs WHERE run_id = ? AND status = 'succeeded'"
+        params: List[Any] = [str(run_id)]
+        if before_ts:
+            query += " AND ended_at IS NOT NULL AND ended_at < ?"
+            params.append(str(before_ts))
+        query += " ORDER BY ended_at DESC LIMIT 1"
+        if self._using_backend():
+            with self.backend.transaction() as conn:  # type: ignore[union-attr]
+                result = self._execute_backend(query, tuple(params), connection=conn)
+            row = self._row_from_result(result)
+            return row.to_dict() if row else None
+
+        row = self._conn.cursor().execute(query, params).fetchone()
+        return dict(row) if row else None
+
+    def aggregate_run_token_usage(self, run_id: str) -> Tuple[Optional[int], Optional[int], Optional[float]]:
+        """Aggregate token usage and cost across step outputs for a run."""
+        query = "SELECT outputs_json FROM workflow_step_runs WHERE run_id = ? AND outputs_json IS NOT NULL"
+        rows: List[Any]
+        if self._using_backend():
+            with self.backend.transaction() as conn:  # type: ignore[union-attr]
+                result = self._execute_backend(query, (str(run_id),), connection=conn)
+            rows = self._rows_from_result(result)
+        else:
+            rows = self._conn.cursor().execute(query, (str(run_id),)).fetchall()
+
+        total_in = 0
+        total_out = 0
+        total_cost = 0.0
+        have_tokens = False
+        have_cost = False
+
+        def _as_int(val: Any) -> Optional[int]:
+            try:
+                if val is None:
+                    return None
+                return int(val)
+            except Exception:
+                return None
+
+        def _as_float(val: Any) -> Optional[float]:
+            try:
+                if val is None:
+                    return None
+                return float(val)
+            except Exception:
+                return None
+
+        for row in rows:
+            raw = None
+            try:
+                if isinstance(row, WorkflowRowAdapter):
+                    raw = row.get("outputs_json")
+                elif isinstance(row, dict):
+                    raw = row.get("outputs_json")
+                else:
+                    raw = row[0] if row else None
+            except Exception:
+                raw = None
+            if raw is None:
+                continue
+            outputs: Any = raw
+            if isinstance(raw, (bytes, bytearray)):
+                try:
+                    outputs = json.loads(raw.decode("utf-8"))
+                except (UnicodeDecodeError, json.JSONDecodeError):
+                    logger.debug("Skipping malformed outputs_json for run_id=%s", run_id)
+                    continue
+            elif isinstance(raw, str):
+                try:
+                    outputs = json.loads(raw)
+                except json.JSONDecodeError:
+                    logger.debug("Skipping malformed outputs_json for run_id=%s", run_id)
+                    continue
+            if not isinstance(outputs, dict):
+                continue
+            meta = outputs.get("metadata") if isinstance(outputs.get("metadata"), dict) else None
+            usage = None
+            if isinstance(meta, dict):
+                usage = meta.get("token_usage") or meta.get("usage")
+            if usage is None and isinstance(outputs.get("token_usage"), dict):
+                usage = outputs.get("token_usage")
+            if isinstance(usage, dict):
+                in_val = _as_int(usage.get("prompt_tokens") or usage.get("input_tokens"))
+                out_val = _as_int(usage.get("completion_tokens") or usage.get("output_tokens"))
+                if in_val is not None:
+                    total_in += in_val
+                    have_tokens = True
+                if out_val is not None:
+                    total_out += out_val
+                    have_tokens = True
+            cost_val = None
+            if isinstance(meta, dict) and meta.get("cost_usd") is not None:
+                cost_val = _as_float(meta.get("cost_usd"))
+            elif outputs.get("cost_usd") is not None:
+                cost_val = _as_float(outputs.get("cost_usd"))
+            if cost_val is not None:
+                total_cost += cost_val
+                have_cost = True
+
+        return (
+            total_in if have_tokens else None,
+            total_out if have_tokens else None,
+            total_cost if have_cost else None,
+        )
+
     def get_run_by_idempotency(self, tenant_id: str, user_id: str, idempotency_key: str) -> Optional[WorkflowRun]:
+        ttl_hours = _workflows_idempotency_ttl_hours()
+        try:
+            from datetime import timedelta
+            cutoff = datetime.utcnow().replace(tzinfo=timezone.utc) - timedelta(hours=ttl_hours)
+            cutoff_iso = cutoff.isoformat()
+        except Exception:
+            cutoff_iso = None
         params = (tenant_id, user_id, idempotency_key)
         query = "SELECT * FROM workflow_runs WHERE tenant_id = ? AND user_id = ? AND idempotency_key = ?"
+        if cutoff_iso:
+            query += " AND created_at >= ?"
+            params = (*params, cutoff_iso)
+        query += " ORDER BY created_at DESC, run_id DESC LIMIT 1"
         if self._using_backend():
             with self.backend.transaction() as conn:  # type: ignore[union-attr]
                 result = self._execute_backend(query, params, connection=conn)

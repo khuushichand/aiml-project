@@ -10,7 +10,7 @@ build-backend = "setuptools.build_meta"
 ###########################
 [project]
 name = "tldw-server"
-version = "0.1.16"
+version = "0.1.18"
 description = "A comprehensive research assistant and media analysis platform - Too Long; Didn't Watch Server"
 requires-python = ">=3.10"
 readme = "README.md"
@@ -304,6 +304,7 @@ STT_Parakeet = [
 STT_Parakeet_MLX = [
   "librosa",
   "parakeet-mlx",
+  "numpy<2.4; platform_system == \"Darwin\" and platform_machine == \"arm64\"",
   "mlx>=0.30.0; platform_system == \"Darwin\" and platform_machine == \"arm64\"",
 ]
 
@@ -332,6 +333,14 @@ TTS_kokoro_onnx = [
   "kokoro-onnx>=0.1.0"
 ]
 
+TTS_pocket_tts = [
+  "onnxruntime>=1.16.0",
+  "soundfile>=0.12.1",
+  "sentencepiece>=0.1.99",
+  "scipy>=1.10.0",
+  "huggingface_hub>=0.21.0"
+]
+
 TTS_sovits = [
   "pydub>=0.25.0"
 ]
@@ -356,6 +365,15 @@ TTS_vibevoice = [
   "librosa>=0.10.0",
   # Note: VibeVoice must be installed from source (community reference):
   # git clone https://github.com/vibevoice-community/VibeVoice.git && cd VibeVoice && pip install -e .
+]
+
+TTS_echo_tts = [
+  "torch>=2.0.0",
+  "torchaudio>=2.0.0",
+  "torchcodec>=0.8.1",
+  "huggingface_hub>=0.23.0",
+  "safetensors>=0.4.2",
+  "einops>=0.8.0"
 ]
 
 TTS_chatterbox = [
@@ -473,7 +491,6 @@ tldw_Server_API = [
   "Config_Files/*.yaml",
   "Helper_Scripts/**/*",
   "static/**/*",
-  "WebUI/**/*",
   "app/static/**/*",
   "**/*.yaml",
   "**/*.json",
@@ -530,6 +547,11 @@ markers = [
     "strategy: marks strategy tests",
     "requires_llm: marks tests requiring LLM backends",
     "requires_api_key: marks tests requiring API key auth",
+    "sandbox_ws_auth: marks sandbox websocket auth tests",
+    "sandbox_ws_signed: marks sandbox websocket tests that require signed URLs",
+    "sandbox_no_auth: marks sandbox tests that must run without default auth headers",
+    "sandbox_no_reload: marks sandbox tests that should not reload app.main",
+    "sandbox_real_docker: marks sandbox tests that require real Docker execution paths",
     "legacy_tts: marks legacy TTS tests",
     "concurrent: marks concurrency tests",
     "streaming: marks streaming tests",

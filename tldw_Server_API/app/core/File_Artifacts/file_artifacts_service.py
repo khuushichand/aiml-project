@@ -31,6 +31,11 @@ from tldw_Server_API.app.core.Jobs.worker_utils import jobs_manager_from_env
 from tldw_Server_API.app.core.Metrics import get_metrics_registry
 from tldw_Server_API.app.core.config import get_config_value
 from tldw_Server_API.app.core.exceptions import FileArtifactsError, FileArtifactsValidationError
+from tldw_Server_API.app.core.AuthNZ.exceptions import QuotaExceededError, StorageError
+from tldw_Server_API.app.core.Storage.generated_file_helpers import (
+    save_and_register_image,
+    save_and_register_spreadsheet,
+)
 
 
 DEFAULT_MAX_BYTES = 10 * 1024 * 1024
@@ -49,6 +54,9 @@ EXPORT_MIME_TYPES = {
     "xlsx": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
     "csv": "text/csv",
     "json": "application/json",
+    "png": "image/png",
+    "jpg": "image/jpeg",
+    "webp": "image/webp",
 }
 
 
@@ -200,7 +208,7 @@ class FileArtifactsService:
             raise FileArtifactsValidationError("unsupported_export_format")
         export_req = FileExportRequest(format=export_format, mode="url", async_mode="async")
         export_result = await self._export_sync(adapter, structured, export_format)
-        return await self._finalize_export(file_id, export_req, export_result, options)
+        return await self._finalize_export(file_id, export_req, export_result, options, file_type=adapter.file_type)
 
     async def _handle_export(
         self,
@@ -218,6 +226,11 @@ class FileArtifactsService:
         async_mode = export_req.async_mode
         if async_mode not in {"auto", "sync", "async"}:
             raise FileArtifactsValidationError("invalid_async_mode")
+        if adapter.file_type == "image":
+            if export_req.mode != "inline":
+                raise FileArtifactsValidationError("invalid_export_mode")
+            if async_mode != "sync":
+                raise FileArtifactsValidationError("invalid_async_mode")
 
         if async_mode == "async" or (
             async_mode == "auto"
@@ -268,7 +281,11 @@ class FileArtifactsService:
             return export_info, HTTPStatus.ACCEPTED
 
         export_result = await self._export_sync(adapter, structured, export_req.format)
-        export_info = await self._finalize_export(file_id, export_req, export_result, options)
+        if adapter.file_type == "image" and export_result.content:
+            inline_max_bytes = self._resolve_inline_max_bytes_for_file_type(adapter.file_type)
+            if len(export_result.content) > inline_max_bytes:
+                raise FileArtifactsValidationError("export_size_exceeded")
+        export_info = await self._finalize_export(file_id, export_req, export_result, options, file_type=adapter.file_type)
         self._emit_metric("export", "success", file_type=adapter.file_type, export_format=export_req.format)
         return export_info, HTTPStatus.OK
 
@@ -288,6 +305,8 @@ class FileArtifactsService:
         export_req: FileExportRequest,
         export_result: ExportResult,
         options: FileCreateOptions,
+        *,
+        file_type: str,
     ) -> FileExportInfo:
         if export_result.status != "ready" or not export_result.content:
             raise FileArtifactsError("export_failed")
@@ -299,7 +318,7 @@ class FileArtifactsService:
 
         content_type = export_result.content_type or EXPORT_MIME_TYPES.get(export_req.format)
         content_b64 = None
-        inline_max_bytes = self._resolve_inline_max_bytes()
+        inline_max_bytes = self._resolve_inline_max_bytes_for_file_type(file_type)
         inline_ready = export_req.mode == "inline" and inline_max_bytes > 0 and byte_count <= inline_max_bytes
         if inline_ready:
             content_b64 = base64.b64encode(export_result.content).decode("ascii")
@@ -334,6 +353,13 @@ class FileArtifactsService:
                 export_expires_at=None,
                 export_consumed_at=consumed_at,
             )
+        # Register generated files for storage/quota tracking (image + spreadsheet exports).
+        await self._register_generated_file_export(
+            file_id=file_id,
+            file_type=file_type,
+            export_format=export_req.format,
+            content=export_result.content,
+        )
         return FileExportInfo(
             status="ready" if export_req.mode == "url" or not inline_ready else "none",
             format=export_req.format,
@@ -344,6 +370,39 @@ class FileArtifactsService:
             content_b64=content_b64,
             expires_at=expires_at,
         )
+
+    async def _register_generated_file_export(
+        self,
+        *,
+        file_id: int,
+        file_type: str,
+        export_format: str,
+        content: bytes,
+    ) -> None:
+        """Persist export outputs into generated files storage for quota tracking."""
+        try:
+            if file_type == "image":
+                await save_and_register_image(
+                    user_id=self._user_id_int,
+                    image_bytes=content,
+                    image_format=export_format,
+                    source_prompt=None,
+                    model_name=None,
+                    check_quota=True,
+                )
+            elif file_type == "data_table" and export_format in {"xlsx", "csv", "xls"}:
+                await save_and_register_spreadsheet(
+                    user_id=self._user_id_int,
+                    spreadsheet_bytes=content,
+                    spreadsheet_format=export_format,
+                    original_filename=f"file_{file_id}.{export_format}",
+                    source_ref=f"file_artifact:{file_id}",
+                    check_quota=True,
+                )
+        except QuotaExceededError as exc:
+            raise FileArtifactsError("storage_quota_exceeded", detail=str(exc)) from exc
+        except StorageError as exc:
+            raise FileArtifactsError("storage_persist_failed", detail=str(exc)) from exc
 
     async def _write_export_file(self, file_id: int, export_format: str, content: bytes) -> Tuple[str, int]:
         filename = f"file_{file_id}.{export_format}"
@@ -461,6 +520,33 @@ class FileArtifactsService:
         if value > INLINE_MAX_BYTES_UPPER_BOUND:
             logger.warning(
                 "inline_max_bytes capped at {} bytes (configured {}).",
+                INLINE_MAX_BYTES_UPPER_BOUND,
+                value,
+            )
+            return INLINE_MAX_BYTES_UPPER_BOUND
+        return value
+
+    @staticmethod
+    def _resolve_inline_max_bytes_for_file_type(file_type: str) -> int:
+        if file_type != "image":
+            return FileArtifactsService._resolve_inline_max_bytes()
+        raw = get_config_value("Image-Generation", "inline_max_bytes")
+        if raw is None:
+            return FileArtifactsService._resolve_inline_max_bytes()
+        try:
+            value = int(str(raw).strip())
+        except (TypeError, ValueError):
+            return FileArtifactsService._resolve_inline_max_bytes()
+        if value <= 0:
+            logger.warning(
+                "Invalid image inline_max_bytes: {}. Using default {} bytes.",
+                value,
+                INLINE_MAX_BYTES,
+            )
+            return FileArtifactsService._resolve_inline_max_bytes()
+        if value > INLINE_MAX_BYTES_UPPER_BOUND:
+            logger.warning(
+                "image inline_max_bytes capped at {} bytes (configured {}).",
                 INLINE_MAX_BYTES_UPPER_BOUND,
                 value,
             )

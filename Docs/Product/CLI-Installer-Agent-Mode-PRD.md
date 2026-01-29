@@ -37,7 +37,7 @@
 
 ### CLI UX
   - Entry points
-      - `tldw-setup agent --goal "configure webui + env" [options]`
+      - `tldw-setup agent --goal "configure ui + env" [options]`
       - `tldw-setup init --agent [options]` (agent used for selected steps)
   - Key options
       - `--goal` (freeform intent), `--plan-only`, `--apply`, `--dry-run`, `--json`
@@ -89,7 +89,7 @@
 
 ### User Flows
   - Plan-only flow
-      - `tldw-setup agent --goal "configure webui env" --plan-only --json`
+      - `tldw-setup agent --goal "configure ui env" --plan-only --json`
       - Output plan, list of actions, and recommended next steps.
   - Apply flow (interactive)
       - CLI presents each action with diff; user approves or skips.

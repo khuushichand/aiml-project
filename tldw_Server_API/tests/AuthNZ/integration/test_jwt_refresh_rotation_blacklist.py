@@ -34,7 +34,7 @@ async def test_refresh_rotates_and_blacklists_old_refresh(monkeypatch):
     # Extract old JTI for assertion
     old_jti = svc.extract_jti(refresh)
 
-    new_access, new_refresh = svc.refresh_access_token(refresh)
+    new_access, new_refresh = await svc.refresh_access_token_async(refresh)
     assert isinstance(new_access, str)
     assert isinstance(new_refresh, str)
     assert new_refresh != refresh

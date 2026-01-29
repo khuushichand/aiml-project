@@ -35,6 +35,7 @@ Note: This README follows the project-wide template to help contributors quickly
 - Modes:
   - Single-user: `X-API-KEY` is validated; optional IP allowlist; JWT stack bypassed.
   - Multi-user: username/password (+MFA) → JWT access/refresh; sessions persisted with rotation and blacklist revocation.
+  - Service tokens: intended for internal use; by default only loopback clients are accepted unless `SERVICE_TOKEN_ALLOWED_IPS` is configured.
 - Key Classes/Functions:
   - `settings.py` (`get_settings`, `is_single_user_mode`) for configuration.
   - `jwt_service.JWTService` issues/verifies tokens, password reset/email verification/virtual access tokens.
@@ -55,6 +56,7 @@ Note: This README follows the project-wide template to help contributors quickly
   - `PASSWORD_MIN_LENGTH`, Argon2 cost knobs; `REDIS_URL`; `RATE_LIMIT_*`, `MAX_LOGIN_ATTEMPTS`, `LOCKOUT_DURATION_MINUTES`.
   - `ENABLE_REGISTRATION`, `REQUIRE_REGISTRATION_CODE`, `VIRTUAL_KEYS_ENABLED`, `LLM_BUDGET_ENFORCE`, `LLM_BUDGET_ENDPOINTS`.
   - `SESSION_COOKIE_SECURE`, `CSRF_BIND_TO_USER`, `SERVICE_ACCOUNT_RATE_LIMIT`, `SINGLE_USER_API_KEY`.
+  - `SERVICE_TOKEN_ALLOWED_IPS` (optional allowlist for service tokens; empty means loopback-only).
   - `BYOK_ENABLED`, `BYOK_ALLOWED_PROVIDERS`, `BYOK_ENCRYPTION_KEY`, `BYOK_SECONDARY_ENCRYPTION_KEY`.
   - Settings merge env, `.env` files, and project config via `load_comprehensive_config`.
 

@@ -201,7 +201,7 @@ Modules
 - Notifications: `tldw_Server_API/app/core/Notifications/service.py` (email + Chatbook delivery bridge using AuthNZ email service and Chatbook document generator)
 - API: `tldw_Server_API/app/api/v1/endpoints/watchlists.py`
 - Services: `tldw_Server_API/app/services/watchlist_jobs.py` (background runs, queues)
-- WebUI: `tldw_Server_API/WebUI/tabs/watchlists_content.html` + helpers in `WebUI/js/tab-functions.js` (items/outputs/templates panel)
+- WebUI: Next.js client in `apps/tldw-frontend` (watchlists pages and admin views)
 
 Key Flows
 - Fetch: HTTP client with per-host delay and ETag/Last-Modified cache

@@ -224,6 +224,43 @@ Notes:
 - Metrics: streaming TTS emits `tts_ttfb_seconds`/`voice_to_voice_seconds{route="audio.stream.tts"}` and error counters on transport failures.
 - Default format is `pcm`; `mp3|opus|aac|flac|wav` are accepted but PCM is preferred for low latency.
 
+WebSocket TTS Realtime
+----------------------
+
+Endpoint: `/api/v1/audio/stream/tts/realtime`
+
+- Auth/quotas: same as `/stream/tts` (API key/JWT/single-user key, per-user concurrent stream guard).
+- Transport: JSON control frames from client, binary audio frames from server.
+
+Client -> server frames:
+- First frame: `type=config` (preferred) or `type=text`/`prompt`
+  - `config` fields (all optional): `provider`, `model`, `voice`, `format`, `speed`, `lang`, `extra_params`,
+    `auto_flush_ms`, `auto_flush_tokens`
+- `type=text`/`input`: `{ "type": "text", "delta": "..." }` (accepted keys: `delta|text|input`)
+- `type=commit`: flush buffered text to synthesis
+- `type=final`: flush + close session
+- `type=ping`: server replies `pong`
+
+Server -> client frames:
+- `ready`: `{ "type": "ready", "provider": "...", "format": "pcm", "sample_rate": 24000, "request_id": "..." }`
+- `warning`: `{ "type": "warning", "message": "...", "request_id": "..." }` (e.g., fallback to buffered TTS)
+- `error`: `{ "type": "error", "code": "...", "message": "...", "request_id": "..." }`
+- `done`: `{ "type": "done" }`
+- Binary audio frames (format from config/ready; for `pcm`, raw PCM16 LE)
+
+Behavior notes:
+- Auto-flush: when `auto_flush_ms` elapses after the last input or `auto_flush_tokens` is exceeded, the server issues
+  an internal commit. Set either to `0` to disable.
+- Config updates after session start are ignored.
+- Defaults: provider `vibevoice_realtime`, model `vibevoice-realtime-0.5b`, format `pcm`.
+- Example client: `Helper_Scripts/voice_latency_harness/examples/ws_tts_realtime_client.py`
+
+Example:
+```bash
+python Helper_Scripts/voice_latency_harness/examples/ws_tts_realtime_client.py --text "Hello realtime"
+ffplay -f s16le -ar 24000 -ac 1 out_ws_tts_realtime.pcm
+```
+
 WebSocket Voice Chat v2
 -----------------------
 

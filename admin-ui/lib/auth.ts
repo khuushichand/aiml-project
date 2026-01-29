@@ -2,8 +2,21 @@
 
 import { buildApiUrl } from './api-config';
 
-// In-memory storage for single-user API key to avoid clear-text persistence
+// In-memory storage for single-user API key with sessionStorage fallback for same-session refreshes.
 let inMemoryApiKey: string | null = null;
+const API_KEY_STORAGE_KEY = 'x_api_key';
+const AUTH_CHANGE_EVENT = 'tldw-admin-auth-change';
+
+const emitAuthChange = () => {
+  if (typeof window === 'undefined') return;
+  window.dispatchEvent(new Event(AUTH_CHANGE_EVENT));
+};
+
+export const subscribeAuthChange = (handler: () => void): (() => void) => {
+  if (typeof window === 'undefined') return () => {};
+  window.addEventListener(AUTH_CHANGE_EVENT, handler);
+  return () => window.removeEventListener(AUTH_CHANGE_EVENT, handler);
+};
 
 export interface AdminUser {
   id: number;
@@ -30,7 +43,7 @@ export interface LoginResponse {
  */
 export function isSingleUserMode(): boolean {
   if (typeof window === 'undefined') return false;
-  return !!inMemoryApiKey;
+  return !!getApiKey();
 }
 
 /**
@@ -38,7 +51,17 @@ export function isSingleUserMode(): boolean {
  */
 export function getApiKey(): string | null {
   if (typeof window === 'undefined') return null;
-  return inMemoryApiKey;
+  if (inMemoryApiKey) return inMemoryApiKey;
+  try {
+    const stored = sessionStorage.getItem(API_KEY_STORAGE_KEY);
+    if (stored) {
+      inMemoryApiKey = stored;
+      return stored;
+    }
+  } catch (error) {
+    console.warn('Failed to read API key from sessionStorage:', error);
+  }
+  return null;
 }
 
 /**
@@ -47,6 +70,7 @@ export function getApiKey(): string | null {
 export function setApiKey(key: string): void {
   if (typeof window !== 'undefined') {
     inMemoryApiKey = key;
+    emitAuthChange();
   }
 }
 
@@ -56,6 +80,11 @@ export function setApiKey(key: string): void {
 export function getJWTToken(): string | null {
   if (typeof window === 'undefined') return null;
   return localStorage.getItem('access_token');
+}
+
+export function hasStoredAuth(): boolean {
+  if (typeof window === 'undefined') return false;
+  return !!getJWTToken() || !!getApiKey();
 }
 
 /**
@@ -84,6 +113,7 @@ export async function loginWithPassword(
       const data: LoginResponse = await response.json();
       // Store JWT token
       localStorage.setItem('access_token', data.access_token);
+      emitAuthChange();
 
       // Fetch user info
       await fetchAndStoreUser(data.access_token);
@@ -169,10 +199,10 @@ export async function logout(): Promise<void> {
     // Always clear local storage
     localStorage.removeItem('user');
     localStorage.removeItem('access_token');
-    localStorage.removeItem('x_api_key');
     if (typeof sessionStorage !== 'undefined') {
       sessionStorage.removeItem('x_api_key');
     }
     inMemoryApiKey = null;
+    emitAuthChange();
   }
 }

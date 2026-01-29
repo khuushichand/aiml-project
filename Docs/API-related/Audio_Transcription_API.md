@@ -221,7 +221,24 @@ nemo_device = cuda
 
 # Cache directory for downloaded models
 nemo_cache_dir = ./models/nemo
+
+# VibeVoice-ASR (local inference)
+vibevoice_enabled = false
+vibevoice_model_id = microsoft/VibeVoice-ASR
+vibevoice_device = cuda
+vibevoice_dtype = bfloat16
+vibevoice_cache_dir = ./models/vibevoice
+
+# Optional: route VibeVoice-ASR to a vLLM HTTP server
+vibevoice_vllm_enabled = false
+vibevoice_vllm_base_url = http://127.0.0.1:8001
+vibevoice_vllm_model_id = microsoft/VibeVoice-ASR
+vibevoice_vllm_timeout_seconds = 600
 ```
+
+Hotwords: VibeVoice-ASR supports the `hotwords` form field on `/api/v1/audio/transcriptions`
+and the `hotwords` option on media ingestion endpoints. You can pass CSV (e.g., `alpha,beta`)
+or a JSON list (e.g., `["alpha","beta"]`).
 
 ### Environment Variables
 
@@ -772,6 +789,8 @@ WebSocket limits
 
 TTS
 - `POST /api/v1/audio/speech`: 10 requests/minute; OpenAI-compatible request with `model`, `input`, `voice`, `response_format` (mp3, opus, aac, flac, wav, pcm).
+- Non-streaming responses may include `X-TTS-Alignment` (base64url JSON) when alignment metadata is available.
+- Streaming alignment support: `POST /api/v1/audio/speech/metadata` with the same payload to return alignment JSON (200) or no-content (204).
 - `GET /api/v1/audio/voices/catalog`: Lists available TTS voices across providers; optional `provider` filter.
 
 ## Security Considerations

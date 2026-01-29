@@ -111,9 +111,12 @@ https://github.com/johnbean393/SVGBench
 https://huggingface.co/blog/rteb
 https://github.com/scaleapi/SWE-bench_Pro-os
 https://simple-bench.com/
+https://avmemeexam.github.io/public/
+https://arxiv.org/abs/2512.16041
 https://arxiv.org/abs/2412.12300
 https://huggingface.co/tencent/SongGeneration
 https://github.com/aizip/Rag-Eval-flow
+https://huggingface.co/datasets/UCSC-IRKM/RAGuard
 https://arxiv.org/pdf/2502.15840
 https://llmapitest.com/
 https://github.com/huggingface/evaluation-guidebook/tree/main

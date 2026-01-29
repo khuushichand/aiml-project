@@ -1,6 +1,7 @@
 'use client';
 
 import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useRouter } from 'next/navigation';
 import { PermissionGuard } from '@/components/PermissionGuard';
 import { ResponsiveLayout } from '@/components/ResponsiveLayout';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
@@ -21,11 +22,13 @@ import { ActivitySection } from '@/components/dashboard/ActivitySection';
 import { RecentActivityCard } from '@/components/dashboard/RecentActivityCard';
 import { QuickActionsCard } from '@/components/dashboard/QuickActionsCard';
 import {
-  Building2, Clipboard, Settings, Trash2, UserPlus
+  Building2, Clipboard, RefreshCw, Settings, Trash2, UserPlus, ShieldAlert
 } from 'lucide-react';
+import { AccessibleIconButton } from '@/components/ui/accessible-icon-button';
 import { api } from '@/lib/api-client';
-import { AuditLog, LLMProvider, Organization, RegistrationCode, RegistrationSettings, User } from '@/types';
+import { AuditLog, LLMProvider, Organization, RegistrationCode, RegistrationSettings, type SecurityHealthData, User } from '@/types';
 import { buildDashboardUIStats, type DashboardUIStats } from '@/lib/dashboard';
+import { isSecurityHealthData } from '@/lib/type-guards';
 import Link from 'next/link';
 
 interface SystemHealth {
@@ -189,6 +192,7 @@ const deriveSystemHealth = (
 };
 
 export default function DashboardPage() {
+  const router = useRouter();
   const { selectedOrg } = useOrgContext();
   const confirm = useConfirm();
   const { success, error: showError } = useToast();
@@ -231,6 +235,7 @@ export default function DashboardPage() {
   });
   const [registrationError, setRegistrationError] = useState('');
   const [creatingRegistration, setCreatingRegistration] = useState(false);
+  const [deletingRegistrationId, setDeletingRegistrationId] = useState<string | null>(null);
   const [latestRegistrationCode, setLatestRegistrationCode] = useState<RegistrationCode | null>(null);
   const [showCreateUserDialog, setShowCreateUserDialog] = useState(false);
   const [createUserForm, setCreateUserForm] = useState({
@@ -249,6 +254,7 @@ export default function DashboardPage() {
   const [creatingOrg, setCreatingOrg] = useState(false);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [securityHealth, setSecurityHealth] = useState<SecurityHealthData | null>(null);
 
   const loadDashboardData = useCallback(async () => {
     try {
@@ -270,6 +276,7 @@ export default function DashboardPage() {
         registrationSettingsResult,
         registrationCodesResult,
         healthResult,
+        securityHealthResult,
       ] = await Promise.allSettled([
         api.getDashboardStats(),
         api.getUsers(orgParams),
@@ -281,6 +288,7 @@ export default function DashboardPage() {
         api.getRegistrationSettings(),
         api.getRegistrationCodes(),
         api.getHealth(),
+        api.getSecurityHealth(),
       ]);
 
       const users = processUsers(usersResult);
@@ -315,6 +323,20 @@ export default function DashboardPage() {
         return 'unknown';
       })();
       setServerStatus({ state: healthState, checkedAt: new Date().toISOString() });
+
+      // Process security health
+      if (securityHealthResult.status === 'fulfilled' && isSecurityHealthData(securityHealthResult.value)) {
+        setSecurityHealth(securityHealthResult.value);
+      } else {
+        // Set default values if endpoint not available
+        setSecurityHealth({
+          risk_score: 0,
+          recent_security_events: 0,
+          failed_logins_24h: 0,
+          suspicious_activity: 0,
+          mfa_adoption_rate: 0,
+        });
+      }
 
       const { activeUsers, totalStorage, totalQuota } = computeUserStats(users);
 
@@ -351,6 +373,7 @@ export default function DashboardPage() {
         { key: 'registration_settings', label: 'registration settings', result: registrationSettingsResult },
         { key: 'registration_codes', label: 'registration codes', result: registrationCodesResult },
         { key: 'health', label: 'health', result: healthResult },
+        { key: 'security_health', label: 'security health', result: securityHealthResult },
       ].filter((entry): entry is {
         key: string;
         label: string;
@@ -465,6 +488,8 @@ export default function DashboardPage() {
   };
 
   const handleRegistrationDelete = async (code: RegistrationCode) => {
+    const codeId = String(code.id);
+    if (deletingRegistrationId === codeId) return;
     const confirmed = await confirm({
       title: 'Delete registration code',
       message: `Delete code ${code.code.slice(0, 6)}…? Users will no longer be able to register with it.`,
@@ -475,12 +500,15 @@ export default function DashboardPage() {
     if (!confirmed) return;
 
     try {
+      setDeletingRegistrationId(codeId);
       await api.deleteRegistrationCode(code.id);
       success('Registration code deleted', `Code ${code.code.slice(0, 6)}… removed.`);
       await loadDashboardData();
     } catch (err: unknown) {
       const message = err instanceof Error ? err.message : 'Failed to delete registration code';
       showError('Delete failed', message);
+    } finally {
+      setDeletingRegistrationId((prev) => (prev === codeId ? null : prev));
     }
   };
 
@@ -751,13 +779,12 @@ export default function DashboardPage() {
                       <p className="text-xs text-muted-foreground">Latest code</p>
                       <div className="mt-2 flex items-center justify-between gap-2">
                         <span className="font-mono text-xs break-all">{latestRegistrationCode.code}</span>
-                        <Button
+                        <AccessibleIconButton
+                          icon={Clipboard}
+                          label="Copy registration code"
                           variant="ghost"
-                          size="icon"
                           onClick={() => copyToClipboard(latestRegistrationCode.code, 'Registration code')}
-                        >
-                          <Clipboard className="h-4 w-4" />
-                        </Button>
+                        />
                       </div>
                     </div>
                   )}
@@ -768,6 +795,7 @@ export default function DashboardPage() {
                     ) : (
                       recentRegistrationCodes.map((code) => {
                         const active = isRegistrationCodeActive(code);
+                        const isDeleting = deletingRegistrationId === String(code.id);
                         return (
                           <div key={code.id} className="flex items-start justify-between gap-2 rounded-lg border p-3">
                             <div className="min-w-0 space-y-1">
@@ -783,20 +811,20 @@ export default function DashboardPage() {
                               </p>
                             </div>
                             <div className="flex items-center gap-1">
-                              <Button
+                              <AccessibleIconButton
+                                icon={Clipboard}
+                                label="Copy registration code"
                                 variant="ghost"
-                                size="icon"
                                 onClick={() => copyToClipboard(code.code, 'Registration code')}
-                              >
-                                <Clipboard className="h-4 w-4" />
-                              </Button>
-                              <Button
+                              />
+                              <AccessibleIconButton
+                                icon={isDeleting ? RefreshCw : Trash2}
+                                label={isDeleting ? 'Deleting registration code' : 'Delete registration code'}
                                 variant="ghost"
-                                size="icon"
                                 onClick={() => handleRegistrationDelete(code)}
-                              >
-                                <Trash2 className="h-4 w-4" />
-                              </Button>
+                                disabled={isDeleting}
+                                iconClassName={isDeleting ? 'animate-spin text-destructive' : 'text-destructive'}
+                              />
                             </div>
                           </div>
                         );
@@ -921,6 +949,68 @@ export default function DashboardPage() {
                         Audit logs
                       </Button>
                     </Link>
+                  </div>
+                </CardContent>
+              </Card>
+            </div>
+
+            {/* Security Health Card */}
+            <div className="mt-6">
+              <Card>
+                <CardHeader>
+                  <CardTitle className="flex items-center gap-2">
+                    <ShieldAlert className="h-5 w-5" />
+                    Security Overview
+                  </CardTitle>
+                  <CardDescription>Security posture and recent activity</CardDescription>
+                </CardHeader>
+                <CardContent>
+                  <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-5">
+                    <div className="space-y-1">
+                      <p className="text-xs text-muted-foreground">Risk Score</p>
+                      <div className="flex items-center gap-2">
+                        <span className={`text-2xl font-bold ${
+                          (securityHealth?.risk_score ?? 0) >= 70 ? 'text-red-500' :
+                          (securityHealth?.risk_score ?? 0) >= 40 ? 'text-yellow-500' :
+                          'text-green-500'
+                        }`}>
+                          {securityHealth?.risk_score ?? 0}
+                        </span>
+                        <span className="text-xs text-muted-foreground">/ 100</span>
+                      </div>
+                    </div>
+                    <div className="space-y-1">
+                      <p className="text-xs text-muted-foreground">Security Events (24h)</p>
+                      <p className="text-2xl font-bold">{securityHealth?.recent_security_events ?? 0}</p>
+                    </div>
+                    <div className="space-y-1">
+                      <p className="text-xs text-muted-foreground">Failed Logins (24h)</p>
+                      <p className={`text-2xl font-bold ${
+                        (securityHealth?.failed_logins_24h ?? 0) > 10 ? 'text-red-500' : ''
+                      }`}>
+                        {securityHealth?.failed_logins_24h ?? 0}
+                      </p>
+                    </div>
+                    <div className="space-y-1">
+                      <p className="text-xs text-muted-foreground">Suspicious Activity</p>
+                      <p className={`text-2xl font-bold ${
+                        (securityHealth?.suspicious_activity ?? 0) > 0 ? 'text-yellow-500' : ''
+                      }`}>
+                        {securityHealth?.suspicious_activity ?? 0}
+                      </p>
+                    </div>
+                    <div className="space-y-1">
+                      <p className="text-xs text-muted-foreground">MFA Adoption</p>
+                      <p className="text-2xl font-bold">{securityHealth?.mfa_adoption_rate ?? 0}%</p>
+                    </div>
+                  </div>
+                  <div className="mt-4 flex flex-wrap gap-2">
+                    <Button variant="outline" size="sm" onClick={() => router.push('/security')}>
+                      Security Dashboard
+                    </Button>
+                    <Button variant="ghost" size="sm" onClick={() => router.push('/audit?filter=security')}>
+                      Security Audit Logs
+                    </Button>
                   </div>
                 </CardContent>
               </Card>

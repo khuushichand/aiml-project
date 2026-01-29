@@ -26,6 +26,39 @@ def test_parse_line_with_categories_suffix_after_action():
 
 
 @pytest.mark.unit
+def test_parse_regex_with_arrow_inside_pattern():
+    svc = ModerationService()
+    expr, action, repl, cats = svc._parse_rule_line(r"/a->b/ -> block")
+    assert expr == "/a->b/"
+    assert action == "block"
+    assert repl is None
+    assert cats is None
+
+
+@pytest.mark.unit
+def test_literal_starting_with_slash_is_not_regex():
+    svc = ModerationService()
+    lines = [
+        "/etc/passwd",
+    ]
+    with tempfile.NamedTemporaryFile(mode="w+", delete=False) as tmp:
+        tmp.write("\n".join(lines) + "\n")
+        tmp_path = tmp.name
+    try:
+        rules = svc._load_block_patterns(tmp_path)
+        pol = ModerationPolicy(enabled=True, block_patterns=rules)
+        flagged, _ = svc.check_text("path /etc/passwd here", pol)
+        assert flagged is True
+        flagged2, _ = svc.check_text("etc passwd", pol)
+        assert flagged2 is False
+    finally:
+        try:
+            os.unlink(tmp_path)
+        except Exception:
+            pass
+
+
+@pytest.mark.unit
 def test_load_block_patterns_and_evaluate_actions():
     svc = ModerationService()
     # Create a temporary blocklist with categories after action
@@ -229,6 +262,38 @@ def test_blocklist_update_preserves_pii_rules(monkeypatch):
 
 
 @pytest.mark.unit
+def test_uncategorized_category_allows_untagged_rules():
+    svc = ModerationService()
+    lines = [
+        "secret -> block",
+    ]
+    with tempfile.NamedTemporaryFile(mode="w+", delete=False) as tmp:
+        tmp.write("\n".join(lines) + "\n")
+        tmp_path = tmp.name
+    try:
+        rules = svc._load_block_patterns(tmp_path)
+        pol = ModerationPolicy(
+            enabled=True,
+            input_enabled=True,
+            output_enabled=True,
+            input_action="block",
+            output_action="redact",
+            redact_replacement="[REDACTED]",
+            per_user_overrides=False,
+            block_patterns=rules,
+            categories_enabled={"uncategorized"},
+        )
+        act, _red, _pattern, cat = svc.evaluate_action("secret", pol, "input")
+        assert act == "block"
+        assert cat == "uncategorized"
+    finally:
+        try:
+            os.unlink(tmp_path)
+        except Exception:
+            pass
+
+
+@pytest.mark.unit
 def test_evaluate_action_redacts_all_matching_rules():
     svc = ModerationService()
     lines = [
@@ -342,6 +407,124 @@ def test_set_blocklist_lines_empty_writes_empty_file():
         assert ok is True
         lines = svc.get_blocklist_lines()
         assert lines == []
+    finally:
+        try:
+            os.unlink(tmp_path)
+        except Exception:
+            pass
+
+
+@pytest.mark.unit
+def test_append_blocklist_line_rejects_newlines():
+    svc = ModerationService()
+    with tempfile.NamedTemporaryFile(mode="w+", delete=False) as tmp:
+        tmp_path = tmp.name
+    try:
+        svc._blocklist_path = tmp_path
+        expected_version = svc._compute_version([])
+        ok, state = svc.append_blocklist_line(expected_version, "secret\nanother")
+        assert ok is False
+        assert "single-line" in str(state.get("error", ""))
+        assert svc.get_blocklist_lines() == []
+    finally:
+        try:
+            os.unlink(tmp_path)
+        except Exception:
+            pass
+
+
+@pytest.mark.unit
+def test_replacement_limit_zero_is_unlimited():
+    svc = ModerationService()
+    lines = [
+        "secret -> redact:[MASK]",
+    ]
+    with tempfile.NamedTemporaryFile(mode="w+", delete=False) as tmp:
+        tmp.write("\n".join(lines) + "\n")
+        tmp_path = tmp.name
+    try:
+        rules = svc._load_block_patterns(tmp_path)
+        pol = ModerationPolicy(
+            enabled=True,
+            input_enabled=True,
+            output_enabled=True,
+            input_action="block",
+            output_action="redact",
+            redact_replacement="[REDACTED]",
+            per_user_overrides=False,
+            block_patterns=rules,
+        )
+        svc._max_replacements_per_pattern = 0
+        text = "secret secret"
+        red = svc.redact_text(text, pol)
+        assert red.count("[MASK]") == 2
+        assert "secret" not in red
+    finally:
+        try:
+            os.unlink(tmp_path)
+        except Exception:
+            pass
+
+
+@pytest.mark.unit
+def test_chunk_boundary_match_window_detects_long_match():
+    svc = ModerationService()
+    lines = [
+        "ABCDEFGHIJKL -> block",
+    ]
+    with tempfile.NamedTemporaryFile(mode="w+", delete=False) as tmp:
+        tmp.write("\n".join(lines) + "\n")
+        tmp_path = tmp.name
+    try:
+        rules = svc._load_block_patterns(tmp_path)
+        pol = ModerationPolicy(
+            enabled=True,
+            input_enabled=True,
+            output_enabled=True,
+            input_action="block",
+            output_action="redact",
+            redact_replacement="[REDACTED]",
+            per_user_overrides=False,
+            block_patterns=rules,
+        )
+        svc._max_scan_chars = 10
+        svc._match_window_chars = 20
+        text = "xxxxxABCDEFGHIJKL"
+        flagged, sample = svc.check_text(text, pol)
+        assert flagged is True
+        assert sample is not None
+    finally:
+        try:
+            os.unlink(tmp_path)
+        except Exception:
+            pass
+
+
+@pytest.mark.unit
+def test_redaction_replacement_treated_as_literal():
+    svc = ModerationService()
+    lines = [
+        r"secret -> redact:\1",
+    ]
+    with tempfile.NamedTemporaryFile(mode="w+", delete=False) as tmp:
+        tmp.write("\n".join(lines) + "\n")
+        tmp_path = tmp.name
+    try:
+        rules = svc._load_block_patterns(tmp_path)
+        pol = ModerationPolicy(
+            enabled=True,
+            input_enabled=True,
+            output_enabled=True,
+            input_action="block",
+            output_action="redact",
+            redact_replacement="[REDACTED]",
+            per_user_overrides=False,
+            block_patterns=rules,
+        )
+        text = "secret secret"
+        red = svc.redact_text(text, pol)
+        assert r"\1" in red
+        assert "secret" not in red
     finally:
         try:
             os.unlink(tmp_path)

@@ -913,6 +913,7 @@ else:
         _HAS_ITEMS = False
     # Notes / Prompts
     from tldw_Server_API.app.api.v1.endpoints.notes import router as notes_router
+    from tldw_Server_API.app.api.v1.endpoints.slides import router as slides_router
 
     # Notes Graph (stub, RBAC-wired)
     try:
@@ -1075,6 +1076,8 @@ else:
     from tldw_Server_API.app.api.v1.endpoints.flashcards import router as flashcards_router
     # Quizzes Endpoint (ChaChaNotes)
     from tldw_Server_API.app.api.v1.endpoints.quizzes import router as quizzes_router
+    # Writing Playground Endpoint (ChaChaNotes)
+    from tldw_Server_API.app.api.v1.endpoints.writing import router as writing_router
 
     # LLM Providers Endpoint
     from tldw_Server_API.app.api.v1.endpoints.llm_providers import router as llm_providers_router
@@ -1082,6 +1085,10 @@ else:
     from tldw_Server_API.app.api.v1.endpoints.llamacpp import (
         router as llamacpp_router,
         public_router as llamacpp_public_router,
+    )
+    from tldw_Server_API.app.api.v1.endpoints.messages import (
+        router as messages_router,
+        public_router as messages_public_router,
     )
     from tldw_Server_API.app.api.v1.endpoints.setup import router as setup_router
 
@@ -1265,6 +1272,13 @@ async def lifespan(app: FastAPI):
             logger.info(f"App Startup: OpenTelemetry initialized for service: {telemetry_manager.config.service_name}")
         else:
             logger.warning("App Startup: OpenTelemetry not available, using fallback metrics")
+        try:
+            from tldw_Server_API.app.core.Metrics.telemetry import instrument_fastapi_app
+
+            if instrument_fastapi_app(app, telemetry_manager):
+                logger.info("App Startup: FastAPI instrumentation enabled")
+        except Exception as _otel_app_err:
+            logger.debug(f"App Startup: FastAPI instrumentation skipped: {_otel_app_err}")
     except Exception as e:
         logger.error(f"App Startup: Failed to initialize telemetry: {e}")
 
@@ -1484,7 +1498,7 @@ async def lifespan(app: FastAPI):
                     by_path = dict(route_map.get("by_path") or {})
                     by_tag = dict(route_map.get("by_tag") or {})
                     if by_path or by_tag:
-                        skip_prefixes = ("/docs", "/openapi.json", "/redoc", "/static", "/webui", "/favicon.ico")
+                        skip_prefixes = ("/docs", "/openapi.json", "/redoc", "/static", "/favicon.ico")
                         missing: list[tuple[str, list[str]]] = []
                         seen_paths: set[str] = set()
                         for route in getattr(app, "routes", []):
@@ -1909,12 +1923,14 @@ async def lifespan(app: FastAPI):
     privilege_snapshot_task = None
     audio_jobs_task = None
     media_ingest_jobs_task = None
+    reading_digest_jobs_task = None
     chatbooks_cleanup_stop_event = None
     files_jobs_stop_event = None
     data_tables_jobs_stop_event = None
     prompt_studio_jobs_stop_event = None
     privilege_snapshot_stop_event = None
     media_ingest_jobs_stop_event = None
+    reading_digest_jobs_stop_event = None
     claims_task = None
     jobs_metrics_task = None
     try:
@@ -2016,6 +2032,24 @@ async def lifespan(app: FastAPI):
             logger.info("Chatbooks cleanup worker disabled by settings")
     except Exception as e:
         logger.warning(f"Failed to start chatbooks cleanup worker: {e}")
+
+    # Storage cleanup worker (expired files, trash purge)
+    storage_cleanup_service = None
+    try:
+        import os as _os
+        from tldw_Server_API.app.services.storage_cleanup_service import get_cleanup_service as _get_storage_cleanup
+
+        _storage_cleanup_enabled = _os.getenv("STORAGE_CLEANUP_ENABLED", "true").lower() in {
+            "true", "1", "yes", "y", "on"
+        }
+        if _storage_cleanup_enabled:
+            storage_cleanup_service = _get_storage_cleanup()
+            await storage_cleanup_service.start()
+            logger.info("Storage cleanup worker started")
+        else:
+            logger.info("Storage cleanup worker disabled by settings")
+    except Exception as e:
+        logger.warning(f"Failed to start storage cleanup worker: {e}")
 
     # Core Jobs worker (Chatbooks, if backend=core)
     try:
@@ -2143,6 +2177,24 @@ async def lifespan(app: FastAPI):
     except Exception as e:
         logger.warning(f"Failed to start Audio Jobs worker: {e}")
 
+    # Audiobook Jobs worker
+    try:
+        import os as _os
+        import asyncio as _asyncio
+        from tldw_Server_API.app.services.audiobook_jobs_worker import (
+            run_audiobook_jobs_worker as _run_audiobook_jobs,
+        )
+
+        _enabled = _should_start_worker("AUDIOBOOK_JOBS_WORKER_ENABLED", "audiobooks")
+        if _enabled:
+            audiobook_jobs_stop_event = _asyncio.Event()
+            audiobook_jobs_task = _asyncio.create_task(_run_audiobook_jobs(audiobook_jobs_stop_event))
+            logger.info("Audiobook Jobs worker started with explicit stop_event signal")
+        else:
+            logger.info("Audiobook Jobs worker disabled by flag (AUDIOBOOK_JOBS_WORKER_ENABLED)")
+    except Exception as e:
+        logger.warning(f"Failed to start Audiobook Jobs worker: {e}")
+
     # Media Ingest Jobs worker
     try:
         import os as _os
@@ -2158,6 +2210,26 @@ async def lifespan(app: FastAPI):
             logger.info("Media Ingest Jobs worker disabled by flag (MEDIA_INGEST_JOBS_WORKER_ENABLED)")
     except Exception as e:
         logger.warning(f"Failed to start Media Ingest Jobs worker: {e}")
+
+    # Reading Digest Jobs worker
+    try:
+        import os as _os
+        import asyncio as _asyncio
+        from tldw_Server_API.app.core.Collections.reading_digest_jobs_worker import (
+            run_reading_digest_jobs_worker as _run_reading_digest_jobs,
+        )
+
+        _enabled = _should_start_worker("READING_DIGEST_JOBS_WORKER_ENABLED", "reading")
+        if _enabled:
+            reading_digest_jobs_stop_event = _asyncio.Event()
+            reading_digest_jobs_task = _asyncio.create_task(
+                _run_reading_digest_jobs(reading_digest_jobs_stop_event)
+            )
+            logger.info("Reading digest Jobs worker started with explicit stop_event signal")
+        else:
+            logger.info("Reading digest Jobs worker disabled by flag (READING_DIGEST_JOBS_WORKER_ENABLED)")
+    except Exception as e:
+        logger.warning(f"Failed to start Reading digest Jobs worker: {e}")
 
     # Evaluations Embeddings A/B Jobs worker
     try:
@@ -2535,6 +2607,36 @@ async def lifespan(app: FastAPI):
     except Exception as e:
         logger.warning(f"Failed to start Outputs purge scheduler: {e}")
 
+    # Start Kanban activity cleanup scheduler (retention cleanup)
+    try:
+        _enable_kanban_activity_cleanup = _env_os.getenv("KANBAN_ACTIVITY_CLEANUP_ENABLED", "false").lower() in {"1", "true", "yes", "on"}
+        if not _enable_kanban_activity_cleanup:
+            logger.info("Kanban activity cleanup scheduler disabled (KANBAN_ACTIVITY_CLEANUP_ENABLED != true)")
+        else:
+            from tldw_Server_API.app.services.kanban_activity_cleanup_service import (
+                start_kanban_activity_cleanup_scheduler,
+            )
+
+            _kanban_cleanup_task = await start_kanban_activity_cleanup_scheduler()
+            if _kanban_cleanup_task:
+                logger.info("Kanban activity cleanup scheduler started")
+    except Exception as e:
+        logger.warning(f"Failed to start Kanban activity cleanup scheduler: {e}")
+
+    # Start Kanban soft-delete purge scheduler
+    try:
+        _enable_kanban_purge = _env_os.getenv("KANBAN_PURGE_ENABLED", "false").lower() in {"1", "true", "yes", "on"}
+        if not _enable_kanban_purge:
+            logger.info("Kanban purge scheduler disabled (KANBAN_PURGE_ENABLED != true)")
+        else:
+            from tldw_Server_API.app.services.kanban_purge_service import start_kanban_purge_scheduler
+
+            _kanban_purge_task = await start_kanban_purge_scheduler()
+            if _kanban_purge_task:
+                logger.info("Kanban purge scheduler started")
+    except Exception as e:
+        logger.warning(f"Failed to start Kanban purge scheduler: {e}")
+
     # Start File artifacts export GC scheduler (expired export cleanup)
     try:
         _enable_files_export_gc = _env_os.getenv("FILES_EXPORT_GC_ENABLED", "false").lower() in {"1", "true", "yes", "on"}
@@ -2605,6 +2707,30 @@ async def lifespan(app: FastAPI):
     except Exception as e:
         logger.warning(f"Failed to start Workflows recurring scheduler: {e}")
 
+    # Start Reading digest scheduler (cron-based submission into Jobs)
+    reading_digest_sched_task = None
+    try:
+        from tldw_Server_API.app.services.reading_digest_scheduler import start_reading_digest_scheduler
+
+        try:
+            _rd_sched_enabled = _env_flag("READING_DIGEST_SCHEDULER_ENABLED", True)
+            if globals().get("_TEST_MODE") and _os.getenv("READING_DIGEST_SCHEDULER_ENABLED") is None:
+                _rd_sched_enabled = False
+        except Exception:
+            _rd_sched_enabled = _os.getenv("READING_DIGEST_SCHEDULER_ENABLED", "true").lower() in {
+                "1",
+                "true",
+                "yes",
+                "on",
+            }
+        reading_digest_sched_task = await start_reading_digest_scheduler(enabled=_rd_sched_enabled)
+        if reading_digest_sched_task:
+            logger.info("Reading digest scheduler started")
+        else:
+            logger.info("Reading digest scheduler disabled (READING_DIGEST_SCHEDULER_ENABLED != true)")
+    except Exception as e:
+        logger.warning(f"Failed to start Reading digest scheduler: {e}")
+
     # Display authentication mode (mask API key in production)
     try:
         from tldw_Server_API.app.core.AuthNZ.settings import get_settings, is_single_user_mode
@@ -2648,8 +2774,9 @@ async def lifespan(app: FastAPI):
                 logger.info("JWT Bearer tokens required for authentication")
             logger.info("=" * 60)
 
-        logger.info(f"📍 API Documentation: http://127.0.0.1:8000/docs")
-        logger.info(f"🌐 WebUI: http://127.0.0.1:8000/webui/")
+        logger.info("📍 API Documentation: http://127.0.0.1:8000/docs")
+        logger.info("🧭 Quickstart: http://127.0.0.1:8000/api/v1/config/quickstart")
+        logger.info("🛠 Setup UI: http://127.0.0.1:8000/setup (if required)")
         logger.info("=" * 60)
     except Exception as e:
         logger.error(f"Failed to display startup info: {e}")
@@ -2777,6 +2904,13 @@ async def lifespan(app: FastAPI):
             chatbooks_cleanup_stop_event.set()
         if "chatbooks_cleanup_task" in locals() and chatbooks_cleanup_task:
             chatbooks_cleanup_task.cancel()
+        # Storage cleanup service shutdown
+        if "storage_cleanup_service" in locals() and storage_cleanup_service:
+            try:
+                await storage_cleanup_service.stop()
+                logger.info("Storage cleanup worker stopped")
+            except Exception:
+                pass
         if "core_jobs_task" in locals() and core_jobs_task:
             # Prefer graceful stop via explicit stop_event
             if "core_jobs_stop_event" in locals() and core_jobs_stop_event:
@@ -2854,6 +2988,16 @@ async def lifespan(app: FastAPI):
                     media_ingest_jobs_task.cancel()
             else:
                 media_ingest_jobs_task.cancel()
+        if "reading_digest_jobs_task" in locals() and reading_digest_jobs_task:
+            if "reading_digest_jobs_stop_event" in locals() and reading_digest_jobs_stop_event:
+                try:
+                    reading_digest_jobs_stop_event.set()
+                    await _asyncio.wait_for(reading_digest_jobs_task, timeout=5.0)
+                    logger.info("Reading digest Jobs worker stopped via stop_event")
+                except Exception:
+                    reading_digest_jobs_task.cancel()
+            else:
+                reading_digest_jobs_task.cancel()
         if "evals_abtest_jobs_task" in locals() and evals_abtest_jobs_task:
             if "evals_abtest_jobs_stop_event" in locals() and evals_abtest_jobs_stop_event:
                 try:
@@ -2911,6 +3055,18 @@ async def lifespan(app: FastAPI):
             try:
                 if "workflows_sched_task" in locals() and workflows_sched_task:
                     workflows_sched_task.cancel()
+            except Exception:
+                pass
+        # Stop Reading digest scheduler
+        try:
+            if "reading_digest_sched_task" in locals() and reading_digest_sched_task:
+                from tldw_Server_API.app.services.reading_digest_scheduler import stop_reading_digest_scheduler as _stop_rd_sched
+
+                await _stop_rd_sched(reading_digest_sched_task)
+        except Exception:
+            try:
+                if "reading_digest_sched_task" in locals() and reading_digest_sched_task:
+                    reading_digest_sched_task.cancel()
             except Exception:
                 pass
         # Jobs metrics gauges worker shutdown
@@ -3044,6 +3200,17 @@ async def lifespan(app: FastAPI):
                     pass
     except Exception:
         pass
+
+    # Stop AuthNZ scheduler early so it can't keep the loop alive during shutdown.
+    try:
+        if "_authnz_sched_started" in locals() and _authnz_sched_started:
+            from tldw_Server_API.app.core.AuthNZ.scheduler import stop_authnz_scheduler
+
+            await stop_authnz_scheduler()
+            _authnz_sched_started = False
+            logger.info("AuthNZ scheduler stopped")
+    except Exception as _e:
+        logger.debug(f"AuthNZ scheduler shutdown skipped: {_e}")
 
     # Shutdown: Clean up resources
     logger.info("App Shutdown: Cleaning up resources...")
@@ -3184,6 +3351,7 @@ async def lifespan(app: FastAPI):
             shutdown_all_audit_services,
         )
 
+        logger.info("App Shutdown: Shutting down unified audit services...")
         await shutdown_all_audit_services()
         logger.info("App Shutdown: Unified audit services stopped")
     except Exception as e:
@@ -3472,6 +3640,7 @@ OPENAPI_TAGS = [
         },
     },
     {"name": "notes", "description": "Notes and knowledge management."},
+    {"name": "writing", "description": "Writing Playground sessions, templates, themes, and token utilities."},
     {
         "name": "data-tables",
         "description": "Data table generation jobs and CRUD.",
@@ -3625,7 +3794,8 @@ APP_DESCRIPTION = """
     - Notes, prompts, evaluations, MCP Unified server
 
     Helpful paths
-    - Web UI: /webui
+    - Quickstart: /api/v1/config/quickstart
+    - Setup UI: /setup
     - OpenAPI JSON: /openapi.json
     - Metrics: /metrics and /api/v1/metrics
     """.strip()
@@ -3912,10 +4082,11 @@ async def _display_startup_info_and_warm():
         logger.info("📌 API Key for authentication:")
         logger.info(f"   {_mask_key(api_key) if (_is_prod and not _show_key) else api_key}")
         logger.info("🌐 Access URLs:")
-        logger.info("   WebUI:    http://localhost:8000/webui/")
-        logger.info("   API Docs: http://localhost:8000/docs")
-        logger.info("   ReDoc:    http://localhost:8000/redoc")
-        logger.info("💡 The WebUI will automatically use this API key")
+        logger.info("   Quickstart: http://localhost:8000/api/v1/config/quickstart")
+        logger.info("   Setup UI:   http://localhost:8000/setup (if required)")
+        logger.info("   API Docs:   http://localhost:8000/docs")
+        logger.info("   ReDoc:      http://localhost:8000/redoc")
+        logger.info("💡 Use this API key in X-API-KEY for API requests")
         logger.info("=" * 70)
     else:
         logger.info("=" * 70)
@@ -3996,8 +4167,8 @@ app.mount("/static", StaticFiles(directory=BASE_DIR / "static"), name="static")
 
 # Security middleware (headers + request size limit)
 from tldw_Server_API.app.core.Security.middleware import SecurityHeadersMiddleware
-from tldw_Server_API.app.core.Security.webui_csp import WebUICSPMiddleware
-from tldw_Server_API.app.core.Security.webui_access_guard import WebUIAccessGuardMiddleware
+from tldw_Server_API.app.core.Security.setup_csp import SetupCSPMiddleware
+from tldw_Server_API.app.core.Security.setup_access_guard import SetupAccessGuardMiddleware
 from tldw_Server_API.app.core.Security.request_id_middleware import RequestIDMiddleware
 from tldw_Server_API.app.core.Metrics.http_middleware import HTTPMetricsMiddleware
 from tldw_Server_API.app.core.AuthNZ.usage_logging_middleware import UsageLoggingMiddleware
@@ -4012,16 +4183,16 @@ if _TEST_MODE:
     logger.info("TEST_MODE detected: Skipping non-essential middlewares (security headers, metrics, usage logging)")
     # Provide request id + trace headers even in tests for assertions
     app.add_middleware(RequestIDMiddleware)
-    # Apply WebUI CSP nonce injection even in tests to keep behavior consistent
+    # Apply Setup CSP nonce injection even in tests to keep behavior consistent
     try:
-        app.add_middleware(WebUICSPMiddleware)
+        app.add_middleware(SetupCSPMiddleware)
     except Exception as _e:
-        logger.debug(f"Skipping WebUICSPMiddleware in tests: {_e}")
-    # Guard WebUI remote access in tests too (should evaluate loopback as allowed)
+        logger.debug(f"Skipping SetupCSPMiddleware in tests: {_e}")
+    # Guard Setup remote access in tests too (should evaluate loopback as allowed)
     try:
-        app.add_middleware(WebUIAccessGuardMiddleware)
+        app.add_middleware(SetupAccessGuardMiddleware)
     except Exception as _e:
-        logger.debug(f"Skipping WebUIAccessGuardMiddleware in tests: {_e}")
+        logger.debug(f"Skipping SetupAccessGuardMiddleware in tests: {_e}")
 
     # Sandbox artifact traversal guard (pre-routing)
     try:
@@ -4085,16 +4256,16 @@ else:
         if (_prod_flag and _enable_sec_headers_env is None)
         else ((_enable_sec_headers_env or "true").lower() in {"true", "1", "yes", "y", "on"})
     )
-    # Apply WebUI CSP nonce injection before security headers
+    # Apply Setup CSP nonce injection before security headers
     try:
-        app.add_middleware(WebUICSPMiddleware)
+        app.add_middleware(SetupCSPMiddleware)
     except Exception as _e:
-        logger.debug(f"Skipping WebUICSPMiddleware: {_e}")
-    # Enforce WebUI remote access policy
+        logger.debug(f"Skipping SetupCSPMiddleware: {_e}")
+    # Enforce Setup remote access policy
     try:
-        app.add_middleware(WebUIAccessGuardMiddleware)
+        app.add_middleware(SetupAccessGuardMiddleware)
     except Exception as _e:
-        logger.debug(f"Skipping WebUIAccessGuardMiddleware: {_e}")
+        logger.debug(f"Skipping SetupAccessGuardMiddleware: {_e}")
 
     if _enable_sec_headers:
         app.add_middleware(SecurityHeadersMiddleware, enabled=True)
@@ -4179,274 +4350,7 @@ try:
 except Exception as _e:
     logger.debug(f"Skipping LLMBudgetMiddleware: {_e}")
 
-# WebUI serving - Serve the WebUI from the same origin to avoid CORS issues
-WEBUI_DIR = BASE_DIR.parent / "WebUI"
-if WEBUI_DIR.exists():
-    # First, define a dynamic config endpoint for single user mode (registered conditionally below)
-    async def get_webui_config():
-        """Dynamically generate WebUI configuration with API key in single user mode.
-
-        This endpoint also exposes the inferred deployment PROFILE as a UX hint so
-        the WebUI can adjust copy/affordances without affecting auth behavior.
-        """
-        from tldw_Server_API.app.core.AuthNZ.settings import (
-            get_settings,
-            get_profile,
-            is_single_user_mode,
-        )
-        from tldw_Server_API.app.api.v1.endpoints.llm_providers import get_configured_providers_async
-        from fastapi.responses import JSONResponse
-        from tldw_Server_API.app.core.config import load_comprehensive_config, get_config_value
-
-        config = {
-            "apiUrl": "",  # Empty means use same origin
-            "apiKey": "",  # Default empty
-            "_comment": "Auto-generated configuration",
-        }
-
-        # In single user mode, include the API key unless running in production
-        import os as _os
-
-        _is_prod_env = _os.getenv("tldw_production", "false").lower() in {"true", "1", "yes", "y", "on"}
-        webui_base_url = _os.getenv("TLDW_WEBUI_BASE_URL") or get_config_value("Server", "webui_base_url")
-        if isinstance(webui_base_url, str) and webui_base_url.strip():
-            config["webui_base_url"] = webui_base_url.strip()
-        profile_hint = None
-        try:
-            profile_hint = get_profile()
-        except Exception:
-            # Coordination-only; failures here must not impact auth
-            profile_hint = None
-
-        if profile_hint:
-            config["profile"] = profile_hint
-
-        if is_single_user_mode():
-            settings = get_settings()
-            config["mode"] = "single-user"
-            if not _is_prod_env:
-                config["apiKey"] = settings.SINGLE_USER_API_KEY
-                config["_comment"] = "Auto-configured for single user mode"
-            else:
-                # Omit API key in production environment for security
-                config["apiKey"] = ""
-                config["_comment"] = "Single-user mode (production): API key omitted"
-        else:
-            config["mode"] = "multi-user"
-            config["_comment"] = "Multi-user mode - manual authentication required"
-            try:
-                from tldw_Server_API.app.core.AuthNZ.database import is_postgres_backend as _is_pg_backend
-
-                _is_pg = await _is_pg_backend()
-                config.setdefault("auth", {})
-                if _is_pg:
-                    config["auth"]["multiUserSupportsApiKey"] = False
-                    config["auth"]["preferApiKeyInMultiUser"] = False
-                else:
-                    # Expose hint so the WebUI can prefer X-API-KEY in multi-user SQLite setups
-                    config["auth"]["multiUserSupportsApiKey"] = True
-                    config["auth"]["preferApiKeyInMultiUser"] = True
-            except Exception:
-                pass
-
-        # Add LLM providers information
-        try:
-            providers_info = await get_configured_providers_async()
-            config["llm_providers"] = providers_info
-        except Exception as e:
-            logger.warning(f"Failed to get LLM providers for config: {e}")
-            config["llm_providers"] = {"providers": [], "default_provider": "openai", "total_configured": 0}
-
-        # Add Embeddings providers information (lightweight; no secrets)
-        try:
-            from tldw_Server_API.app.core.Embeddings.simplified_config import get_config as _get_emb_cfg
-
-            _emb_cfg = _get_emb_cfg()
-            config["embeddings"] = {
-                "default_provider": getattr(_emb_cfg, "default_provider", None),
-                "default_model": getattr(_emb_cfg, "default_model", None),
-                "providers": [
-                    {
-                        "name": getattr(p, "name", None),
-                        "enabled": bool(getattr(p, "enabled", False)),
-                        # Expose API URL for local/self-hosted providers only; never include keys
-                        "api_url": getattr(p, "api_url", None),
-                        "models": list(getattr(p, "models", []) or []),
-                    }
-                    for p in (getattr(_emb_cfg, "providers", []) or [])
-                ],
-            }
-        except Exception as e:
-            logger.warning(f"Failed to include embeddings providers in WebUI config: {e}")
-
-        # Add chat defaults (e.g., default save_to_db)
-        try:
-            cfg = load_comprehensive_config()
-            chat_cfg = {}
-            if cfg and cfg.has_section("Chat-Module"):
-                chat_cfg = dict(cfg.items("Chat-Module"))
-
-            def _to_bool(val: str) -> bool:
-                return str(val).strip().lower() in {"1", "true", "yes", "y", "on"}
-
-            env_default = _os.getenv("CHAT_SAVE_DEFAULT") or _os.getenv("DEFAULT_CHAT_SAVE")
-            default_save = None
-            if env_default is not None:
-                default_save = _to_bool(env_default)
-            elif chat_cfg.get("chat_save_default") or chat_cfg.get("default_save_to_db"):
-                default_save = _to_bool(chat_cfg.get("chat_save_default") or chat_cfg.get("default_save_to_db"))
-            elif cfg and cfg.has_section("Auto-Save"):
-                try:
-                    auto_val = cfg.get("Auto-Save", "save_character_chats", fallback=None)
-                    if auto_val is not None:
-                        default_save = _to_bool(auto_val)
-                except Exception:
-                    default_save = None
-            if default_save is None:
-                default_save = False
-
-            config["chat"] = {"default_save_to_db": default_save}
-        except Exception as e:
-            logger.warning(f"Failed to compute chat defaults for WebUI config: {e}")
-
-        # Add a compact catalog of commonly used API endpoints for the WebUI
-        try:
-            config["api_endpoints"] = {
-                "llm": {
-                    "health": "/api/v1/llm/health",
-                    "providers": "/api/v1/llm/providers",
-                    "provider": "/api/v1/llm/providers/{provider}",
-                    "models": "/api/v1/llm/models",
-                    "models_metadata": "/api/v1/llm/models/metadata",
-                },
-                "embeddings": {
-                    "models": "/api/v1/embeddings/models",
-                    "providers_config": "/api/v1/embeddings/providers-config",
-                    "warmup": "/api/v1/embeddings/models/warmup",
-                    "download": "/api/v1/embeddings/models/download",
-                },
-                "audio": {
-                    "providers": "/api/v1/audio/providers",
-                    "voices_catalog": "/api/v1/audio/voices/catalog",
-                    "speech": "/api/v1/audio/speech",
-                    "transcriptions": "/api/v1/audio/transcriptions",
-                    "stream_transcribe": "/api/v1/audio/stream/transcribe",
-                    "stream_status": "/api/v1/audio/stream/status",
-                },
-                "ocr": {
-                    "backends": "/api/v1/ocr/backends",
-                    "points_preload": "/api/v1/ocr/points/preload",
-                },
-                "media": {
-                    "add": "/api/v1/media/add",
-                    "search": "/api/v1/media/search",
-                    "ingest_web": "/api/v1/media/ingest-web-content",
-                    "metadata_search": "/api/v1/media/metadata-search",
-                    "list": "/api/v1/media",
-                    "by_id": "/api/v1/media/{media_id}",
-                    "versions": "/api/v1/media/{media_id}/versions",
-                },
-                "rag": {
-                    "search": "/api/v1/rag/search",
-                },
-                "chat": {
-                    "completions": "/api/v1/chat/completions",
-                },
-                "research": {
-                    "websearch": "/api/v1/research/websearch",
-                    "arxiv": "/api/v1/paper-search/arxiv",
-                    "semantic_scholar": "/api/v1/paper-search/semantic-scholar",
-                },
-                "prompts": {
-                    "health": "/api/v1/prompts/health",
-                    "list": "/api/v1/prompts",
-                    "create": "/api/v1/prompts",
-                    "search": "/api/v1/prompts/search",
-                    "get": "/api/v1/prompts/{prompt_identifier}",
-                    "export": "/api/v1/prompts/export",
-                    "update": "/api/v1/prompts/{prompt_identifier}",
-                    "delete": "/api/v1/prompts/{prompt_identifier}",
-                    "keywords": "/api/v1/prompts/keywords/",
-                    "keyword_delete": "/api/v1/prompts/keywords/{keyword}",
-                },
-                "notes": {
-                    "health": "/api/v1/notes/health",
-                    "list": "/api/v1/notes/",
-                    "get": "/api/v1/notes/{note_id}",
-                    "search": "/api/v1/notes/search",
-                    "export": "/api/v1/notes/export",
-                    "create": "/api/v1/notes/",
-                    "keywords": "/api/v1/notes/keywords/",
-                    "keywords_notes": "/api/v1/notes/keywords/{keyword_id}/notes/",
-                },
-                "mcp": {
-                    "health": "/api/v1/mcp/health",
-                    "prompts": "/api/v1/mcp/prompts",
-                    "resources": "/api/v1/mcp/resources",
-                    "auth_token": "/api/v1/mcp/auth/token",
-                },
-                "workflows": {
-                    "config": "/api/v1/workflows/config",
-                    "run": "/api/v1/workflows/run",
-                    "auth_check": "/api/v1/workflows/auth/check",
-                },
-                "health": {
-                    "aggregate": "/api/v1/health",
-                    "live": "/api/v1/health/live",
-                    "ready": "/api/v1/health/ready",
-                },
-                "evaluations": {
-                    "rag_presets": "/api/v1/evaluations/rag/pipeline/presets",
-                    "rag_preset": "/api/v1/evaluations/rag/pipeline/presets/{name}",
-                },
-            }
-        except Exception:
-            # Best-effort: omit if anything goes wrong
-            pass
-
-        return JSONResponse(content=config)
-
-    # Explicit handlers for /webui and /webui/ before static mount to avoid shadowing
-    async def _serve_webui_index():
-        idx = WEBUI_DIR / "index.html"
-        try:
-            if idx.exists():
-                return FileResponse(idx, media_type="text/html")
-        except Exception:
-            pass
-        try:
-            from fastapi.responses import JSONResponse  # local import to avoid top-level churn
-
-            return JSONResponse({"detail": "WebUI index not found"}, status_code=404)
-        except Exception:
-            raise HTTPException(status_code=404, detail="WebUI index not found")
-
-    try:
-        # Redirect bare /webui to /webui/
-        app.add_api_route("/webui", lambda: RedirectResponse(url="/webui/", status_code=307), include_in_schema=False)
-        # Explicitly serve the main index at /webui/
-        app.add_api_route("/webui/", _serve_webui_index, include_in_schema=False)
-    except Exception as _webui_idx_err:
-        logger.debug(f"Could not register explicit /webui handlers: {_webui_idx_err}")
-
-    # Gate WebUI static mount and config endpoint
-    try:
-        if route_enabled("webui"):
-            app.add_api_route("/webui/config.json", get_webui_config, include_in_schema=False)
-            # Mount the WebUI static files (except config.json which is handled above)
-            app.mount("/webui", StaticFiles(directory=str(WEBUI_DIR), html=True), name="webui")
-            logger.info(f"WebUI mounted at /webui from {WEBUI_DIR}")
-        else:
-            logger.info("Route disabled by policy: webui (static + /webui/config.json)")
-    except Exception as _webui_rt_err:
-        logger.warning(f"Route gating error for webui; mounting by default. Error: {_webui_rt_err}")
-        app.add_api_route("/webui/config.json", get_webui_config, include_in_schema=False)
-        app.mount("/webui", StaticFiles(directory=str(WEBUI_DIR), html=True), name="webui")
-        logger.info(f"WebUI mounted at /webui from {WEBUI_DIR}")
-else:
-    logger.warning(f"WebUI directory not found at {WEBUI_DIR}")
-
-# Keep Setup UI HTML outside the /webui static mount to avoid bypassing the
+# Keep Setup UI HTML outside the static mounts to avoid bypassing the
 # /setup gating via direct file access.
 SETUP_PAGE_PATH = BASE_DIR / "Setup_UI" / "setup.html"
 
@@ -4459,10 +4363,10 @@ async def serve_setup_page():
         raise HTTPException(status_code=500, detail="Configuration file missing; cannot render setup UI.")
 
     if not setup_required:
-        return RedirectResponse(url="/webui/", status_code=307)
+        return RedirectResponse(url="/api/v1/config/quickstart", status_code=307)
 
     if not SETUP_PAGE_PATH.exists():
-        raise HTTPException(status_code=404, detail="Setup UI assets missing. Reinstall the WebUI bundle.")
+        raise HTTPException(status_code=404, detail="Setup UI assets missing. Reinstall the setup UI bundle.")
 
     return FileResponse(SETUP_PAGE_PATH)
 
@@ -4481,7 +4385,7 @@ except Exception as _setup_rt_err:
         "/setup", serve_setup_page, methods=["GET"], include_in_schema=False, openapi_extra={"security": []}
     )
 
-# Mount project Docs (read-only) for WebUI links, if present
+# Mount project Docs (read-only) for UI links, if present
 DOCS_DIR = BASE_DIR.parent.parent / "Docs"
 if DOCS_DIR.exists():
     app.mount("/docs-static", StaticFiles(directory=str(DOCS_DIR), html=False), name="docs-static")
@@ -4509,8 +4413,8 @@ async def root():
         logger.warning("config.txt missing while handling root request; serving default message.")
 
     return {
-        "message": "Welcome to the tldw API; If you're seeing this, the server is running!"
-        "Check out /webui , /docs or /metrics to get started!"
+        "message": "Welcome to the tldw API; if you're seeing this, the server is running! "
+        "Check out /api/v1/config/quickstart, /docs, or /metrics to get started."
     }
 
 
@@ -4723,6 +4627,12 @@ elif _MINIMAL_TEST_APP:
     except ImportError as _files_min_err:
         logger.debug(f"Skipping files router in minimal test app: {_files_min_err}")
     try:
+        from tldw_Server_API.app.api.v1.endpoints.storage import router as storage_router
+
+        app.include_router(storage_router, prefix=f"{API_V1_PREFIX}", tags=["storage"])
+    except ImportError as _storage_min_err:
+        logger.debug(f"Skipping storage router in minimal test app: {_storage_min_err}")
+    try:
         from tldw_Server_API.app.api.v1.endpoints.data_tables import router as data_tables_router
 
         app.include_router(data_tables_router, prefix=f"{API_V1_PREFIX}", tags=["data-tables"])
@@ -4768,6 +4678,13 @@ elif _MINIMAL_TEST_APP:
         app.include_router(notes_router, prefix=f"{API_V1_PREFIX}/notes", tags=["notes"])
     except Exception as _notes_min_err:
         logger.debug(f"Skipping notes router in minimal test app: {_notes_min_err}")
+    # Slides endpoints
+    try:
+        from tldw_Server_API.app.api.v1.endpoints.slides import router as slides_router
+
+        app.include_router(slides_router, prefix=f"{API_V1_PREFIX}", tags=["slides"])
+    except Exception as _slides_min_err:
+        logger.debug(f"Skipping slides router in minimal test app: {_slides_min_err}")
     # Kanban Board endpoints
     try:
         from tldw_Server_API.app.api.v1.endpoints.kanban_boards import router as kanban_boards_router
@@ -4856,6 +4773,13 @@ elif _MINIMAL_TEST_APP:
         app.include_router(quizzes_router, prefix=f"{API_V1_PREFIX}", tags=["quizzes"])
     except Exception as _quiz_min_err:
         logger.debug(f"Skipping quizzes router in minimal test app: {_quiz_min_err}")
+    # Writing Playground endpoints (ChaChaNotes-backed) for integration tests
+    try:
+        from tldw_Server_API.app.api.v1.endpoints.writing import router as writing_router
+
+        app.include_router(writing_router, prefix=f"{API_V1_PREFIX}/writing", tags=["writing"])
+    except Exception as _writing_min_err:
+        logger.debug(f"Skipping writing router in minimal test app: {_writing_min_err}")
     # Metrics endpoints (/api/v1/metrics/text)
     try:
         from tldw_Server_API.app.api.v1.endpoints.metrics import router as metrics_router
@@ -4953,9 +4877,15 @@ elif _MINIMAL_TEST_APP:
             router as llamacpp_router,
             public_router as llamacpp_public_router,
         )
+        from tldw_Server_API.app.api.v1.endpoints.messages import (
+            router as messages_router,
+            public_router as messages_public_router,
+        )
 
         app.include_router(llamacpp_router, prefix=f"{API_V1_PREFIX}", tags=["llamacpp"])
         app.include_router(llamacpp_public_router, prefix="", tags=["llamacpp"])
+        app.include_router(messages_router, prefix=f"{API_V1_PREFIX}", tags=["messages"])
+        app.include_router(messages_public_router, prefix="", tags=["messages"])
     except Exception as _llama_min_err:  # noqa: BLE001
         logger.debug(f"Skipping llamacpp router in minimal test app: {_llama_min_err}")
     # Workflows + scheduler routers are lightweight enough to enable in minimal
@@ -5086,6 +5016,24 @@ else:
         _include_if_enabled(
             "audio-websocket", audio_ws_router, prefix=f"{API_V1_PREFIX}/audio", tags=["audio-websocket"]
         )
+    # Voice Assistant endpoints (REST + WebSocket)
+    try:
+        from tldw_Server_API.app.api.v1.endpoints.voice_assistant import (
+            router as voice_assistant_router,
+            ws_router as voice_assistant_ws_router,
+        )
+
+        _include_if_enabled(
+            "voice-assistant", voice_assistant_router, prefix=f"{API_V1_PREFIX}/voice", tags=["voice-assistant"]
+        )
+        _include_if_enabled(
+            "voice-assistant-ws",
+            voice_assistant_ws_router,
+            prefix=f"{API_V1_PREFIX}/voice",
+            tags=["voice-assistant-ws"],
+        )
+    except ImportError as _voice_err:
+        logger.debug(f"Voice assistant endpoints not available: {_voice_err}")
     # Guard optional routers that may not be imported in ULTRA_MINIMAL_APP
     if "chat_router" in locals():
         _include_if_enabled("chat", chat_router, prefix=f"{API_V1_PREFIX}/chat")
@@ -5132,6 +5080,19 @@ else:
         _include_if_enabled("outputs", _outputs_router, prefix=f"{API_V1_PREFIX}", tags=["outputs"])
     except Exception as _e:
         logger.warning(f"Outputs endpoint not available: {_e}")
+    try:
+        # Optional audiobook creation endpoint
+        from tldw_Server_API.app.api.v1.endpoints.audiobooks import router as audiobooks_router
+
+        _include_if_enabled(
+            "audiobooks",
+            audiobooks_router,
+            prefix=f"{API_V1_PREFIX}",
+            tags=["audiobooks"],
+            default_stable=False,
+        )
+    except Exception as _e:
+        logger.warning(f"Audiobooks endpoint not available: {_e}")
     try:
         # Optional files artifacts endpoint
         from tldw_Server_API.app.api.v1.endpoints.files import router as _files_router
@@ -5203,6 +5164,7 @@ else:
             "notes", notes_graph_router, prefix=f"{API_V1_PREFIX}/notes", tags=["notes"]
         )  # /api/v1/notes/graph
     _include_if_enabled("notes", notes_router, prefix=f"{API_V1_PREFIX}/notes", tags=["notes"])
+    _include_if_enabled("slides", slides_router, prefix=f"{API_V1_PREFIX}", tags=["slides"])
     _include_if_enabled("prompts", prompt_router, prefix=f"{API_V1_PREFIX}/prompts", tags=["prompts"])
     # Kanban Board endpoints
     if _HAS_KANBAN:
@@ -5364,6 +5326,9 @@ else:
     _include_if_enabled(
         "quizzes", quizzes_router, prefix=f"{API_V1_PREFIX}", tags=["quizzes"], default_stable=True
     )
+    _include_if_enabled(
+        "writing", writing_router, prefix=f"{API_V1_PREFIX}/writing", tags=["writing"], default_stable=True
+    )
     from tldw_Server_API.app.api.v1.endpoints.personalization import (
         router as personalization_router,
     )
@@ -5389,6 +5354,8 @@ else:
     _include_if_enabled("chatbooks", chatbooks_router, prefix=f"{API_V1_PREFIX}", tags=["chatbooks"])
     _include_if_enabled("llm", mlx_router, prefix=f"{API_V1_PREFIX}", tags=["llm"])
     _include_if_enabled("llm", llm_providers_router, prefix=f"{API_V1_PREFIX}", tags=["llm"])
+    _include_if_enabled("llm", messages_router, prefix=f"{API_V1_PREFIX}", tags=["messages"])
+    _include_if_enabled("llm", messages_public_router, prefix="", tags=["messages"])
     _include_if_enabled("llamacpp", llamacpp_router, prefix=f"{API_V1_PREFIX}", tags=["llamacpp"])
     _include_if_enabled("llamacpp", llamacpp_public_router, prefix="", tags=["llamacpp"])
     _include_if_enabled("web-scraping", web_scraping_router, tags=["web-scraping"])

@@ -240,6 +240,7 @@ def save_chat_history_to_db_wrapper(
                     text_content_parts: List[str] = []
                     image_data_bytes: Optional[bytes] = None
                     image_mime_type_str: Optional[str] = None
+                    image_entries: List[Tuple[bytes, str]] = []
                     content_data = message_obj.get("content")
 
                     if isinstance(content_data, str):
@@ -255,13 +256,17 @@ def save_chat_history_to_db_wrapper(
                                 if url_str.startswith("data:") and ";base64," in url_str:
                                     try:
                                         header, b64_data = url_str.split(";base64,", 1)
-                                        image_mime_type_str = header.split("data:", 1)[1] if "data:" in header else None
-                                        if image_mime_type_str:
-                                            image_data_bytes = base64.b64decode(b64_data)
+                                        image_mime_type = header.split("data:", 1)[1] if "data:" in header else None
+                                        if image_mime_type:
+                                            decoded_bytes = base64.b64decode(b64_data)
+                                            image_entries.append((decoded_bytes, image_mime_type))
+                                            if image_data_bytes is None:
+                                                image_data_bytes = decoded_bytes
+                                                image_mime_type_str = image_mime_type
                                             logging.debug(
                                                 "Decoded image for saving (MIME: %s, Size: %s) for msg %s in conv %s",
-                                                image_mime_type_str,
-                                                len(image_data_bytes) if image_data_bytes else 0,
+                                                image_mime_type,
+                                                len(decoded_bytes) if decoded_bytes else 0,
                                                 index,
                                                 current_conversation_id,
                                             )
@@ -282,7 +287,7 @@ def save_chat_history_to_db_wrapper(
                         text_content_parts.append(f"<Unsupported content type: {type(content_data)}>")
 
                     final_text_content = "\n".join(text_content_parts).strip()
-                    if not final_text_content and not image_data_bytes:
+                    if not final_text_content and not image_data_bytes and not image_entries:
                         logging.warning(
                             "Skipping empty message (no text or decodable image) at index %s for conv %s",
                             index,
@@ -290,16 +295,17 @@ def save_chat_history_to_db_wrapper(
                         )
                         continue
 
-                    db.add_message(
-                        {
-                            "conversation_id": current_conversation_id,
-                            "sender": sender,
-                            "content": final_text_content,
-                            "image_data": image_data_bytes,
-                            "image_mime_type": image_mime_type_str,
-                            "client_id": db.client_id,
-                        }
-                    )
+                    payload = {
+                        "conversation_id": current_conversation_id,
+                        "sender": sender,
+                        "content": final_text_content,
+                        "image_data": image_data_bytes,
+                        "image_mime_type": image_mime_type_str,
+                        "client_id": db.client_id,
+                    }
+                    if image_entries:
+                        payload["images"] = [{"data": b, "mime": m} for b, m in image_entries]
+                    db.add_message(payload)
                     message_save_count += 1
                 logging.info(
                     "Successfully saved %s messages to conversation %s.", message_save_count, current_conversation_id

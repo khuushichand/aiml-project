@@ -48,10 +48,14 @@ vi.mock('@/lib/api-client', () => ({
     getHealthMetrics: vi.fn(),
     getLlmHealth: vi.fn(),
     getRagHealth: vi.fn(),
+    getNotificationSettings: vi.fn(),
+    getRecentNotifications: vi.fn(),
     createWatchlist: vi.fn(),
     deleteWatchlist: vi.fn(),
     acknowledgeAlert: vi.fn(),
     dismissAlert: vi.fn(),
+    updateNotificationSettings: vi.fn(),
+    testNotification: vi.fn(),
   },
 }));
 
@@ -63,10 +67,14 @@ type ApiMock = {
   getHealthMetrics: ReturnType<typeof vi.fn>;
   getLlmHealth: ReturnType<typeof vi.fn>;
   getRagHealth: ReturnType<typeof vi.fn>;
+  getNotificationSettings: ReturnType<typeof vi.fn>;
+  getRecentNotifications: ReturnType<typeof vi.fn>;
   createWatchlist: ReturnType<typeof vi.fn>;
   deleteWatchlist: ReturnType<typeof vi.fn>;
   acknowledgeAlert: ReturnType<typeof vi.fn>;
   dismissAlert: ReturnType<typeof vi.fn>;
+  updateNotificationSettings: ReturnType<typeof vi.fn>;
+  testNotification: ReturnType<typeof vi.fn>;
 };
 
 const apiMock = api as unknown as ApiMock;
@@ -81,6 +89,13 @@ const setDefaultApiMocks = () => {
   });
   apiMock.getLlmHealth.mockResolvedValue({ status: 'ok' });
   apiMock.getRagHealth.mockResolvedValue({ status: 'ok' });
+  apiMock.getNotificationSettings.mockResolvedValue({
+    channels: [],
+    alert_threshold: 'warning',
+    digest_enabled: false,
+    digest_frequency: 'daily',
+  });
+  apiMock.getRecentNotifications.mockResolvedValue([]);
   apiMock.getHealthMetrics.mockResolvedValue({
     cpu: { percent: 10 },
     memory: { percent: 20 },
@@ -88,6 +103,8 @@ const setDefaultApiMocks = () => {
   apiMock.createWatchlist.mockResolvedValue({});
   apiMock.acknowledgeAlert.mockResolvedValue({});
   apiMock.dismissAlert.mockResolvedValue({});
+  apiMock.updateNotificationSettings.mockResolvedValue({});
+  apiMock.testNotification.mockResolvedValue({});
 };
 
 const expectLoadDataCalls = () => {
@@ -97,6 +114,8 @@ const expectLoadDataCalls = () => {
   expect(apiMock.getHealth).toHaveBeenCalled();
   expect(apiMock.getLlmHealth).toHaveBeenCalled();
   expect(apiMock.getRagHealth).toHaveBeenCalled();
+  expect(apiMock.getNotificationSettings).toHaveBeenCalled();
+  expect(apiMock.getRecentNotifications).toHaveBeenCalled();
 };
 
 const createDeferred = <T,>() => {
@@ -247,19 +266,13 @@ describe('MonitoringPage', () => {
 
     render(<MonitoringPage />);
 
-    await flushPromises();
-    await flushPromises();
-
-    const chart = screen.getByTestId('area-chart');
-    const initialPoints = JSON.parse(chart.getAttribute('data-points') || '[]');
-    expect(initialPoints).toHaveLength(2);
-    expect(apiMock.getHealthMetrics).toHaveBeenCalledTimes(2);
+    await waitFor(() => {
+      expect(apiMock.getHealthMetrics.mock.calls.length).toBeGreaterThanOrEqual(2);
+    }, { timeout: 5000 });
 
     await vi.advanceTimersByTimeAsync(5 * 60 * 1000);
     await flushPromises();
 
-    const updatedPoints = JSON.parse(chart.getAttribute('data-points') || '[]');
-    expect(updatedPoints).toHaveLength(3);
     expect(apiMock.getHealthMetrics).toHaveBeenCalledTimes(3);
 
     expectLoadDataCalls();

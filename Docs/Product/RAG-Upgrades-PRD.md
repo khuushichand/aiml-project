@@ -1,7 +1,7 @@
 # PRD: RAG Upgrades (Unified Pipeline)
 
 - Owner: RAG/Backend
-- Stakeholders: API, tldw-frontend, Evaluations, Embeddings
+- Stakeholders: API, Next.js WebUI, Evaluations, Embeddings
 - Status: In Progress
 - Last updated: 2025-11-16
 - Related docs: RAG core guide (tldw_Server_API/app/core/RAG/README.md), API ref (tldw_Server_API/app/core/RAG/API_DOCUMENTATION.md), Benchmarking (Docs/RAG/RAG_Benchmarks.md), Prior plans (Docs/Design/RAG_Plan.md, Docs/Design/RAG_Features_Evaluation_And_Plan.md, Docs/Design/RAG-Benchmarking.md)
@@ -132,7 +132,7 @@ Response additions (under `metadata`):
 - `decomposition`: { subqueries: [...], timings }
 - `graph_retrieval`: { communities, neighbors_k, alpha }
 
-Documentation to update: `tldw_Server_API/app/core/RAG/API_DOCUMENTATION.md` and `tldw-frontend` helper texts for Unified RAG Search.
+Documentation to update: `tldw_Server_API/app/core/RAG/API_DOCUMENTATION.md` and Next.js WebUI (`apps/tldw-frontend`) helper texts for Unified RAG Search.
 
 ## 9) Architecture & Code Touchpoints
 
@@ -144,7 +144,7 @@ Documentation to update: `tldw_Server_API/app/core/RAG/API_DOCUMENTATION.md` and
 - Synonyms registry: `tldw_Server_API/app/core/RAG/rag_service/synonyms_registry.py`
 - Post‑verification: `tldw_Server_API/app/core/RAG/rag_service/post_generation_verifier.py`
 - Ingestion for precomputed spans: `tldw_Server_API/app/core/Embeddings/ChromaDB_Library.py` (+ small store under `tldw_Server_API/app/core/RAG/rag_service/vector_stores/`)
-- Frontend UI: `tldw-frontend/pages/search.tsx`, `tldw-frontend/lib/quickforms.ts`, and any RAG preset/advanced panels tied to Unified RAG Search
+- Frontend UI: `apps/tldw-frontend/pages/search.tsx`, `apps/tldw-frontend/lib/quickforms.ts`, and any RAG preset/advanced panels tied to Unified RAG Search
 
 ## 10) Rollout Plan
 
@@ -213,7 +213,7 @@ Baseline (documented)
 
 - Phase 1 enabled in staging with doc updates; no regression in TP95 > +20% in Precision mode.
 - On internal benchmark suite, achieve: Recall@10 +8% and claim-faithfulness +10% (target ranges above) with cost/latency within budgets.
-- API docs and tldw-frontend helpers updated; feature flags documented.
+- API docs and Next.js WebUI helpers updated; feature flags documented.
 
 ## 15) Timeline (tentative)
 
@@ -227,7 +227,7 @@ Baseline (documented)
 
 - Unit: PRF term extraction; fusion correctness; calibrator decision boundaries; span metadata invariants.
 - Integration: `/rag/search` with each flag; budgets honored; metadata fields present.
-- E2E: Benchmark scripts (Docs/RAG/RAG_Benchmarks.md) plus new ablations; tldw-frontend RAG search flows.
+- E2E: Benchmark scripts (Docs/RAG/RAG_Benchmarks.md) plus new ablations; Next.js WebUI RAG search flows.
 - Performance: Soak tests with flags; record per-phase TP95 and timeouts.
 
 ## 17) Open Questions
@@ -236,7 +236,7 @@ Baseline (documented)
 - Minimum viable feature set for learned fusion before considering LTR?
 - Where to store calibrator artifacts and how to roll versions across multi-env deployments?
 
-## 18) Presets (for Docs/tldw-frontend)
+## 18) Presets (for Next.js WebUI docs)
 
 - Precision mode
   - `enable_multi_vector_passages=true`, `mv_flatten_to_spans=true`
@@ -280,7 +280,7 @@ mv_meta = (result.metadata or {}).get("multi_vector") or {}
 - `mv_meta` exposes how multi-vector spans were applied:
   - `enabled`, `span_chars`, `stride`, `max_spans_per_doc`, `flattened`, `precomputed_spans`
 
-Clients (including tldw-frontend) can surface these fields in a debug/advanced pane to explain why particular documents were selected or why additional evidence was pulled in.
+Clients (including the Next.js WebUI) can surface these fields in a debug/advanced pane to explain why particular documents were selected or why additional evidence was pulled in.
 
 ## 20) Implementation Status & Remaining Work (2025-11-16)
 
@@ -298,7 +298,7 @@ Current:
 - Adaptive rerun on low confidence is implemented as part of `enable_post_verification` + `adaptive_rerun_on_low_confidence`, with `metadata.post_verification` and `metadata.adaptive_rerun`.
 
 Remaining:
-- Tune and document “Precision” vs “Recall” presets more explicitly in docs/tldw-frontend, including recommended combinations of reranking strategy, hybrid weights, and guardrail defaults.
+- Tune and document “Precision” vs “Recall” presets more explicitly in Next.js WebUI docs, including recommended combinations of reranking strategy, hybrid weights, and guardrail defaults.
 - Run and bake in benchmark-driven thresholds (MMR, intent routing, numeric fidelity defaults) instead of current heuristic values.
 
 ### Phase 2 — Retrieval Quality & Stability
@@ -368,14 +368,14 @@ Remaining:
 - Implement a graph retrieval path that, when enabled, retrieves graph neighbors and blends them with standard retrieval using `graph_alpha`.
 - Expose `metadata.graph_retrieval` (communities, neighbors_k, alpha, basic stats) and add minimal graph-related metrics.
 
-### Cross-Cutting: tldw-frontend, Benchmarks, & Ops
+### Cross-Cutting: Next.js WebUI, Benchmarks, & Ops
 
 Current:
 - Core flags and metadata are documented in the RAG README and API docs; the server exposes the necessary toggles via `/api/v1/rag/search`.
 
 Remaining:
-- tldw-frontend:
-  - Add checkboxes/controls for PRF, multi-vector/precomputed spans, learned fusion + abstention, and decomposition in `tldw-frontend/pages/search.tsx`.
+- Next.js WebUI:
+  - Add checkboxes/controls for PRF, multi-vector/precomputed spans, learned fusion + abstention, and decomposition in `apps/tldw-frontend/pages/search.tsx`.
   - Surface `metadata.prf`, `metadata.multi_vector`, `metadata.reranking_calibration`, and `metadata.decomposition` in an advanced/debug view (search page + any shared RAG panels).
 - Benchmarking:
   - Implement the ablation matrix described in this PRD (baseline vs +PRF, +precomputed spans, +learned fusion, +decomposition) using the existing RAG benchmarking scripts.

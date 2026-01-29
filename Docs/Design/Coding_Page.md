@@ -21,7 +21,9 @@ https://github.com/mrgoonie/claudekit-skills/tree/main
 https://github.com/TheAuditorTool/Auditor
 https://astral.sh/blog/ty
 https://corridor.dev/blog/introducing-acsm/
-
+https://github.com/neutree-ai/openapi-to-skills
+https://github.com/dadbodgeoff/drift
+https://github.com/chunkhound/chunkhound
 
 ### Link Dump:
 repo2txt integration/clone https://github.com/abinthomasonline/repo2txt

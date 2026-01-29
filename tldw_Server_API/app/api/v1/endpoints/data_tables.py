@@ -8,6 +8,7 @@ import os
 import threading
 import time
 import uuid
+from pathlib import Path
 from typing import Any, Dict, List, Optional, Union
 from uuid import UUID
 
@@ -58,7 +59,11 @@ from tldw_Server_API.app.core.AuthNZ.permissions import (
 from tldw_Server_API.app.core.AuthNZ.principal_model import AuthPrincipal
 from tldw_Server_API.app.core.DB_Management.Collections_DB import CollectionsDatabase
 from tldw_Server_API.app.core.DB_Management.Media_DB_v2 import MediaDatabase, InputError
-from tldw_Server_API.app.core.exceptions import FileArtifactsError, FileArtifactsValidationError
+from tldw_Server_API.app.core.exceptions import (
+    FileArtifactsError,
+    FileArtifactsValidationError,
+    file_artifacts_http_status,
+)
 from tldw_Server_API.app.core.File_Artifacts.adapters.data_table_adapter import DataTableAdapter
 from tldw_Server_API.app.core.File_Artifacts.file_artifacts_service import (
     DEFAULT_MAX_BYTES,
@@ -75,45 +80,33 @@ MAX_CACHED_JOB_MANAGER_INSTANCES = 4
 _job_manager_cache: LRUCache = LRUCache(maxsize=MAX_CACHED_JOB_MANAGER_INSTANCES)
 _job_manager_lock = threading.Lock()
 
-_FILE_ARTIFACTS_ERROR_STATUS = {
-    "unsupported_file_type": status.HTTP_400_BAD_REQUEST,
-    "persist_required": status.HTTP_400_BAD_REQUEST,
-    "unsupported_export_format": status.HTTP_422_UNPROCESSABLE_ENTITY,
-    "invalid_async_mode": status.HTTP_422_UNPROCESSABLE_ENTITY,
-    "export_size_exceeded": status.HTTP_422_UNPROCESSABLE_ENTITY,
-    "row_limit_exceeded": status.HTTP_422_UNPROCESSABLE_ENTITY,
-    "cell_limit_exceeded": status.HTTP_422_UNPROCESSABLE_ENTITY,
-    "export_failed": status.HTTP_500_INTERNAL_SERVER_ERROR,
-    "export_job_enqueue_failed": status.HTTP_500_INTERNAL_SERVER_ERROR,
-}
-
-
 def _file_artifacts_http_exception(exc: FileArtifactsError) -> HTTPException:
     """Translate file artifact errors into HTTP exceptions with status codes."""
     detail = exc.detail if exc.detail is not None else exc.code
-    status_code = _FILE_ARTIFACTS_ERROR_STATUS.get(exc.code)
-    if status_code is None:
-        if isinstance(exc, FileArtifactsValidationError):
-            status_code = status.HTTP_422_UNPROCESSABLE_ENTITY
-        else:
-            status_code = status.HTTP_500_INTERNAL_SERVER_ERROR
+    status_code = file_artifacts_http_status(exc)
     return HTTPException(status_code=status_code, detail=detail)
 
 
 def get_job_manager() -> JobManager:
-    """Return a cached JobManager instance keyed by JOBS_DB_URL."""
-    cache_key = (os.getenv("JOBS_DB_URL", "default") or "default").strip() or "default"
+    """Return a cached JobManager instance keyed by JOBS_DB_URL or JOBS_DB_PATH."""
+    db_url = (os.getenv("JOBS_DB_URL") or "").strip()
+    db_path = (os.getenv("JOBS_DB_PATH") or "").strip()
+    if db_url:
+        cache_key = f"url:{db_url}"
+    else:
+        cache_key = f"path:{db_path or 'default'}"
     with _job_manager_lock:
         cached = _job_manager_cache.get(cache_key)
         if cached is not None:
             return cached
 
-        db_url = (os.getenv("JOBS_DB_URL") or "").strip()
-        if not db_url:
-            job_manager = JobManager()
-        else:
+        if db_url:
             backend = "postgres" if db_url.startswith("postgres") else None
             job_manager = JobManager(backend=backend, db_url=db_url)
+        elif db_path:
+            job_manager = JobManager(db_path=Path(db_path))
+        else:
+            job_manager = JobManager()
 
         _job_manager_cache[cache_key] = job_manager
         return job_manager
@@ -189,6 +182,7 @@ def _table_summary_from_row(
         uuid=str(row.get("uuid") or ""),
         name=str(row.get("name") or ""),
         description=row.get("description"),
+        workspace_tag=row.get("workspace_tag"),
         prompt=str(row.get("prompt") or ""),
         column_hints=_parse_json_value(row.get("column_hints_json")),
         status=str(row.get("status") or ""),
@@ -406,17 +400,17 @@ def _build_table_detail_response(
 async def generate_data_table(
     req: DataTableGenerateRequest,
     response: Response,
+    request: Request,
     wait_for_completion: bool = Query(False, description="Wait for job completion"),
     wait_timeout_seconds: int = Query(300, ge=1, le=1800),
     current_user: User = Depends(get_request_user),
     principal: AuthPrincipal = Depends(get_auth_principal),
     db: MediaDatabase = Depends(get_media_db_for_user),
     jm: JobManager = Depends(get_job_manager),
-    request: Request = None,
 ) -> Union[DataTableGenerateResponse, DataTableDetailResponse]:
     """Queue a data table generation job and optionally wait for completion."""
-    rid = ensure_request_id(request) if request is not None else None
-    tp = ensure_traceparent(request) if request is not None else ""
+    rid = ensure_request_id(request)
+    tp = ensure_traceparent(request)
     table_id = None
     table_uuid = None
     owner_user_id = _resolve_owner_id(principal, current_user)
@@ -430,6 +424,7 @@ async def generate_data_table(
             name=req.name.strip(),
             prompt=req.prompt.strip(),
             description=req.description,
+            workspace_tag=req.workspace_tag,
             column_hints=column_hints,
             status="queued",
             row_count=0,
@@ -438,6 +433,7 @@ async def generate_data_table(
         )
         table_id = int(table_row.get("id"))
         table_uuid = str(table_row.get("uuid"))
+        table_owner_client_id = str(table_row.get("client_id") or "").strip() or None
 
         sources_db_payload: List[Dict[str, Any]] = []
         job_sources: List[Dict[str, Any]] = []
@@ -473,6 +469,8 @@ async def generate_data_table(
             "model": req.model,
             "max_rows": req.max_rows,
         }
+        if table_owner_client_id:
+            payload["user_id"] = table_owner_client_id
 
         job = jm.create_job(
             domain="data_tables",
@@ -534,8 +532,11 @@ async def generate_data_table(
                     last_error=str(exc),
                     owner_user_id=owner_user_id,
                 )
-            except Exception:
-                logger.debug("data_tables.generate: failed to mark table as failed")
+            except Exception as update_exc:
+                logger.debug(
+                    "data_tables.generate: failed to mark table as failed: {}",
+                    update_exc,
+                )
         raise HTTPException(status_code=500, detail="Failed to submit data table job") from exc
 
 
@@ -551,6 +552,7 @@ async def generate_data_table(
 async def list_data_tables(
     status_filter: Optional[str] = Query(None, description="Filter by status"),
     search: Optional[str] = Query(None, description="Search by name/description"),
+    workspace_tag: Optional[str] = Query(None, description="Filter by workspace tag"),
     limit: int = Query(50, ge=1, le=500),
     offset: int = Query(0, ge=0),
     current_user: User = Depends(get_request_user),
@@ -562,6 +564,7 @@ async def list_data_tables(
     rows = db.list_data_tables(
         status=status_filter,
         search=search,
+        workspace_tag=workspace_tag,
         limit=limit,
         offset=offset,
         owner_user_id=owner_user_id,
@@ -569,6 +572,7 @@ async def list_data_tables(
     total = db.count_data_tables(
         status=status_filter,
         search=search,
+        workspace_tag=workspace_tag,
         owner_user_id=owner_user_id,
     )
     table_ids = []
@@ -659,7 +663,7 @@ async def get_data_table(
 async def export_data_table(
     table_uuid: str,
     response: Response,
-    request: Request = None,
+    request: Request,
     format: DataTableExportFormat = Query(..., description="Export format (csv|json|xlsx)"),
     async_mode: AsyncMode = Query("auto", description="auto defers large exports; async forces 202"),
     mode: ExportMode = Query("url", description="url returns a download link; inline returns base64 content"),
@@ -734,7 +738,7 @@ async def export_data_table(
         export=export_req,
         options=options,
     )
-    request_id = ensure_request_id(request) if request is not None else None
+    request_id = ensure_request_id(request)
     service = FileArtifactsService(cdb, user_id=current_user.id)
     should_async = async_mode == "async" or (
         async_mode == "auto"
@@ -969,17 +973,17 @@ async def regenerate_data_table(
     table_uuid: str,
     req: DataTableRegenerateRequest,
     response: Response,
+    request: Request,
     wait_for_completion: bool = Query(False, description="Wait for job completion"),
     wait_timeout_seconds: int = Query(300, ge=1, le=1800),
     current_user: User = Depends(get_request_user),
     principal: AuthPrincipal = Depends(get_auth_principal),
     db: MediaDatabase = Depends(get_media_db_for_user),
     jm: JobManager = Depends(get_job_manager),
-    request: Request = None,
 ) -> Union[DataTableGenerateResponse, DataTableDetailResponse]:
     """Queue a data table regeneration job."""
-    rid = ensure_request_id(request) if request is not None else None
-    tp = ensure_traceparent(request) if request is not None else ""
+    rid = ensure_request_id(request)
+    tp = ensure_traceparent(request)
 
     owner_user_id = _resolve_owner_id(principal, current_user)
     table_row = db.get_data_table_by_uuid(table_uuid, owner_user_id=owner_user_id)
@@ -987,6 +991,7 @@ async def regenerate_data_table(
         raise HTTPException(status_code=404, detail="data_table_not_found")
 
     table_id = int(table_row.get("id"))
+    table_owner_client_id = str(table_row.get("client_id") or "").strip() or None
     sources_rows = db.list_data_table_sources(table_id, owner_user_id=owner_user_id)
     job_sources = [
         {
@@ -1015,6 +1020,8 @@ async def regenerate_data_table(
         "max_rows": req.max_rows,
         "regenerate": True,
     }
+    if table_owner_client_id:
+        payload["user_id"] = table_owner_client_id
 
     job = jm.create_job(
         domain="data_tables",

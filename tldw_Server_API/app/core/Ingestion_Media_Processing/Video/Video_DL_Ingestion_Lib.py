@@ -33,7 +33,7 @@ import shutil
 from datetime import datetime
 import time
 from pathlib import Path
-from typing import List, Optional, Dict, Any, Callable
+from typing import List, Optional, Sequence, Dict, Any, Callable
 from urllib.parse import urlparse, parse_qs, urlunparse
 #
 # 3rd-Party Imports
@@ -802,6 +802,7 @@ def process_videos(
     cookies: Optional[str],
     timestamp_option: bool,
     perform_confabulation_check: bool, # Renamed from confab_checkbox
+    hotwords: Optional[Sequence[str] | str] = None,
     temp_dir: Optional[str] = None, # Added temp_dir argument
     keep_original: bool = False, # Add if needed for intermediate files
     perform_diarization:bool = False,
@@ -822,6 +823,8 @@ def process_videos(
     :param vad_use: Enable Voice Activity Detection.
     :param transcription_model: Name of the transcription model to use.
     :param transcription_language: Language for transcription.
+    :param hotwords: Optional hotword hints (list/sequence or JSON/CSV string).
+                     Primarily used by VibeVoice-ASR and ignored elsewhere.
     :param perform_analysis: If True, perform analysis on the transcript.
     :param custom_prompt: The user’s custom text prompt for summarization.
     :param system_prompt: The system prompt for the LLM.
@@ -985,6 +988,7 @@ def process_videos(
                 vad_use=vad_use,
                 transcription_model=transcription_model,
                 transcription_language=transcription_language,
+                hotwords=hotwords,
                 perform_analysis=perform_analysis,
                 custom_prompt=custom_prompt,
                 system_prompt=system_prompt,
@@ -1181,6 +1185,7 @@ def process_single_video(
     cookies: Optional[str],
     timestamp_option: bool,
     temp_dir: str, # Expect temp_dir path from caller (e.g., TempDirManager context)
+    hotwords: Optional[Sequence[str] | str] = None,
     keep_intermediate_audio: bool = False, # Flag to keep the WAV file from transcription
     perform_diarization: bool = False, # Flag to perform diarization
     keep_original: bool = False,
@@ -1194,6 +1199,8 @@ def process_single_video(
     'input_ref' should hold the original URL/path passed in video_input.
     'processing_source' should hold the path of the file actually processed.
     cancel_check: Optional callable that returns True when processing should be cancelled.
+    Hotwords are forwarded to STT providers that support them (for example
+    VibeVoice-ASR) and ignored elsewhere.
     """
     # --- Initialize result with the ORIGINAL input reference ---
     processing_result = {
@@ -1370,6 +1377,7 @@ def process_single_video(
             diarize=diarize,
             overwrite=False, # Usually False for safety unless specifically needed
             transcription_language=transcription_language,
+            hotwords=hotwords,
             temp_dir=str(processing_temp_dir), # Pass temp dir for its use
             cancel_check=cancel_check,
         )

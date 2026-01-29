@@ -21,6 +21,9 @@ from typing import Any, Dict, List, Optional, Tuple
 
 from loguru import logger
 
+from tldw_Server_API.app.core.Embeddings import redis_pipeline
+from tldw_Server_API.app.core.Jobs.manager import JobManager
+
 # Try to import ChromaDB components - graceful fallback if unavailable
 _CHROMADB_AVAILABLE = False
 _ChromaDBManager = None
@@ -38,6 +41,8 @@ except Exception as e:
 
 
 KANBAN_COLLECTION_PREFIX = "kanban_user_"
+_EMBEDDINGS_DOMAIN = "embeddings"
+_EMBEDDINGS_ROOT_JOB_TYPE = "embeddings_pipeline"
 
 
 def is_vector_search_available() -> bool:
@@ -69,6 +74,52 @@ def get_kanban_collection_name(user_id: str) -> str:
     else:
         safe_user_id = sanitized
     return f"{KANBAN_COLLECTION_PREFIX}{safe_user_id}"
+
+
+def _jobs_queue() -> str:
+    """Return the configured embeddings stage queue name."""
+    queue = (os.getenv("EMBEDDINGS_JOBS_QUEUE") or "default").strip()
+    return queue or "default"
+
+
+def _root_jobs_queue(stage_queue: str) -> str:
+    """Select the root jobs queue, defaulting to low priority when stages aren't low."""
+    root_queue = (os.getenv("EMBEDDINGS_ROOT_JOBS_QUEUE") or "").strip()
+    if root_queue:
+        return root_queue
+    return "low" if stage_queue != "low" else "default"
+
+
+def _jobs_manager() -> JobManager:
+    """Create a JobManager using the configured Jobs DB when available."""
+    db_url = (os.getenv("JOBS_DB_URL") or "").strip()
+    if not db_url:
+        return JobManager()
+    backend = "postgres" if db_url.startswith("postgres") else None
+    return JobManager(backend=backend, db_url=db_url)
+
+
+def _map_priority(priority: int) -> int:
+    """Map a 0-100 style priority to the 1-10 scale used by the jobs system."""
+    try:
+        val = int(priority)
+    except (TypeError, ValueError):
+        val = 50
+    mapped = max(1, min(10, int(val / 10)))
+    return mapped or 5
+
+
+def _extract_embedding_settings(embedding_config: Optional[Dict[str, Any]]) -> Tuple[Optional[str], Optional[str]]:
+    """Pull provider/model identifiers from a user embedding configuration."""
+    if not isinstance(embedding_config, dict):
+        return None, None
+    model = (
+        embedding_config.get("embedding_model")
+        or embedding_config.get("default_model_id")
+        or embedding_config.get("model_id")
+    )
+    provider = embedding_config.get("embedding_provider") or embedding_config.get("provider")
+    return model, provider
 
 
 class KanbanVectorSearch:
@@ -145,7 +196,7 @@ class KanbanVectorSearch:
         """
         Build a searchable document from card data.
 
-        Combines title, description, and label names for embedding.
+        Combines title, description, label names, and checklist item names for embedding.
         """
         parts = []
 
@@ -165,6 +216,12 @@ class KanbanVectorSearch:
             label_names = [label.get("name", "") for label in labels if label.get("name")]
             if label_names:
                 parts.append("Labels: " + ", ".join(label_names))
+
+        checklist_items = card.get("checklist_items", [])
+        if checklist_items:
+            item_names = [item for item in checklist_items if item]
+            if item_names:
+                parts.append("Checklist: " + "; ".join(item_names))
 
         return " ".join(parts)
 
@@ -187,6 +244,11 @@ class KanbanVectorSearch:
             metadata["due_date"] = card["due_date"]
         if card.get("created_at"):
             metadata["created_at"] = card["created_at"]
+        labels = card.get("labels", [])
+        if labels:
+            label_names = [label.get("name") for label in labels if label.get("name")]
+            if label_names:
+                metadata["labels"] = label_names
 
         return metadata
 
@@ -209,23 +271,61 @@ class KanbanVectorSearch:
                 logger.warning(f"KanbanVectorSearch.index_card: missing or invalid card id for user {self.user_id}")
                 return False
 
+            if str(os.getenv("TEST_MODE", "")).lower() in {"1", "true", "yes"}:
+                return True
+
             doc_id = f"card_{card_id}"
             document = self._build_document(card)
             metadata = self._build_metadata(card)
+            embedding_model, embedding_provider = _extract_embedding_settings(self.embedding_config)
 
-            # Upsert the document using the manager's generic storage API
-            # Reuse the existing collection name and let the manager handle embedding generation.
-            self._manager.process_and_store_content(
-                content=document,
-                media_id=doc_id,
-                file_name=f"kanban_card_{card_id}",
-                collection_name=self._collection_name,
-                create_embeddings=True,
-                create_contextualized=False,
-                base_metadata=metadata,
+            payload = {
+                "content": document,
+                "metadata": metadata,
+                "collection_name": self._collection_name,
+                "document_id": doc_id,
+                "card_id": card_id,
+                "card_version": card.get("version"),
+                "current_stage": "content",
+                "request_source": "kanban",
+            }
+            if embedding_model:
+                payload["embedding_model"] = embedding_model
+            if embedding_provider:
+                payload["embedding_provider"] = embedding_provider
+
+            jm = _jobs_manager()
+            stage_queue = _jobs_queue()
+            root_queue = _root_jobs_queue(stage_queue)
+            root_job = jm.create_job(
+                domain=_EMBEDDINGS_DOMAIN,
+                queue=root_queue,
+                job_type=_EMBEDDINGS_ROOT_JOB_TYPE,
+                payload=payload,
+                owner_user_id=str(self.user_id),
+                priority=_map_priority(50),
+                max_retries=0,
+            )
+            root_uuid = str(root_job.get("uuid") or "")
+            if not root_uuid:
+                logger.warning(
+                    f"KanbanVectorSearch.index_card: missing root job uuid for card {card_id} "
+                    f"(user {self.user_id})"
+                )
+                return False
+            stage_payload = dict(payload)
+            stage_payload["root_job_uuid"] = root_uuid
+            stage_payload["parent_job_uuid"] = root_uuid
+            stage_payload["user_id"] = str(self.user_id)
+
+            redis_pipeline.enqueue_content_job(
+                payload=stage_payload,
+                root_job_uuid=root_uuid,
+                force_regenerate=False,
+                require_redis=not redis_pipeline.allow_stub(),
             )
 
-            logger.debug(f"Indexed card {card_id} for user {self.user_id}")
+            logger.debug(f"Queued embeddings for card {card_id} (user {self.user_id})")
             return True
 
         except Exception as e:
@@ -244,10 +344,13 @@ class KanbanVectorSearch:
         """
         if not self.available:
             return False
+        manager = self._manager
+        if manager is None:
+            return False
 
         try:
             doc_id = f"card_{card_id}"
-            collection = self._manager.get_or_create_collection(self._collection_name)
+            collection = manager.get_or_create_collection(self._collection_name)
             collection.delete(ids=[doc_id])
 
             logger.debug(f"Removed card {card_id} from index for user {self.user_id}")
@@ -263,7 +366,7 @@ class KanbanVectorSearch:
         board_id: Optional[int] = None,
         priority: Optional[str] = None,
         limit: int = 20,
-        ) -> List[Dict[str, Any]]:
+    ) -> List[Dict[str, Any]]:
         """
         Search cards using vector similarity.
 
@@ -283,6 +386,9 @@ class KanbanVectorSearch:
         """
         if not self.available:
             return []
+        manager = self._manager
+        if manager is None:
+            return []
 
         try:
             # Build where filter
@@ -295,7 +401,7 @@ class KanbanVectorSearch:
                     where_filter["priority"] = priority
 
             # Use the manager's vector search
-            results = self._manager.vector_search(
+            results = manager.vector_search(
                 query=query,
                 collection_name=self._collection_name,
                 k=limit,

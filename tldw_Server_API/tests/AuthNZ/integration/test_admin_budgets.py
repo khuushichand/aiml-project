@@ -74,10 +74,18 @@ async def _fetch_custom_limits_json(db_name: str, org_id: int) -> dict:
         database=db_name,
     )
     try:
-        return await conn.fetchval(
+        value = await conn.fetchval(
             "SELECT custom_limits_json FROM org_subscriptions WHERE org_id=$1",
             org_id,
         )
+        if isinstance(value, str):
+            try:
+                decoded = json.loads(value)
+                if isinstance(decoded, dict):
+                    return decoded
+            except json.JSONDecodeError:
+                pass
+        return value
     finally:
         await conn.close()
 

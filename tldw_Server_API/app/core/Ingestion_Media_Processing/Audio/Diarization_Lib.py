@@ -21,7 +21,7 @@ from contextlib import contextmanager
 from enum import Enum
 #
 # Local Imports
-from tldw_Server_API.app.core.config import loaded_config_data
+from tldw_Server_API.app.core.config import loaded_config_data, DIARIZATION_CONFIG
 #
 ######################################################################################################################
 # Type checking imports (not loaded at runtime)
@@ -160,6 +160,16 @@ SPEAKER_LABEL_PREFIX = 'SPEAKER_'
 # Memory-efficient mode constants
 DEFAULT_MEMORY_EFFICIENT = False
 DEFAULT_MAX_MEMORY_MB = 2048  # 2GB default memory limit
+
+
+def load_diarization_config() -> Dict[str, Any]:
+    """Return the merged diarization configuration (defaults + user overrides)."""
+    config = dict(DIARIZATION_CONFIG)
+    if loaded_config_data:
+        diarization_config = loaded_config_data.get('diarization', {})
+        if isinstance(diarization_config, dict):
+            config.update(diarization_config)
+    return config
 
 
 def _sanitize_path_component(name: str) -> str:
@@ -500,6 +510,17 @@ class DiarizationService:
             # Overlapping speech detection
             'detect_overlapping_speech': False,
             'overlap_confidence_threshold': 0.7,
+
+            # Backend selection
+            'backend': 'embedding',  # embedding | nemo_multitalk
+
+            # NeMo multitalk defaults (Parakeet + Sortformer diarization)
+            'nemo_multitalk_asr_model': 'nvidia/multitalker-parakeet-streaming-0.6b-v1',
+            'nemo_multitalk_diar_model': 'nvidia/diar_streaming_sortformer_4spk-v2.1',
+            'nemo_multitalk_device': 'auto',  # auto | cpu | cuda
+            'nemo_multitalk_cache_dir': None,
+            'nemo_multitalk_max_speakers': 4,
+            'nemo_multitalk_disable_cuda_graphs': True,
         }
 
     def _default_config_loader(self) -> Dict[str, Any]:

@@ -308,6 +308,8 @@ def load_character_and_image(
         if not char_data:
             logger.warning("No character data found for ID: {}", character_id)
             return None, [], None
+        # Work with a copy to avoid mutating cached DB rows in-place when replacing placeholders.
+        char_data = dict(char_data)
 
         char_name_from_card = char_data.get("name", "Character")
 

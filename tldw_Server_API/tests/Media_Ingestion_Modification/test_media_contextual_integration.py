@@ -258,13 +258,15 @@ class TestMediaEndpointContextualIntegration:
         with patch('tldw_Server_API.app.api.v1.endpoints.media.process_document_content') as mock_process:
             mock_process.return_value = {"success": True, "media_id": 126}
 
-            # Avoid real network: mock smart_download to create a temporary file inside provided temp_dir
+            # Avoid real network: mock _download_url_async to create a temporary file inside provided temp_dir
             from pathlib import Path
-            def _fake_download(url, temp_dir, allowed_extensions=None):
-                p = Path(str(temp_dir)) / (Path(url).name or "test.pdf")
+            async def _fake_download_url_async(**kwargs):
+                url = kwargs.get("url")
+                target_dir = kwargs.get("target_dir")
+                p = Path(str(target_dir)) / (Path(url).name or "test.pdf")
                 p.write_text("dummy content")
                 return p
-            with patch('tldw_Server_API.app.api.v1.endpoints.media.smart_download', side_effect=_fake_download):
+            with patch('tldw_Server_API.app.api.v1.endpoints.media._download_url_async', side_effect=_fake_download_url_async):
                 response = test_client.post(
                     "/api/v1/media/add",
                     data=form_data,

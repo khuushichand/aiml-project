@@ -374,6 +374,13 @@ class CancelJobResponse(BaseModel):
     job_id: str
 
 
+class RemoveJobResponse(BaseModel):
+    """Response for job removal."""
+    success: bool
+    message: str
+    job_id: str
+
+
 # Error Responses
 
 class ChatbookErrorResponse(BaseModel):

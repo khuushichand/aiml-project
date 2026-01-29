@@ -79,13 +79,22 @@ async def list_outputs(
     job_id: int | None = None,
     run_id: int | None = None,
     type: str | None = None,
+    workspace_tag: str | None = None,
     include_deleted: bool = False,
     _current_user: User = Depends(get_request_user),
     cdb = Depends(get_collections_db_for_user),
 ):
     limit = max(1, min(200, size))
     offset = (max(1, page) - 1) * limit
-    rows, total = cdb.list_output_artifacts(limit=limit, offset=offset, job_id=job_id, run_id=run_id, type_=type, include_deleted=include_deleted)
+    rows, total = cdb.list_output_artifacts(
+        limit=limit,
+        offset=offset,
+        job_id=job_id,
+        run_id=run_id,
+        type_=type,
+        workspace_tag=workspace_tag,
+        include_deleted=include_deleted,
+    )
     items = []
     for r in rows:
         try:
@@ -112,6 +121,7 @@ async def list_outputs(
                 storage_path=storage_path,
                 media_item_id=r.media_item_id,
                 created_at=datetime.fromisoformat(r.created_at),
+                workspace_tag=r.workspace_tag,
             )
         )
     return OutputListResponse(items=items, total=total, page=page, size=limit)
@@ -154,6 +164,7 @@ async def list_deleted_outputs(
                 storage_path=storage_path,
                 media_item_id=r.media_item_id,
                 created_at=datetime.fromisoformat(r.created_at),
+                workspace_tag=r.workspace_tag,
             )
         )
     return OutputListResponse(items=items, total=total, page=page, size=limit)
@@ -247,6 +258,8 @@ async def create_output(
         "tags": context.get("tags", []),
         "item_count": len(context.get("items", [])),
     }
+    if payload.workspace_tag:
+        base_meta["workspace_tag"] = payload.workspace_tag
     outputs_created: list[tuple[int, PathlibPath]] = []
 
     async def _persist_output(
@@ -297,6 +310,7 @@ async def create_output(
                 # Store only the filename; absolute path is reconstructed on read.
                 storage_path=filename,
                 metadata_json=json.dumps(meta),
+                workspace_tag=payload.workspace_tag,
                 job_id=None,
                 run_id=payload.run_id,
                 media_item_id=None,

@@ -7,6 +7,7 @@ import os
 import shutil
 import threading
 from datetime import datetime
+from pathlib import Path
 
 from cachetools import LRUCache
 from fastapi import APIRouter, Depends, File, HTTPException, UploadFile, status, Request, Query
@@ -15,6 +16,7 @@ from loguru import logger
 from starlette.responses import JSONResponse
 
 from tldw_Server_API.app.api.v1.API_Deps.auth_deps import (
+    check_rate_limit,
     get_auth_principal,
     rbac_rate_limit,
     require_permissions,
@@ -45,14 +47,18 @@ _job_manager_lock = threading.Lock()
 
 def get_job_manager() -> JobManager:
     db_url = (os.getenv("JOBS_DB_URL") or "").strip()
-    cache_key = db_url or "default"
+    db_path = (os.getenv("JOBS_DB_PATH") or "").strip()
+    cache_key = f"url:{db_url}" if db_url else f"path:{db_path or 'default'}"
     with _job_manager_lock:
         cached = _job_manager_cache.get(cache_key)
         if cached is not None:
             return cached
 
         if not db_url:
-            job_manager = JobManager()
+            if db_path:
+                job_manager = JobManager(db_path=Path(db_path))
+            else:
+                job_manager = JobManager()
         else:
             backend = "postgres" if db_url.startswith("postgres") else None
             job_manager = JobManager(backend=backend, db_url=db_url)
@@ -190,11 +196,11 @@ def _job_to_status(job: Dict[str, Any]) -> MediaIngestJobStatus:
     ],
 )
 async def submit_media_ingest_jobs(
+    request: Request,
     form_data: AddMediaForm = Depends(get_add_media_form),
     files: Optional[List[UploadFile]] = File(None, description="Optional media uploads"),
     current_user: User = Depends(get_request_user),
     jm: JobManager = Depends(get_job_manager),
-    request: Request = None,
 ) -> SubmitMediaIngestJobsResponse:
     rid = ensure_request_id(request) if request is not None else None
     tp = ensure_traceparent(request) if request is not None else ""
@@ -342,6 +348,7 @@ async def submit_media_ingest_jobs(
     response_model=MediaIngestJobStatus,
     summary="Get media ingest job status",
     tags=["Media Ingestion Jobs"],
+    dependencies=[Depends(check_rate_limit)],
 )
 async def get_media_ingest_job(
     job_id: int,
@@ -421,6 +428,7 @@ async def list_media_ingest_jobs(
     response_model=CancelMediaIngestJobResponse,
     summary="Cancel a media ingest job",
     tags=["Media Ingestion Jobs"],
+    dependencies=[Depends(check_rate_limit)],
 )
 async def cancel_media_ingest_job(
     job_id: int,

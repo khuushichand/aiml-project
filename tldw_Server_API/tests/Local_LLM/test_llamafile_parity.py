@@ -56,6 +56,22 @@ async def test_llamafile_denylist(monkeypatch, tmp_path: Path):
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("key", ["hf-token", "hfToken", "api-key", "apiKey"])
+async def test_llamafile_denylist_normalized_keys_rejected(tmp_path: Path, key: str):
+    models_dir = tmp_path / "models"
+    models_dir.mkdir()
+    (models_dir / "m.gguf").write_text("x")
+    cfg = LlamafileConfig(models_dir=models_dir, llamafile_dir=tmp_path / "bin", allow_unvalidated_args=True)
+    handler = LlamafileHandler(cfg, global_app_config={})
+    exe = handler.llamafile_exe_path
+    exe.parent.mkdir(parents=True, exist_ok=True)
+    exe.write_text("#!/bin/sh\n")
+
+    with pytest.raises(ServerError):
+        await handler.start_server("m.gguf", server_args={key: "SECRET"})
+
+
+@pytest.mark.asyncio
 async def test_llamafile_path_prefix_bypass_rejected(monkeypatch, tmp_path: Path):
     models_dir = tmp_path / "models"
     models_dir.mkdir()

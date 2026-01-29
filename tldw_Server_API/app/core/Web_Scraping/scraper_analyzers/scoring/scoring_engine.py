@@ -53,6 +53,26 @@ def calculate_difficulty_score(results: Dict[str, Any]) -> Dict[str, Any]:
     if results.get("tls", {}).get("status") == "active":
         score += 1
 
+    fingerprint = results.get("fingerprint", {})
+    if fingerprint.get("status") == "success":
+        if fingerprint.get("detected_services"):
+            score += 2
+        if fingerprint.get("canvas_fingerprinting_signal"):
+            score += 1
+        if fingerprint.get("behavioral_listeners_detected"):
+            score += 1
+
+    integrity = results.get("integrity", {})
+    if integrity.get("status") == "success":
+        modified = integrity.get("modified_functions") or {}
+        if modified:
+            has_canvas = any("Canvas" in func for func in modified.keys())
+            has_timing = any("Date.now" in func or "performance.now" in func for func in modified.keys())
+            if has_canvas or has_timing:
+                score += 2
+            else:
+                score += 1
+
     final_score = min(score, 10)
 
     if final_score >= 8:

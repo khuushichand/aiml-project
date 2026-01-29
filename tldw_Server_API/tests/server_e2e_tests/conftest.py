@@ -1,8 +1,175 @@
+import contextlib
 import json
+import os
+import socket
+from pathlib import Path
+from typing import Dict, Optional
 
+import pytest
 from playwright.sync_api import APIRequestContext
 
-from tldw_Server_API.tests.webui_e2e.conftest import browser, page, server_url
+# Robust import of server_lifecycle regardless of PYTHONPATH layout in CI.
+# Prefer the package import; on failure, locate repository root dynamically and
+# add it (and package dir) to sys.path, then retry.
+try:
+    from tldw_Server_API.tests.scripts import server_lifecycle
+except ModuleNotFoundError:  # pragma: no cover - environment specific
+    import sys
+    import importlib
+
+    here = Path(__file__).resolve()
+    repo_root = None
+    for cand in [here.parent, *here.parents]:
+        if (cand / "tldw_Server_API" / "scripts" / "server_lifecycle.py").exists():
+            repo_root = cand
+            break
+    if repo_root is None:
+        try:
+            repo_root = here.parents[3]
+        except Exception:
+            repo_root = here.parent.parent
+    if repo_root and str(repo_root) not in sys.path:
+        sys.path.insert(0, str(repo_root))
+    pkg_dir = repo_root / "tldw_Server_API" if repo_root else None
+    if pkg_dir and str(pkg_dir) not in sys.path:
+        sys.path.insert(0, str(pkg_dir))
+
+    for key in list(sys.modules.keys()):
+        if key == "tldw_Server_API" or key.startswith("tldw_Server_API."):
+            sys.modules.pop(key, None)
+
+    try:
+        server_lifecycle = importlib.import_module("tldw_Server_API.tests.scripts.server_lifecycle")
+    except ModuleNotFoundError:
+        import importlib.util as importlib_util
+
+        if not pkg_dir:
+            raise
+        module_path = pkg_dir / "scripts" / "server_lifecycle.py"
+        if not module_path.exists():
+            raise
+        spec = importlib_util.spec_from_file_location(
+            "tldw_Server_API.tests.scripts.server_lifecycle", str(module_path)
+        )
+        assert spec and spec.loader
+        module = importlib_util.module_from_spec(spec)
+        sys.modules[spec.name] = module
+        spec.loader.exec_module(module)  # type: ignore[assignment]
+        server_lifecycle = module
+
+
+def _find_free_port() -> int:
+    with contextlib.closing(socket.socket(socket.AF_INET, socket.SOCK_STREAM)) as sock:
+        sock.bind(("127.0.0.1", 0))
+        return sock.getsockname()[1]
+
+
+def _set_env(overrides: Dict[str, str]) -> Dict[str, Optional[str]]:
+    original = {key: os.environ.get(key) for key in overrides}
+    for key, value in overrides.items():
+        os.environ[key] = value
+    return original
+
+
+def _merge_route_enable(existing: Optional[str], extra: str) -> str:
+    """Merge two comma/newline-separated route-enable strings."""
+
+    def _split(value: Optional[str]) -> list[str]:
+        if not value:
+            return []
+        return [part.strip() for part in value.replace("\n", ",").split(",") if part.strip()]
+
+    merged = _split(existing)
+    merged.extend(_split(extra))
+    return ",".join(list(dict.fromkeys(merged)))
+
+
+def _restore_env(original: Dict[str, Optional[str]]) -> None:
+    for key, value in original.items():
+        if value is None:
+            os.environ.pop(key, None)
+        else:
+            os.environ[key] = value
+
+
+def _print_server_log(label: str) -> None:
+    log_path = Path(f"server-{label}.log")
+    if log_path.exists():
+        print(f"===== server log ({label}) =====")
+        try:
+            print(log_path.read_text(encoding="utf-8"))
+        except Exception:
+            pass
+
+
+@pytest.fixture(scope="session")
+def server_url() -> str:
+    port = _find_free_port()
+    base_url = f"http://127.0.0.1:{port}"
+    label = os.environ.get("SERVER_LABEL", "server-e2e")
+
+    overrides = {
+        "SERVER_LABEL": label,
+        "SERVER_PORT": str(port),
+        "E2E_TEST_BASE_URL": base_url,
+        "AUTH_MODE": "single_user",
+        "SINGLE_USER_API_KEY": os.getenv("SINGLE_USER_API_KEY", "sk-test-1234567890-VALID"),
+        "CSRF_ENABLED": "true",
+        "TEST_MODE": "true",
+        "MINIMAL_TEST_APP": "0",
+        "EPHEMERAL_CLEANUP_ENABLED": "false",
+        "CLAIMS_REBUILD_ENABLED": "false",
+        "ROUTES_ENABLE": _merge_route_enable(
+            os.getenv("ROUTES_ENABLE"),
+            "reading,reading-highlights,watchlists",
+        ),
+    }
+
+    original_env = _set_env(overrides)
+
+    try:
+        server_lifecycle.start_server()
+        server_lifecycle.health_check()
+    except Exception:
+        _print_server_log(label)
+        _restore_env(original_env)
+        raise
+
+    try:
+        yield base_url
+    finally:
+        try:
+            server_lifecycle.stop_server()
+        finally:
+            _restore_env(original_env)
+
+
+@pytest.fixture(scope="session")
+def browser():
+    from playwright.sync_api import sync_playwright
+
+    with sync_playwright() as playwright:
+        exec_path = Path(playwright.chromium.executable_path)
+        if exec_path and not exec_path.exists():
+            pytest.skip(
+                "Playwright Chromium binaries are not installed. "
+                "Run `python -m playwright install chromium`."
+            )
+        browser = playwright.chromium.launch(headless=True)
+        try:
+            yield browser
+        finally:
+            browser.close()
+
+
+@pytest.fixture
+def page(server_url: str, browser):
+    context = browser.new_context(base_url=server_url)
+    try:
+        page = context.new_page()
+        yield page
+    finally:
+        context.close()
 
 
 def _patch_request_json_support() -> None:

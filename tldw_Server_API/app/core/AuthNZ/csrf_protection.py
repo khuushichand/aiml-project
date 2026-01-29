@@ -18,6 +18,7 @@ from loguru import logger
 # Local imports
 from tldw_Server_API.app.core.AuthNZ.settings import get_settings
 from tldw_Server_API.app.core.AuthNZ.crypto_utils import derive_hmac_key
+from tldw_Server_API.app.core.AuthNZ.ip_allowlist import resolve_client_ip
 from tldw_Server_API.app.core.config import settings as global_settings
 
 #######################################################################################################################
@@ -108,7 +109,12 @@ class CSRFTokenManager:
             if len(parts) != 2:
                 return False
             suffix = parts[1]
-            if not suffix or suffix == "unbound" or user_id is None:
+            if not suffix:
+                return False
+            if suffix == "unbound":
+                # Accept unbound tokens only when no user context is available.
+                return user_id is None
+            if user_id is None:
                 return False
             expected = self._bind_suffix(user_id)
             return secrets.compare_digest(suffix, expected)
@@ -133,17 +139,15 @@ class CSRFTokenManager:
         if any(path.startswith(excluded) for excluded in self.excluded_paths):
             return False
 
-        # Skip if single-user mode with API key auth (X-API-KEY or Bearer fallback)
-        if self.settings.AUTH_MODE == "single_user":
-            # Check if API key is present
-            api_key = request.headers.get("X-API-KEY")
-            if api_key:
-                return False  # API key auth doesn't need CSRF
-            authorization = request.headers.get("authorization") or request.headers.get("Authorization")
-            if authorization:
-                scheme, _, credential = authorization.partition(" ")
-                if scheme.lower() == "bearer" and credential.strip():
-                    return False
+        # Skip if API key or Bearer auth is present (headers are not sent in cross-site requests)
+        api_key = request.headers.get("X-API-KEY")
+        if api_key:
+            return False
+        authorization = request.headers.get("authorization") or request.headers.get("Authorization")
+        if authorization:
+            scheme, _, credential = authorization.partition(" ")
+            if scheme.lower() == "bearer" and credential.strip():
+                return False
 
         # Check content type
         content_type = request.headers.get("content-type", "").lower()
@@ -239,6 +243,16 @@ class CSRFProtectionMiddleware(BaseHTTPMiddleware):
                 try:
                     from tldw_Server_API.app.core.AuthNZ.jwt_service import get_jwt_service
                     payload = get_jwt_service().decode_access_token(token)
+                    try:
+                        from tldw_Server_API.app.core.AuthNZ.session_manager import get_session_manager
+
+                        session_manager = await get_session_manager()
+                        if await session_manager.is_token_blacklisted(token, payload.get("jti")):
+                            logger.debug("CSRF binding: bearer token revoked; skipping user binding")
+                            return None
+                    except Exception as bl_exc:
+                        logger.debug(f"CSRF binding: token blacklist check failed: {bl_exc}")
+                        return None
                     user_id = payload.get("user_id") or payload.get("sub")
                     if isinstance(user_id, str):
                         user_id = int(user_id)
@@ -258,7 +272,8 @@ class CSRFProtectionMiddleware(BaseHTTPMiddleware):
                 manager = await get_api_key_manager()
                 info = await manager.validate_api_key(
                     api_key=api_key,
-                    ip_address=request.client.host if request.client else None
+                    ip_address=resolve_client_ip(request, get_settings()),
+                    record_usage=False,
                 )
                 user_id = info.get("user_id") if info else None
                 if isinstance(user_id, int):
@@ -291,6 +306,7 @@ class CSRFProtectionMiddleware(BaseHTTPMiddleware):
             return await call_next(request)
 
         # Check if this request needs CSRF protection
+        force_rotate = False
         if self.token_manager.should_protect(request):
             if get_settings().CSRF_BIND_TO_USER:
                 user_id = await self._resolve_user_id(request)
@@ -304,7 +320,24 @@ class CSRFProtectionMiddleware(BaseHTTPMiddleware):
             header_token = request.headers.get(self.token_manager.token_header_name)
 
             # Validate tokens
-            if not self.token_manager.validate_token(cookie_token, header_token, user_id):
+            valid = self.token_manager.validate_token(cookie_token, header_token, user_id)
+            if not valid and get_settings().CSRF_BIND_TO_USER:
+                # Allow a one-time upgrade from an unbound token when a user context
+                # becomes available (e.g., immediately after login).
+                try:
+                    if (
+                        cookie_token
+                        and header_token
+                        and secrets.compare_digest(cookie_token, header_token)
+                        and cookie_token.endswith(".unbound")
+                        and user_id is not None
+                    ):
+                        valid = True
+                        force_rotate = True
+                except Exception:
+                    valid = False
+
+            if not valid:
                 logger.warning(
                     f"CSRF token validation failed for {request.method} {request.url.path} "
                     f"from {request.client.host if request.client else 'unknown'}"
@@ -319,8 +352,25 @@ class CSRFProtectionMiddleware(BaseHTTPMiddleware):
         # Process request
         response = await call_next(request)
 
-        # Set CSRF token cookie if not present
-        if self.token_manager.token_cookie_name not in request.cookies:
+        # Set or rotate CSRF token cookie when needed.
+        cookie_token = request.cookies.get(self.token_manager.token_cookie_name)
+        should_set_token = force_rotate or cookie_token is None
+        if get_settings().CSRF_BIND_TO_USER:
+            try:
+                bound_user_id = getattr(request.state, "user_id", None)
+            except Exception:
+                bound_user_id = None
+            if bound_user_id is not None:
+                try:
+                    token_valid = self.token_manager.validate_token(
+                        cookie_token or "", cookie_token or "", bound_user_id
+                    )
+                except Exception:
+                    token_valid = False
+                if not token_valid:
+                    should_set_token = True
+
+        if should_set_token:
             token = self.token_manager.generate_token(request)
             self.token_manager.set_cookie(response, token)
 

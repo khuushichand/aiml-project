@@ -209,3 +209,28 @@ def test_interrupted_by_system_message_produces_non_character_turn():
     assert rich[0]["user"] is not None
     assert rich[0]["non_character"] is not None
     assert rich[1]["character"] is not None
+
+
+def test_explicit_character_sender_overrides_reserved_alias():
+    char_name = "system"
+    user_name = "User"
+
+    db_messages = [
+        {"id": "m1", "sender": "system", "content": "I am a character", "timestamp": 1, "version": 1},
+        {"id": "m2", "sender": "system:note", "content": "meta", "timestamp": 2, "version": 1},
+    ]
+
+    rich = process_db_messages_to_rich_ui_history(
+        db_messages=db_messages,
+        char_name_from_card=char_name,
+        user_name_for_placeholders=user_name,
+        actual_user_sender_id_in_db="User",
+        actual_char_sender_id_in_db=char_name,
+        additional_char_sender_ids=None,
+        additional_user_sender_ids=None,
+        char_first_message=None,
+    )
+
+    assert rich[0]["character"] is not None
+    assert rich[0]["non_character"] is None
+    assert rich[1]["non_character"] is not None

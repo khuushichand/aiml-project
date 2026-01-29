@@ -60,6 +60,7 @@ async def run_video_batch(
         "transcription_model": form_data.transcription_model,
         # Add language if process_videos needs it
         "transcription_language": form_data.transcription_language,
+        "hotwords": getattr(form_data, "hotwords", None),
         "perform_analysis": form_data.perform_analysis,
         "custom_prompt": form_data.custom_prompt,
         "system_prompt": form_data.system_prompt,
@@ -213,10 +214,10 @@ async def run_video_batch(
         batch_result["processed_count"] = sum(
             1
             for r in final_results_list
-            if r.get("status") in {"Success", "Warning"}
+            if str(r.get("status", "")).lower() in {"success", "warning"}
         )
         batch_result["errors_count"] = sum(
-            1 for r in final_results_list if r.get("status") == "Error"
+            1 for r in final_results_list if str(r.get("status", "")).lower() == "error"
         )
         deduped_errors: List[str] = []
         for err in final_errors_list:

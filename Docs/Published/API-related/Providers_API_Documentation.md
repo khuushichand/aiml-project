@@ -116,20 +116,30 @@
 - Response: Same shape as a single item in `providers` above. `404` if provider not configured.
 
 ### 4) GET /api/v1/llm/models
-- Summary: Flat list of available models across all providers.
-- Query params: `include_deprecated` (bool, default false)
+- Summary: Flat list of available models across all providers (chat, embeddings, image).
+- Query params:
+  - `include_deprecated` (bool, default false)
+  - `type` (repeatable; `chat`, `embedding`, `image`)
+  - `input_modality` (repeatable; e.g., `text`, `image`)
+  - `output_modality` (repeatable; e.g., `text`, `image`, `embedding`)
 - Response (example):
 ```json
 [
   "openai/gpt-4o",
   "openai/gpt-4o-mini",
-  "anthropic/claude-opus-4.1"
+  "anthropic/claude-opus-4.1",
+  "image/stable_diffusion_cpp"
 ]
 ```
+Tip: For chat-only models, use `/api/v1/llm/models?type=chat`.
 
 ### 5) GET /api/v1/llm/models/metadata
 - Summary: Flattened model capability metadata across providers.
-- Query params: `include_deprecated` (bool, default false)
+- Query params:
+  - `include_deprecated` (bool, default false)
+  - `type` (repeatable; `chat`, `embedding`, `image`)
+  - `input_modality` (repeatable)
+  - `output_modality` (repeatable)
 - Response (example):
 ```json
 {
@@ -151,9 +161,19 @@
       },
       "modalities": {"input": ["text", "image"], "output": ["text"]},
       "notes": "Vision multimodal; tool use supported."
+    },
+    {
+      "provider": "image",
+      "id": "image/stable_diffusion_cpp",
+      "name": "stable_diffusion_cpp",
+      "type": "image",
+      "capabilities": {"image_generation": true},
+      "modalities": {"input": ["text"], "output": ["image"]},
+      "supported_formats": ["png", "jpg", "webp"],
+      "is_configured": true
     }
   ],
-  "total": 1
+  "total": 2
 }
 ```
 

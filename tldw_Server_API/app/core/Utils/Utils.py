@@ -191,7 +191,22 @@ def ensure_directory_exists(path):
 
 global_api_endpoints = ["anthropic", "cohere", "google", "groq", "openai", "huggingface", "openrouter", "deepseek", "mistral", "custom_openai_api", "custom_openai_api_2", "llama", "ollama", "ooba", "kobold", "tabby", "vllm", "aphrodite"]
 
-global_search_engines = ["baidu", "brave", "duckduckgo", "google", "kagi", "searx", "tavily", "yandex"]
+global_search_engines = [
+    "baidu",
+    "bing",
+    "brave",
+    "duckduckgo",
+    "exa",
+    "firecrawl",
+    "google",
+    "kagi",
+    "searx",
+    "tavily",
+    "yandex",
+    "sogou",
+    "startpage",
+    "stract",
+]
 
 openai_tts_voices = ["alloy", "echo", "fable", "onyx", "nova", "shimmer"]
 

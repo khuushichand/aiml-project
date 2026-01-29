@@ -9,6 +9,8 @@ from typing import List, Dict, Any, Optional, Tuple, Callable
 from dataclasses import dataclass
 from collections import deque
 import uuid
+import threading
+import weakref
 
 from loguru import logger
 from pydantic import BaseModel
@@ -100,6 +102,12 @@ class RequestBatcher:
             'current_timeout': self.batch_timeout_ms,
             'throughput_history': deque(maxlen=10)
         }
+        self._shutdown_requested = False
+
+        try:
+            self._loop = asyncio.get_running_loop()
+        except RuntimeError:
+            self._loop = None
 
         logger.info(
             f"Request batcher initialized: "
@@ -107,6 +115,30 @@ class RequestBatcher:
             f"max_batch_size={self.max_batch_size}, "
             f"timeout={self.batch_timeout_ms}ms"
         )
+
+    def _start_processing_task(self, queue_key: Tuple[str, str, str]) -> Optional[asyncio.Task]:
+        """Start a processing task for the queue if we're not shutting down."""
+        if self._shutdown_requested:
+            return None
+
+        new_task = asyncio.create_task(self._process_queue(queue_key))
+        self.processing_tasks[queue_key] = new_task
+        new_task.add_done_callback(
+            lambda completed, key=queue_key: self._handle_task_done(key, completed)
+        )
+        return new_task
+
+    def _handle_task_done(self, queue_key: Tuple[str, str, str], completed: asyncio.Task) -> None:
+        """Cleanup task tracking and restart processing if work arrived during idle exit."""
+        if self.processing_tasks.get(queue_key) is completed:
+            self.processing_tasks.pop(queue_key, None)
+
+        if self._shutdown_requested:
+            return
+
+        queue = self.queues.get(queue_key)
+        if queue:
+            self._start_processing_task(queue_key)
 
     async def submit_request(
         self,
@@ -128,9 +160,19 @@ class RequestBatcher:
         Returns:
             Embedding result when ready
         """
+        loop = asyncio.get_running_loop()
+        if self._loop is None:
+            self._loop = loop
+        elif self._loop is not loop:
+            raise RuntimeError(
+                "RequestBatcher used across multiple event loops; "
+                "call get_batcher() inside each loop."
+            )
+
         metadata = metadata or {}
         user_id = metadata.get("user_id")
 
+        rate_limit_applied = False
         if (
             user_id
             and getattr(self.config.security, "enable_rate_limiting", False)
@@ -141,6 +183,7 @@ class RequestBatcher:
                 tokens_units = 0
             allowed, retry_after = await self.rate_limiter.check_rate_limit_async(
                 user_id,
+                cost=1,
                 tokens_units=tokens_units,
             )
             if not allowed:
@@ -156,6 +199,7 @@ class RequestBatcher:
                 raise RuntimeError(
                     f"Rate limit exceeded for user '{user_id}'.{retry_after_msg}"
                 )
+            rate_limit_applied = True
 
         if not self.enabled:
             # Batching disabled, process immediately
@@ -165,12 +209,12 @@ class RequestBatcher:
                 self._resolve_provider_name(provider, model, config_override),
                 metadata,
                 config_override=config_override,
+                rate_limit_applied=rate_limit_applied,
             )
 
         provider = self._resolve_provider_name(provider, model, config_override)
 
         # Create request
-        loop = asyncio.get_running_loop()
         request = BatchRequest(
             request_id=str(uuid.uuid4()),
             text=text,
@@ -195,15 +239,7 @@ class RequestBatcher:
                 except Exception:
                     reason = "finished"
                 logger.debug(f"Restarting processing task for queue {self._queue_label(queue_key)}: previous task {reason}.")
-
-            new_task = asyncio.create_task(self._process_queue(queue_key))
-            self.processing_tasks[queue_key] = new_task
-
-            def _remove_task(completed: asyncio.Task, key: str = queue_key) -> None:
-                if self.processing_tasks.get(key) is completed:
-                    self.processing_tasks.pop(key, None)
-
-            new_task.add_done_callback(_remove_task)
+            self._start_processing_task(queue_key)
 
         # Add to queue
         self.queues[queue_key].append(request)
@@ -402,6 +438,7 @@ class RequestBatcher:
         provider: str,
         metadata: Optional[Dict[str, Any]] = None,
         config_override: Optional[Dict[str, Any]] = None,
+        rate_limit_applied: bool = False,
     ) -> Any:
         """
         Process a single request without batching.
@@ -442,6 +479,7 @@ class RequestBatcher:
         from tldw_Server_API.app.core.Embeddings.async_embeddings import get_async_embedding_service
         service = get_async_embedding_service()
         user_id = metadata.get("user_id")
+        effective_user_id = None if rate_limit_applied else user_id
 
         provider_candidates = []
         normalized_provider = self._normalize_provider_name(provider)
@@ -460,7 +498,7 @@ class RequestBatcher:
                     text=text,
                     model=model,
                     provider=candidate,
-                    user_id=user_id,
+                    user_id=effective_user_id,
                     use_batching=False,
                 )
             except ValueError as exc:
@@ -791,6 +829,7 @@ class RequestBatcher:
 
     async def shutdown(self):
         """Gracefully shutdown the batcher"""
+        self._shutdown_requested = True
         # Process remaining requests
         await self.flush_all_queues()
 
@@ -823,15 +862,33 @@ class RequestBatcher:
 
 
 # Global batcher instance
-_batcher: Optional[RequestBatcher] = None
+_batcher_fallback: Optional[RequestBatcher] = None
+_batchers_by_loop: "weakref.WeakKeyDictionary[asyncio.AbstractEventLoop, RequestBatcher]" = (
+    weakref.WeakKeyDictionary()
+)
+_batchers_lock = threading.Lock()
 
 
 def get_batcher() -> RequestBatcher:
     """Get or create the global batcher instance."""
-    global _batcher
-    if _batcher is None:
-        _batcher = RequestBatcher()
-    return _batcher
+    global _batcher_fallback
+    try:
+        loop = asyncio.get_running_loop()
+    except RuntimeError:
+        loop = None
+
+    with _batchers_lock:
+        if loop is not None:
+            batcher = _batchers_by_loop.get(loop)
+            if batcher is None:
+                batcher = RequestBatcher()
+                batcher._loop = loop
+                _batchers_by_loop[loop] = batcher
+            return batcher
+
+        if _batcher_fallback is None:
+            _batcher_fallback = RequestBatcher()
+        return _batcher_fallback
 
 
 def _resolve_provider_model(

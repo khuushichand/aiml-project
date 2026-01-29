@@ -5,6 +5,7 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 from tldw_Server_API.app.api.v1.endpoints.audio import router as audio_router
+from tldw_Server_API.app.api.v1.endpoints import audio as audio_endpoints
 from tldw_Server_API.app.core.AuthNZ.settings import reset_settings
 from tldw_Server_API.app.core.TTS.adapters.base import TTSResponse
 from tldw_Server_API.app.core.TTS.tts_service_v2 import TTSServiceV2
@@ -70,7 +71,7 @@ def test_custom_voice_resolution_populates_reference(client, monkeypatch):
     service._ensure_factory = AsyncMock(return_value=_FakeFactory())
     service._get_adapter = AsyncMock(return_value=_FakeAdapter())
 
-    async def _fake_get_tts_service_v2(*_args, **_kwargs):
+    async def _fake_get_tts_service_v2():
         return service
 
     monkeypatch.setattr(
@@ -79,6 +80,8 @@ def test_custom_voice_resolution_populates_reference(client, monkeypatch):
         raising=True,
     )
 
+    client.app.dependency_overrides[audio_endpoints.get_tts_service] = _fake_get_tts_service_v2
+
     payload = {
         "model": "neutts-air",
         "input": "Hello world",
@@ -86,10 +89,13 @@ def test_custom_voice_resolution_populates_reference(client, monkeypatch):
         "response_format": "pcm",
         "stream": False,
     }
-    r = client.post(
-        "/api/v1/audio/speech",
-        json=payload,
-        headers={"X-API-KEY": os.environ["SINGLE_USER_API_KEY"]},
-    )
-    assert r.status_code == 200, r.text
-    assert r.content == b"ok"
+    try:
+        r = client.post(
+            "/api/v1/audio/speech",
+            json=payload,
+            headers={"X-API-KEY": os.environ["SINGLE_USER_API_KEY"]},
+        )
+        assert r.status_code == 200, r.text
+        assert r.content == b"ok"
+    finally:
+        client.app.dependency_overrides.pop(audio_endpoints.get_tts_service, None)

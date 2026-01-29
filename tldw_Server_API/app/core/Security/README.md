@@ -1,14 +1,14 @@
 ## 1. Descriptive of Current Feature Set
 
-- Purpose: Central security controls for outbound network policy (SSRF guard), HTTP hardening headers, request ID propagation, CSP for the WebUI, URL validation for endpoints, and secret management.
+- Purpose: Central security controls for outbound network policy (SSRF guard), HTTP hardening headers, request ID propagation, CSP for the Setup UI, URL validation for endpoints, and secret management.
 - Capabilities:
   - Egress policy enforcement (allowlist/denylist, private IP blocking, port restrictions) with per-tenant helpers.
   - Hardened HTTP response headers (CSP, Permissions-Policy, HSTS opt-in, referrer policy, remove Server header).
   - Request ID middleware (sanitizes incoming X-Request-ID, generates UUID when invalid; propagates via response and request.state).
-  - CSP nonce and relaxed policies for WebUI and API docs; WebUI remote access guard with IP allowlists.
+  - CSP nonce and relaxed policies for Setup UI and API docs; Setup remote access guard with IP allowlists.
   - Secret management: retrieval, validation, caching (e.g., single-user API key, JWT secret) via config sources.
 - Related Endpoints/Middleware Wiring:
-  - Middlewares added in `main.py`: RequestID, WebUI CSP, WebUI access guard, SecurityHeaders — see tldw_Server_API/app/main.py:2429, tldw_Server_API/app/main.py:2498, tldw_Server_API/app/main.py:2503, tldw_Server_API/app/main.py:2512.
+  - Middlewares added in `main.py`: RequestID, Setup CSP, Setup access guard, SecurityHeaders — see tldw_Server_API/app/main.py.
   - URL validation helper used by endpoints (e.g., web scraping duplicate check): tldw_Server_API/app/api/v1/endpoints/web_scraping.py:320.
 - Related Schemas: N/A (security uses middleware and utility functions rather than Pydantic models).
 
@@ -23,12 +23,12 @@
 - HTTP Hardening
   - `SecurityHeadersMiddleware` sets default CSP/permissions, removes `Server`, adds HSTS when `SECURITY_ENABLE_HSTS=true` and request is HTTPS (incl. `X-Forwarded-Proto: https`): tldw_Server_API/app/core/Security/middleware.py:86.
   - Path-scoped CSP:
-    - WebUI (`/webui`, `/setup`): relaxed CSP; nonce-aware when `request.state.csp_nonce` present.
+    - Setup UI (`/setup`): relaxed CSP; nonce-aware when `request.state.csp_nonce` present.
     - API docs (`/docs`, `/redoc`): relaxed CSP allowing inline/eval and optional HTTPS CDNs.
     - Else: strict default CSP.
-  - `WebUICSPMiddleware` injects a per-request CSP nonce and tailored policy for WebUI: tldw_Server_API/app/core/Security/webui_csp.py:72.
-  - WebUI CSP eval policy: `TLDW_WEBUI_NO_EVAL` takes precedence. If present and truthy (`1|true|yes|on|y`, case-insensitive), `'unsafe-eval'` is DISABLED. If present and falsy, eval is allowed. If unset, default is no eval in production (`ENVIRONMENT|APP_ENV|ENV in {prod, production}`) and allow eval otherwise.
-  - `WebUIAccessGuardMiddleware` enforces WebUI remote access policy and IP allowlists: tldw_Server_API/app/core/Security/webui_access_guard.py:74.
+  - `SetupCSPMiddleware` injects a per-request CSP nonce and tailored policy for Setup UI: tldw_Server_API/app/core/Security/setup_csp.py:72.
+  - Setup CSP eval policy: `TLDW_SETUP_NO_EVAL` takes precedence. If present and truthy (`1|true|yes|on|y`, case-insensitive), `'unsafe-eval'` is DISABLED.
+  - `SetupAccessGuardMiddleware` enforces Setup remote access policy and IP allowlists: tldw_Server_API/app/core/Security/setup_access_guard.py:62.
 
 - Request ID Propagation
   - `RequestIDMiddleware` validates/sanitizes `X-Request-ID`, stores value on `request.state.request_id`, and returns header in responses: tldw_Server_API/app/core/Security/request_id_middleware.py:34.
@@ -42,8 +42,8 @@
 - Folder Structure
   - `egress.py`: URL policy evaluation and env-driven allow/deny controls.
   - `middleware.py`: security headers + CSP strategies.
-  - `webui_csp.py`: CSP nonce injection for WebUI.
-  - `webui_access_guard.py`: remote access guard for WebUI.
+  - `setup_csp.py`: CSP nonce injection for Setup UI.
+  - `setup_access_guard.py`: remote access guard for Setup UI.
   - `request_id_middleware.py`: request ID sanitization and echo.
   - `secret_manager.py`: secret sources, types, validation.
   - `url_validation.py`: endpoint helper to assert URL safety.

@@ -38,6 +38,7 @@ from tldw_Server_API.app.api.v1.schemas.kanban_schemas import (
 from tldw_Server_API.app.api.v1.API_Deps.kanban_deps import (
     get_kanban_db_for_user,
     handle_kanban_db_error,
+    kanban_rate_limit,
 )
 
 
@@ -59,7 +60,8 @@ def _handle_error(e: Exception) -> HTTPException:
     response_model=ChecklistResponse,
     status_code=status.HTTP_201_CREATED,
     summary="Create a new checklist",
-    description="Create a new checklist for a card."
+    description="Create a new checklist for a card.",
+    dependencies=[Depends(kanban_rate_limit("kanban.checklists.create"))]
 )
 async def create_checklist(
     card_id: int,
@@ -80,14 +82,13 @@ async def create_checklist(
         )
         return ChecklistResponse(**checklist)
     except Exception as e:
-        raise _handle_error(e)
-
-
+        raise _handle_error(e) from e
 @router.get(
     "/cards/{card_id}/checklists",
     response_model=ChecklistsListResponse,
     summary="List card checklists",
-    description="Get all checklists for a card."
+    description="Get all checklists for a card.",
+    dependencies=[Depends(kanban_rate_limit("kanban.checklists.list"))]
 )
 async def list_checklists(
     card_id: int,
@@ -100,14 +101,13 @@ async def list_checklists(
             checklists=[ChecklistResponse(**cl) for cl in checklists]
         )
     except Exception as e:
-        raise _handle_error(e)
-
-
+        raise _handle_error(e) from e
 @router.get(
     "/checklists/{checklist_id}",
     response_model=ChecklistWithItemsResponse,
     summary="Get a checklist",
-    description="Get a checklist by ID with its items."
+    description="Get a checklist by ID with its items.",
+    dependencies=[Depends(kanban_rate_limit("kanban.checklists.get"))]
 )
 async def get_checklist(
     checklist_id: int,
@@ -125,14 +125,13 @@ async def get_checklist(
     except HTTPException:
         raise
     except Exception as e:
-        raise _handle_error(e)
-
-
+        raise _handle_error(e) from e
 @router.patch(
     "/checklists/{checklist_id}",
     response_model=ChecklistResponse,
     summary="Update a checklist",
-    description="Update an existing checklist."
+    description="Update an existing checklist.",
+    dependencies=[Depends(kanban_rate_limit("kanban.checklists.update"))]
 )
 async def update_checklist(
     checklist_id: int,
@@ -151,15 +150,14 @@ async def update_checklist(
         )
         return ChecklistResponse(**checklist)
     except Exception as e:
-        raise _handle_error(e)
-
-
+        raise _handle_error(e) from e
 @router.delete(
     "/checklists/{checklist_id}",
     status_code=status.HTTP_204_NO_CONTENT,
     response_class=Response,
     summary="Delete a checklist",
-    description="Delete a checklist (hard delete). This deletes all items in the checklist."
+    description="Delete a checklist (hard delete). This deletes all items in the checklist.",
+    dependencies=[Depends(kanban_rate_limit("kanban.checklists.delete"))]
 )
 async def delete_checklist(
     checklist_id: int,
@@ -177,14 +175,13 @@ async def delete_checklist(
     except HTTPException:
         raise
     except Exception as e:
-        raise _handle_error(e)
-
-
+        raise _handle_error(e) from e
 @router.post(
     "/cards/{card_id}/checklists/reorder",
     response_model=ChecklistsListResponse,
     summary="Reorder checklists",
-    description="Reorder checklists on a card."
+    description="Reorder checklists on a card.",
+    dependencies=[Depends(kanban_rate_limit("kanban.checklists.reorder"))]
 )
 async def reorder_checklists(
     card_id: int,
@@ -205,9 +202,7 @@ async def reorder_checklists(
             checklists=[ChecklistResponse(**cl) for cl in checklists]
         )
     except Exception as e:
-        raise _handle_error(e)
-
-
+        raise _handle_error(e) from e
 # =============================================================================
 # Checklist Item CRUD Endpoints
 # =============================================================================
@@ -217,7 +212,8 @@ async def reorder_checklists(
     response_model=ChecklistItemResponse,
     status_code=status.HTTP_201_CREATED,
     summary="Create a checklist item",
-    description="Create a new item in a checklist."
+    description="Create a new item in a checklist.",
+    dependencies=[Depends(kanban_rate_limit("kanban.checklist_items.create"))]
 )
 async def create_checklist_item(
     checklist_id: int,
@@ -240,14 +236,13 @@ async def create_checklist_item(
         )
         return ChecklistItemResponse(**item)
     except Exception as e:
-        raise _handle_error(e)
-
-
+        raise _handle_error(e) from e
 @router.get(
     "/checklists/{checklist_id}/items",
     response_model=ChecklistItemsListResponse,
     summary="List checklist items",
-    description="Get all items in a checklist."
+    description="Get all items in a checklist.",
+    dependencies=[Depends(kanban_rate_limit("kanban.checklist_items.list"))]
 )
 async def list_checklist_items(
     checklist_id: int,
@@ -260,14 +255,13 @@ async def list_checklist_items(
             items=[ChecklistItemResponse(**item) for item in items]
         )
     except Exception as e:
-        raise _handle_error(e)
-
-
+        raise _handle_error(e) from e
 @router.get(
     "/checklist-items/{item_id}",
     response_model=ChecklistItemResponse,
     summary="Get a checklist item",
-    description="Get a checklist item by ID."
+    description="Get a checklist item by ID.",
+    dependencies=[Depends(kanban_rate_limit("kanban.checklist_items.get"))]
 )
 async def get_checklist_item(
     item_id: int,
@@ -285,14 +279,13 @@ async def get_checklist_item(
     except HTTPException:
         raise
     except Exception as e:
-        raise _handle_error(e)
-
-
+        raise _handle_error(e) from e
 @router.patch(
     "/checklist-items/{item_id}",
     response_model=ChecklistItemResponse,
     summary="Update a checklist item",
-    description="Update a checklist item (name and/or checked status)."
+    description="Update a checklist item (name and/or checked status).",
+    dependencies=[Depends(kanban_rate_limit("kanban.checklist_items.update"))]
 )
 async def update_checklist_item(
     item_id: int,
@@ -313,15 +306,14 @@ async def update_checklist_item(
         )
         return ChecklistItemResponse(**item)
     except Exception as e:
-        raise _handle_error(e)
-
-
+        raise _handle_error(e) from e
 @router.delete(
     "/checklist-items/{item_id}",
     status_code=status.HTTP_204_NO_CONTENT,
     response_class=Response,
     summary="Delete a checklist item",
-    description="Delete a checklist item (hard delete)."
+    description="Delete a checklist item (hard delete).",
+    dependencies=[Depends(kanban_rate_limit("kanban.checklist_items.delete"))]
 )
 async def delete_checklist_item(
     item_id: int,
@@ -339,14 +331,13 @@ async def delete_checklist_item(
     except HTTPException:
         raise
     except Exception as e:
-        raise _handle_error(e)
-
-
+        raise _handle_error(e) from e
 @router.post(
     "/checklists/{checklist_id}/items/reorder",
     response_model=ChecklistItemsListResponse,
     summary="Reorder checklist items",
-    description="Reorder items in a checklist."
+    description="Reorder items in a checklist.",
+    dependencies=[Depends(kanban_rate_limit("kanban.checklist_items.reorder"))]
 )
 async def reorder_checklist_items(
     checklist_id: int,
@@ -367,9 +358,7 @@ async def reorder_checklist_items(
             items=[ChecklistItemResponse(**item) for item in items]
         )
     except Exception as e:
-        raise _handle_error(e)
-
-
+        raise _handle_error(e) from e
 # =============================================================================
 # Convenience Endpoints
 # =============================================================================
@@ -378,7 +367,8 @@ async def reorder_checklist_items(
     "/checklist-items/{item_id}/check",
     response_model=ChecklistItemResponse,
     summary="Check an item",
-    description="Mark a checklist item as checked."
+    description="Mark a checklist item as checked.",
+    dependencies=[Depends(kanban_rate_limit("kanban.checklist_items.update"))]
 )
 async def check_item(
     item_id: int,
@@ -389,14 +379,13 @@ async def check_item(
         item = db.update_checklist_item(item_id=item_id, checked=True)
         return ChecklistItemResponse(**item)
     except Exception as e:
-        raise _handle_error(e)
-
-
+        raise _handle_error(e) from e
 @router.post(
     "/checklist-items/{item_id}/uncheck",
     response_model=ChecklistItemResponse,
     summary="Uncheck an item",
-    description="Mark a checklist item as unchecked."
+    description="Mark a checklist item as unchecked.",
+    dependencies=[Depends(kanban_rate_limit("kanban.checklist_items.update"))]
 )
 async def uncheck_item(
     item_id: int,
@@ -407,14 +396,13 @@ async def uncheck_item(
         item = db.update_checklist_item(item_id=item_id, checked=False)
         return ChecklistItemResponse(**item)
     except Exception as e:
-        raise _handle_error(e)
-
-
+        raise _handle_error(e) from e
 @router.post(
     "/checklists/{checklist_id}/toggle-all",
     response_model=ChecklistWithItemsResponse,
     summary="Toggle all checklist items",
-    description="Check or uncheck all items in a checklist."
+    description="Check or uncheck all items in a checklist.",
+    dependencies=[Depends(kanban_rate_limit("kanban.checklist_items.toggle_all"))]
 )
 async def toggle_all_checklist_items(
     checklist_id: int,
@@ -433,4 +421,4 @@ async def toggle_all_checklist_items(
         )
         return ChecklistWithItemsResponse(**checklist)
     except Exception as e:
-        raise _handle_error(e)
+        raise _handle_error(e) from e

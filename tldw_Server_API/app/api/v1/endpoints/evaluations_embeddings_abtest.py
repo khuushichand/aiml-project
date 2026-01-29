@@ -138,6 +138,8 @@ async def run_embeddings_abtest(
     enforce_heavy_evaluations_admin(principal)
     svc = get_unified_evaluation_service_for_user(current_user.id)
     db = svc.db
+    if not db.get_abtest(test_id, created_by=user_ctx):
+        raise HTTPException(status_code=404, detail="abtest not found")
     if idempotency_key:
         try:
             prior = db.lookup_idempotency("emb_abtest_run", idempotency_key, user_ctx)
@@ -167,6 +169,7 @@ async def run_embeddings_abtest(
                 test_id,
                 'failed',
                 stats_json={"error": str(exc), "policy": exc.details, "status_code": exc.status_code},
+                created_by=user_ctx,
             )
         except Exception:
             pass
@@ -182,7 +185,7 @@ async def run_embeddings_abtest(
     if testing:
         logger.info(f"A/B test running synchronously in TESTING mode: {test_id}")
         try:
-            db.set_abtest_status(test_id, 'running', stats_json={"progress": {"phase": 0.01}})
+            db.set_abtest_status(test_id, 'running', stats_json={"progress": {"phase": 0.01}}, created_by=user_ctx)
         except Exception:
             pass
         log_run_started(
@@ -207,7 +210,7 @@ async def run_embeddings_abtest(
             pass
         if run_error is not None:
             try:
-                db.set_abtest_status(test_id, 'failed', stats_json={"error": str(run_error)})
+                db.set_abtest_status(test_id, 'failed', stats_json={"error": str(run_error)}, created_by=user_ctx)
             except Exception:
                 pass
             return EmbeddingsABTestStatusResponse(test_id=test_id, status='failed', progress={"phase": 0.0})
@@ -236,6 +239,7 @@ async def run_embeddings_abtest(
                 test_id,
                 'running',
                 stats_json={"progress": {"phase": 0.01}, "job_id": job_ref},
+                created_by=user_ctx,
             )
         except Exception:
             pass
@@ -266,7 +270,7 @@ async def get_embeddings_abtest_status(
     current_user: User = Depends(get_eval_request_user),  # noqa: B008
 ):
     svc = get_unified_evaluation_service_for_user(current_user.id)
-    row = svc.db.get_abtest(test_id)
+    row = svc.db.get_abtest(test_id, created_by=user_ctx)
     if not row:
         raise HTTPException(status_code=404, detail="abtest not found")
     status_val = row.get('status', 'pending')
@@ -276,7 +280,7 @@ async def get_embeddings_abtest_status(
         aggregates = stats_json.get('aggregates') or {}
     except Exception:
         aggregates = {}
-    arms_rows = svc.db.get_abtest_arms(test_id)
+    arms_rows = svc.db.get_abtest_arms(test_id, created_by=user_ctx)
     arms = []
     for ar in arms_rows:
         metrics = aggregates.get(ar['arm_id']) or {}
@@ -341,8 +345,8 @@ async def get_embeddings_abtest_results(
         return out
 
     svc = get_unified_evaluation_service_for_user(current_user.id)
-    rows, total = svc.db.list_abtest_results(test_id, limit=page_size, offset=(page-1)*page_size)
-    row = svc.db.get_abtest(test_id)
+    rows, total = svc.db.list_abtest_results(test_id, limit=page_size, offset=(page-1)*page_size, created_by=user_ctx)
+    row = svc.db.get_abtest(test_id, created_by=user_ctx)
     if not row:
         raise HTTPException(status_code=404, detail="abtest not found")
     status_val = row.get('status', 'pending')
@@ -352,7 +356,7 @@ async def get_embeddings_abtest_results(
         aggregates = stats_json.get('aggregates') or {}
     except Exception:
         aggregates = {}
-    arms_rows = svc.db.get_abtest_arms(test_id)
+    arms_rows = svc.db.get_abtest_arms(test_id, created_by=user_ctx)
     arms = []
     for ar in arms_rows:
         metrics = aggregates.get(ar['arm_id']) or {}
@@ -410,5 +414,5 @@ async def get_embeddings_abtest_significance(
     current_user: User = Depends(get_eval_request_user),  # noqa: B008
 ):
     svc = get_unified_evaluation_service_for_user(current_user.id)
-    _ = svc.db.get_abtest(test_id) or (_ for _ in ()).throw(HTTPException(404, "abtest not found"))
+    _ = svc.db.get_abtest(test_id, created_by=user_ctx) or (_ for _ in ()).throw(HTTPException(404, "abtest not found"))
     return compute_significance(svc.db, test_id, metric=metric)

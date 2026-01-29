@@ -4,7 +4,7 @@
  * Tests the provider model catalog used in the admin panel for model selection.
  */
 
-import { describe, it, expect } from '@jest/globals';
+import { describe, it, expect } from 'vitest';
 import {
   PROVIDER_MODELS,
   PROVIDERS,
@@ -99,31 +99,29 @@ describe('Provider Models Catalog', () => {
       const models = PROVIDER_MODELS.anthropic.models;
       const modelValues = models.map(m => m.value);
 
-      expect(modelValues).toContain('claude-opus-4-1');
-      expect(modelValues).toContain('claude-opus-4');
+      expect(modelValues).toContain('claude-opus-4-20250514');
     });
 
     it('should have Claude Sonnet 4 models', () => {
       const models = PROVIDER_MODELS.anthropic.models;
       const modelValues = models.map(m => m.value);
 
-      expect(modelValues).toContain('claude-sonnet-4-5');
-      expect(modelValues).toContain('claude-sonnet-4');
-      expect(modelValues).toContain('claude-sonnet-3-7');
+      expect(modelValues).toContain('claude-sonnet-4-20250514');
+      expect(modelValues).toContain('claude-sonnet-4-20241022');
+      expect(modelValues).toContain('claude-3-5-sonnet-20241022');
     });
 
     it('should have Claude Haiku models', () => {
       const models = PROVIDER_MODELS.anthropic.models;
       const modelValues = models.map(m => m.value);
 
-      expect(modelValues).toContain('claude-haiku-4-5');
-      expect(modelValues).toContain('claude-haiku-3-5');
-      expect(modelValues).toContain('claude-haiku-3');
+      expect(modelValues).toContain('claude-haiku-4-20250514');
+      expect(modelValues).toContain('claude-3-5-haiku-20241022');
     });
 
     it('should have accurate pricing for Claude Sonnet 4.5', () => {
       const sonnet45 = PROVIDER_MODELS.anthropic.models.find(
-        m => m.value === 'claude-sonnet-4-5'
+        m => m.value === 'claude-sonnet-4-20250514'
       );
       expect(sonnet45).toBeDefined();
       expect(sonnet45?.defaultInputPrice).toBe(3.0);
@@ -180,19 +178,19 @@ describe('Provider Models Catalog', () => {
       const models = PROVIDER_MODELS.fireworks.models;
       const modelValues = models.map(m => m.value);
 
-      expect(modelValues).toContain('llama-v3p3-70b-instruct');
-      expect(modelValues).toContain('llama-v3p1-405b-instruct');
-      expect(modelValues).toContain('llama-v3p1-70b-instruct');
-      expect(modelValues).toContain('llama-v3p1-8b-instruct');
+      expect(modelValues).toContain('accounts/fireworks/models/llama-v3p3-70b-instruct');
+      expect(modelValues).toContain('accounts/fireworks/models/llama-v3p1-405b-instruct');
+      expect(modelValues).toContain('accounts/fireworks/models/llama-v3p1-70b-instruct');
+      expect(modelValues).toContain('accounts/fireworks/models/llama-v3p1-8b-instruct');
     });
 
-    it('should have DeepSeek R1 reasoning model', () => {
+    it('should have DeepSeek reasoning model', () => {
       const models = PROVIDER_MODELS.fireworks.models;
       const modelValues = models.map(m => m.value);
 
-      expect(modelValues).toContain('deepseek-r1');
+      expect(modelValues).toContain('accounts/fireworks/models/deepseek-v3p1');
 
-      const deepseek = models.find(m => m.value === 'deepseek-r1');
+      const deepseek = models.find(m => m.value === 'accounts/fireworks/models/deepseek-v3p1');
       expect(deepseek?.description).toContain('Reasoning');
     });
 
@@ -200,28 +198,28 @@ describe('Provider Models Catalog', () => {
       const models = PROVIDER_MODELS.fireworks.models;
       const modelValues = models.map(m => m.value);
 
-      expect(modelValues).toContain('qwen2p5-72b-instruct');
+      expect(modelValues).toContain('accounts/fireworks/models/qwen2p5-72b-instruct');
     });
 
     it('should have Mixtral models', () => {
       const models = PROVIDER_MODELS.fireworks.models;
       const modelValues = models.map(m => m.value);
 
-      expect(modelValues).toContain('mixtral-8x22b-instruct');
-      expect(modelValues).toContain('mixtral-8x7b-instruct');
+      expect(modelValues).toContain('accounts/fireworks/models/mixtral-8x22b-instruct');
+      expect(modelValues).toContain('accounts/fireworks/models/mixtral-8x7b-instruct');
     });
 
     it('should have vision models', () => {
       const models = PROVIDER_MODELS.fireworks.models;
       const modelValues = models.map(m => m.value);
 
-      expect(modelValues).toContain('phi-3-vision-128k-instruct');
-      expect(modelValues).toContain('firellava-13b');
+      expect(modelValues).toContain('accounts/fireworks/models/phi-3-vision-128k-instruct');
+      expect(modelValues).toContain('accounts/fireworks/models/firellava-13b');
     });
 
     it('should have accurate pricing', () => {
       const llama33 = PROVIDER_MODELS.fireworks.models.find(
-        m => m.value === 'llama-v3p3-70b-instruct'
+        m => m.value === 'accounts/fireworks/models/llama-v3p3-70b-instruct'
       );
       expect(llama33).toBeDefined();
       expect(llama33?.defaultInputPrice).toBe(0.9);
@@ -328,7 +326,7 @@ describe('Provider Models Catalog', () => {
       expect(gpt5?.defaultOutputPrice).toBe(10.0);
 
       // Claude Opus 4.1: $15.00 input, $75.00 output per 1M tokens
-      const opus41 = getModel('anthropic', 'claude-opus-4-1');
+      const opus41 = getModel('anthropic', 'claude-opus-4-20250514');
       expect(opus41?.defaultInputPrice).toBe(15.0);
       expect(opus41?.defaultOutputPrice).toBe(75.0);
 
@@ -338,7 +336,7 @@ describe('Provider Models Catalog', () => {
       expect(gemini25flash?.defaultOutputPrice).toBe(0.3);
 
       // DeepSeek R1: $0.90 input/output per 1M tokens
-      const deepseek = getModel('fireworks', 'deepseek-r1');
+      const deepseek = getModel('fireworks', 'accounts/fireworks/models/deepseek-v3p1');
       expect(deepseek?.defaultInputPrice).toBe(0.9);
       expect(deepseek?.defaultOutputPrice).toBe(0.9);
     });

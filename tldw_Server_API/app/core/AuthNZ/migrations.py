@@ -1076,6 +1076,142 @@ def migration_049_add_llm_usage_log_key_ts_index(conn: sqlite3.Connection) -> No
     logger.info("Migration 049: Added llm_usage_log key_id + ts index")
 
 
+def migration_050_create_generated_files_table(conn: sqlite3.Connection) -> None:
+    """Create generated_files table for tracking user-generated content files.
+
+    Tracks: TTS audio, images, voice clones, mindmaps, spreadsheets.
+    Supports virtual folders via tags and soft delete with retention policies.
+    """
+    logger.info("Migration 050: START generated_files table")
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS generated_files (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            uuid TEXT UNIQUE NOT NULL,
+
+            -- Ownership
+            user_id INTEGER NOT NULL,
+            org_id INTEGER,
+            team_id INTEGER,
+
+            -- File metadata
+            filename TEXT NOT NULL,
+            original_filename TEXT,
+            storage_path TEXT NOT NULL,
+            mime_type TEXT,
+            file_size_bytes INTEGER NOT NULL DEFAULT 0,
+            checksum TEXT,
+
+            -- Classification
+            file_category TEXT NOT NULL,
+            source_feature TEXT NOT NULL,
+            source_ref TEXT,
+
+            -- Organization (virtual folders via tags)
+            folder_tag TEXT,
+            tags TEXT,
+
+            -- Lifecycle
+            is_transient INTEGER DEFAULT 0,
+            expires_at TIMESTAMP,
+            retention_policy TEXT DEFAULT 'user_default',
+
+            -- Soft delete
+            is_deleted INTEGER DEFAULT 0,
+            deleted_at TIMESTAMP,
+
+            -- Timestamps
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            accessed_at TIMESTAMP,
+
+            FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
+            FOREIGN KEY (org_id) REFERENCES organizations(id) ON DELETE SET NULL,
+            FOREIGN KEY (team_id) REFERENCES teams(id) ON DELETE SET NULL
+        )
+        """
+    )
+
+    # Indexes for common query patterns
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_generated_files_user_id ON generated_files(user_id)")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_generated_files_org_id ON generated_files(org_id)")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_generated_files_team_id ON generated_files(team_id)")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_generated_files_uuid ON generated_files(uuid)")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_generated_files_category ON generated_files(file_category)")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_generated_files_source_feature ON generated_files(source_feature)")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_generated_files_folder_tag ON generated_files(folder_tag)")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_generated_files_is_deleted ON generated_files(is_deleted)")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_generated_files_expires_at ON generated_files(expires_at)")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_generated_files_created_at ON generated_files(created_at)")
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_generated_files_user_category "
+        "ON generated_files(user_id, file_category, is_deleted)"
+    )
+
+    conn.commit()
+    logger.info("Migration 050: Created generated_files table with indexes")
+
+
+def rollback_050_drop_generated_files_table(conn: sqlite3.Connection) -> None:
+    """Rollback migration 050 by dropping generated_files table."""
+    conn.execute("DROP TABLE IF EXISTS generated_files")
+    conn.commit()
+    logger.info("Rollback 050: Dropped generated_files table")
+
+
+def migration_051_create_storage_quotas_table(conn: sqlite3.Connection) -> None:
+    """Create storage_quotas table for team/org-level quota management.
+
+    Provides shared pool quotas for teams and organizations.
+    User quotas are stored on the users table (storage_quota_mb, storage_used_mb).
+    """
+    logger.info("Migration 051: START storage_quotas table")
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS storage_quotas (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            org_id INTEGER,
+            team_id INTEGER,
+            quota_mb INTEGER NOT NULL DEFAULT 10240,
+            used_mb REAL DEFAULT 0,
+            soft_limit_pct INTEGER DEFAULT 80,
+            hard_limit_pct INTEGER DEFAULT 100,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+
+            FOREIGN KEY (org_id) REFERENCES organizations(id) ON DELETE CASCADE,
+            FOREIGN KEY (team_id) REFERENCES teams(id) ON DELETE CASCADE,
+
+            CHECK ((org_id IS NOT NULL AND team_id IS NULL) OR
+                   (org_id IS NULL AND team_id IS NOT NULL) OR
+                   (org_id IS NULL AND team_id IS NULL))
+        )
+        """
+    )
+
+    # Indexes
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_storage_quotas_org_id ON storage_quotas(org_id)")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_storage_quotas_team_id ON storage_quotas(team_id)")
+    conn.execute(
+        "CREATE UNIQUE INDEX IF NOT EXISTS idx_storage_quotas_org_unique "
+        "ON storage_quotas(org_id) WHERE org_id IS NOT NULL"
+    )
+    conn.execute(
+        "CREATE UNIQUE INDEX IF NOT EXISTS idx_storage_quotas_team_unique "
+        "ON storage_quotas(team_id) WHERE team_id IS NOT NULL"
+    )
+
+    conn.commit()
+    logger.info("Migration 051: Created storage_quotas table with indexes")
+
+
+def rollback_051_drop_storage_quotas_table(conn: sqlite3.Connection) -> None:
+    """Rollback migration 051 by dropping storage_quotas table."""
+    conn.execute("DROP TABLE IF EXISTS storage_quotas")
+    conn.commit()
+    logger.info("Rollback 051: Dropped storage_quotas table")
+
+
 def migration_022_create_tool_catalogs(conn: sqlite3.Connection) -> None:
     """Create tables for MCP tool catalogs (SQLite)."""
     # tool_catalogs: scoped by (org_id, team_id) with name unique per scope
@@ -1387,67 +1523,119 @@ def migration_030_create_subscription_plans(conn: sqlite3.Connection) -> None:
         {
             "name": "free",
             "display_name": "Free",
-            "description": "Get started with basic features",
+            "description": "Internal/default plan (not publicly listed)",
             "price_usd_monthly": 0,
             "price_usd_yearly": 0,
             "sort_order": 0,
+            "is_public": 0,
             "limits_json": json.dumps({
                 "storage_mb": 1024,
                 "api_calls_day": 100,
                 "api_calls_month": 3000,
                 "llm_tokens_day": 10000,
                 "llm_tokens_month": 300000,
-                "llm_cost_month_usd": 0,
                 "transcription_minutes_month": 10,
                 "rag_queries_day": 50,
                 "concurrent_jobs": 1,
                 "team_members": 1,
                 "rate_limit_rpm": 10,
-                "features": ["basic_search", "fts5_search", "basic_chat"]
+                "features": ["basic_search", "basic_chat"]
+            })
+        },
+        {
+            "name": "starter",
+            "display_name": "Starter",
+            "description": "For individuals getting started",
+            "price_usd_monthly": 10,
+            "price_usd_yearly": 100,
+            "sort_order": 1,
+            "is_public": 1,
+            "limits_json": json.dumps({
+                "storage_mb": 2048,
+                "api_calls_day": 1000,
+                "api_calls_month": 30000,
+                "llm_tokens_month": 4000000,
+                "llm_tokens_premium_month": 80000,
+                "max_context_tokens": 64000,
+                "byok_enabled": True,
+                "byok_keys_saved": 1,
+                "notebooks": 100,
+                "sources_per_notebook": 50,
+                "ingestion_pages_month": 2000,
+                "ingestion_pages_day": 150,
+                "scheduled_refresh": "manual",
+                "max_upload_mb": 50,
+                "transcription_minutes_month": 120,
+                "tts_minutes_month": 30,
+                "rag_queries_day": 1000,
+                "concurrent_jobs": 2,
+                "team_members": 1,
+                "rate_limit_rpm": 20,
+                "features": ["basic_search", "basic_chat", "byok"]
+            })
+        },
+        {
+            "name": "plus",
+            "display_name": "Plus",
+            "description": "For power users who need more capacity",
+            "price_usd_monthly": 20,
+            "price_usd_yearly": 200,
+            "sort_order": 2,
+            "is_public": 1,
+            "limits_json": json.dumps({
+                "storage_mb": 10240,
+                "api_calls_day": 5000,
+                "api_calls_month": 150000,
+                "llm_tokens_month": 12000000,
+                "llm_tokens_premium_month": 200000,
+                "max_context_tokens": 128000,
+                "byok_enabled": True,
+                "byok_keys_saved": 3,
+                "notebooks": 300,
+                "sources_per_notebook": 100,
+                "ingestion_pages_month": 10000,
+                "ingestion_pages_day": 750,
+                "scheduled_refresh": "weekly",
+                "max_upload_mb": 200,
+                "transcription_minutes_month": 300,
+                "tts_minutes_month": 90,
+                "rag_queries_day": 5000,
+                "concurrent_jobs": 5,
+                "team_members": 1,
+                "rate_limit_rpm": 60,
+                "features": ["*", "byok", "rag_advanced", "vector_search"]
             })
         },
         {
             "name": "pro",
             "display_name": "Pro",
-            "description": "For power users and small teams",
-            "price_usd_monthly": 29,
-            "price_usd_yearly": 290,
-            "sort_order": 1,
+            "description": "For teams and professional usage",
+            "price_usd_monthly": 30,
+            "price_usd_yearly": 300,
+            "sort_order": 3,
+            "is_public": 1,
             "limits_json": json.dumps({
-                "storage_mb": 10240,
-                "api_calls_day": 5000,
-                "api_calls_month": 150000,
-                "llm_tokens_day": 500000,
-                "llm_tokens_month": 15000000,
-                "llm_cost_month_usd": 50,
-                "transcription_minutes_month": 300,
-                "rag_queries_day": 500,
-                "concurrent_jobs": 5,
+                "storage_mb": 30720,
+                "api_calls_day": 15000,
+                "api_calls_month": 450000,
+                "llm_tokens_month": 18000000,
+                "llm_tokens_premium_month": 300000,
+                "max_context_tokens": 200000,
+                "byok_enabled": True,
+                "byok_keys_saved": 10,
+                "notebooks": 1000,
+                "sources_per_notebook": 300,
+                "ingestion_pages_month": 30000,
+                "ingestion_pages_day": 2000,
+                "scheduled_refresh": "daily",
+                "max_upload_mb": 500,
+                "transcription_minutes_month": 500,
+                "tts_minutes_month": 150,
+                "rag_queries_day": 15000,
+                "concurrent_jobs": 10,
                 "team_members": 5,
                 "rate_limit_rpm": 120,
-                "features": ["*", "rag_advanced", "vector_search", "priority_support"]
-            })
-        },
-        {
-            "name": "enterprise",
-            "display_name": "Enterprise",
-            "description": "For organizations with advanced needs",
-            "price_usd_monthly": 199,
-            "price_usd_yearly": 1990,
-            "sort_order": 2,
-            "limits_json": json.dumps({
-                "storage_mb": 102400,
-                "api_calls_day": 50000,
-                "api_calls_month": 1500000,
-                "llm_tokens_day": 5000000,
-                "llm_tokens_month": 150000000,
-                "llm_cost_month_usd": 500,
-                "transcription_minutes_month": 3000,
-                "rag_queries_day": 5000,
-                "concurrent_jobs": 20,
-                "team_members": -1,
-                "rate_limit_rpm": 600,
-                "features": ["*", "sso", "audit_logs", "dedicated_support", "custom_models"]
+                "features": ["*", "byok", "rag_advanced", "vector_search", "priority_support", "audit_logs"]
             })
         }
     ]
@@ -1456,11 +1644,11 @@ def migration_030_create_subscription_plans(conn: sqlite3.Connection) -> None:
         conn.execute(
             """
             INSERT OR IGNORE INTO subscription_plans
-            (name, display_name, description, price_usd_monthly, price_usd_yearly, limits_json, sort_order)
-            VALUES (?, ?, ?, ?, ?, ?, ?)
+            (name, display_name, description, price_usd_monthly, price_usd_yearly, limits_json, sort_order, is_public)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (plan["name"], plan["display_name"], plan["description"],
-             plan["price_usd_monthly"], plan["price_usd_yearly"], plan["limits_json"], plan["sort_order"])
+             plan["price_usd_monthly"], plan["price_usd_yearly"], plan["limits_json"], plan["sort_order"], plan.get("is_public", 1))
         )
 
     conn.commit()
@@ -2413,6 +2601,18 @@ def get_authnz_migrations() -> List[Migration]:
             49,
             "Add llm_usage_log key_id + ts index",
             migration_049_add_llm_usage_log_key_ts_index,
+        ),
+        Migration(
+            50,
+            "Create generated_files table",
+            migration_050_create_generated_files_table,
+            rollback_050_drop_generated_files_table,
+        ),
+        Migration(
+            51,
+            "Create storage_quotas table",
+            migration_051_create_storage_quotas_table,
+            rollback_051_drop_storage_quotas_table,
         ),
     ]
 

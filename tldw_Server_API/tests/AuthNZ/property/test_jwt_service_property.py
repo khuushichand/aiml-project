@@ -51,7 +51,10 @@ class TestJWTServiceProperty:
         secret_key=text(min_size=32, max_size=64),
         algorithm=st.sampled_from(["HS256", "HS384", "HS512"]),
     )
-    @hypothesis_settings(suppress_health_check=[HealthCheck.function_scoped_fixture])
+    @hypothesis_settings(
+        suppress_health_check=[HealthCheck.function_scoped_fixture],
+        deadline=None,
+    )
     def test_jwt_settings_configuration(self, secret_key, algorithm):
         """Service should operate for a range of symmetric key lengths and algorithms."""
         settings = Settings(

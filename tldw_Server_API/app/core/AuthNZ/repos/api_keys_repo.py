@@ -7,7 +7,7 @@ import json
 
 from loguru import logger
 
-from tldw_Server_API.app.core.AuthNZ.database import DatabasePool
+from tldw_Server_API.app.core.AuthNZ.database import DatabasePool, build_sqlite_in_clause
 
 
 @dataclass
@@ -95,7 +95,9 @@ class AuthnzApiKeysRepo:
                 )
             else:
                 # SQLite path: emulate ANY with an IN (...) clause
-                placeholders = ",".join("?" for _ in hash_candidates)
+                # SECURITY: Using build_sqlite_in_clause helper to safely generate
+                # parameterized placeholders - see database.py for implementation details
+                placeholders, hash_params = build_sqlite_in_clause(hash_candidates)
                 query = f"""
                     SELECT id, user_id, name, scope, status, expires_at,
                            rate_limit, allowed_ips, usage_count, key_hash,
@@ -110,7 +112,7 @@ class AuthnzApiKeysRepo:
                     ORDER BY created_at DESC
                     LIMIT 1
                     """
-                params = (*hash_candidates, "active")
+                params = (*hash_params, "active")
                 row = await self.db_pool.fetchone(query, params)
 
             if not row:
@@ -487,6 +489,7 @@ class AuthnzApiKeysRepo:
         expires_at: Optional[datetime],
         org_id: Optional[int],
         team_id: Optional[int],
+        scope: Optional[str],
         allowed_endpoints: Optional[List[str]],
         allowed_providers: Optional[List[str]],
         allowed_models: Optional[List[str]],
@@ -518,6 +521,8 @@ class AuthnzApiKeysRepo:
                 meta_dict["max_calls"] = int(max_calls)
             if max_runs is not None:
                 meta_dict["max_runs"] = int(max_runs)
+
+            scope_value = str(scope).strip().lower() if scope else "read"
 
             async with self.db_pool.transaction() as conn:
                 if hasattr(conn, "fetchval"):
@@ -586,7 +591,7 @@ class AuthnzApiKeysRepo:
                             key_prefix,
                             name,
                             description,
-                            "read",
+                            scope_value,
                             expires_at_param,
                             parent_key_id,
                             org_id,
@@ -623,7 +628,7 @@ class AuthnzApiKeysRepo:
                             key_prefix,
                             name,
                             description,
-                            "read",
+                            scope_value,
                             expires_at_param,
                             parent_key_id,
                             org_id,
@@ -660,7 +665,7 @@ class AuthnzApiKeysRepo:
                             key_prefix,
                             name,
                             description,
-                            "read",
+                            scope_value,
                             expires_at.isoformat() if expires_at else None,
                             parent_key_id,
                             org_id,

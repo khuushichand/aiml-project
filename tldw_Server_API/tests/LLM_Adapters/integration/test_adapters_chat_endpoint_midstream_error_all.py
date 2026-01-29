@@ -19,6 +19,8 @@ from tldw_Server_API.tests._plugins import chat_fixtures as _chat_pl  # noqa: F4
 def _enable(monkeypatch):
     monkeypatch.setenv("STREAMS_UNIFIED", "1")
     monkeypatch.setenv("LOGURU_LEVEL", "ERROR")
+    # Disable moderation holdback buffering so early chunks are observable.
+    monkeypatch.setenv("MODERATION_STREAM_BUFFER_CHARS", "0")
     monkeypatch.delenv("TEST_MODE", raising=False)
     yield
 

@@ -154,10 +154,10 @@ Org invites (separate system) should store:
 - allowed_email_domain (optional)
 
 ## UX Details
-- "Copy invite link" uses the configured Web UI base URL plus `/webui/auth.html?code=XXXX`.
-- "Copy acceptance link" uses `/webui/accept-invite.html?code=XXXX` when accepting into an existing account.
-- "Copy redeem link" for org invites uses `/webui/redeem-invite.html?code=XXXX`.
-- Web UI base URL is configurable via `Server.webui_base_url` or `TLDW_WEBUI_BASE_URL`.
+- "Copy invite link" uses the configured Web UI base URL plus the Next.js login/registration flow with `?code=XXXX`.
+- "Copy acceptance link" targets the Next.js WebUI invite acceptance flow.
+- "Copy redeem link" for org invites targets the Next.js WebUI invite redemption flow.
+- Web UI base URL is configurable via deployment settings (for example, `QUICKSTART_URL` or the frontend's public base URL).
 - If registration is disabled, the UI shows a warning and disables code creation.
 - Revoke action is destructive and requires confirmation.
 - List defaults to active codes; expired/inactive are dimmed if shown.

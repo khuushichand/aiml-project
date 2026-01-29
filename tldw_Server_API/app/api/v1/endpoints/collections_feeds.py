@@ -203,6 +203,10 @@ def _load_job(db: WatchlistsDatabase, settings: Dict[str, Any]):
     job_id = _extract_job_id(settings)
     if not job_id:
         return None
+    try:
+        return db.get_job(int(job_id))
+    except Exception:
+        return None
 
 
 def _merge_settings(existing: Dict[str, Any], updates: Dict[str, Any]) -> Dict[str, Any]:

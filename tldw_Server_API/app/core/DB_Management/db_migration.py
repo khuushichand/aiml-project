@@ -40,13 +40,15 @@ class Migration:
         name: str,
         up_sql: str,
         down_sql: Optional[str] = None,
-        description: str = ""
+        description: str = "",
+        idempotent: bool = False
     ):
         self.version = version
         self.name = name
         self.up_sql = up_sql
         self.down_sql = down_sql
         self.description = description
+        self.idempotent = idempotent
         self.checksum = self._calculate_checksum()
 
     def _calculate_checksum(self) -> str:
@@ -63,7 +65,8 @@ class Migration:
             "description": self.description,
             "checksum": self.checksum,
             "up_sql": self.up_sql,
-            "down_sql": self.down_sql
+            "down_sql": self.down_sql,
+            "idempotent": self.idempotent,
         }
 
     @classmethod
@@ -77,12 +80,18 @@ class Migration:
             name=data["name"],
             up_sql=data["up_sql"],
             down_sql=data.get("down_sql"),
-            description=data.get("description", "")
+            description=data.get("description", ""),
+            idempotent=bool(data.get("idempotent", False)),
         )
 
 
 class DatabaseMigrator:
     """Handles database migrations for on-disk SQLite databases"""
+
+    _ADD_COLUMN_RE = re.compile(
+        r"^\s*ALTER\s+TABLE\s+(?P<table>[A-Za-z0-9_]+)\s+ADD\s+COLUMN\s+(?P<column>[A-Za-z0-9_]+)\b",
+        re.IGNORECASE,
+    )
 
     def __init__(self, db_path: str, migrations_dir: Optional[str] = None):
         if self._is_memory_db_path(db_path):
@@ -110,6 +119,18 @@ class DatabaseMigrator:
         # Backup directory
         self.backup_dir = str(self._db_dir / "backups")
         os.makedirs(self.backup_dir, exist_ok=True)
+
+    @staticmethod
+    def _sqlite_column_exists(conn: sqlite3.Connection, table: str, column: str) -> bool:
+        try:
+            rows = conn.execute(f"PRAGMA table_info({table})").fetchall()
+        except sqlite3.Error:
+            return False
+        for row in rows:
+            name = row["name"] if isinstance(row, sqlite3.Row) else row[1]
+            if name and str(name).lower() == column.lower():
+                return True
+        return False
 
     @staticmethod
     def _is_memory_db_path(db_path: str) -> bool:
@@ -393,12 +414,29 @@ class DatabaseMigrator:
         with self._get_connection() as conn:
             try:
                 # Execute migration SQL
-                if ";" in sql:
-                    # Multiple statements
-                    conn.executescript(sql)
+                if direction == "up" and migration.idempotent:
+                    statements = [stmt.strip() for stmt in sql.split(";") if stmt.strip()]
+                    for statement in statements:
+                        match = self._ADD_COLUMN_RE.match(statement)
+                        if match:
+                            table = match.group("table")
+                            column = match.group("column")
+                            if self._sqlite_column_exists(conn, table, column):
+                                logger.info(
+                                    "Skipping duplicate column {}.{} for migration {}",
+                                    table,
+                                    column,
+                                    migration.name,
+                                )
+                                continue
+                        conn.execute(statement)
                 else:
-                    # Single statement
-                    conn.execute(sql)
+                    if ";" in sql:
+                        # Multiple statements
+                        conn.executescript(sql)
+                    else:
+                        # Single statement
+                        conn.execute(sql)
 
                 conn.commit()
 

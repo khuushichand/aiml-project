@@ -158,7 +158,7 @@ Use `--skip-table <table_name>` to omit auxiliary tables (for example, to skip l
 
 2. Remove or archive the old SQLite files once you are confident the migration succeeded.
 
-3. Restart the API/WebUI stack. On startup the service should log that it is using PostgreSQL for
+3. Restart the API/frontend stack. On startup the service should log that it is using PostgreSQL for
    Media, ChaChaNotes, Analytics, and Workflows. Monitor `/api/v1/workflows/status` to ensure the
    runtime heartbeat updates and that queue depth drops as pending runs are processed.
 

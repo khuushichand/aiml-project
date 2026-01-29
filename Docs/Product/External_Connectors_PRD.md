@@ -275,7 +275,7 @@ Implementation status (v0.2 - partial):
 - Exports: Slides→PDF, Docs→TXT, Sheets→CSV; PDF text extraction integrated.
 - Notion: nested Markdown export for headings, lists, code blocks, tables, images (basic).
 - Policy: allowed providers, export formats, file types/mimes, max file size, per-role daily job quota; enforced on submit and during import.
-- UI: basic Next.js routes (`/connectors`, `/connectors/browse`, `/connectors/sources`, `/connectors/jobs`) and basic WebUI tab at `/webui/tabs/connectors.html`.
+- UI: basic Next.js routes (`/connectors`, `/connectors/browse`, `/connectors/sources`, `/connectors/jobs`).
 
 Outstanding (next):
 - OAuth token refresh + persistence; retry on 401 then persist refreshed tokens.

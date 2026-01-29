@@ -200,9 +200,7 @@ Steps:
 1. Run focused tests:
    - `python -m pytest tldw_Server_API/tests/Media_Ingestion_Modification/test_media_processing.py::TestProcessVideos`
    - `python -m pytest tldw_Server_API/tests/Media_Ingestion_Modification/test_add_media_endpoint.py::test_process_video_with_analysis_mocked`
-   - Optionally:
-     - `python -m pytest tldw_Server_API/tests/webui_e2e/test_media_processing_ui_feedback.py`
-     - Any additional E2E tests that touch `/process-videos`.
+   - Optionally: any additional E2E tests that touch `/process-videos`.
 2. Compare key expectations:
    - Status codes (200/207/400/422) under the same scenarios.
    - `input_ref` values for:

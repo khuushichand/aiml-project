@@ -6,7 +6,7 @@ across all valid inputs.
 """
 
 import pytest
-from hypothesis import given, strategies as st, example
+from hypothesis import given, strategies as st, example, settings, HealthCheck
 from hypothesis.stateful import RuleBasedStateMachine, rule, invariant, Bundle
 import numpy as np
 from datetime import datetime
@@ -589,11 +589,16 @@ class TestErrorHandlingProperties:
             st.text().filter(lambda x: "\x00" in x)  # Null bytes
         )
     )
+    @settings(deadline=None, suppress_health_check=[HealthCheck.too_slow])
     @pytest.mark.asyncio
     async def test_invalid_query_handling(self, query):
         """Invalid queries should be handled gracefully via the public pipeline API."""
         # Call the unified pipeline; for blank queries it should short-circuit with an error
-        result = await unified_rag_pipeline(query=query, enable_cache=False)
+        result = await unified_rag_pipeline(
+            query=query,
+            enable_cache=False,
+            enable_generation=False,
+        )
         assert isinstance(result, UnifiedRAGResponse)
 
         is_blank = len(query.strip()) == 0

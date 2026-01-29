@@ -91,7 +91,7 @@ Version 0.1.13 (beta). Expect bugs and rough edges; please report issues.
 - Workflows
 - Browser extension ([tldw_Browser_Assistant](https://github.com/rmusser01/tldw_browser_assistant))
 - Unified Admin Dashboard ([admin-ui](./admin-ui))
-- front-end webapp ([tldw-frontend](./tldw-frontend))
+- front-end webapp ([apps/tldw-frontend](./apps/tldw-frontend))
 - Watchlists
 - Collections (read-it-later)
 - Documentation
@@ -110,18 +110,20 @@ Version 0.1.13 (beta). Expect bugs and rough edges; please report issues.
 - API changes:
     - Use FastAPI routes; see http://127.0.0.1:8000/docs. OpenAI-compatible endpoints are available (e.g., `/api/v1/chat/completions`).
 - Frontend:
-    - Legacy: /webui
+    - Next.js WebUI: `apps/tldw-frontend/` (run separately)
     - Or integrate directly against the API;
 </details>
 
 ## What's New (compared to Gradio)
 
-- FastAPI-first backend with OpenAI-compatible Chat and Audio APIs (including streaming STT and TTS)
-- Unified RAG and Evaluations modules (hybrid BM25 + vector with re-ranking; unified metrics)
-- MCP Unified module with JWT/RBAC, tool execution APIs, and WebSockets
-- New WebUI (current Next.js UI is WIP and may be unstable or rough)
+- FastAPI-first backend with OpenAI-compatible Chat, Audio (STT/TTS + voice catalog), Embeddings, and Evals APIs
+- Unified RAG + Evaluations modules (hybrid BM25 + vector with re-ranking; unified metrics)
+- Expanded audio stack: multi-provider TTS/STT, streaming, and audio jobs queue
+- MCP Unified module with JWT/RBAC, tool execution APIs, WebSockets, and metrics
+- Next.js WebUI and Admin UI (primary web client)
+- Research & ingestion upgrades: OCR, web search + academic search, connectors, outputs/artifacts, watchlists/workflows
 - Strict OpenAI compatibility mode for local/self-hosted providers
-- PostgreSQL content mode + backup/restore helpers; Prometheus metrics and monitoring improvements
+- PostgreSQL content mode + backup/restore helpers; Prometheus/Grafana monitoring + admin usage reporting
 
 See: `Docs/Published/RELEASE_NOTES.md` for detailed release notes.
 
@@ -135,14 +137,20 @@ See: `Docs/Published/RELEASE_NOTES.md` for detailed release notes.
 
 ## Highlights
 
-- Media ingestion & processing: video, audio, PDFs, EPUB, DOCX, HTML, Markdown, XML, MediaWiki dumps; metadata extraction; configurable chunking.
+- Media ingestion & processing: video, audio, PDFs, EPUB, DOCX, HTML, Markdown, XML, MediaWiki dumps; OCR for PDFs/images; metadata extraction; configurable chunking.
 - Custom-built Chunking library, tldw_Chunker, supporting token, word, sentence, paragraph, semantic, hierarchical and template chunking approaches.
-- Audio & speech: real-time and file STT via faster_whisper, NVIDIA NeMo (Canary/Parakeet), Qwen2Audio; TTS: OpenAI-compatible TTS supporting ElevenLabs, OpenAI and locally: kokoro, Higgs, Dia, VibeVoice.
-- Search & retrieval (RAG): hybrid BM25 + vector (ChromaDB/pgvector), re-ranking, contextual retrieval, OpenAI-compatible embeddings. 50+ optional parameters available for tuning.
-- Chat & providers: `/api/v1/chat/completions` (OpenAI-compatible), 16+ providers (commercial + self-hosted), character chat, budgets/allowlists.
-- Knowledge management: notes, prompt library, character cards, soft-delete with recovery, Chatbooks import/export. (Support for import/edit/export of .apkg files - anki)
-- Prompt Studio & evaluations: projects, prompt testing/optimization, unified evaluation APIs (G-Eval, RAG, batch metrics). Full evaluations and prompt management.
+- Audio & speech: real-time and file STT via faster_whisper, NVIDIA NeMo (Canary/Parakeet), Qwen2Audio; diarization/VAD; TTS backends — commercial: OpenAI, ElevenLabs; local: Kokoro, PocketTTS, LuxTTS, Higgs, Chatterbox, Dia, VibeVoice, VibeVoice Realtime, NeuTTS, IndexTTS2, Supertonic, Supertonic2, Qwen3-TTS, EchoTTS; voice catalog + audio jobs queue.
+- Audiobooks: parse + chapter detection, per-chapter voice settings, optional TTS provider overrides (alignment/subtitles Kokoro-only), and M4B packaging (API-only).
+- Search & retrieval (RAG): hybrid BM25 + vector (ChromaDB/pgvector), re-ranking, contextual retrieval, OpenAI-compatible embeddings, vector stores API, and media embeddings ingestion. 50+ optional parameters available for tuning.
+- Chat & providers: `/api/v1/chat/completions` (OpenAI-compatible), 16+ providers (commercial + self-hosted), character chat, budgets/allowlists, moderation endpoint.
+- Knowledge management: notes, prompt library, character cards, soft-delete with recovery, Chatbooks import/export, flashcards (.apkg), reading items/highlights.
+- Prompt Studio & evaluations: projects, prompt testing/optimization, unified evaluation APIs (G-Eval, RAG, OCR, embeddings A/B tests, batch metrics). Full evaluations and prompt management.
+- Research & web scraping: multi-provider web search, academic paper search (arXiv/PubMed/etc.), scraping jobs with cookies/progress, aggregation/final answers.
+- Connectors: Google Drive + Notion OAuth import; connector policies/quotas.
+- Outputs & artifacts: templated outputs (Markdown/HTML/MP3 via TTS), persisted artifacts with retention controls.
+- Automation: watchlists (sources/groups/tags, OPML import/export, scheduled runs) and workflows engine/scheduler (WIP).
 - MCP Server: production MCP with JWT/RBAC, tool execution, WebSockets, metrics, and health endpoints. Use existing tools or add your own using a handy guide. Setup tool categories and collections, allowing for easier context management.
+- Admin/Ops: orgs/teams/roles, API key management, audit logging, usage/LLM cost reporting, Prometheus metrics + Grafana dashboards, PostgreSQL content mode + backup/restore helpers.
 
 
 ## Feature Status
@@ -186,10 +194,19 @@ cat > .env << 'EOF'
 AUTH_MODE=single_user
 SINGLE_USER_API_KEY=CHANGE_ME_TO_SECURE_API_KEY
 DATABASE_URL=sqlite:///./Databases/users.db
+# MCP Unified secrets (required in production; initializer can generate if missing for quickstart only)
+# MCP_JWT_SECRET=change-me-to-secure-mcp-jwt-secret
+# MCP_API_KEY_SALT=change-me-to-secure-mcp-salt
 EOF
 
 # First-time initialization (validates config, sets up DBs)
 python -m tldw_Server_API.app.core.AuthNZ.initialize
+# This will also auto-generate MCP_JWT_SECRET and MCP_API_KEY_SALT if they are missing,
+# using Python's secrets.token_urlsafe(32) for quickstart-only defaults.
+# These auto-generated values must be replaced and managed securely before production
+# deployment (rotate regularly and store in a secret manager such as Vault or AWS Secrets Manager).
+# Example: set MCP_JWT_SECRET and MCP_API_KEY_SALT to your own values and manage them
+# following secure secret-management practices.
 # Add provider API keys in .env or tldw_Server_API/Config_Files/config.txt
 ```
 3) Run the API
@@ -197,7 +214,8 @@ python -m tldw_Server_API.app.core.AuthNZ.initialize
 python -m uvicorn tldw_Server_API.app.main:app --reload
 ```
 - API docs: http://127.0.0.1:8000/docs
-- Legacy WebUI: http://127.0.0.1:8000/webui/ (deprecated)
+- Quickstart: http://127.0.0.1:8000/api/v1/config/quickstart
+- Setup UI (if required): http://127.0.0.1:8000/setup
 
 ### Sidecar workers (optional)
 
@@ -222,7 +240,7 @@ Requires Node.js and npm (or yarn/pnpm).
 
 1) From the repo root:
 ```bash
-cd tldw-frontend
+cd apps/tldw-frontend
 cp .env.local.example .env.local
 ```
 2) Set your API URL (defaults shown):
@@ -240,7 +258,7 @@ npm run dev -- -p 8080
 ```
 Open http://localhost:8080
 
-Tip: `./start-webui.sh` launches the API and opens the legacy `/webui/` client.
+Tip: http://127.0.0.1:8000/api/v1/config/quickstart redirects to your configured quickstart target.
 
 ### Docker Compose
 
@@ -281,7 +299,7 @@ docker compose -f Dockerfiles/docker-compose.yml -f Dockerfiles/docker-compose.p
 
 Notes
 - Run compose commands from the repository root. The base compose file at `Dockerfiles/docker-compose.yml` builds with context at the repo root and includes Postgres and Redis services.
-- The legacy WebUI is served at `/webui`; the primary UI is the Next.js client in `tldw-frontend/`.
+- The primary UI is the Next.js WebUI in `apps/tldw-frontend/` (run separately).
   - For unified streaming validation in non-prod, prefer the dev overlay above. You can also export `STREAMS_UNIFIED=1` directly in your environment.
 
 ### Supporting Services via Docker
@@ -422,6 +440,10 @@ curl -s -X POST http://127.0.0.1:8000/api/v1/audio/transcriptions \
 - Audio STT (WS): `WS /api/v1/audio/stream/transcribe` - real-time transcription ([docs](Docs/API-related/Audio_Transcription_API.md))
 - Audio TTS: `POST /api/v1/audio/speech` - text-to-speech (streaming and non-streaming) ([docs](Docs/API-related/TTS_API.md))
 - TTS Voices: `GET /api/v1/audio/voices/catalog` - voice catalog across providers ([docs](Docs/API-related/TTS_API.md))
+- Voice Assistant: `POST /api/v1/voice/command` (REST) and `WS /api/v1/voice/assistant` (real-time) ([docs](Docs/API/Voice_Assistant.md))
+- Audiobooks Parse: `POST /api/v1/audiobooks/parse` - parse + chapter preview ([docs](Docs/Product/Completed/Audiobook_Creation_PRD.md))
+- Audiobooks Jobs: `POST /api/v1/audiobooks/jobs` - create audiobook job; `GET /api/v1/audiobooks/jobs/{job_id}` - status ([docs](Docs/Product/Completed/Audiobook_Creation_PRD.md))
+- Audiobooks Subtitles: `POST /api/v1/audiobooks/subtitles` - render subtitle export ([docs](Docs/Product/Completed/Audiobook_Creation_PRD.md))
 - Vector Stores: `POST /api/v1/vector_stores` - create; `POST /api/v1/vector_stores/{id}/query` - query ([docs](Docs/API-related/Vector_Stores_Admin_and_Query.md))
 - OCR Backends: `GET /api/v1/ocr/backends` - available OCR providers ([docs](Docs/API-related/OCR_API_Documentation.md))
 - VLM Backends: `GET /api/v1/vlm/backends` - available VLM providers ([docs](Docs/Code_Documentation/VLM_Backends.md))
@@ -501,13 +523,12 @@ Examples
 │   │   ├── static/               # Static assets
 │   │   └── main.py               # FastAPI entry point
 │   ├── cli/                      # CLI entry points
-│   ├── WebUI/                    # Legacy integrated WebUI served at /webui (deprecated)
 │   ├── Config_Files/             # config.txt, example YAMLs, migration helpers
 │   ├── Databases/                # Default DBs (runtime data; some are gitignored)
 │   ├── tests/                    # Pytest suite
 │   └── requirements.txt          # Legacy pin set (prefer pyproject extras)
 ├── admin-ui/                     # Admin dashboard
-├── tldw-frontend/                # Next.js WebUI (current client)
+├── apps/tldw-frontend/                # Next.js WebUI (primary web client)
 ├── Docs/                         # Documentation (API, Development, RAG, AuthNZ, TTS, etc.)
 ├── Helper_Scripts/               # Utilities (installers, prompt tools, doc generators)
 ├── mock_openai_server/           # Mock OpenAI-compatible API server for tests/dev
@@ -517,13 +538,12 @@ Examples
 ├── models/                       # Optional model assets (if used)
 ├── pyproject.toml                # Project configuration
 ├── README.md                     # Project README (this file)
-├── start-webui.sh                # Convenience script for WebUI + server
 ├── start-sidecars.sh             # Run API + Jobs workers as sidecar processes
 └── Project_Guidelines.md         # Development philosophy
 ```
 
 Notes
-- The FastAPI app serves a legacy UI at `/webui` (deprecated); the Next.js UI in `tldw-frontend/` is the current client.
+- The primary UI is the Next.js WebUI in `apps/tldw-frontend/` (run separately).
 - SQLite is default for local dev; PostgreSQL supported for AuthNZ and content DBs.
 - `mock_openai_server/` is handy for local OpenAI-compatible API testing.
 
@@ -534,8 +554,7 @@ Notes
 ```mermaid
 flowchart LR
   subgraph CLIENTS [Clients]
-    WebUI[Next.js WebUI (current)]:::client
-    LegacyUI[Legacy WebUI (/webui, deprecated)]:::client
+    WebUI[Next.js WebUI (primary web client)]:::client
     MCPClients[MCP Clients (IDE/tools)]:::client
     APIClients[CLI/HTTP Clients]:::client
   end
@@ -581,7 +600,6 @@ flowchart LR
 
   %% Client to API
   WebUI -->|HTTP| API
-  LegacyUI -->|HTTP| API
   MCPClients -->|HTTP/WebSocket| API
   APIClients -->|HTTP/WebSocket| API
 
@@ -676,7 +694,7 @@ All limits are designed to be conservative by default and can be tuned using the
 Use the helper script to run frontend unit tests plus smoke checks against a live backend:
 
 ```bash
-cd tldw-frontend
+cd apps/tldw-frontend
 npm run test:integration
 ```
 

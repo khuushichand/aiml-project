@@ -5,6 +5,7 @@ import os
 import shutil
 import sqlite3
 import subprocess
+import urllib.parse
 from datetime import datetime
 from typing import Dict, Optional
 
@@ -98,19 +99,39 @@ def _get_allowed_db_roots() -> list[str]:
     return deduped
 
 
+def _sqlite_uri_to_path(raw: str) -> Optional[str]:
+    """Return filesystem path from a file: SQLite URI, or None if not applicable."""
+    lowered = raw.lower()
+    if not lowered.startswith("file:"):
+        return None
+    try:
+        parsed = urllib.parse.urlparse(raw)
+    except Exception:
+        return None
+    if parsed.scheme != "file":
+        return None
+    query = (parsed.query or "").lower()
+    path = urllib.parse.unquote(parsed.path or "")
+    if not path or path in {":memory:", "/:memory:"} or "mode=memory" in query:
+        return None
+    return path
+
+
 def _resolve_db_path(db_path: str) -> Optional[str]:
     """Resolve a database path within the allowed roots."""
     raw = str(db_path or "").strip()
     if not raw:
         return None
-    is_abs = os.path.isabs(raw)
-    candidate_abs = os.path.abspath(raw)
+    uri_path = _sqlite_uri_to_path(raw)
+    path_for_checks = uri_path if uri_path is not None else raw
+    is_abs = os.path.isabs(path_for_checks)
+    candidate_abs = os.path.abspath(path_for_checks)
     for base in _get_allowed_db_roots():
         resolved = _ensure_within_base(base, candidate_abs)
         if resolved:
             return resolved
         if not is_abs:
-            resolved = safe_join(os.path.abspath(base), raw)
+            resolved = safe_join(os.path.abspath(base), path_for_checks)
             if resolved:
                 return resolved
     return None
@@ -172,10 +193,11 @@ def create_backup(db_path: str, backup_dir: str, db_name: str) -> str:
     """Create a full backup of the database."""
     try:
         # Guard: in-memory databases cannot be backed up to disk
-        mem = str(db_path).strip()
+        raw_db_path = str(db_path).strip()
+        mem = raw_db_path
         if mem == ":memory:" or mem.startswith("file::memory:"):
             return "Cannot create backup for in-memory database"
-        resolved_db_path = _resolve_db_path(db_path)
+        resolved_db_path = _resolve_db_path(raw_db_path)
         if not resolved_db_path:
             error_msg = "Invalid database path"
             logger.error(f"{error_msg}: {db_path}")
@@ -185,6 +207,7 @@ def create_backup(db_path: str, backup_dir: str, db_name: str) -> str:
             error_msg = "Invalid backup directory"
             logger.error(f"{error_msg}: {backup_dir}")
             return error_msg
+        is_uri = raw_db_path.lower().startswith("file:")
         db_path = resolved_db_path
         backup_dir = resolved_backup_dir
         if not os.path.exists(db_path):
@@ -208,7 +231,8 @@ def create_backup(db_path: str, backup_dir: str, db_name: str) -> str:
         logger.info(f"  Full backup path: {backup_file}")
 
         # Create a backup using SQLite's backup API
-        with sqlite3.connect(db_path) as source, \
+        source_connect_path = raw_db_path if is_uri else db_path
+        with sqlite3.connect(source_connect_path, uri=is_uri) as source, \
                 sqlite3.connect(backup_file) as target:
             source.backup(target)
 
@@ -231,10 +255,11 @@ def create_backup(db_path: str, backup_dir: str, db_name: str) -> str:
 def create_incremental_backup(db_path: str, backup_dir: str, db_name: str) -> str:
     """Create an incremental backup using VACUUM INTO."""
     try:
-        mem = str(db_path).strip()
+        raw_db_path = str(db_path).strip()
+        mem = raw_db_path
         if mem == ":memory:" or mem.startswith("file::memory:"):
             return "Cannot create incremental backup for in-memory database"
-        resolved_db_path = _resolve_db_path(db_path)
+        resolved_db_path = _resolve_db_path(raw_db_path)
         if not resolved_db_path:
             error_msg = "Invalid database path"
             logger.error(f"{error_msg}: {db_path}")
@@ -244,6 +269,7 @@ def create_incremental_backup(db_path: str, backup_dir: str, db_name: str) -> st
             error_msg = "Invalid backup directory"
             logger.error(f"{error_msg}: {backup_dir}")
             return error_msg
+        is_uri = raw_db_path.lower().startswith("file:")
         db_path = resolved_db_path
         backup_dir = resolved_backup_dir
         if not os.path.exists(db_path):
@@ -263,7 +289,8 @@ def create_incremental_backup(db_path: str, backup_dir: str, db_name: str) -> st
             logger.error(error_msg)
             return error_msg
 
-        with sqlite3.connect(db_path) as conn:
+        source_connect_path = raw_db_path if is_uri else db_path
+        with sqlite3.connect(source_connect_path, uri=is_uri) as conn:
             try:
                 conn.execute("VACUUM INTO ?", (backup_file,))
             except sqlite3.OperationalError:

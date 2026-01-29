@@ -8,8 +8,8 @@ from typing import Any, Dict, List, Literal, Optional
 from pydantic import BaseModel, Field
 
 
-FileType = Literal["ical", "markdown_table", "html_table", "xlsx", "data_table"]
-ExportFormat = Literal["ics", "md", "html", "xlsx", "csv", "json"]
+FileType = Literal["ical", "markdown_table", "html_table", "xlsx", "data_table", "image"]
+ExportFormat = Literal["ics", "md", "html", "xlsx", "csv", "json", "png", "jpg", "webp"]
 ExportMode = Literal["url", "inline"]
 AsyncMode = Literal["auto", "sync", "async"]
 

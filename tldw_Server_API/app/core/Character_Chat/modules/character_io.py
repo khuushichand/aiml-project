@@ -20,12 +20,24 @@ from PIL import Image
 from loguru import logger
 
 from tldw_Server_API.app.core.DB_Management.ChaChaNotes_DB import CharactersRAGDB, CharactersRAGDBError, ConflictError, InputError
+from tldw_Server_API.app.core.Character_Chat.character_limits import get_character_limits
+from tldw_Server_API.app.core.Character_Chat.constants import MAX_PNG_METADATA_BYTES
 
 # Import validation and parsing functions from character_validation module
 from . import character_validation as _character_validation
 
 # Import database functions from character_db module
 from .character_db import create_new_character_from_data
+
+
+class DatabaseCountError(CharactersRAGDBError):
+    """Raised when counting messages for a conversation fails."""
+
+    def __init__(self, conversation_id: Union[str, int, None], original_exception: Exception) -> None:
+        message = f"Failed to count messages for conversation {conversation_id}: {original_exception}"
+        super().__init__(message)
+        self.conversation_id = conversation_id
+        self.original_exception = original_exception
 
 
 def extract_json_from_image_file(image_file_input: Union[str, bytes, io.BytesIO]) -> Optional[str]:
@@ -212,6 +224,26 @@ def extract_json_from_image_file(image_file_input: Union[str, bytes, io.BytesIO]
             return {}
         pos = 8
         chunks: Dict[str, str] = {}
+
+        def _safe_decompress(data: bytes) -> Optional[bytes]:
+            if not data:
+                return b""
+            try:
+                max_bytes = MAX_PNG_METADATA_BYTES
+                decompressor = zlib.decompressobj()
+                chunk = decompressor.decompress(data, max_bytes + 1)
+                if len(chunk) > max_bytes or decompressor.unconsumed_tail:
+                    logger.warning("PNG metadata chunk exceeded max size (>{} bytes).", max_bytes)
+                    return None
+                chunk += decompressor.flush()
+                if len(chunk) > max_bytes:
+                    logger.warning("PNG metadata chunk exceeded max size after flush (>{} bytes).", max_bytes)
+                    return None
+                return chunk
+            except Exception as exc:
+                logger.debug("Failed to decompress PNG metadata chunk: {}", exc)
+                return None
+
         while pos + 8 <= len(raw_bytes):
             length = struct.unpack(">I", raw_bytes[pos:pos + 4])[0]
             chunk_type = raw_bytes[pos + 4:pos + 8]
@@ -226,6 +258,9 @@ def extract_json_from_image_file(image_file_input: Union[str, bytes, io.BytesIO]
                 if b'\x00' not in data:
                     continue
                 keyword, text = data.split(b'\x00', 1)
+                if len(text) > MAX_PNG_METADATA_BYTES:
+                    logger.warning("PNG tEXt metadata exceeded max size (>{} bytes).", MAX_PNG_METADATA_BYTES)
+                    continue
                 chunks[keyword.decode('latin-1', errors='ignore')] = text.decode('utf-8', errors='replace')
             elif chunk_type == b'zTXt':
                 if b'\x00' not in data:
@@ -238,7 +273,9 @@ def extract_json_from_image_file(image_file_input: Union[str, bytes, io.BytesIO]
                 if compression_method != b'\x00':
                     continue
                 try:
-                    text = zlib.decompress(compressed_text)
+                    text = _safe_decompress(compressed_text)
+                    if text is None:
+                        continue
                     chunks[keyword.decode('latin-1', errors='ignore')] = text.decode('utf-8', errors='replace')
                 except Exception:
                     continue
@@ -254,9 +291,14 @@ def extract_json_from_image_file(image_file_input: Union[str, bytes, io.BytesIO]
                     if compression_method != b'\x00':
                         continue
                     try:
-                        text = zlib.decompress(text)
+                        text = _safe_decompress(text)
+                        if text is None:
+                            continue
                     except Exception:
                         continue
+                if len(text) > MAX_PNG_METADATA_BYTES:
+                    logger.warning("PNG iTXt metadata exceeded max size (>{} bytes).", MAX_PNG_METADATA_BYTES)
+                    continue
                 chunks[keyword] = text.decode('utf-8', errors='replace')
         return chunks
 
@@ -414,12 +456,19 @@ def import_character_card_from_json_string(json_content_str: str) -> Optional[Di
             except Exception as e:
                 logger.warning(f"V3 parsing import failed or not available: {e}")
 
-        attempt_v2_processing = (parsed_card is None) and (is_explicit_v2_spec or is_explicit_v2_version or \
-                                (has_data_node_heuristic and not is_explicit_v2_spec and not is_explicit_v2_version))
+        attempt_v2_processing = (parsed_card is None) and (
+            is_explicit_v2_spec
+            or is_explicit_v2_version
+            or (has_data_node_heuristic and not is_explicit_v2_spec and not is_explicit_v2_version)
+        )
 
         if attempt_v2_processing:
             logger.debug("Attempting V2 validation based on card structure/spec.")
-            is_valid_v2_struct, v2_errors = _character_validation.validate_v2_card(card_data_dict)
+            strict_spec = bool(is_explicit_v2_spec or is_explicit_v2_version)
+            is_valid_v2_struct, v2_errors = _character_validation.validate_v2_card(
+                card_data_dict,
+                strict_spec=strict_spec,
+            )
 
             if not is_valid_v2_struct:
                 logger.error(f"V2 Card structural validation failed: {'; '.join(v2_errors)}.")
@@ -703,6 +752,9 @@ def load_chat_history_from_file_and_save_to_db(
 
     Returns:
         Tuple of (conversation_id, character_id) on success, otherwise (None, None).
+
+    Raises:
+        DatabaseCountError: If the message count lookup fails during import.
     """
     try:
         # Load content from path or provided string
@@ -875,8 +927,6 @@ def load_chat_history_from_file_and_save_to_db(
             return False, normalized
 
         from .character_chat import start_new_chat_session, post_message_to_conversation
-        from .character_utils import replace_placeholders
-
         (
             conversation_id,
             char_data,
@@ -944,23 +994,40 @@ def load_chat_history_from_file_and_save_to_db(
                     )
 
             messages_added = 0
+            try:
+                current_message_count = db.count_messages_for_conversation(conversation_id)
+            except Exception as exc:
+                logger.error(
+                    "Failed to count messages for conversation {}: {}",
+                    conversation_id,
+                    exc,
+                    exc_info=True,
+                )
+                raise DatabaseCountError(conversation_id, exc) from exc
+
+            limits = get_character_limits()
+            max_messages_per_chat = getattr(limits, "max_messages_per_chat", 0) or 0
 
             def _add_message_to_conversation(
                 message_text: str,
                 is_user_message: bool,
                 sender_override: Optional[str],
             ) -> None:
-                nonlocal messages_added
-                cleaned = replace_placeholders(message_text, character_name, user_name)
+                nonlocal messages_added, current_message_count
+                if max_messages_per_chat and current_message_count >= max_messages_per_chat:
+                    raise InputError(
+                        f"Message limit exceeded. Maximum {max_messages_per_chat} messages per chat."
+                    )
                 post_message_to_conversation(
                     db=db,
                     conversation_id=conversation_id,
                     character_name=character_name,
-                    message_content=cleaned,
+                    message_content=message_text,
                     is_user_message=is_user_message,
                     sender_override=sender_override,
                 )
                 messages_added += 1
+                current_message_count += 1
 
             # Helper to process pair-based history entries (legacy export format)
             def _process_pair_history(entries: List[Any]) -> None:
@@ -1022,6 +1089,8 @@ def load_chat_history_from_file_and_save_to_db(
             _cleanup_failed_import()
             raise
 
+    except DatabaseCountError:
+        raise
     except Exception as exc:
         logger.error("Error loading chat history: {}", exc, exc_info=True)
         return None, None

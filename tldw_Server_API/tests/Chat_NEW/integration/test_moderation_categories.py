@@ -87,7 +87,7 @@ class _Svc:
                 return text.replace('user@example.com', '[PII]')
         return text
 
-    def check_text(self, text: str, policy: _Policy):
+    def check_text(self, text: str, policy: _Policy, phase: str | None = None):
         if 'user@example.com' in text:
             cats = policy.categories_enabled
             if not cats or ('pii' in cats or 'pii_email' in cats):

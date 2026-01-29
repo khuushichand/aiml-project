@@ -644,7 +644,11 @@ class MediaModule(BaseModule):
         snippet_length = int(retrieval.get("snippet_length", 300))
         max_tokens = retrieval.get("max_tokens")
         cpt = int(retrieval.get("chars_per_token", 4))
+        if cpt <= 0:
+            raise ValueError("chars_per_token must be a positive integer")
         chunk_size_tokens = int(retrieval.get("chunk_size_tokens", 1000 if max_tokens else 500))
+        if chunk_size_tokens <= 0:
+            raise ValueError("chunk_size_tokens must be a positive integer")
         sibling_window = int(retrieval.get("sibling_window", 1))
         loc = retrieval.get("loc") or {}
         # Session defaults
@@ -1783,7 +1787,55 @@ class MediaModule(BaseModule):
 
     def validate_tool_arguments(self, tool_name: str, arguments: Dict[str, Any]):
         """Stricter validation for high-risk tools."""
-        if tool_name == "ingest_media":
+        if tool_name == "media.search":
+            q = arguments.get("query")
+            if not isinstance(q, str) or not (1 <= len(q) <= 1000):
+                raise ValueError("query must be 1..1000 chars")
+            limit = int(arguments.get("limit", 10))
+            offset = int(arguments.get("offset", 0))
+            snip = int(arguments.get("snippet_length", 300))
+            if limit < 1 or limit > 100:
+                raise ValueError("limit must be 1..100")
+            if offset < 0:
+                raise ValueError("offset must be >= 0")
+            if snip < 50 or snip > 2000:
+                raise ValueError("snippet_length must be 50..2000")
+            order_by = arguments.get("order_by")
+            if order_by is not None and order_by not in {"relevance", "recent"}:
+                raise ValueError("order_by must be relevance|recent when provided")
+            media_types = arguments.get("media_types")
+            if media_types is not None and (not isinstance(media_types, list) or any(not isinstance(m, str) for m in media_types)):
+                raise ValueError("media_types must be list[str] when provided")
+        elif tool_name == "media.get":
+            mid = arguments.get("media_id")
+            if not isinstance(mid, int) or mid <= 0:
+                raise ValueError("media_id must be a positive integer")
+            retrieval = arguments.get("retrieval") or {}
+            if not isinstance(retrieval, dict):
+                raise ValueError("retrieval must be an object")
+            mode = retrieval.get("mode", "snippet")
+            if mode not in {"snippet", "full", "chunk", "chunk_with_siblings", "auto"}:
+                raise ValueError("retrieval.mode invalid")
+            snip = int(retrieval.get("snippet_length", 300))
+            if snip < 50 or snip > 2000:
+                raise ValueError("retrieval.snippet_length must be 50..2000")
+            if retrieval.get("chars_per_token") is not None:
+                cpt = int(retrieval.get("chars_per_token"))
+                if cpt <= 0:
+                    raise ValueError("chars_per_token must be a positive integer")
+            if retrieval.get("max_tokens") is not None:
+                mt = int(retrieval.get("max_tokens"))
+                if mt <= 0:
+                    raise ValueError("max_tokens must be a positive integer")
+            if retrieval.get("chunk_size_tokens") is not None:
+                cst = int(retrieval.get("chunk_size_tokens"))
+                if cst <= 0:
+                    raise ValueError("chunk_size_tokens must be a positive integer")
+            if retrieval.get("sibling_window") is not None:
+                sw = int(retrieval.get("sibling_window"))
+                if sw < 0:
+                    raise ValueError("sibling_window must be >= 0")
+        elif tool_name == "ingest_media":
             url = arguments.get("url")
             if not isinstance(url, str) or not self._validate_url(url) or len(url) > 2048:
                 raise ValueError("url must be a valid http(s) URL <= 2048 chars")

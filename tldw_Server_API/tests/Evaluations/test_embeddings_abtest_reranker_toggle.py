@@ -1,6 +1,6 @@
 import os
 import json
-import asyncio
+import time
 import pytest
 from fastapi.testclient import TestClient
 
@@ -58,7 +58,7 @@ def test_reranker_toggle_controls_reranking(monkeypatch, auth_headers):
         s = _get_status()
         if s.get('status') == 'completed':
             break
-        asyncio.sleep(0.1)
+        time.sleep(0.05)
 
     # Export JSON and capture baseline results
     r = client.get(
@@ -83,7 +83,7 @@ def test_reranker_toggle_controls_reranking(monkeypatch, auth_headers):
         s = _get_status()
         if s.get('status') == 'completed':
             break
-        asyncio.sleep(0.1)
+        time.sleep(0.05)
 
     r = client.get(
         f"/api/v1/evaluations/embeddings/abtest/{test_id}/export",
@@ -97,7 +97,13 @@ def test_reranker_toggle_controls_reranking(monkeypatch, auth_headers):
     def _has_rerank(rows):
         for row in rows.get('results', []):
             try:
-                scores = json.loads(row.get('rerank_scores') or 'null')
+                raw_scores = row.get("rerank_scores")
+                if isinstance(raw_scores, list):
+                    scores = raw_scores
+                elif isinstance(raw_scores, str):
+                    scores = json.loads(raw_scores or "null")
+                else:
+                    scores = None
                 if scores:
                     return True
             except Exception:

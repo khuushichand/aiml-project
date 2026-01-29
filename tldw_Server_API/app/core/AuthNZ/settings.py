@@ -95,6 +95,11 @@ class Settings(BaseSettings):
         description="Refresh token expiration time in days"
     )
 
+    MAGIC_LINK_EXPIRE_MINUTES: int = Field(
+        default=15,
+        description="Magic link token expiration time in minutes"
+    )
+
     JWT_ALGORITHM: str = Field(
         default="HS256",
         description="JWT signing algorithm"
@@ -378,7 +383,7 @@ class Settings(BaseSettings):
     )
     USAGE_LOG_EXCLUDE_PREFIXES: list[str] = Field(
         default_factory=lambda: [
-            "/docs", "/redoc", "/openapi.json", "/metrics", "/static", "/favicon.ico", "/webui"
+            "/docs", "/redoc", "/openapi.json", "/metrics", "/static", "/favicon.ico"
         ],
         description="Request path prefixes to exclude from usage logging"
     )
@@ -598,11 +603,31 @@ class Settings(BaseSettings):
         description="Optional list of allowed client IPs/CIDRs for SINGLE_USER_API_KEY"
     )
 
+    # Trust proxy headers for resolving client IPs (used by API key allowlists).
+    AUTH_TRUST_X_FORWARDED_FOR: bool = Field(
+        default=False,
+        description=(
+            "If true, honor X-Forwarded-For/X-Real-IP when the peer is a trusted proxy "
+            "(see AUTH_TRUSTED_PROXY_IPS)."
+        ),
+    )
+    AUTH_TRUSTED_PROXY_IPS: list[str] = Field(
+        default_factory=list,
+        description="Optional list of trusted proxy IPs/CIDRs for X-Forwarded-For resolution."
+    )
+
     # ===== Service Account Settings =====
     SERVICE_ACCOUNT_RATE_LIMIT: int = Field(
         default=1000,
         ge=100,
         description="Rate limit for service accounts per minute"
+    )
+    SERVICE_TOKEN_ALLOWED_IPS: list[str] = Field(
+        default_factory=list,
+        description=(
+            "Optional list of allowed client IPs/CIDRs for service tokens. "
+            "When empty, service tokens are restricted to loopback requests."
+        ),
     )
 
     def __init__(self, **kwargs):
@@ -774,6 +799,36 @@ class Settings(BaseSettings):
     @field_validator("SINGLE_USER_ALLOWED_IPS", mode="before")
     @classmethod
     def parse_single_user_allowed_ips(cls, v):
+        """Allow env string like '127.0.0.1,10.0.0.0/8' to map to list[str]."""
+        if not v:
+            return []
+        if isinstance(v, str):
+            try:
+                return [s.strip() for s in v.split(',') if s.strip()]
+            except Exception:
+                return []
+        if isinstance(v, (list, tuple)):
+            return [str(x).strip() for x in v if str(x).strip()]
+        return []
+
+    @field_validator("SERVICE_TOKEN_ALLOWED_IPS", mode="before")
+    @classmethod
+    def parse_service_token_allowed_ips(cls, v):
+        """Allow env string like '127.0.0.1,10.0.0.0/8' to map to list[str]."""
+        if not v:
+            return []
+        if isinstance(v, str):
+            try:
+                return [s.strip() for s in v.split(',') if s.strip()]
+            except Exception:
+                return []
+        if isinstance(v, (list, tuple)):
+            return [str(x).strip() for x in v if str(x).strip()]
+        return []
+
+    @field_validator("AUTH_TRUSTED_PROXY_IPS", mode="before")
+    @classmethod
+    def parse_auth_trusted_proxy_ips(cls, v):
         """Allow env string like '127.0.0.1,10.0.0.0/8' to map to list[str]."""
         if not v:
             return []
@@ -959,6 +1014,7 @@ def _load_overrides_from_config() -> dict:
         maybe_set("RATE_LIMIT_BURST", "rate_limit_burst", lambda v: int(v))
         maybe_set("ACCESS_TOKEN_EXPIRE_MINUTES", "access_token_expire_minutes", lambda v: int(v))
         maybe_set("REFRESH_TOKEN_EXPIRE_DAYS", "refresh_token_expire_days", lambda v: int(v))
+        maybe_set("MAGIC_LINK_EXPIRE_MINUTES", "magic_link_expire_minutes", lambda v: int(v))
         maybe_set("REDIS_URL", "redis_url", lambda v: v.strip())
         maybe_set("SECURITY_ALERTS_ENABLED", "security_alerts_enabled", _bool_from_str)
         maybe_set("SECURITY_ALERT_MIN_SEVERITY", "security_alert_min_severity", lambda v: v.strip())
@@ -978,6 +1034,8 @@ def _load_overrides_from_config() -> dict:
         maybe_set("SECURITY_ALERT_WEBHOOK_MIN_SEVERITY", "security_alert_webhook_min_severity", lambda v: v.strip())
         maybe_set("SECURITY_ALERT_EMAIL_MIN_SEVERITY", "security_alert_email_min_severity", lambda v: v.strip())
         maybe_set("SECURITY_ALERT_BACKOFF_SECONDS", "security_alert_backoff_seconds", lambda v: int(v))
+        maybe_set("AUTH_TRUST_X_FORWARDED_FOR", "auth_trust_x_forwarded_for", _bool_from_str)
+        maybe_set("AUTH_TRUSTED_PROXY_IPS", "auth_trusted_proxy_ips", _split_csv)
 
         # If DATABASE_URL is not provided via env or explicit key, synthesize from db_type fields
         if os.getenv("DATABASE_URL") is None and "DATABASE_URL" not in overrides:
@@ -1059,13 +1117,35 @@ def get_settings() -> Settings:
                 _settings.USER_DATA_BASE_PATH = str(Path(base_dir).resolve())
         except Exception as exc:
             logger.warning(f"AuthNZ settings: failed to align USER_DATA_BASE_PATH with core settings: {exc}")
-        # In pytest/TEST_MODE contexts, default-disable rate limiting to keep tests deterministic
+        # In pytest/TEST_MODE contexts, default-disable rate limiting to keep tests deterministic.
+        # Explicit falsey flags (e.g., TEST_MODE=0) should take precedence so tests can
+        # exercise real rate limiting under pytest.
         try:
             import os as _os, sys as _sys
-            if (
-                _os.getenv("PYTEST_CURRENT_TEST")
-                or _os.getenv("TEST_MODE", "").lower() in ("1", "true", "yes")
-                or "pytest" in _sys.modules
+            truthy = {"1", "true", "yes", "on"}
+            falsy = {"0", "false", "no", "off"}
+
+            def _env_bool(name: str) -> Optional[bool]:
+                raw = _os.getenv(name)
+                if raw is None:
+                    return None
+                norm = str(raw).strip().lower()
+                if norm in truthy:
+                    return True
+                if norm in falsy:
+                    return False
+                return None
+
+            explicit_flags = [
+                _env_bool("TEST_MODE"),
+                _env_bool("TLDW_TEST_MODE"),
+                _env_bool("TESTING"),
+            ]
+            explicit_false = any(flag is False for flag in explicit_flags)
+            explicit_true = any(flag is True for flag in explicit_flags)
+
+            if not explicit_false and (
+                explicit_true or _os.getenv("PYTEST_CURRENT_TEST") or "pytest" in _sys.modules
             ):
                 _settings.RATE_LIMIT_ENABLED = False
         except Exception:

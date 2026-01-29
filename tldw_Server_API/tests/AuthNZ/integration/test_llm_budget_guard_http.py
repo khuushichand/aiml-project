@@ -50,6 +50,14 @@ async def test_chat_budget_guard_dependency_returns_principal(tmp_path):
     key_id = vk["id"]
     vkey = vk["key"]
 
+    # Virtual keys default to read scope, but POST chat completions now
+    # requires write scope even under scope="any".
+    async with pool.transaction() as conn:
+        if getattr(pool, "pool", None):
+            await conn.execute("UPDATE api_keys SET scope = $1 WHERE id = $2", "write", key_id)
+        else:
+            await conn.execute("UPDATE api_keys SET scope = ? WHERE id = ?", ("write", key_id))
+
     # Remove LLMBudgetMiddleware so the dependency path handles the 402
     from tldw_Server_API.app.main import app
     from tldw_Server_API.app.core.AuthNZ.llm_budget_middleware import LLMBudgetMiddleware

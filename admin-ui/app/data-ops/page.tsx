@@ -8,6 +8,7 @@ import { RefreshCw } from 'lucide-react';
 import { BackupsSection } from '@/components/data-ops/BackupsSection';
 import { RetentionPoliciesSection } from '@/components/data-ops/RetentionPoliciesSection';
 import { ExportsSection } from '@/components/data-ops/ExportsSection';
+import { MaintenanceSection } from '@/components/data-ops/MaintenanceSection';
 
 export default function DataOpsPage() {
   const [refreshSignal, setRefreshSignal] = useState(0);
@@ -30,6 +31,7 @@ export default function DataOpsPage() {
           <BackupsSection refreshSignal={refreshSignal} />
           <RetentionPoliciesSection refreshSignal={refreshSignal} />
           <ExportsSection refreshSignal={refreshSignal} />
+          <MaintenanceSection refreshSignal={refreshSignal} />
         </div>
       </ResponsiveLayout>
     </PermissionGuard>

@@ -25,6 +25,7 @@ from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import get_request_user, U
 from tldw_Server_API.app.core.AuthNZ.principal_model import AuthPrincipal
 from tldw_Server_API.app.core.DB_Management.Media_DB_v2 import MediaDatabase
 from tldw_Server_API.app.core.DB_Management.ChaChaNotes_DB import CharactersRAGDB
+from tldw_Server_API.app.core.DB_Management.db_path_utils import DatabasePaths
 from tldw_Server_API.app.api.v1.API_Deps.auth_deps import (
     check_rate_limit,
     rbac_rate_limit,
@@ -49,6 +50,10 @@ from tldw_Server_API.app.core.RAG.rag_service.agentic_chunker import (
 )
 from tldw_Server_API.app.core.RAG.rag_service.generation import generate_streaming_response
 from tldw_Server_API.app.core.RAG.rag_service.types import DataSource, Document
+from tldw_Server_API.app.core.RAG.rag_service.database_retrievers import (
+    MultiDatabaseRetriever,
+    RetrievalConfig,
+)
 
 # Schemas
 from tldw_Server_API.app.api.v1.schemas.rag_schemas_unified import (
@@ -71,6 +76,7 @@ def _build_unified_pipeline_kwargs(
     payload["media_db_path"] = db_paths.get("media_db_path")
     payload["notes_db_path"] = db_paths.get("notes_db_path")
     payload["character_db_path"] = db_paths.get("character_db_path")
+    payload["kanban_db_path"] = db_paths.get("kanban_db_path")
     payload["media_db"] = media_db
     payload["chacha_db"] = chacha_db
     payload["index_namespace"] = request.index_namespace or request.corpus
@@ -78,8 +84,65 @@ def _build_unified_pipeline_kwargs(
         current_user.username if current_user else None
     )
     payload["user_id"] = current_user.username if current_user else payload.get("user_id")
-    allowed = set(inspect.signature(unified_rag_pipeline).parameters.keys())
+    signature = inspect.signature(unified_rag_pipeline)
+    params = list(signature.parameters.values())
+    if any(p.kind == inspect.Parameter.VAR_KEYWORD for p in params):
+        return payload
+    allowed = set(signature.parameters.keys())
     return {k: v for k, v in payload.items() if k in allowed}
+
+
+def _sync_retriever_overrides_to_pipeline() -> None:
+    """
+    Keep endpoint-level retriever monkeypatches effective.
+
+    Several integration tests patch ``rag_unified.MultiDatabaseRetriever``.
+    The streaming and unified endpoints now delegate retrieval to
+    ``unified_rag_pipeline`` which references its own module globals.
+    This hook synchronizes the pipeline's references with the endpoint's.
+    """
+    try:
+        import tldw_Server_API.app.core.RAG.rag_service.unified_pipeline as up
+
+        if getattr(up, "MultiDatabaseRetriever", None) is not MultiDatabaseRetriever:
+            up.MultiDatabaseRetriever = MultiDatabaseRetriever  # type: ignore[assignment]
+
+        # RetrievalConfig should normally already be set, but be defensive.
+        if getattr(up, "RetrievalConfig", None) is None and RetrievalConfig is not None:
+            up.RetrievalConfig = RetrievalConfig  # type: ignore[assignment]
+    except Exception:
+        logger.debug("Failed to sync retriever overrides to unified pipeline", exc_info=True)
+
+
+def _resolve_kanban_db_path(current_user: Optional[User], request_user_id: Optional[str] = None) -> Optional[str]:
+    """Resolve the Kanban DB path for the active user context."""
+    user_id: Optional[Any] = None
+    try:
+        if current_user is not None:
+            for attr in ("id", "id_int", "username"):
+                value = getattr(current_user, attr, None)
+                if value is not None:
+                    user_id = value
+                    break
+        elif request_user_id:
+            user_id = request_user_id
+    except Exception:
+        logger.debug("Failed to resolve user_id for kanban DB path", exc_info=True)
+        if current_user is None:
+            user_id = request_user_id
+        else:
+            user_id = None
+    if user_id is None:
+        try:
+            user_id = DatabasePaths.get_single_user_id()
+        except Exception:
+            logger.debug("Failed to resolve single-user ID for kanban DB path", exc_info=True)
+            return None
+    try:
+        return str(DatabasePaths.get_kanban_db_path(user_id))
+    except Exception:
+        logger.debug("Failed to resolve kanban DB path", exc_info=True)
+        return None
 
 
 def _normalize_documents_for_generation(docs: List[Any]) -> List[Document]:
@@ -305,10 +368,12 @@ async def rag_ablate(
     media_db: MediaDatabase = Depends(get_media_db_for_user),
     chacha_db: CharactersRAGDB = Depends(get_chacha_db_for_user)
 ):
+    kanban_db_path = _resolve_kanban_db_path(current_user)
     db_paths = {
         "media_db_path": media_db.db_path if media_db else None,
         "notes_db_path": chacha_db.db_path if chacha_db else None,
         "character_db_path": chacha_db.db_path if chacha_db else None,
+        "kanban_db_path": kanban_db_path,
     }
 
     common = dict(
@@ -317,6 +382,7 @@ async def rag_ablate(
         media_db_path=db_paths["media_db_path"],
         notes_db_path=db_paths["notes_db_path"],
         character_db_path=db_paths["character_db_path"],
+        kanban_db_path=db_paths["kanban_db_path"],
         media_db=media_db,
         chacha_db=chacha_db,
         search_mode=request.search_mode,
@@ -878,7 +944,8 @@ async def unified_search_endpoint(
             "media_db_path": media_db.db_path if media_db else None,
             # Notes are stored in ChaChaNotes DB by design; reuse its path for notes_db
             "notes_db_path": chacha_db.db_path if chacha_db else None,
-            "character_db_path": chacha_db.db_path if chacha_db else None
+            "character_db_path": chacha_db.db_path if chacha_db else None,
+            "kanban_db_path": _resolve_kanban_db_path(current_user, request.user_id),
         }
 
         # Branch: agentic strategy builds a synthetic chunk at query time
@@ -925,6 +992,7 @@ async def unified_search_endpoint(
                     media_db_path=db_paths.get("media_db_path"),
                     notes_db_path=db_paths.get("notes_db_path"),
                     character_db_path=db_paths.get("character_db_path"),
+                    kanban_db_path=db_paths.get("kanban_db_path"),
                     search_mode=request.search_mode,
                     fts_level=request.fts_level,
                     hybrid_alpha=request.hybrid_alpha,
@@ -984,6 +1052,7 @@ async def unified_search_endpoint(
                 chacha_db=chacha_db,
                 current_user=current_user,
             )
+            _sync_retriever_overrides_to_pipeline()
             result = await unified_rag_pipeline(**kwargs)
 
         # Convert to response format
@@ -1114,7 +1183,8 @@ async def unified_batch_endpoint(
         db_paths = {
             "media_db_path": media_db.db_path if media_db else None,
             "notes_db_path": chacha_db.db_path if chacha_db else None,
-            "character_db_path": chacha_db.db_path if chacha_db else None
+            "character_db_path": chacha_db.db_path if chacha_db else None,
+            "kanban_db_path": _resolve_kanban_db_path(current_user, request.user_id),
         }
 
         # Convert request to kwargs, excluding queries (Pydantic compat)
@@ -1221,6 +1291,7 @@ async def simple_search_endpoint(
             media_db_path=(media_db.db_path if media_db else None),
             notes_db_path=(chacha_db.db_path if chacha_db else None),
             character_db_path=(chacha_db.db_path if chacha_db else None),
+            kanban_db_path=_resolve_kanban_db_path(current_user),
             user_id=current_user.username if current_user else None,
         )
 
@@ -1291,16 +1362,21 @@ async def unified_search_stream_endpoint(
             if chacha_db:
                 db_paths["notes_db"] = chacha_db.db_path
                 db_paths["character_cards_db"] = chacha_db.db_path
+            kanban_db_path = _resolve_kanban_db_path(current_user, request.user_id)
+            if kanban_db_path:
+                db_paths["kanban_db"] = kanban_db_path
 
             docs = []
             try:
                 if db_paths:
+                    _sync_retriever_overrides_to_pipeline()
                     kwargs = _build_unified_pipeline_kwargs(
                         request=request,
                         db_paths={
                             "media_db_path": media_db.db_path if media_db else None,
                             "notes_db_path": chacha_db.db_path if chacha_db else None,
                             "character_db_path": chacha_db.db_path if chacha_db else None,
+                            "kanban_db_path": kanban_db_path,
                         },
                         media_db=media_db,
                         chacha_db=chacha_db,
@@ -1352,6 +1428,7 @@ async def unified_search_stream_endpoint(
                         media_db_path=(media_db.db_path if media_db else None),
                         notes_db_path=(chacha_db.db_path if chacha_db else None),
                         character_db_path=(chacha_db.db_path if chacha_db else None),
+                        kanban_db_path=kanban_db_path,
                         search_mode=request.search_mode,
                         fts_level=request.fts_level,
                         hybrid_alpha=request.hybrid_alpha,
@@ -1549,7 +1626,8 @@ async def advanced_search_endpoint(
         # Set up database paths
         db_paths = {
             "media_db_path": media_db.db_path if media_db else None,
-            "character_db_path": chacha_db.db_path if chacha_db else None
+            "character_db_path": chacha_db.db_path if chacha_db else None,
+            "kanban_db_path": _resolve_kanban_db_path(current_user),
         }
 
         # Use the advanced_search wrapper

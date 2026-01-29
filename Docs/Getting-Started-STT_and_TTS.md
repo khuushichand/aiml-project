@@ -19,7 +19,7 @@ It covers quick paths for both cloud-hosted and local backends, plus verificatio
 - Start the server
   - `python -m uvicorn tldw_Server_API.app.main:app --reload`
   - API: <http://127.0.0.1:8000/docs>
-  - WebUI: <http://127.0.0.1:8000/webui/>
+  - WebUI (Next.js): run `apps/tldw-frontend/` or visit <http://127.0.0.1:8000/api/v1/config/quickstart>
 
 Auth quick note
 - Single-user mode: server prints an API key on startup; or set `SINGLE_USER_API_KEY`.
@@ -56,6 +56,26 @@ curl -sS -X POST http://127.0.0.1:8000/api/v1/audio/speech \
   --output out.mp3
 ```
 - Play `out.mp3` in your player.
+
+5) (Optional) Return a storage download link in headers
+```bash
+curl -i -sS -X POST http://127.0.0.1:8000/api/v1/audio/speech \
+  -H "X-API-KEY: $SINGLE_USER_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{
+        "model": "tts-1",
+        "voice": "alloy",
+        "input": "Save this to generated files storage",
+        "response_format": "mp3",
+        "stream": false,
+        "return_download_link": true
+      }' \
+  --output out_saved.mp3
+```
+- Look for `X-Download-Path` and `X-Generated-File-Id` in the response headers.
+- The download path will look like `/api/v1/storage/files/{id}/download`.
+- `return_download_link` only works with `stream: false`.
+- When `return_download_link: true`, the response still includes the audio bytes in the body; the headers provide a storage reference for later retrieval.
 
 Troubleshooting
 - 401/403: ensure `OPENAI_API_KEY` is set and valid, and you’re passing `X-API-KEY` (single-user) or Bearer token (multi-user).
@@ -234,11 +254,11 @@ Troubleshooting
 ---
 
 ## Verifying Setup via WebUI
-- Open <http://127.0.0.1:8000/webui/>
+- Open the Next.js WebUI (`apps/tldw-frontend`) or visit <http://127.0.0.1:8000/api/v1/config/quickstart>.
 - Tabs:
   - Audio → Transcription (STT): upload a short clip and transcribe
   - Audio → TTS: enter text, pick a voice/model, and synthesize
-- The WebUI auto-detects single-user mode and populates the API key.
+- In single-user mode, set `NEXT_PUBLIC_X_API_KEY` in the frontend config if you want auto-auth.
 
 ---
 
@@ -409,4 +429,4 @@ Notes
 
 ## Model Hints (At-a-Glance)
 - TTS models: `tts-1` (OpenAI), `kokoro`, `eleven_monolingual_v1`, `higgs`, `dia`, `vibevoice`, `neutts`, `index_tts`.
-- STT models: `whisper-1` (faster-whisper), `whisper-large-v3` and `*-ct2` variants, `nemo-canary`, `nemo-parakeet-1.1b`, `qwen2audio`.
+- STT models: `whisper-1` (faster-whisper), `whisper-large-v3` and `*-ct2` variants, `nemo-canary`, `nemo-parakeet-1.1b`, `qwen2audio`, `vibevoice-asr`.

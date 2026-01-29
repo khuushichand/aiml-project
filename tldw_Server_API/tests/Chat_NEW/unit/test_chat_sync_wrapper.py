@@ -1,4 +1,5 @@
 import asyncio
+import importlib
 from typing import Any, Dict, List, Optional
 
 import pytest
@@ -136,3 +137,10 @@ async def test_chat_wrapper_safe_under_running_loop(monkeypatch):
 
     assert resp == "ok-async"
     assert called["count"] == 1
+
+
+@pytest.mark.asyncio
+async def test_chat_orchestrator_reload_safe_in_running_loop():
+    """Reloading chat_orchestrator should not raise when an event loop is running."""
+
+    importlib.reload(chat_orchestrator)

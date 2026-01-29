@@ -179,7 +179,7 @@ def unit_test_client(isolated_db, isolated_chat_endpoint_mocks):
     # Add helper method for authenticated requests
     def post_with_auth(url, json_data, auth_token="Bearer sk-mock-key-12345"):
         # In single-user mode, the API expects X-API-KEY to match settings.
-        # Keep legacy 'Token' header for backward compatibility in tests.
+        # Use Authorization header for bearer/API-key compatibility in tests.
         from tldw_Server_API.app.core.AuthNZ.settings import get_settings as _get_settings
 
         _settings = _get_settings()
@@ -191,8 +191,7 @@ def unit_test_client(isolated_db, isolated_chat_endpoint_mocks):
                 headers["X-API-KEY"] = api_key
         except Exception:
             pass
-        # Also provide deprecated Token header used by some tests/utilities
-        headers["Token"] = auth_token
+        headers["Authorization"] = auth_token
         return client.post(url, json=json_data, headers=headers)
 
     client.post_with_auth = post_with_auth
@@ -265,7 +264,7 @@ def integration_test_client(isolated_db, mock_server_url):
                         headers["X-API-KEY"] = api_key
                 except Exception:
                     pass
-                headers["Token"] = auth_token
+                headers["Authorization"] = auth_token
                 return client.post(url, json=json_data, headers=headers)
 
             client.post_with_auth = post_with_auth

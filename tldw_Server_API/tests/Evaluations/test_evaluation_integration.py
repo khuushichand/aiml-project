@@ -296,6 +296,8 @@ class TestAuthentication:
         settings.RATE_LIMIT_PER_MINUTE = 60
         settings.RATE_LIMIT_BURST = 10
         settings.SINGLE_USER_ALLOWED_IPS = []
+        settings.AUTH_TRUST_X_FORWARDED_FOR = False
+        settings.AUTH_TRUSTED_PROXY_IPS = []
         return settings
 
     @pytest.mark.asyncio

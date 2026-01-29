@@ -340,55 +340,88 @@ class TokenChunkingStrategy(BaseChunkingStrategy):
         if isinstance(self.tokenizer, FallbackTokenizer):
             return self._chunk_with_fallback(text, max_size, overlap, **options)
 
-        # Encode text to tokens
+        # Encode text to tokens (and capture offsets when available)
+        token_ids: List[int]
+        offsets: Optional[List[Tuple[int, int]]] = None
         try:
             add_special = options.get('add_special_tokens', False)
             if hasattr(self.tokenizer, 'tokenizer'):
                 # For TransformersTokenizer
-                tokens = self.tokenizer.tokenizer.encode(
-                    text,
-                    add_special_tokens=add_special
-                )
+                tok = self.tokenizer.tokenizer
+                try:
+                    enc = tok(
+                        text,
+                        add_special_tokens=add_special,
+                        return_offsets_mapping=True,
+                        return_attention_mask=False,
+                        return_special_tokens_mask=False,
+                    )
+                    token_ids = list(enc.get('input_ids') or enc['input_ids'])
+                    offsets = list(enc.get('offset_mapping') or enc['offset_mapping'])
+                except Exception:
+                    token_ids = tok.encode(text, add_special_tokens=add_special)
+                    offsets = None
             else:
-                tokens = self.tokenizer.encode(text)
+                token_ids = self.tokenizer.encode(text)
 
         except Exception as e:
             logger.error(f"Tokenization failed: {e}")
             raise TokenizerError(f"Failed to tokenize text: {e}")
 
-        if not tokens:
+        if not token_ids:
             return []
 
-        logger.debug(f"Tokenized text into {len(tokens)} tokens")
+        if offsets is not None and len(offsets) != len(token_ids):
+            offsets = None
+
+        logger.debug(f"Tokenized text into {len(token_ids)} tokens")
 
         # Create chunks
         chunks = []
         step = max(1, max_size - overlap)
 
-        for i in range(0, len(tokens), step):
-            chunk_tokens = tokens[i:i + max_size]
-
-            # Decode tokens back to text
-            try:
-                if hasattr(self.tokenizer, 'decode'):
-                    try:
-                        chunk_text = self.tokenizer.decode(chunk_tokens, skip_special_tokens=True)
-                    except TypeError:
-                        chunk_text = self.tokenizer.decode(chunk_tokens)
-                elif hasattr(self.tokenizer, 'tokenizer') and hasattr(self.tokenizer.tokenizer, 'decode'):
-                    try:
-                        chunk_text = self.tokenizer.tokenizer.decode(chunk_tokens, skip_special_tokens=True)
-                    except TypeError:
-                        chunk_text = self.tokenizer.tokenizer.decode(chunk_tokens)
-                else:
-                    raise AttributeError('No decode() available on tokenizer or underlying implementation')
-
-                if chunk_text:
-                    chunks.append(chunk_text)
-
-            except Exception as e:
-                logger.warning(f"Failed to decode chunk at position {i}: {e}")
+        for i in range(0, len(token_ids), step):
+            chunk_tokens = token_ids[i:i + max_size]
+            if not chunk_tokens:
                 continue
+
+            if offsets is not None:
+                start_idx = i
+                end_idx = min(i + len(chunk_tokens) - 1, len(offsets) - 1)
+                # Skip zero-width tokens at the bounds
+                while start_idx < len(offsets) and (offsets[start_idx][1] - offsets[start_idx][0]) == 0:
+                    start_idx += 1
+                while end_idx > start_idx and (offsets[end_idx][1] - offsets[end_idx][0]) == 0:
+                    end_idx -= 1
+                if start_idx < len(offsets) and end_idx >= start_idx:
+                    start_char = int(offsets[start_idx][0])
+                    end_char = int(offsets[end_idx][1])
+                    if end_char < start_char:
+                        end_char = start_char
+                    chunk_text = text[start_char:end_char]
+                else:
+                    chunk_text = ""
+            else:
+                # Decode tokens back to text
+                try:
+                    if hasattr(self.tokenizer, 'decode'):
+                        try:
+                            chunk_text = self.tokenizer.decode(chunk_tokens, skip_special_tokens=True)
+                        except TypeError:
+                            chunk_text = self.tokenizer.decode(chunk_tokens)
+                    elif hasattr(self.tokenizer, 'tokenizer') and hasattr(self.tokenizer.tokenizer, 'decode'):
+                        try:
+                            chunk_text = self.tokenizer.tokenizer.decode(chunk_tokens, skip_special_tokens=True)
+                        except TypeError:
+                            chunk_text = self.tokenizer.tokenizer.decode(chunk_tokens)
+                    else:
+                        raise AttributeError('No decode() available on tokenizer or underlying implementation')
+                except Exception as e:
+                    logger.warning(f"Failed to decode chunk at position {i}: {e}; falling back to word approximation")
+                    return self._chunk_with_fallback(text, max_size, overlap, **options)
+
+            if chunk_text:
+                chunks.append(chunk_text)
 
         logger.debug(f"Created {len(chunks)} token-based chunks")
         return chunks

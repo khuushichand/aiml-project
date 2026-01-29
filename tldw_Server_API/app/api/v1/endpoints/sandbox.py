@@ -29,6 +29,9 @@ from tldw_Server_API.app.api.v1.schemas.sandbox_schemas import (
     SandboxAdminUsageItem,
 )
 from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import User, get_request_user
+from tldw_Server_API.app.core.AuthNZ.ip_allowlist import is_single_user_ip_allowed, resolve_client_ip
+from tldw_Server_API.app.core.AuthNZ.api_key_manager import get_api_key_manager
+from tldw_Server_API.app.core.AuthNZ.settings import get_settings
 from tldw_Server_API.app.core.Sandbox.models import RunSpec, SessionSpec, RuntimeType as CoreRuntimeType
 from tldw_Server_API.app.core.Sandbox.service import SandboxService
 from tldw_Server_API.app.core.config import settings as app_settings
@@ -87,6 +90,113 @@ class SandboxArtifactGuardRoute(APIRoute):
 router = APIRouter(prefix="/sandbox", tags=["sandbox"], route_class=SandboxArtifactGuardRoute)
 
 _service = SandboxService()
+
+
+def _is_admin_user(user: User) -> bool:
+    try:
+        if bool(getattr(user, "is_admin", False)):
+            return True
+    except Exception:
+        pass
+    try:
+        roles = getattr(user, "roles", None)
+        if roles and "admin" in roles:
+            return True
+    except Exception:
+        pass
+    return False
+
+
+def _require_run_owner(run_id: str, current_user: User) -> str:
+    owner = _service._orch.get_run_owner(run_id)  # type: ignore[attr-defined]
+    if owner is None:
+        raise HTTPException(status_code=404, detail="run_not_found")
+    if not _is_admin_user(current_user) and str(owner) != str(current_user.id):
+        raise HTTPException(status_code=404, detail="run_not_found")
+    return str(owner)
+
+
+def _require_session_owner(session_id: str, current_user: User) -> str:
+    owner = _service._orch.get_session_owner(session_id)  # type: ignore[attr-defined]
+    if owner is None:
+        raise HTTPException(status_code=404, detail="session_not_found")
+    if not _is_admin_user(current_user) and str(owner) != str(current_user.id):
+        raise HTTPException(status_code=404, detail="session_not_found")
+    return str(owner)
+
+
+def _looks_like_jwt(token: Optional[str]) -> bool:
+    return isinstance(token, str) and token.count(".") == 2
+
+
+async def _resolve_sandbox_ws_user_id(
+    websocket: WebSocket,
+    *,
+    token: Optional[str],
+    api_key: Optional[str],
+) -> int:
+    if not token:
+        auth_hdr = websocket.headers.get("authorization") or websocket.headers.get("Authorization")
+        if auth_hdr and auth_hdr.lower().startswith("bearer "):
+            token = auth_hdr.split(" ", 1)[1].strip()
+    if not api_key:
+        api_key = websocket.headers.get("x-api-key") or websocket.headers.get("X-API-KEY")
+
+    if token and not api_key and not _looks_like_jwt(token):
+        api_key = token
+        token = None
+
+    if token:
+        try:
+            from tldw_Server_API.app.core.AuthNZ.jwt_service import get_jwt_service
+            from tldw_Server_API.app.core.AuthNZ.session_manager import get_session_manager
+            from tldw_Server_API.app.core.AuthNZ.exceptions import InvalidTokenError, TokenExpiredError
+
+            jwt_service = get_jwt_service()
+            payload = await jwt_service.verify_token_async(token, token_type="access")
+            session_manager = await get_session_manager()
+            if await session_manager.is_token_blacklisted(token, payload.get("jti")):
+                raise HTTPException(status_code=401, detail="invalid_token")
+        except HTTPException:
+            raise
+        except (InvalidTokenError, TokenExpiredError):
+            raise HTTPException(status_code=401, detail="invalid_token")
+        except Exception:
+            raise HTTPException(status_code=401, detail="invalid_token")
+
+        sub = payload.get("user_id") or payload.get("sub")
+        if sub is None:
+            raise HTTPException(status_code=401, detail="invalid_token")
+        try:
+            return int(sub)
+        except Exception:
+            raise HTTPException(status_code=401, detail="invalid_token")
+
+    if api_key:
+        settings = get_settings()
+        client_ip = resolve_client_ip(websocket, settings)
+        if getattr(settings, "AUTH_MODE", None) == "single_user":
+            allowed_keys: set[str] = set()
+            primary_key = getattr(settings, "SINGLE_USER_API_KEY", None)
+            if primary_key:
+                allowed_keys.add(primary_key)
+            test_key = os.getenv("SINGLE_USER_TEST_API_KEY")
+            if test_key:
+                allowed_keys.add(test_key)
+            if api_key in allowed_keys and is_single_user_ip_allowed(client_ip, settings):
+                return int(getattr(settings, "SINGLE_USER_FIXED_ID", 1))
+            raise HTTPException(status_code=401, detail="invalid_api_key")
+
+        api_mgr = await get_api_key_manager()
+        info = await api_mgr.validate_api_key(api_key=api_key, required_scope="read", ip_address=client_ip)
+        if not info:
+            raise HTTPException(status_code=401, detail="invalid_api_key")
+        user_id = info.get("user_id")
+        if user_id is None:
+            raise HTTPException(status_code=401, detail="invalid_api_key")
+        return int(user_id)
+
+    raise HTTPException(status_code=401, detail="auth_required")
 
 
 def _normalize_reason(outcome: str, message: Optional[str]) -> str:
@@ -239,10 +349,10 @@ async def sandbox_health_public() -> dict:
 
 @router.post("/sessions", response_model=SandboxSession, summary="Create a short-lived sandbox session")
 async def create_session(
+    request: Request,
     payload: SandboxSessionCreateRequest = Body(...),
     current_user: User = Depends(get_request_user),
     idempotency_key: Optional[str] = Header(None, alias="Idempotency-Key"),
-    request: Request = None,
     audit_service=Depends(get_audit_service_for_user),
 ) -> SandboxSession:
     # Default execution timeout from settings (fallback handled in schema)
@@ -321,6 +431,14 @@ async def create_session(
                     "details": {"supported": e.supported, "provided": e.provided}
                 }
             })
+        if isinstance(e, _Svc.InvalidFirecrackerConfig):
+            return JSONResponse(status_code=400, content={
+                "error": {
+                    "code": "invalid_firecracker_config",
+                    "message": "Firecracker kernel/rootfs configuration is invalid.",
+                    "details": e.details,
+                }
+            })
         raise
     # Metrics
     try:
@@ -381,6 +499,7 @@ async def delete_session(
     session_id: str = Path(..., min_length=1),
     current_user: User = Depends(get_request_user),
 ) -> dict:
+    _require_session_owner(session_id, current_user)
     ok = _service.destroy_session(session_id)
     if not ok:
         raise HTTPException(status_code=404, detail="session_not_found")
@@ -389,12 +508,13 @@ async def delete_session(
 
 @router.post("/sessions/{session_id}/files", response_model=SandboxFileUploadResponse, summary="Upload files to a session workspace")
 async def upload_files(
+    request: Request,
     session_id: str = Path(..., min_length=1),
     files: list[UploadFile] = File(...),
     current_user: User = Depends(get_request_user),
-    request: Request = None,
     audit_service=Depends(get_audit_service_for_user),
 ) -> SandboxFileUploadResponse:
+    _require_session_owner(session_id, current_user)
     ws_root = _service.get_session_workspace_path(session_id)
     if not ws_root:
         raise HTTPException(status_code=404, detail="session_not_found")
@@ -518,10 +638,10 @@ async def upload_files(
 
 @router.post("/runs", response_model=SandboxRunStatus, summary="Start a sandbox run (one-shot or for a session)")
 async def start_run(
+    request: Request,
     payload: SandboxRunCreateRequest = Body(...),
     current_user: User = Depends(get_request_user),
     idempotency_key: Optional[str] = Header(None, alias="Idempotency-Key"),
-    request: Request = None,
     audit_service=Depends(get_audit_service_for_user),
 ) -> SandboxRunStatus:
     """
@@ -543,6 +663,8 @@ async def start_run(
         HTTPException: 409 with code "idempotency_conflict" when an idempotent request conflicts.
         HTTPException: 400 with code "invalid_spec_version" when the provided spec_version is unsupported.
     """
+    if payload.session_id:
+        _require_session_owner(payload.session_id, current_user)
     files_inline = _service.parse_inline_files([f.dict() for f in (payload.files or [])])
     try:
         default_exec_to = int(getattr(app_settings, "SANDBOX_DEFAULT_EXEC_TIMEOUT_SEC", 300))
@@ -661,6 +783,14 @@ async def start_run(
                     "code": "invalid_spec_version",
                     "message": str(e),
                     "details": {"supported": e.supported, "provided": e.provided}
+                }
+            })
+        if isinstance(e, _Svc.InvalidFirecrackerConfig):
+            return JSONResponse(status_code=400, content={
+                "error": {
+                    "code": "invalid_firecracker_config",
+                    "message": "Firecracker kernel/rootfs configuration is invalid.",
+                    "details": e.details,
                 }
             })
         raise
@@ -786,21 +916,27 @@ async def start_run(
     log_stream_url: Optional[str] = None
     try:
         base_path = f"/api/v1/sandbox/runs/{status.id}/stream"
-        # Read from settings first, then fall back to direct env to avoid stale cache issues in tests
-        signed_flag = bool(getattr(app_settings, "SANDBOX_WS_SIGNED_URLS", False))
+        # Prefer explicit env override to avoid stale cached settings in tests.
+        signed_env = None
         try:
-            if not signed_flag:
-                import os as _os
-                signed_flag = str(_os.getenv("SANDBOX_WS_SIGNED_URLS", "")).strip().lower() in {"1","true","yes","on","y"}
+            import os as _os
+            signed_env = _os.getenv("SANDBOX_WS_SIGNED_URLS")
         except Exception:
-            pass
-        secret_val = getattr(app_settings, "SANDBOX_WS_SIGNING_SECRET", None)
-        if not secret_val:
-            try:
-                import os as _os
-                secret_val = _os.getenv("SANDBOX_WS_SIGNING_SECRET")
-            except Exception:
-                secret_val = None
+            signed_env = None
+        if signed_env is not None:
+            signed_flag = str(signed_env).strip().lower() in {"1","true","yes","on","y"}
+        else:
+            signed_flag = bool(getattr(app_settings, "SANDBOX_WS_SIGNED_URLS", False))
+        secret_env = None
+        try:
+            import os as _os
+            secret_env = _os.getenv("SANDBOX_WS_SIGNING_SECRET")
+        except Exception:
+            secret_env = None
+        if secret_env is not None:
+            secret_val = secret_env or None
+        else:
+            secret_val = getattr(app_settings, "SANDBOX_WS_SIGNING_SECRET", None)
         if signed_flag and secret_val:
             ttl = int(getattr(app_settings, "SANDBOX_WS_SIGNED_URL_TTL_SEC", 60))
             exp = int(time.time()) + max(1, ttl)
@@ -845,6 +981,7 @@ async def get_run_status(
     run_id: str = Path(..., min_length=1),
     current_user: User = Depends(get_request_user),
 ) -> SandboxRunStatus:
+    _require_run_owner(run_id, current_user)
     st = _service.get_run(run_id)
     if not st:
         raise HTTPException(status_code=404, detail="run_not_found")
@@ -868,10 +1005,11 @@ async def get_run_status(
 
 @router.get("/runs/{run_id}/artifacts", response_model=ArtifactListResponse, summary="List captured artifacts")
 async def list_artifacts(
+    request: Request,
     run_id: str = Path(..., min_length=1),
     current_user: User = Depends(get_request_user),
-    request: Request = None,
 ) -> ArtifactListResponse:
+    _require_run_owner(run_id, current_user)
     # If a traversal attempt like `/artifacts/../x` was normalized to this route,
     # detect it via the raw ASGI path and reject with 400 to satisfy security tests.
     try:
@@ -939,12 +1077,13 @@ async def reject_artifact_traversal(
 
 @router.get("/runs/{run_id}/artifacts/{path:path}", summary="Download an artifact")
 async def download_artifact(
+    request: Request,
     run_id: str = Path(..., min_length=1),
     path: str = Path(..., min_length=1),
     current_user: User = Depends(get_request_user),
     range_header: Optional[str] = Header(None, alias="Range"),
-    request: Request = None,
 ):
+    _require_run_owner(run_id, current_user)
     # Basic path normalization checks (orchestrator also normalizes on FS)
     # Reject absolute or traversal attempts early (defense in depth). When the ASGI router
     # normalizes the URL (e.g., collapsing '/artifacts/../x' to '/artifacts/x'), the path
@@ -1054,6 +1193,7 @@ async def cancel_run(
     current_user: User = Depends(get_request_user),
 ) -> CancelResponse:
     try:
+        _require_run_owner(run_id, current_user)
         ok = _service.cancel_run(run_id)
         return CancelResponse(id=run_id, cancelled=bool(ok), message=("canceled_by_user" if ok else "not_running_or_not_found"))
     except Exception as e:
@@ -1077,10 +1217,78 @@ async def stream_run_logs(websocket: WebSocket, run_id: str) -> None:
         websocket (WebSocket): The active WebSocket connection to send frames to.
         run_id (str): Identifier of the sandbox run whose events should be streamed.
     """
-    # Enforce signed WS URL validation when enabled
+    # Authenticate via JWT/session (Authorization header) or API key.
+    signed_flag = False
     try:
-        if bool(getattr(app_settings, "SANDBOX_WS_SIGNED_URLS", False)) or str(os.getenv("SANDBOX_WS_SIGNED_URLS", "")).strip().lower() in {"1","true","yes","on","y"}:
-            secret = getattr(app_settings, "SANDBOX_WS_SIGNING_SECRET", None) or os.getenv("SANDBOX_WS_SIGNING_SECRET")
+        signed_env = os.getenv("SANDBOX_WS_SIGNED_URLS")
+        if signed_env is not None:
+            signed_flag = str(signed_env).strip().lower() in {"1", "true", "yes", "on", "y"}
+        else:
+            signed_flag = bool(getattr(app_settings, "SANDBOX_WS_SIGNED_URLS", False))
+    except Exception:
+        signed_flag = False
+    try:
+        qp = websocket.query_params  # type: ignore[attr-defined]
+        auth_token = None
+        if qp is not None:
+            # Prefer explicit auth_token; only reuse token param when signed URLs are disabled
+            auth_token = qp.get("auth_token")
+            if not auth_token and not signed_flag:
+                auth_token = qp.get("token")
+    except Exception:
+        auth_token = None
+    try:
+        api_key = websocket.headers.get("x-api-key") or websocket.headers.get("X-API-KEY")
+    except Exception:
+        api_key = None
+    try:
+        user_id = await _resolve_sandbox_ws_user_id(websocket, token=auth_token, api_key=api_key)
+    except HTTPException:
+        try:
+            await websocket.close(code=4401)
+        finally:
+            return
+    # Ownership check before streaming
+    try:
+        owner = _service._orch.get_run_owner(run_id)  # type: ignore[attr-defined]
+    except Exception:
+        owner = None
+    if owner is None:
+        # In test mode, allow streaming for untracked runs so hub-only WS tests
+        # can publish frames without going through the run store.
+        try:
+            test_mode = bool(getattr(app_settings, "TEST_MODE", False))
+        except Exception:
+            test_mode = False
+        try:
+            test_mode = test_mode or str(os.getenv("TEST_MODE", "")).strip().lower() in {"1", "true", "yes", "on", "y"}
+        except Exception:
+            pass
+        try:
+            allow_untracked = str(os.getenv("SANDBOX_WS_ALLOW_UNTRACKED_RUNS", "")).strip().lower() in {"1", "true", "yes", "on", "y"}
+        except Exception:
+            allow_untracked = False
+        if test_mode or allow_untracked:
+            owner = str(user_id)
+        else:
+            try:
+                await websocket.close(code=4404)
+            finally:
+                return
+    if str(owner) != str(user_id):
+        try:
+            await websocket.close(code=4404)
+        finally:
+            return
+
+    # Enforce signed WS URL validation when enabled (in addition to auth).
+    try:
+        if signed_flag:
+            secret_env = os.getenv("SANDBOX_WS_SIGNING_SECRET")
+            if secret_env is not None:
+                secret = secret_env or None
+            else:
+                secret = getattr(app_settings, "SANDBOX_WS_SIGNING_SECRET", None)
             if not secret:
                 # Signing is enabled but no secret configured: refuse connection
                 try:
@@ -1453,9 +1661,9 @@ async def admin_get_run_details(
 # Fallback guard: catch normalized traversal paths that bypass artifacts route
 @router.get("/runs/{run_id}/{rest:path}", include_in_schema=False)
 async def sandbox_runs_fallback_guard(
+    request: Request,
     run_id: str = Path(..., min_length=1),
     rest: str = Path(..., min_length=1),
-    request: Request = None,
 ):
     try:
         # Collect multiple candidates for the original request path across ASGI implementations

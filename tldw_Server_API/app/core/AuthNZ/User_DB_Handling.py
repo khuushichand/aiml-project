@@ -14,7 +14,10 @@ from pydantic import BaseModel, ValidationError, Field
 # Local Imports
 # New unified settings
 from tldw_Server_API.app.core.AuthNZ.settings import get_settings
-from tldw_Server_API.app.core.AuthNZ.ip_allowlist import is_single_user_ip_allowed
+from tldw_Server_API.app.core.AuthNZ.ip_allowlist import (
+    is_single_user_ip_allowed,
+    resolve_client_ip,
+)
 # New JWT service
 from tldw_Server_API.app.core.AuthNZ.jwt_service import get_jwt_service
 from tldw_Server_API.app.core.AuthNZ.api_key_manager import get_api_key_manager
@@ -283,6 +286,27 @@ def _is_test_context() -> bool:
     for flag in ("TEST_MODE", "TLDW_TEST_MODE", "TESTING"):
         if os.getenv(flag, "").lower() in {"1", "true", "yes", "on"}:
             return True
+    return False
+
+
+def _is_strict_test_bypass_context() -> bool:
+    """
+    Return True only when an explicit test runtime is detected.
+
+    This is intentionally stricter than `_is_test_context()` so that accidental
+    `TESTING=1` environment leakage does not enable auth bypasses in non-test
+    deployments.
+    """
+    if os.getenv("PYTEST_CURRENT_TEST") is not None:
+        return True
+    for flag in ("TEST_MODE", "TLDW_TEST_MODE"):
+        if os.getenv(flag, "").lower() in {"1", "true", "yes", "on"}:
+            return True
+    try:
+        if getattr(get_settings(), "TEST_MODE", False):
+            return True
+    except Exception:
+        pass
     return False
 
 
@@ -657,16 +681,92 @@ async def verify_jwt_and_fetch_user(request: Request, token: str = Depends(oauth
         membership_lookup_id = user.id_int
         if membership_lookup_id is None:
             raise ValueError("User ID is non-numeric; skipping membership lookup.")
-        if token_team_ids or token_org_ids:
-            team_ids = token_team_ids or []
-            org_ids = token_org_ids or []
-        memberships = []
-        if not team_ids or not org_ids:
-            memberships = await list_memberships_for_user(membership_lookup_id)
-        if not team_ids:
-            team_ids = [m.get("team_id") for m in memberships if m.get("team_id") is not None]
-        if not org_ids:
-            org_ids = sorted({m.get("org_id") for m in memberships if m.get("org_id") is not None})
+
+        memberships = await list_memberships_for_user(membership_lookup_id)
+        member_team_ids = _coerce_int_list(
+            [m.get("team_id") for m in memberships if m.get("team_id") is not None]
+        )
+        member_org_ids = sorted(
+            set(_coerce_int_list([m.get("org_id") for m in memberships if m.get("org_id") is not None]))
+        )
+        team_to_org: dict[int, int] = {}
+        for m in memberships:
+            if m.get("team_id") is None or m.get("org_id") is None:
+                continue
+            try:
+                team_to_org[int(m["team_id"])] = int(m["org_id"])
+            except (TypeError, ValueError):
+                continue
+
+        member_team_set = set(member_team_ids)
+        member_org_set = set(member_org_ids)
+
+        if token_team_ids:
+            missing_teams = [tid for tid in token_team_ids if tid not in member_team_set]
+            if missing_teams:
+                if pii_redact_logs:
+                    logger.warning("Token team memberships are no longer valid (details redacted)")
+                else:
+                    logger.warning(
+                        f"Token team IDs not permitted for user {subject_identifier}: {missing_teams}"
+                    )
+                raise HTTPException(
+                    status_code=status.HTTP_403_FORBIDDEN,
+                    detail="Token membership is no longer valid",
+                )
+        if token_org_ids:
+            missing_orgs = [oid for oid in token_org_ids if oid not in member_org_set]
+            if missing_orgs:
+                if pii_redact_logs:
+                    logger.warning("Token org memberships are no longer valid (details redacted)")
+                else:
+                    logger.warning(
+                        f"Token org IDs not permitted for user {subject_identifier}: {missing_orgs}"
+                    )
+                raise HTTPException(
+                    status_code=status.HTTP_403_FORBIDDEN,
+                    detail="Token membership is no longer valid",
+                )
+
+        if token_team_ids:
+            team_ids = list(token_team_ids)
+            if token_org_ids:
+                org_ids = list(token_org_ids)
+            else:
+                org_ids = sorted(
+                    {team_to_org.get(tid) for tid in team_ids if team_to_org.get(tid) is not None}
+                )
+        elif token_org_ids:
+            org_ids = list(token_org_ids)
+            token_org_set = set(org_ids)
+            team_ids = [tid for tid in member_team_ids if team_to_org.get(tid) in token_org_set]
+        else:
+            team_ids = list(member_team_ids)
+            org_ids = list(member_org_ids)
+
+        active_team_claim = None
+        if token_active_team_id is not None:
+            try:
+                active_team_claim = int(token_active_team_id)
+            except (TypeError, ValueError):
+                active_team_claim = None
+        if active_team_claim is not None and active_team_claim not in team_ids:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Token active team is no longer valid",
+            )
+        active_org_claim = None
+        if token_active_org_id is not None:
+            try:
+                active_org_claim = int(token_active_org_id)
+            except (TypeError, ValueError):
+                active_org_claim = None
+        if active_org_claim is not None and active_org_claim not in org_ids:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Token active organization is no longer valid",
+            )
+
         active_team_id = _normalize_active_id(token_active_team_id, team_ids)
         active_org_id = _normalize_active_id(token_active_org_id, org_ids)
         try:
@@ -678,6 +778,8 @@ async def verify_jwt_and_fetch_user(request: Request, token: str = Depends(oauth
                 request.state.active_org_id = active_org_id
         except Exception:
             pass
+    except HTTPException:
+        raise
     except Exception:
         try:
             request.state.team_ids = []
@@ -764,17 +866,12 @@ async def authenticate_api_key_user(request: Request, api_key: str) -> User:
             primary_key = getattr(settings, "SINGLE_USER_API_KEY", None)
             if primary_key:
                 allowed_keys.add(primary_key)
-            test_key = os.getenv("SINGLE_USER_TEST_API_KEY")
-            if test_key:
-                allowed_keys.add(test_key)
+            if _is_test_context():
+                test_key = os.getenv("SINGLE_USER_TEST_API_KEY")
+                if test_key:
+                    allowed_keys.add(test_key)
             if api_key in allowed_keys:
-                client_ip = None
-                try:
-                    client = getattr(request, "client", None)
-                    if client is not None:
-                        client_ip = getattr(client, "host", None)
-                except Exception:
-                    client_ip = None
+                client_ip = resolve_client_ip(request, settings)
                 if not is_single_user_ip_allowed(client_ip, settings):
                     if settings.PII_REDACT_LOGS:
                         logger.warning("Single-user API key rejected due to client IP allowlist (details redacted)")
@@ -866,13 +963,7 @@ async def authenticate_api_key_user(request: Request, api_key: str) -> User:
 
     try:
         api_mgr = await get_api_key_manager()
-        client_ip = None
-        try:
-            client = getattr(request, "client", None)
-            if client is not None:
-                client_ip = getattr(client, "host", None)
-        except Exception:
-            client_ip = None
+        client_ip = resolve_client_ip(request, settings)
 
         key_info = await api_mgr.validate_api_key(api_key=api_key, ip_address=client_ip)
         if not key_info:
@@ -1168,7 +1259,7 @@ async def get_request_user(
     request: Request,
     api_key: Optional[str] = Header(None, alias="X-API-KEY"),
     token: Optional[str] = Depends(oauth2_scheme),  # Bearer from Authorization
-    legacy_token_header: Optional[str] = Header(None, alias="Token"),  # Back-compat for chat endpoint tests
+    legacy_token_header: Optional[str] = Header(None, alias="Token"),  # Deprecated legacy header (ignored)
 ) -> User:
     """
     Unified authentication dependency for endpoints that require a User.
@@ -1190,6 +1281,7 @@ async def get_request_user(
             not _prod
             and _os.getenv("TESTING", "").lower() in {"1", "true", "yes", "on"}
             and _os.getenv("EVALS_HEAVY_ADMIN_ONLY", "true").lower() not in {"1", "true", "yes", "on"}
+            and _is_strict_test_bypass_context()
         ):
             logger.info(
                 "TESTING with EVALS_HEAVY_ADMIN_ONLY disabled: "
@@ -1234,18 +1326,8 @@ async def get_request_user(
             f"get_request_user fast-path reuse failed; falling back to normal auth: {fastpath_exc}"
         )
 
-    # Backwards-compatibility: treat a legacy "Token: Bearer <API_KEY>" header as an
-    # API key when X-API-KEY is absent.
-    if api_key is None and legacy_token_header and isinstance(legacy_token_header, str):
-        extracted = None
-        try:
-            legacy_token_header = legacy_token_header.strip()
-            if legacy_token_header.lower().startswith("bearer "):
-                extracted = legacy_token_header[len("Bearer ") :].strip()
-        except Exception:
-            extracted = None
-        if extracted:
-            api_key = extracted
+    # Legacy Token header is intentionally ignored (no longer supported).
+    _ = legacy_token_header
 
     # Prefer Bearer JWT when present; in single-user mode treat Bearer as API key.
     if token:

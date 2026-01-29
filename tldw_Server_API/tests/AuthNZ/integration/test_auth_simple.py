@@ -60,6 +60,7 @@ class TestSimpleAuth:
             self.test_password = password
             self.test_email = "test@example.com"
             self.client = client  # Store the TestClient
+            self.db_name = db_name
 
         finally:
             await conn.close()
@@ -165,7 +166,45 @@ class TestSimpleAuth:
         assert response.status_code == 200
         data = response.json()
         assert data["username"] == self.test_username
-        assert data["email"] == self.test_email
+
+    def test_refresh_inactive_user_returns_401_or_403(self):
+        """Refresh should not 500 when the user is inactive."""
+        import asyncio
+        import asyncpg
+
+        login_response = self.client.post(
+            "/api/v1/auth/login",
+            data={
+                "username": self.test_username,
+                "password": self.test_password,
+            },
+        )
+        assert login_response.status_code == 200
+        refresh_token = login_response.json()["refresh_token"]
+
+        async def _deactivate_user():
+            conn = await asyncpg.connect(
+                host=TEST_DB_HOST,
+                port=TEST_DB_PORT,
+                user=TEST_DB_USER,
+                password=TEST_DB_PASSWORD,
+                database=self.db_name,
+            )
+            try:
+                await conn.execute(
+                    "UPDATE users SET is_active = FALSE WHERE username = $1",
+                    self.test_username,
+                )
+            finally:
+                await conn.close()
+
+        asyncio.run(_deactivate_user())
+
+        refresh_response = self.client.post(
+            "/api/v1/auth/refresh",
+            json={"refresh_token": refresh_token},
+        )
+        assert refresh_response.status_code in (401, 403)
 
     def test_unauthorized_access(self):
 

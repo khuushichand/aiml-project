@@ -155,7 +155,8 @@ async def _create_user_and_key(*, username: str, email: str, role: str = "user")
     user_id = int(created_user["id"])
     mgr = APIKeyManager(pool)
     await mgr.initialize()
-    key_rec = await mgr.create_api_key(user_id=user_id, name=f"{username}-key")
+    # POST endpoints require write scope in the API-key fallback path.
+    key_rec = await mgr.create_api_key(user_id=user_id, name=f"{username}-key", scope="write")
     return user_id, str(key_rec["key"])
 
 

@@ -338,14 +338,30 @@ class RequestQueue:
             raise RuntimeError("Streaming channel not provided for streaming job")
 
         async def _pump_async_iterator(async_iter):
+            aiter = async_iter.__aiter__() if hasattr(async_iter, "__aiter__") else async_iter
             try:
-                async for chunk in async_iter:
+                while True:
+                    if request.future.cancelled() or loop.is_closed() or not self._running:
+                        break
+                    try:
+                        chunk = await aiter.__anext__()
+                    except StopAsyncIteration:
+                        break
+                    if request.future.cancelled() or loop.is_closed() or not self._running:
+                        break
                     try:
                         await request.stream_channel.put(chunk)
                     except Exception as ch_e:
                         logger.warning(f"Failed to enqueue stream chunk for {request.request_id}: {ch_e}")
                         break
             finally:
+                # Ensure async iterators are closed on cancellation or early exit
+                try:
+                    aclose = getattr(aiter, "aclose", None)
+                    if callable(aclose):
+                        await aclose()
+                except Exception:
+                    pass
                 # Signal completion
                 try:
                     await request.stream_channel.put(None)
@@ -567,7 +583,9 @@ class RequestQueue:
             # Cancel all pending requests
             for request in self.queue:
                 request.future.cancel()
+                self._active_request_ids.discard(request.request_id)
             self.queue.clear()
+            self._has_items.clear()
             logger.info("Cleared request queue")
 
 
@@ -605,17 +623,19 @@ class RateLimitedQueue(RequestQueue):
         # Lock for thread-safe rate limit state modifications
         self._rate_limit_lock = asyncio.Lock()
 
-    async def _check_rate_limit(self, client_id: str) -> bool:
+    async def _reserve_rate_limit(self, client_id: str) -> Optional[float]:
         """
-        Check if request is within rate limits.
+        Reserve a rate limit slot for this client.
 
         This method is thread-safe and uses locking to prevent race conditions.
+        It mutates the rate-limit state on success and returns the reservation
+        timestamp so callers can roll back if downstream admission fails.
 
         Args:
             client_id: Client identifier
 
         Returns:
-            True if within limits, False otherwise
+            Reservation timestamp if within limits, None otherwise
         """
         current_time = time.time()
         minute_ago = current_time - 60
@@ -633,12 +653,12 @@ class RateLimitedQueue(RequestQueue):
 
             # Check global rate limit
             if len(self.global_request_times) >= self.global_rate_limit:
-                return False
+                return None
 
             # Check per-client rate limit
             client_requests = self.client_request_times.get(client_id, [])
             if len(client_requests) >= self.per_client_rate_limit:
-                return False
+                return None
 
             # Record request time
             self.global_request_times.append(current_time)
@@ -646,7 +666,24 @@ class RateLimitedQueue(RequestQueue):
                 self.client_request_times[client_id] = []
             self.client_request_times[client_id].append(current_time)
 
-            return True
+            return current_time
+
+    async def _rollback_rate_limit(self, client_id: str, reservation_ts: float) -> None:
+        """Rollback a previously reserved rate-limit slot."""
+        async with self._rate_limit_lock:
+            try:
+                self.global_request_times.remove(reservation_ts)
+            except ValueError:
+                pass
+            client_times = self.client_request_times.get(client_id, [])
+            try:
+                client_times.remove(reservation_ts)
+            except ValueError:
+                pass
+            if client_times:
+                self.client_request_times[client_id] = client_times
+            else:
+                self.client_request_times.pop(client_id, None)
 
     async def enqueue(
         self,
@@ -683,26 +720,31 @@ class RateLimitedQueue(RequestQueue):
         Raises:
             ValueError: If queue is full or rate limit exceeded
         """
-        # Check rate limits (async with locking)
-        if not await self._check_rate_limit(client_id):
+        # Reserve rate limit capacity (async with locking)
+        reservation = await self._reserve_rate_limit(client_id)
+        if reservation is None:
             raise ValueError(f"Rate limit exceeded for client {client_id}")
 
         if processor_kwargs is None:
             processor_kwargs = {}
 
-        # Proceed with normal enqueue
-        return await super().enqueue(
-            request_id,
-            request_data,
-            client_id,
-            priority,
-            estimated_tokens,
-            processor=processor,
-            processor_args=processor_args,
-            processor_kwargs=processor_kwargs,
-            streaming=streaming,
-            stream_channel=stream_channel,
-        )
+        # Proceed with normal enqueue; roll back reservation if admission fails
+        try:
+            return await super().enqueue(
+                request_id,
+                request_data,
+                client_id,
+                priority,
+                estimated_tokens,
+                processor=processor,
+                processor_args=processor_args,
+                processor_kwargs=processor_kwargs,
+                streaming=streaming,
+                stream_channel=stream_channel,
+            )
+        except Exception:
+            await self._rollback_rate_limit(client_id, reservation)
+            raise
 
 
 # Global queue instance

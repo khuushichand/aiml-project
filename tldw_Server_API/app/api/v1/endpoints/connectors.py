@@ -107,9 +107,9 @@ async def list_providers() -> List[ConnectorProvider]:
 @router.post("/providers/{provider}/authorize", response_model=AuthorizeURLResponse)
 async def start_authorize(
     provider: str,
+    request: Request,
     state: Optional[str] = None,
     scopes: Optional[str] = None,
-    request: Request = None,
     db=Depends(get_db_transaction),
     current_user: Dict[str, Any] = Depends(get_current_active_user),
 ) -> AuthorizeURLResponse:
@@ -129,8 +129,8 @@ async def start_authorize(
 async def oauth_callback(
     provider: str,
     code: str,
+    request: Request,
     state: Optional[str] = None,
-    request: Request = None,
     db=Depends(get_db_transaction),
     current_user: Dict[str, Any] = Depends(get_current_active_user),
     org_policy: Dict[str, Any] = Depends(get_org_policy_from_principal),
@@ -224,8 +224,8 @@ async def oauth_callback(
                     close = getattr(resp, "close", None)
                     if callable(close):
                         close()
-        except Exception:
-            pass
+        except Exception as e:
+            logger.debug(f"Failed to fetch userinfo for drive account (non-fatal): {e}")
     elif provider == 'notion':
         notion_workspace_id = tokens.get('workspace_id')
     # Enforce additional org policy constraints at callback across modes using
@@ -423,9 +423,9 @@ async def patch_source(
 @router.post("/sources/{source_id}/import", response_model=ImportJob)
 async def import_source(
     source_id: int,
+    request: Request,
     db=Depends(get_db_transaction),
     current_user: Dict[str, Any] = Depends(get_current_active_user),
-    request: Request = None,
     org_policy: Dict[str, Any] = Depends(get_org_policy_from_principal),
     count_jobs_fn: Callable[[int], int] = Depends(get_connectors_job_counter),
 ) -> ImportJob:

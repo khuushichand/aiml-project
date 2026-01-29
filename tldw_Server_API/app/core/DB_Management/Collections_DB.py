@@ -24,7 +24,7 @@ from urllib.parse import urlparse
 
 from loguru import logger
 
-from tldw_Server_API.app.core.config import load_comprehensive_config
+from tldw_Server_API.app.core.config import load_comprehensive_config, settings
 from tldw_Server_API.app.core.exceptions import (
     InvalidStoragePathError,
     InvalidStorageUserIdError,
@@ -47,6 +47,66 @@ from .db_path_utils import DatabasePaths, normalize_output_storage_filename
 
 def _utcnow_iso() -> str:
     return datetime.utcnow().replace(tzinfo=timezone.utc).isoformat()
+
+
+def _extract_output_byte_size(metadata_json: Optional[str]) -> Optional[int]:
+    if not metadata_json:
+        return None
+    try:
+        payload = json.loads(metadata_json)
+    except Exception:
+        return None
+    if not isinstance(payload, dict):
+        return None
+    raw = payload.get("byte_size")
+    try:
+        value = int(raw)
+    except (TypeError, ValueError):
+        return None
+    return value if value >= 0 else None
+
+
+def _is_audiobook_output_type(type_value: Optional[str]) -> bool:
+    if not type_value:
+        return False
+    return str(type_value).startswith("audiobook_")
+
+
+def _resolve_output_size_bytes(user_id: str, storage_path: Optional[str]) -> Optional[int]:
+    if not storage_path:
+        return None
+    try:
+        user_int = int(user_id)
+    except (TypeError, ValueError):
+        logger.warning("audiobook_quota: invalid user id for output size: %s", user_id)
+        return None
+    try:
+        outputs_dir = DatabasePaths.get_user_outputs_dir(user_int)
+        return (outputs_dir / storage_path).stat().st_size
+    except FileNotFoundError:
+        logger.warning("audiobook_quota: missing output file %s", storage_path)
+    except OSError as exc:
+        logger.warning("audiobook_quota: failed to stat %s: %s", storage_path, exc)
+    return None
+
+_SQLITE_PRAGMA_TABLES = {
+    "audiobook_artifacts",
+    "audiobook_chapters",
+    "audiobook_projects",
+    "collection_tags",
+    "content_item_tags",
+    "content_items",
+    "file_artifacts",
+    "output_templates",
+    "outputs",
+    "reading_digest_schedules",
+    "reading_highlights",
+}
+
+
+def _is_backfill_noop_error(exc: Exception) -> bool:
+    message = str(exc).lower()
+    return "duplicate column" in message or "already exists" in message
 
 
 @dataclass
@@ -118,6 +178,77 @@ class ContentItemRow:
     tags: List[str]
     is_new: bool = False
     content_changed: bool = False
+
+
+@dataclass
+class ReadingDigestScheduleRow:
+    """Row model for reading_digest_schedules entries."""
+    id: str
+    tenant_id: str
+    user_id: str
+    name: Optional[str]
+    cron: str
+    timezone: Optional[str]
+    enabled: bool
+    require_online: bool
+    filters_json: str
+    template_id: Optional[int]
+    template_name: Optional[str]
+    format: str
+    retention_days: Optional[int]
+    last_run_at: Optional[str]
+    next_run_at: Optional[str]
+    last_status: Optional[str]
+    created_at: str
+    updated_at: str
+
+
+@dataclass
+class VoiceProfileRow:
+    profile_id: str
+    user_id: str
+    name: str
+    default_voice: str
+    default_speed: float
+    chapter_overrides_json: Optional[str]
+    created_at: str
+    updated_at: str
+
+
+@dataclass
+class AudiobookProjectRow:
+    id: int
+    user_id: str
+    project_id: Optional[str]
+    title: Optional[str]
+    source_ref: Optional[str]
+    status: Optional[str]
+    settings_json: Optional[str]
+    created_at: str
+    updated_at: str
+
+
+@dataclass
+class AudiobookChapterRow:
+    id: int
+    project_id: int
+    chapter_index: int
+    title: Optional[str]
+    start_offset: Optional[int]
+    end_offset: Optional[int]
+    voice_profile_id: Optional[str]
+    speed: Optional[float]
+    metadata_json: Optional[str]
+
+
+@dataclass
+class AudiobookArtifactRow:
+    id: int
+    project_id: int
+    artifact_type: str
+    format: str
+    output_id: int
+    metadata_json: Optional[str]
 
 
 class CollectionsDatabase:
@@ -224,6 +355,86 @@ class CollectionsDatabase:
             return bool(value)
         return 1 if value else 0
 
+    @staticmethod
+    def _coerce_bool_setting(value: Any, default: bool) -> bool:
+        if value is None:
+            return default
+        if isinstance(value, bool):
+            return value
+        raw = str(value).strip().lower()
+        if raw in {"1", "true", "yes", "on", "y"}:
+            return True
+        if raw in {"0", "false", "no", "off", "n"}:
+            return False
+        return default
+
+    @staticmethod
+    def _seeded_template_hash(body: str, description: Optional[str], fmt: str, type_: str) -> Optional[str]:
+        payload = json.dumps(
+            {
+                "body": body or "",
+                "description": description or "",
+                "format": fmt or "",
+                "type": type_ or "",
+            },
+            ensure_ascii=False,
+            sort_keys=True,
+        )
+        return hash_text_sha256(payload)
+
+    def _sqlite_columns(self, table: str) -> set[str]:
+        if self.backend.backend_type != BackendType.SQLITE:
+            return set()
+        if table not in _SQLITE_PRAGMA_TABLES:
+            return set()
+        try:
+            result = self.backend.execute(f"PRAGMA table_info({table})", tuple())
+        except Exception as exc:
+            logger.exception(
+                "collections_db: failed to read sqlite columns for table {}: {}",
+                table,
+                exc,
+            )
+            return set()
+        columns: set[str] = set()
+        for row in result.rows:
+            name = row.get("name")
+            if name:
+                columns.add(str(name))
+        return columns
+
+    def _backfill_audiobook_project_ids(self) -> None:
+        try:
+            rows = self.backend.execute(
+                "SELECT id, settings_json FROM audiobook_projects WHERE project_id IS NULL OR project_id = ''",
+                tuple(),
+            ).rows
+        except Exception as exc:
+            logger.debug("collections backfill: audiobook_projects.project_id fetch failed: %s", exc)
+            return
+        updated = 0
+        for row in rows:
+            raw_settings = row.get("settings_json")
+            if not raw_settings:
+                continue
+            try:
+                settings = json.loads(raw_settings)
+            except Exception:
+                continue
+            project_id = settings.get("project_id") if isinstance(settings, dict) else None
+            if not isinstance(project_id, str) or not project_id:
+                continue
+            try:
+                self.backend.execute(
+                    "UPDATE audiobook_projects SET project_id = ? WHERE id = ? AND user_id = ?",
+                    (project_id, row.get("id"), self.user_id),
+                )
+                updated += 1
+            except Exception as exc:
+                logger.debug("collections backfill: audiobook_projects.project_id update failed: %s", exc)
+        if updated:
+            logger.debug("collections backfill: audiobook_projects.project_id updated %s rows", updated)
+
     def ensure_schema(self) -> None:
         """Create tables if they do not already exist."""
         if self.backend.backend_type == BackendType.POSTGRESQL:
@@ -272,6 +483,7 @@ class CollectionsDatabase:
                 format TEXT NOT NULL,
                 storage_path TEXT NOT NULL,
                 metadata_json TEXT,
+                workspace_tag TEXT,
                 created_at TEXT NOT NULL,
                 media_item_id BIGINT,
                 chatbook_path TEXT,
@@ -281,7 +493,30 @@ class CollectionsDatabase:
             );
             CREATE INDEX IF NOT EXISTS idx_outputs_user ON outputs(user_id);
             CREATE INDEX IF NOT EXISTS idx_outputs_run ON outputs(run_id);
-            CREATE UNIQUE INDEX IF NOT EXISTS ux_outputs_user_title_format ON outputs(user_id, title, format) WHERE deleted = FALSE;
+            -- NOTE: workspace_tag/deleted indexes are created after backfill to avoid schema init failures
+
+            CREATE TABLE IF NOT EXISTS reading_digest_schedules (
+                id TEXT PRIMARY KEY,
+                tenant_id TEXT NOT NULL,
+                user_id TEXT NOT NULL,
+                name TEXT,
+                cron TEXT NOT NULL,
+                timezone TEXT,
+                enabled BOOLEAN NOT NULL DEFAULT TRUE,
+                require_online BOOLEAN NOT NULL DEFAULT FALSE,
+                filters_json TEXT NOT NULL DEFAULT '{}',
+                template_id BIGINT,
+                template_name TEXT,
+                format TEXT NOT NULL DEFAULT 'md',
+                retention_days INTEGER,
+                last_run_at TEXT,
+                next_run_at TEXT,
+                last_status TEXT,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL
+            );
+            CREATE INDEX IF NOT EXISTS idx_reading_digest_user ON reading_digest_schedules(user_id);
+            CREATE INDEX IF NOT EXISTS idx_reading_digest_tenant ON reading_digest_schedules(tenant_id);
 
             CREATE TABLE IF NOT EXISTS file_artifacts (
                 id BIGSERIAL PRIMARY KEY,
@@ -312,6 +547,62 @@ class CollectionsDatabase:
             CREATE INDEX IF NOT EXISTS idx_file_artifacts_retention_until ON file_artifacts(retention_until);
             CREATE INDEX IF NOT EXISTS idx_file_artifacts_deleted_at ON file_artifacts(deleted_at);
             CREATE INDEX IF NOT EXISTS idx_file_artifacts_export_expires_at ON file_artifacts(export_expires_at);
+
+            CREATE TABLE IF NOT EXISTS audiobook_projects (
+                id BIGSERIAL PRIMARY KEY,
+                user_id TEXT NOT NULL,
+                project_id TEXT,
+                title TEXT,
+                source_ref TEXT,
+                status TEXT,
+                settings_json TEXT,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL
+            );
+            CREATE INDEX IF NOT EXISTS idx_audiobook_projects_user ON audiobook_projects(user_id);
+
+            CREATE TABLE IF NOT EXISTS audiobook_chapters (
+                id BIGSERIAL PRIMARY KEY,
+                project_id BIGINT NOT NULL,
+                chapter_index INTEGER NOT NULL,
+                title TEXT,
+                start_offset INTEGER,
+                end_offset INTEGER,
+                voice_profile_id TEXT,
+                speed DOUBLE PRECISION,
+                metadata_json TEXT
+            );
+            CREATE INDEX IF NOT EXISTS idx_audiobook_chapters_project ON audiobook_chapters(project_id);
+            CREATE UNIQUE INDEX IF NOT EXISTS ux_audiobook_chapters_project_index ON audiobook_chapters(project_id, chapter_index);
+
+            CREATE TABLE IF NOT EXISTS audiobook_artifacts (
+                id BIGSERIAL PRIMARY KEY,
+                project_id BIGINT NOT NULL,
+                artifact_type TEXT NOT NULL,
+                format TEXT NOT NULL,
+                output_id BIGINT NOT NULL,
+                metadata_json TEXT
+            );
+            CREATE INDEX IF NOT EXISTS idx_audiobook_artifacts_project ON audiobook_artifacts(project_id);
+            CREATE INDEX IF NOT EXISTS idx_audiobook_artifacts_output ON audiobook_artifacts(output_id);
+
+            CREATE TABLE IF NOT EXISTS audiobook_voice_profiles (
+                profile_id TEXT PRIMARY KEY,
+                user_id TEXT NOT NULL,
+                name TEXT NOT NULL,
+                default_voice TEXT NOT NULL,
+                default_speed DOUBLE PRECISION NOT NULL,
+                chapter_overrides_json TEXT,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL
+            );
+            CREATE INDEX IF NOT EXISTS idx_audiobook_voice_profiles_user ON audiobook_voice_profiles(user_id);
+
+            CREATE TABLE IF NOT EXISTS audiobook_output_usage (
+                user_id TEXT PRIMARY KEY,
+                used_bytes BIGINT NOT NULL DEFAULT 0,
+                updated_at TEXT NOT NULL
+            );
             """
         else:
             ddl = """
@@ -359,6 +650,7 @@ class CollectionsDatabase:
                 format TEXT NOT NULL,
                 storage_path TEXT NOT NULL,
                 metadata_json TEXT,
+                workspace_tag TEXT,
                 created_at TEXT NOT NULL,
                 media_item_id INTEGER,
                 chatbook_path TEXT,
@@ -368,7 +660,30 @@ class CollectionsDatabase:
             );
             CREATE INDEX IF NOT EXISTS idx_outputs_user ON outputs(user_id);
             CREATE INDEX IF NOT EXISTS idx_outputs_run ON outputs(run_id);
-            CREATE UNIQUE INDEX IF NOT EXISTS ux_outputs_user_title_format ON outputs(user_id, title, format) WHERE deleted = 0;
+            -- NOTE: workspace_tag/deleted indexes are created after backfill to avoid schema init failures
+
+            CREATE TABLE IF NOT EXISTS reading_digest_schedules (
+                id TEXT PRIMARY KEY,
+                tenant_id TEXT NOT NULL,
+                user_id TEXT NOT NULL,
+                name TEXT,
+                cron TEXT NOT NULL,
+                timezone TEXT,
+                enabled INTEGER NOT NULL DEFAULT 1,
+                require_online INTEGER NOT NULL DEFAULT 0,
+                filters_json TEXT NOT NULL DEFAULT '{}',
+                template_id INTEGER,
+                template_name TEXT,
+                format TEXT NOT NULL DEFAULT 'md',
+                retention_days INTEGER,
+                last_run_at TEXT,
+                next_run_at TEXT,
+                last_status TEXT,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL
+            );
+            CREATE INDEX IF NOT EXISTS idx_reading_digest_user ON reading_digest_schedules(user_id);
+            CREATE INDEX IF NOT EXISTS idx_reading_digest_tenant ON reading_digest_schedules(tenant_id);
 
             CREATE TABLE IF NOT EXISTS file_artifacts (
                 id INTEGER PRIMARY KEY,
@@ -399,91 +714,369 @@ class CollectionsDatabase:
             CREATE INDEX IF NOT EXISTS idx_file_artifacts_retention_until ON file_artifacts(retention_until);
             CREATE INDEX IF NOT EXISTS idx_file_artifacts_deleted_at ON file_artifacts(deleted_at);
             CREATE INDEX IF NOT EXISTS idx_file_artifacts_export_expires_at ON file_artifacts(export_expires_at);
+
+            CREATE TABLE IF NOT EXISTS audiobook_projects (
+                id INTEGER PRIMARY KEY,
+                user_id TEXT NOT NULL,
+                project_id TEXT,
+                title TEXT,
+                source_ref TEXT,
+                status TEXT,
+                settings_json TEXT,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL
+            );
+            CREATE INDEX IF NOT EXISTS idx_audiobook_projects_user ON audiobook_projects(user_id);
+
+            CREATE TABLE IF NOT EXISTS audiobook_chapters (
+                id INTEGER PRIMARY KEY,
+                project_id INTEGER NOT NULL,
+                chapter_index INTEGER NOT NULL,
+                title TEXT,
+                start_offset INTEGER,
+                end_offset INTEGER,
+                voice_profile_id TEXT,
+                speed REAL,
+                metadata_json TEXT
+            );
+            CREATE INDEX IF NOT EXISTS idx_audiobook_chapters_project ON audiobook_chapters(project_id);
+            CREATE UNIQUE INDEX IF NOT EXISTS ux_audiobook_chapters_project_index ON audiobook_chapters(project_id, chapter_index);
+
+            CREATE TABLE IF NOT EXISTS audiobook_artifacts (
+                id INTEGER PRIMARY KEY,
+                project_id INTEGER NOT NULL,
+                artifact_type TEXT NOT NULL,
+                format TEXT NOT NULL,
+                output_id INTEGER NOT NULL,
+                metadata_json TEXT
+            );
+            CREATE INDEX IF NOT EXISTS idx_audiobook_artifacts_project ON audiobook_artifacts(project_id);
+            CREATE INDEX IF NOT EXISTS idx_audiobook_artifacts_output ON audiobook_artifacts(output_id);
+
+            CREATE TABLE IF NOT EXISTS audiobook_voice_profiles (
+                profile_id TEXT PRIMARY KEY,
+                user_id TEXT NOT NULL,
+                name TEXT NOT NULL,
+                default_voice TEXT NOT NULL,
+                default_speed REAL NOT NULL,
+                chapter_overrides_json TEXT,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL
+            );
+            CREATE INDEX IF NOT EXISTS idx_audiobook_voice_profiles_user ON audiobook_voice_profiles(user_id);
+
+            CREATE TABLE IF NOT EXISTS audiobook_output_usage (
+                user_id TEXT PRIMARY KEY,
+                used_bytes INTEGER NOT NULL DEFAULT 0,
+                updated_at TEXT NOT NULL
+            );
             """
         try:
             self.backend.create_tables(ddl)
         except Exception as e:
             logger.error(f"Collections schema init failed: {e}")
             raise
+        output_template_columns: set[str] = set()
+        output_columns: set[str] = set()
+        digest_columns: set[str] = set()
+        file_artifact_columns: set[str] = set()
+        content_columns: set[str] = set()
+        audiobook_project_columns: set[str] = set()
+        if self.backend.backend_type == BackendType.SQLITE:
+            output_template_columns = self._sqlite_columns("output_templates")
+            output_columns = self._sqlite_columns("outputs")
+            digest_columns = self._sqlite_columns("reading_digest_schedules")
+            file_artifact_columns = self._sqlite_columns("file_artifacts")
+            content_columns = self._sqlite_columns("content_items")
+            audiobook_project_columns = self._sqlite_columns("audiobook_projects")
         # Backfill columns for existing tables
-        try:
-            # Attempt to add metadata_json if missing
-            self.backend.execute("ALTER TABLE output_templates ADD COLUMN metadata_json TEXT", tuple())
-        except Exception:
-            logger.debug("collections backfill: output_templates.metadata_json already exists or skipped")
+        if "metadata_json" not in output_template_columns:
+            try:
+                # Attempt to add metadata_json if missing
+                self.backend.execute("ALTER TABLE output_templates ADD COLUMN metadata_json TEXT", tuple())
+            except Exception as exc:
+                if _is_backfill_noop_error(exc):
+                    logger.debug("collections backfill: output_templates.metadata_json already exists or skipped")
+                else:
+                    raise
         # Outputs table backfills
-        try:
-            deleted_type = "BOOLEAN" if self.backend.backend_type == BackendType.POSTGRESQL else "INTEGER"
-            deleted_default = "FALSE" if self.backend.backend_type == BackendType.POSTGRESQL else "0"
-            self.backend.execute(
-                f"ALTER TABLE outputs ADD COLUMN deleted {deleted_type} NOT NULL DEFAULT {deleted_default}",
-                tuple(),
-            )
-        except Exception:
-            logger.debug("collections backfill: outputs.deleted already exists or skipped")
-        try:
-            self.backend.execute("ALTER TABLE outputs ADD COLUMN deleted_at TEXT", tuple())
-        except Exception:
-            logger.debug("collections backfill: outputs.deleted_at already exists or skipped")
-        try:
-            self.backend.execute("ALTER TABLE outputs ADD COLUMN retention_until TEXT", tuple())
-        except Exception:
-            logger.debug("collections backfill: outputs.retention_until already exists or skipped")
+        if "deleted" not in output_columns:
+            try:
+                deleted_type = "BOOLEAN" if self.backend.backend_type == BackendType.POSTGRESQL else "INTEGER"
+                deleted_default = "FALSE" if self.backend.backend_type == BackendType.POSTGRESQL else "0"
+                self.backend.execute(
+                    f"ALTER TABLE outputs ADD COLUMN deleted {deleted_type} NOT NULL DEFAULT {deleted_default}",
+                    tuple(),
+                )
+            except Exception as exc:
+                if _is_backfill_noop_error(exc):
+                    logger.debug("collections backfill: outputs.deleted already exists or skipped")
+                else:
+                    raise
+        if "deleted_at" not in output_columns:
+            try:
+                self.backend.execute("ALTER TABLE outputs ADD COLUMN deleted_at TEXT", tuple())
+            except Exception as exc:
+                if _is_backfill_noop_error(exc):
+                    logger.debug("collections backfill: outputs.deleted_at already exists or skipped")
+                else:
+                    raise
+        if "retention_until" not in output_columns:
+            try:
+                self.backend.execute("ALTER TABLE outputs ADD COLUMN retention_until TEXT", tuple())
+            except Exception as exc:
+                if _is_backfill_noop_error(exc):
+                    logger.debug("collections backfill: outputs.retention_until already exists or skipped")
+                else:
+                    raise
+        if "workspace_tag" not in output_columns:
+            try:
+                self.backend.execute("ALTER TABLE outputs ADD COLUMN workspace_tag TEXT", tuple())
+            except Exception as exc:
+                if _is_backfill_noop_error(exc):
+                    logger.debug("collections backfill: outputs.workspace_tag already exists or skipped")
+                else:
+                    raise
         try:
             self.backend.execute("CREATE UNIQUE INDEX IF NOT EXISTS ux_outputs_user_title_format ON outputs(user_id, title, format) WHERE deleted = 0", tuple())
-        except Exception:
-            logger.debug("collections backfill: outputs unique index already exists or skipped")
+        except Exception as exc:
+            if _is_backfill_noop_error(exc):
+                logger.debug("collections backfill: outputs unique index already exists or skipped")
+            else:
+                raise
+        try:
+            self.backend.execute("CREATE INDEX IF NOT EXISTS idx_outputs_workspace_tag ON outputs(workspace_tag)", tuple())
+        except Exception as exc:
+            if _is_backfill_noop_error(exc):
+                logger.debug("collections backfill: outputs workspace_tag index already exists or skipped")
+            else:
+                raise
+        # Reading digest schedule backfills
+        if "enabled" not in digest_columns:
+            try:
+                enabled_type = "BOOLEAN" if self.backend.backend_type == BackendType.POSTGRESQL else "INTEGER"
+                enabled_default = "TRUE" if self.backend.backend_type == BackendType.POSTGRESQL else "1"
+                self.backend.execute(
+                    f"ALTER TABLE reading_digest_schedules ADD COLUMN enabled {enabled_type} NOT NULL DEFAULT {enabled_default}",
+                    tuple(),
+                )
+            except Exception as exc:
+                if _is_backfill_noop_error(exc):
+                    logger.debug("collections backfill: reading_digest_schedules.enabled already exists or skipped")
+                else:
+                    raise
+        if "require_online" not in digest_columns:
+            try:
+                online_type = "BOOLEAN" if self.backend.backend_type == BackendType.POSTGRESQL else "INTEGER"
+                online_default = "FALSE" if self.backend.backend_type == BackendType.POSTGRESQL else "0"
+                self.backend.execute(
+                    f"ALTER TABLE reading_digest_schedules ADD COLUMN require_online {online_type} NOT NULL DEFAULT {online_default}",
+                    tuple(),
+                )
+            except Exception as exc:
+                if _is_backfill_noop_error(exc):
+                    logger.debug("collections backfill: reading_digest_schedules.require_online already exists or skipped")
+                else:
+                    raise
+        if "filters_json" not in digest_columns:
+            try:
+                self.backend.execute("ALTER TABLE reading_digest_schedules ADD COLUMN filters_json TEXT", tuple())
+            except Exception as exc:
+                if _is_backfill_noop_error(exc):
+                    logger.debug("collections backfill: reading_digest_schedules.filters_json already exists or skipped")
+                else:
+                    raise
+        if "template_id" not in digest_columns:
+            try:
+                template_id_type = "BIGINT" if self.backend.backend_type == BackendType.POSTGRESQL else "INTEGER"
+                self.backend.execute(f"ALTER TABLE reading_digest_schedules ADD COLUMN template_id {template_id_type}", tuple())
+            except Exception as exc:
+                if _is_backfill_noop_error(exc):
+                    logger.debug("collections backfill: reading_digest_schedules.template_id already exists or skipped")
+                else:
+                    raise
+        if "template_name" not in digest_columns:
+            try:
+                self.backend.execute("ALTER TABLE reading_digest_schedules ADD COLUMN template_name TEXT", tuple())
+            except Exception as exc:
+                if _is_backfill_noop_error(exc):
+                    logger.debug("collections backfill: reading_digest_schedules.template_name already exists or skipped")
+                else:
+                    raise
+        if "format" not in digest_columns:
+            try:
+                self.backend.execute("ALTER TABLE reading_digest_schedules ADD COLUMN format TEXT", tuple())
+            except Exception as exc:
+                if _is_backfill_noop_error(exc):
+                    logger.debug("collections backfill: reading_digest_schedules.format already exists or skipped")
+                else:
+                    raise
+        if "retention_days" not in digest_columns:
+            try:
+                self.backend.execute("ALTER TABLE reading_digest_schedules ADD COLUMN retention_days INTEGER", tuple())
+            except Exception as exc:
+                if _is_backfill_noop_error(exc):
+                    logger.debug("collections backfill: reading_digest_schedules.retention_days already exists or skipped")
+                else:
+                    raise
+        if "last_run_at" not in digest_columns:
+            try:
+                self.backend.execute("ALTER TABLE reading_digest_schedules ADD COLUMN last_run_at TEXT", tuple())
+            except Exception as exc:
+                if _is_backfill_noop_error(exc):
+                    logger.debug("collections backfill: reading_digest_schedules.last_run_at already exists or skipped")
+                else:
+                    raise
+        if "next_run_at" not in digest_columns:
+            try:
+                self.backend.execute("ALTER TABLE reading_digest_schedules ADD COLUMN next_run_at TEXT", tuple())
+            except Exception as exc:
+                if _is_backfill_noop_error(exc):
+                    logger.debug("collections backfill: reading_digest_schedules.next_run_at already exists or skipped")
+                else:
+                    raise
+        if "last_status" not in digest_columns:
+            try:
+                self.backend.execute("ALTER TABLE reading_digest_schedules ADD COLUMN last_status TEXT", tuple())
+            except Exception as exc:
+                if _is_backfill_noop_error(exc):
+                    logger.debug("collections backfill: reading_digest_schedules.last_status already exists or skipped")
+                else:
+                    raise
         # File artifacts backfills
-        try:
-            deleted_type = "BOOLEAN" if self.backend.backend_type == BackendType.POSTGRESQL else "INTEGER"
-            deleted_default = "FALSE" if self.backend.backend_type == BackendType.POSTGRESQL else "0"
-            self.backend.execute(
-                f"ALTER TABLE file_artifacts ADD COLUMN deleted {deleted_type} NOT NULL DEFAULT {deleted_default}",
-                tuple(),
-            )
-        except Exception:
-            logger.debug("collections backfill: file_artifacts.deleted already exists or skipped")
-        try:
-            self.backend.execute("ALTER TABLE file_artifacts ADD COLUMN deleted_at TEXT", tuple())
-        except Exception:
-            logger.debug("collections backfill: file_artifacts.deleted_at already exists or skipped")
-        try:
-            self.backend.execute("ALTER TABLE file_artifacts ADD COLUMN retention_until TEXT", tuple())
-        except Exception:
-            logger.debug("collections backfill: file_artifacts.retention_until already exists or skipped")
-        try:
-            self.backend.execute("ALTER TABLE file_artifacts ADD COLUMN export_status TEXT NOT NULL DEFAULT 'none'", tuple())
-        except Exception:
-            logger.debug("collections backfill: file_artifacts.export_status already exists or skipped")
-        try:
-            self.backend.execute("ALTER TABLE file_artifacts ADD COLUMN export_format TEXT", tuple())
-        except Exception:
-            logger.debug("collections backfill: file_artifacts.export_format already exists or skipped")
-        try:
-            self.backend.execute("ALTER TABLE file_artifacts ADD COLUMN export_storage_path TEXT", tuple())
-        except Exception:
-            logger.debug("collections backfill: file_artifacts.export_storage_path already exists or skipped")
-        try:
-            export_bytes_type = "BIGINT" if self.backend.backend_type == BackendType.POSTGRESQL else "INTEGER"
-            self.backend.execute(f"ALTER TABLE file_artifacts ADD COLUMN export_bytes {export_bytes_type}", tuple())
-        except Exception:
-            logger.debug("collections backfill: file_artifacts.export_bytes already exists or skipped")
-        try:
-            self.backend.execute("ALTER TABLE file_artifacts ADD COLUMN export_content_type TEXT", tuple())
-        except Exception:
-            logger.debug("collections backfill: file_artifacts.export_content_type already exists or skipped")
-        try:
-            self.backend.execute("ALTER TABLE file_artifacts ADD COLUMN export_job_id TEXT", tuple())
-        except Exception:
-            logger.debug("collections backfill: file_artifacts.export_job_id already exists or skipped")
-        try:
-            self.backend.execute("ALTER TABLE file_artifacts ADD COLUMN export_expires_at TEXT", tuple())
-        except Exception:
-            logger.debug("collections backfill: file_artifacts.export_expires_at already exists or skipped")
-        try:
-            self.backend.execute("ALTER TABLE file_artifacts ADD COLUMN export_consumed_at TEXT", tuple())
-        except Exception:
-            logger.debug("collections backfill: file_artifacts.export_consumed_at already exists or skipped")
+        if "deleted" not in file_artifact_columns:
+            try:
+                deleted_type = "BOOLEAN" if self.backend.backend_type == BackendType.POSTGRESQL else "INTEGER"
+                deleted_default = "FALSE" if self.backend.backend_type == BackendType.POSTGRESQL else "0"
+                self.backend.execute(
+                    f"ALTER TABLE file_artifacts ADD COLUMN deleted {deleted_type} NOT NULL DEFAULT {deleted_default}",
+                    tuple(),
+                )
+            except Exception as exc:
+                if _is_backfill_noop_error(exc):
+                    logger.debug("collections backfill: file_artifacts.deleted already exists or skipped")
+                else:
+                    raise
+        if "deleted_at" not in file_artifact_columns:
+            try:
+                self.backend.execute("ALTER TABLE file_artifacts ADD COLUMN deleted_at TEXT", tuple())
+            except Exception as exc:
+                if _is_backfill_noop_error(exc):
+                    logger.debug("collections backfill: file_artifacts.deleted_at already exists or skipped")
+                else:
+                    raise
+        if "retention_until" not in file_artifact_columns:
+            try:
+                self.backend.execute("ALTER TABLE file_artifacts ADD COLUMN retention_until TEXT", tuple())
+            except Exception as exc:
+                if _is_backfill_noop_error(exc):
+                    logger.debug("collections backfill: file_artifacts.retention_until already exists or skipped")
+                else:
+                    raise
+        if "export_status" not in file_artifact_columns:
+            try:
+                self.backend.execute("ALTER TABLE file_artifacts ADD COLUMN export_status TEXT NOT NULL DEFAULT 'none'", tuple())
+            except Exception as exc:
+                if _is_backfill_noop_error(exc):
+                    logger.debug("collections backfill: file_artifacts.export_status already exists or skipped")
+                else:
+                    raise
+        if "export_format" not in file_artifact_columns:
+            try:
+                self.backend.execute("ALTER TABLE file_artifacts ADD COLUMN export_format TEXT", tuple())
+            except Exception as exc:
+                if _is_backfill_noop_error(exc):
+                    logger.debug("collections backfill: file_artifacts.export_format already exists or skipped")
+                else:
+                    raise
+        if "export_storage_path" not in file_artifact_columns:
+            try:
+                self.backend.execute("ALTER TABLE file_artifacts ADD COLUMN export_storage_path TEXT", tuple())
+            except Exception as exc:
+                if _is_backfill_noop_error(exc):
+                    logger.debug("collections backfill: file_artifacts.export_storage_path already exists or skipped")
+                else:
+                    raise
+        if "export_bytes" not in file_artifact_columns:
+            try:
+                export_bytes_type = "BIGINT" if self.backend.backend_type == BackendType.POSTGRESQL else "INTEGER"
+                self.backend.execute(f"ALTER TABLE file_artifacts ADD COLUMN export_bytes {export_bytes_type}", tuple())
+            except Exception as exc:
+                if _is_backfill_noop_error(exc):
+                    logger.debug("collections backfill: file_artifacts.export_bytes already exists or skipped")
+                else:
+                    raise
+        if "export_content_type" not in file_artifact_columns:
+            try:
+                self.backend.execute("ALTER TABLE file_artifacts ADD COLUMN export_content_type TEXT", tuple())
+            except Exception as exc:
+                if _is_backfill_noop_error(exc):
+                    logger.debug("collections backfill: file_artifacts.export_content_type already exists or skipped")
+                else:
+                    raise
+        if "export_job_id" not in file_artifact_columns:
+            try:
+                self.backend.execute("ALTER TABLE file_artifacts ADD COLUMN export_job_id TEXT", tuple())
+            except Exception as exc:
+                if _is_backfill_noop_error(exc):
+                    logger.debug("collections backfill: file_artifacts.export_job_id already exists or skipped")
+                else:
+                    raise
+        if "export_expires_at" not in file_artifact_columns:
+            try:
+                self.backend.execute("ALTER TABLE file_artifacts ADD COLUMN export_expires_at TEXT", tuple())
+            except Exception as exc:
+                if _is_backfill_noop_error(exc):
+                    logger.debug("collections backfill: file_artifacts.export_expires_at already exists or skipped")
+                else:
+                    raise
+        if "export_consumed_at" not in file_artifact_columns:
+            try:
+                self.backend.execute("ALTER TABLE file_artifacts ADD COLUMN export_consumed_at TEXT", tuple())
+            except Exception as exc:
+                if _is_backfill_noop_error(exc):
+                    logger.debug("collections backfill: file_artifacts.export_consumed_at already exists or skipped")
+                else:
+                    raise
+        # Audiobook projects backfills
+        if self.backend.backend_type == BackendType.POSTGRESQL:
+            try:
+                self.backend.execute("ALTER TABLE audiobook_projects ADD COLUMN IF NOT EXISTS project_id TEXT", tuple())
+            except Exception as exc:
+                if _is_backfill_noop_error(exc):
+                    logger.debug("collections backfill: audiobook_projects.project_id already exists or skipped")
+                else:
+                    raise
+            try:
+                self.backend.execute(
+                    "CREATE INDEX IF NOT EXISTS idx_audiobook_projects_project_id ON audiobook_projects(user_id, project_id)",
+                    tuple(),
+                )
+            except Exception as exc:
+                if _is_backfill_noop_error(exc):
+                    logger.debug("collections backfill: audiobook_projects.project_id index already exists or skipped")
+                else:
+                    raise
+        else:
+            if "project_id" not in audiobook_project_columns:
+                try:
+                    self.backend.execute("ALTER TABLE audiobook_projects ADD COLUMN project_id TEXT", tuple())
+                except Exception as exc:
+                    if _is_backfill_noop_error(exc):
+                        logger.debug("collections backfill: audiobook_projects.project_id already exists or skipped")
+                    else:
+                        raise
+            try:
+                self.backend.execute(
+                    "CREATE INDEX IF NOT EXISTS idx_audiobook_projects_project_id ON audiobook_projects(user_id, project_id)",
+                    tuple(),
+                )
+            except Exception as exc:
+                if _is_backfill_noop_error(exc):
+                    logger.debug("collections backfill: audiobook_projects.project_id index already exists or skipped")
+                else:
+                    raise
+        self._backfill_audiobook_project_ids()
         # Collections layer tables
         fts_available = self.backend.backend_type == BackendType.SQLITE
         if self.backend.backend_type == BackendType.POSTGRESQL:
@@ -615,13 +1208,24 @@ class CollectionsDatabase:
             "notes": "TEXT",
         }
         for column, col_type in _backfill_columns.items():
+            if column in content_columns:
+                continue
             try:
                 self.backend.execute(f"ALTER TABLE content_items ADD COLUMN {column} {col_type}", tuple())
-            except Exception:
-                pass
+            except Exception as exc:
+                if _is_backfill_noop_error(exc):
+                    logger.debug("collections backfill: content_items.%s already exists or skipped", column)
+                else:
+                    raise
         self._fts_available = fts_available
 
     def _seed_watchlists_output_templates(self) -> None:
+        seed_setting = settings.get("WATCHLISTS_SEED_OUTPUT_TEMPLATES")
+        if seed_setting is None:
+            seed_setting = os.getenv("WATCHLISTS_SEED_OUTPUT_TEMPLATES")
+        if not self._coerce_bool_setting(seed_setting, True):
+            return
+
         try:
             from tldw_Server_API.app.core.Watchlists import template_store
         except Exception as exc:
@@ -651,7 +1255,12 @@ class CollectionsDatabase:
                 continue
             fmt = record.format.lower()
             type_ = self._infer_output_template_type(record.name, fmt)
-            desired_meta = {"seeded_from": "watchlists_templates"}
+            seeded_hash = self._seeded_template_hash(record.content, record.description, fmt, type_)
+            desired_meta = {
+                "seeded_from": "watchlists_templates",
+                "seeded_hash": seeded_hash,
+                "seeded_mtime": record.updated_at,
+            }
             metadata_json = json.dumps(desired_meta, ensure_ascii=False)
 
             if name not in existing:
@@ -687,6 +1296,27 @@ class CollectionsDatabase:
 
             if current_meta.get("seeded_from") != "watchlists_templates":
                 continue
+            if current_meta.get("seeded_locked"):
+                continue
+
+            current_seed_hash = current_meta.get("seeded_hash")
+            if not current_seed_hash:
+                continue
+
+            current_row_hash = self._seeded_template_hash(
+                current.body,
+                current.description,
+                current.format,
+                current.type,
+            )
+            if current_row_hash and current_seed_hash != current_row_hash:
+                continue
+
+            if (
+                current_seed_hash == seeded_hash
+                and current_meta.get("seeded_mtime") == record.updated_at
+            ):
+                continue
 
             patch: Dict[str, Any] = {}
             if current.body != record.content:
@@ -697,8 +1327,12 @@ class CollectionsDatabase:
                 patch["format"] = fmt
             if current.type != type_:
                 patch["type"] = type_
-            if current_meta.get("seeded_from") != desired_meta["seeded_from"]:
-                patch["metadata_json"] = metadata_json
+
+            new_meta = dict(current_meta)
+            new_meta.update(desired_meta)
+            new_metadata_json = json.dumps(new_meta, ensure_ascii=False)
+            if current.metadata_json != new_metadata_json:
+                patch["metadata_json"] = new_metadata_json
 
             if patch:
                 try:
@@ -1908,6 +2542,7 @@ class CollectionsDatabase:
         format: str
         storage_path: str
         metadata_json: Optional[str]
+        workspace_tag: Optional[str]
         created_at: str
         media_item_id: Optional[int]
         chatbook_path: Optional[str]
@@ -1920,6 +2555,7 @@ class CollectionsDatabase:
         format_: str,
         storage_path: str,
         metadata_json: Optional[str] = None,
+        workspace_tag: Optional[str] = None,
         job_id: Optional[int] = None,
         run_id: Optional[int] = None,
         media_item_id: Optional[int] = None,
@@ -1929,8 +2565,8 @@ class CollectionsDatabase:
         now = _utcnow_iso()
         resolved_storage_path = self.resolve_output_storage_path(storage_path)
         q = (
-            "INSERT INTO outputs (user_id, job_id, run_id, type, title, format, storage_path, metadata_json, created_at, media_item_id, chatbook_path, deleted, deleted_at, retention_until) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, NULL, ?)"
+            "INSERT INTO outputs (user_id, job_id, run_id, type, title, format, storage_path, metadata_json, workspace_tag, created_at, media_item_id, chatbook_path, deleted, deleted_at, retention_until) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, NULL, ?)"
         )
         params = (
             self.user_id,
@@ -1941,6 +2577,7 @@ class CollectionsDatabase:
             format_,
             resolved_storage_path,
             metadata_json,
+            workspace_tag,
             now,
             media_item_id,
             chatbook_path,
@@ -1986,7 +2623,7 @@ class CollectionsDatabase:
     def get_output_artifact(self, output_id: int, include_deleted: bool = False) -> "CollectionsDatabase.OutputArtifactRow":
         cond = "id = ? AND user_id = ?" + ("" if include_deleted else " AND deleted = 0")
         q = (
-            "SELECT id, user_id, job_id, run_id, type, title, format, storage_path, metadata_json, created_at, media_item_id, chatbook_path "
+            "SELECT id, user_id, job_id, run_id, type, title, format, storage_path, metadata_json, workspace_tag, created_at, media_item_id, chatbook_path "
             f"FROM outputs WHERE {cond}"
         )
         row = self.backend.execute(q, (output_id, self.user_id)).first
@@ -1995,13 +2632,36 @@ class CollectionsDatabase:
         return CollectionsDatabase.OutputArtifactRow(**row)
 
     def delete_output_artifact(self, output_id: int, *, hard: bool = False) -> bool:
+        row = self.backend.execute(
+            "SELECT id, type, metadata_json, storage_path, deleted FROM outputs WHERE id = ? AND user_id = ?",
+            (output_id, self.user_id),
+        ).first
+        if not row:
+            return False
+        deleted_flag = int(row["deleted"] if isinstance(row, dict) else row[4] or 0)
+        output_type = row["type"] if isinstance(row, dict) else row[1]
+        metadata_json = row["metadata_json"] if isinstance(row, dict) else row[2]
+        storage_path = row["storage_path"] if isinstance(row, dict) else row[3]
+        should_decrement = deleted_flag == 0 and _is_audiobook_output_type(output_type)
+        size_bytes = None
+        if should_decrement:
+            size_bytes = _extract_output_byte_size(metadata_json)
+            if size_bytes is None:
+                size_bytes = _resolve_output_size_bytes(self.user_id, storage_path)
+
         if hard:
             q = "DELETE FROM outputs WHERE id = ? AND user_id = ?"
             res = self.backend.execute(q, (output_id, self.user_id))
-            return res.rowcount > 0
-        q = "UPDATE outputs SET deleted = 1, deleted_at = ? WHERE id = ? AND user_id = ? AND deleted = 0"
-        res = self.backend.execute(q, (_utcnow_iso(), output_id, self.user_id))
-        return res.rowcount > 0
+        else:
+            q = "UPDATE outputs SET deleted = 1, deleted_at = ? WHERE id = ? AND user_id = ? AND deleted = 0"
+            res = self.backend.execute(q, (_utcnow_iso(), output_id, self.user_id))
+        ok = res.rowcount > 0
+        if ok and should_decrement and size_bytes:
+            try:
+                self.update_audiobook_output_usage(-size_bytes)
+            except Exception as exc:
+                logger.warning("audiobook_quota: failed to decrement usage: %s", exc)
+        return ok
 
     def get_output_artifact_by_title(self, title: str, format_: Optional[str] = None, include_deleted: bool = False) -> "CollectionsDatabase.OutputArtifactRow":
         where = ["user_id = ?", "title = ?"]
@@ -2012,7 +2672,7 @@ class CollectionsDatabase:
         if not include_deleted:
             where.append("deleted = 0")
         q = (
-            "SELECT id, user_id, job_id, run_id, type, title, format, storage_path, metadata_json, created_at, media_item_id, chatbook_path "
+            "SELECT id, user_id, job_id, run_id, type, title, format, storage_path, metadata_json, workspace_tag, created_at, media_item_id, chatbook_path "
             f"FROM outputs WHERE {' AND '.join(where)} ORDER BY created_at DESC LIMIT 1"
         )
         row = self.backend.execute(q, tuple(params)).first
@@ -2028,6 +2688,7 @@ class CollectionsDatabase:
         job_id: Optional[int] = None,
         run_id: Optional[int] = None,
         type_: Optional[str] = None,
+        workspace_tag: Optional[str] = None,
         include_deleted: bool = False,
         only_deleted: bool = False,
     ) -> tuple[list["CollectionsDatabase.OutputArtifactRow"], int]:
@@ -2046,16 +2707,155 @@ class CollectionsDatabase:
         if type_:
             where.append("type = ?")
             params.append(type_)
+        if workspace_tag:
+            where.append("workspace_tag = ?")
+            params.append(workspace_tag)
         where_sql = " AND ".join(where)
 
         cq = f"SELECT COUNT(*) AS cnt FROM outputs WHERE {where_sql}"
         total = int(self.backend.execute(cq, tuple(params)).scalar or 0)
         sq = (
-            "SELECT id, user_id, job_id, run_id, type, title, format, storage_path, metadata_json, created_at, media_item_id, chatbook_path "
+            "SELECT id, user_id, job_id, run_id, type, title, format, storage_path, metadata_json, workspace_tag, created_at, media_item_id, chatbook_path "
             f"FROM outputs WHERE {where_sql} ORDER BY created_at DESC LIMIT ? OFFSET ?"
         )
         rows = self.backend.execute(sq, tuple(params + [limit, offset])).rows
         return [CollectionsDatabase.OutputArtifactRow(**row) for row in rows], total
+
+    def list_output_artifacts_by_types(
+        self,
+        *,
+        types: list[str],
+        limit: int = 200,
+        offset: int = 0,
+        include_deleted: bool = False,
+        workspace_tag: Optional[str] = None,
+    ) -> tuple[list["CollectionsDatabase.OutputArtifactRow"], int]:
+        if not types:
+            return [], 0
+        where = ["user_id = ?"]
+        params: list[Any] = [self.user_id]
+        if not include_deleted:
+            where.append("deleted = 0")
+        placeholders = ", ".join(["?"] * len(types))
+        where.append(f"type IN ({placeholders})")
+        params.extend(types)
+        if workspace_tag:
+            where.append("workspace_tag = ?")
+            params.append(workspace_tag)
+        where_sql = " AND ".join(where)
+        cq = f"SELECT COUNT(*) AS cnt FROM outputs WHERE {where_sql}"
+        total = int(self.backend.execute(cq, tuple(params)).scalar or 0)
+        sq = (
+            "SELECT id, user_id, job_id, run_id, type, title, format, storage_path, metadata_json, workspace_tag, created_at, media_item_id, chatbook_path "
+            f"FROM outputs WHERE {where_sql} ORDER BY created_at DESC LIMIT ? OFFSET ?"
+        )
+        rows = self.backend.execute(sq, tuple(params + [limit, offset])).rows
+        return [CollectionsDatabase.OutputArtifactRow(**row) for row in rows], total
+
+    def get_audiobook_output_usage(self) -> Optional[int]:
+        row = self.backend.execute(
+            "SELECT used_bytes FROM audiobook_output_usage WHERE user_id = ?",
+            (self.user_id,),
+        ).first
+        if not row:
+            return None
+        value = row["used_bytes"] if isinstance(row, dict) else row[0]
+        try:
+            return int(value or 0)
+        except (TypeError, ValueError):
+            return None
+
+    def set_audiobook_output_usage(self, used_bytes: int) -> int:
+        value = max(0, int(used_bytes))
+        now = _utcnow_iso()
+        if self.backend.backend_type == BackendType.POSTGRESQL:
+            row = self.backend.execute(
+                """
+                INSERT INTO audiobook_output_usage (user_id, used_bytes, updated_at)
+                VALUES (%s, %s, %s)
+                ON CONFLICT (user_id) DO UPDATE
+                SET used_bytes = EXCLUDED.used_bytes, updated_at = EXCLUDED.updated_at
+                RETURNING used_bytes
+                """,
+                (self.user_id, value, now),
+            ).first
+            if row:
+                return int(row["used_bytes"] if isinstance(row, dict) else row[0] or 0)
+            return value
+        self.backend.execute(
+            """
+            INSERT INTO audiobook_output_usage (user_id, used_bytes, updated_at)
+            VALUES (?, ?, ?)
+            ON CONFLICT(user_id) DO UPDATE
+            SET used_bytes = excluded.used_bytes, updated_at = excluded.updated_at
+            """,
+            (self.user_id, value, now),
+        )
+        return value
+
+    def update_audiobook_output_usage(self, delta_bytes: int) -> int:
+        delta = int(delta_bytes or 0)
+        now = _utcnow_iso()
+        initial = max(0, delta)
+        if self.backend.backend_type == BackendType.POSTGRESQL:
+            row = self.backend.execute(
+                """
+                INSERT INTO audiobook_output_usage (user_id, used_bytes, updated_at)
+                VALUES (%s, %s, %s)
+                ON CONFLICT (user_id) DO UPDATE
+                SET used_bytes = GREATEST(0, audiobook_output_usage.used_bytes + %s),
+                    updated_at = EXCLUDED.updated_at
+                RETURNING used_bytes
+                """,
+                (self.user_id, initial, now, delta),
+            ).first
+            if row:
+                return int(row["used_bytes"] if isinstance(row, dict) else row[0] or 0)
+            return initial
+        self.backend.execute(
+            """
+            INSERT INTO audiobook_output_usage (user_id, used_bytes, updated_at)
+            VALUES (?, ?, ?)
+            ON CONFLICT(user_id) DO UPDATE
+            SET used_bytes = MAX(0, audiobook_output_usage.used_bytes + ?),
+                updated_at = excluded.updated_at
+            """,
+            (self.user_id, initial, now, delta),
+        )
+        row = self.backend.execute(
+            "SELECT used_bytes FROM audiobook_output_usage WHERE user_id = ?",
+            (self.user_id,),
+        ).first
+        if not row:
+            return initial
+        return int(row["used_bytes"] if isinstance(row, dict) else row[0] or 0)
+
+    def recompute_audiobook_output_usage(self) -> int:
+        try:
+            user_int = int(self.user_id)
+        except (TypeError, ValueError):
+            logger.warning("audiobook_quota: invalid user id for recompute: %s", self.user_id)
+            return 0
+        outputs_dir = DatabasePaths.get_user_outputs_dir(user_int)
+        total_bytes = 0
+        offset = 0
+        limit = 200
+        while True:
+            rows, total = self.list_output_artifacts_by_types(
+                types=["audiobook_audio", "audiobook_subtitle", "audiobook_alignment", "audiobook_package"],
+                limit=limit,
+                offset=offset,
+            )
+            for row in rows:
+                size = _extract_output_byte_size(row.metadata_json)
+                if size is None:
+                    size = _resolve_output_size_bytes(self.user_id, row.storage_path)
+                if size:
+                    total_bytes += size
+            offset += len(rows)
+            if offset >= total or not rows:
+                break
+        return self.set_audiobook_output_usage(total_bytes)
 
     def rename_output_artifact(self, output_id: int, new_title: str, new_storage_path: Optional[str] = None) -> "CollectionsDatabase.OutputArtifactRow":
         fields = ["title = ?"]
@@ -2070,6 +2870,557 @@ class CollectionsDatabase:
         if res.rowcount <= 0:
             raise KeyError("output_not_found")
         return self.get_output_artifact(output_id)
+
+    # ------------------------
+    # Audiobook voice profiles
+    # ------------------------
+    def create_audiobook_project(
+        self,
+        *,
+        project_id: Optional[str],
+        title: Optional[str],
+        source_ref: Optional[str],
+        status: Optional[str],
+        settings_json: Optional[str],
+    ) -> AudiobookProjectRow:
+        now = _utcnow_iso()
+        q = (
+            "INSERT INTO audiobook_projects (user_id, project_id, title, source_ref, status, settings_json, created_at, updated_at) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?)"
+        )
+        params = (
+            self.user_id,
+            project_id,
+            title,
+            source_ref,
+            status,
+            settings_json,
+            now,
+            now,
+        )
+        res = self._execute_insert(q, params)
+        project_id = self._extract_lastrowid(res)
+        if project_id is None:
+            raise DatabaseError("audiobook_project_insert_failed")
+        return self.get_audiobook_project(project_id)
+
+    def get_audiobook_project(self, project_id: int) -> AudiobookProjectRow:
+        q = (
+            "SELECT id, user_id, project_id, title, source_ref, status, settings_json, created_at, updated_at "
+            "FROM audiobook_projects WHERE id = ? AND user_id = ?"
+        )
+        row = self.backend.execute(q, (project_id, self.user_id)).first
+        if not row:
+            raise KeyError("audiobook_project_not_found")
+        return AudiobookProjectRow(**row)
+
+    def get_audiobook_project_by_project_id(self, project_id: str) -> AudiobookProjectRow:
+        q = (
+            "SELECT id, user_id, project_id, title, source_ref, status, settings_json, created_at, updated_at "
+            "FROM audiobook_projects WHERE user_id = ? AND project_id = ?"
+        )
+        row = self.backend.execute(q, (self.user_id, project_id)).first
+        if not row:
+            raise KeyError("audiobook_project_not_found")
+        return AudiobookProjectRow(**row)
+
+    def list_audiobook_projects(
+        self,
+        *,
+        limit: int = 100,
+        offset: int = 0,
+    ) -> list[AudiobookProjectRow]:
+        q = (
+            "SELECT id, user_id, project_id, title, source_ref, status, settings_json, created_at, updated_at "
+            "FROM audiobook_projects WHERE user_id = ? ORDER BY created_at DESC LIMIT ? OFFSET ?"
+        )
+        rows = self.backend.execute(q, (self.user_id, limit, offset)).rows
+        return [AudiobookProjectRow(**row) for row in rows]
+
+    def update_audiobook_project_status(
+        self,
+        project_id: int,
+        *,
+        status: str,
+        settings_json: Optional[str] = None,
+    ) -> AudiobookProjectRow:
+        fields = ["status = ?", "updated_at = ?"]
+        params: list[Any] = [status, _utcnow_iso()]
+        if settings_json is not None:
+            fields.append("settings_json = ?")
+            params.append(settings_json)
+        params.extend([project_id, self.user_id])
+        q = f"UPDATE audiobook_projects SET {', '.join(fields)} WHERE id = ? AND user_id = ?"
+        res = self.backend.execute(q, tuple(params))
+        if res.rowcount <= 0:
+            raise KeyError("audiobook_project_not_found")
+        return self.get_audiobook_project(project_id)
+
+    def create_audiobook_chapter(
+        self,
+        *,
+        project_id: int,
+        chapter_index: int,
+        title: Optional[str],
+        start_offset: Optional[int],
+        end_offset: Optional[int],
+        voice_profile_id: Optional[str],
+        speed: Optional[float],
+        metadata_json: Optional[str],
+    ) -> AudiobookChapterRow:
+        q = (
+            "INSERT INTO audiobook_chapters (project_id, chapter_index, title, start_offset, end_offset, "
+            "voice_profile_id, speed, metadata_json) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?)"
+        )
+        params = (
+            project_id,
+            chapter_index,
+            title,
+            start_offset,
+            end_offset,
+            voice_profile_id,
+            speed,
+            metadata_json,
+        )
+        res = self._execute_insert(q, params)
+        chapter_id = self._extract_lastrowid(res)
+        if chapter_id is None:
+            raise DatabaseError("audiobook_chapter_insert_failed")
+        return self.get_audiobook_chapter(chapter_id)
+
+    def get_audiobook_chapter(self, chapter_id: int) -> AudiobookChapterRow:
+        q = (
+            "SELECT id, project_id, chapter_index, title, start_offset, end_offset, voice_profile_id, speed, metadata_json "
+            "FROM audiobook_chapters WHERE id = ?"
+        )
+        row = self.backend.execute(q, (chapter_id,)).first
+        if not row:
+            raise KeyError("audiobook_chapter_not_found")
+        return AudiobookChapterRow(**row)
+
+    def list_audiobook_chapters(
+        self,
+        *,
+        project_id: int,
+        limit: int = 1000,
+        offset: int = 0,
+    ) -> list[AudiobookChapterRow]:
+        q = (
+            "SELECT id, project_id, chapter_index, title, start_offset, end_offset, voice_profile_id, speed, metadata_json "
+            "FROM audiobook_chapters WHERE project_id = ? ORDER BY chapter_index ASC LIMIT ? OFFSET ?"
+        )
+        rows = self.backend.execute(q, (project_id, limit, offset)).rows
+        return [AudiobookChapterRow(**row) for row in rows]
+
+    def create_audiobook_artifact(
+        self,
+        *,
+        project_id: int,
+        artifact_type: str,
+        format_: str,
+        output_id: int,
+        metadata_json: Optional[str],
+    ) -> AudiobookArtifactRow:
+        q = (
+            "INSERT INTO audiobook_artifacts (project_id, artifact_type, format, output_id, metadata_json) "
+            "VALUES (?, ?, ?, ?, ?)"
+        )
+        params = (
+            project_id,
+            artifact_type,
+            format_,
+            output_id,
+            metadata_json,
+        )
+        res = self._execute_insert(q, params)
+        artifact_id = self._extract_lastrowid(res)
+        if artifact_id is None:
+            raise DatabaseError("audiobook_artifact_insert_failed")
+        return self.get_audiobook_artifact(artifact_id)
+
+    def get_audiobook_artifact(self, artifact_id: int) -> AudiobookArtifactRow:
+        q = (
+            "SELECT id, project_id, artifact_type, format, output_id, metadata_json "
+            "FROM audiobook_artifacts WHERE id = ?"
+        )
+        row = self.backend.execute(q, (artifact_id,)).first
+        if not row:
+            raise KeyError("audiobook_artifact_not_found")
+        return AudiobookArtifactRow(**row)
+
+    def list_audiobook_artifacts(
+        self,
+        *,
+        project_id: int,
+        limit: int = 2000,
+        offset: int = 0,
+    ) -> list[AudiobookArtifactRow]:
+        q = (
+            "SELECT id, project_id, artifact_type, format, output_id, metadata_json "
+            "FROM audiobook_artifacts WHERE project_id = ? ORDER BY id ASC LIMIT ? OFFSET ?"
+        )
+        rows = self.backend.execute(q, (project_id, limit, offset)).rows
+        return [AudiobookArtifactRow(**row) for row in rows]
+
+    def create_voice_profile(
+        self,
+        *,
+        profile_id: str,
+        name: str,
+        default_voice: str,
+        default_speed: float,
+        chapter_overrides_json: Optional[str],
+    ) -> VoiceProfileRow:
+        now = _utcnow_iso()
+        q = (
+            "INSERT INTO audiobook_voice_profiles (profile_id, user_id, name, default_voice, default_speed, chapter_overrides_json, created_at, updated_at) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?)"
+        )
+        params = (
+            profile_id,
+            self.user_id,
+            name,
+            default_voice,
+            default_speed,
+            chapter_overrides_json,
+            now,
+            now,
+        )
+        self.backend.execute(q, params)
+        return self.get_voice_profile(profile_id)
+
+    def get_voice_profile(self, profile_id: str) -> VoiceProfileRow:
+        q = (
+            "SELECT profile_id, user_id, name, default_voice, default_speed, chapter_overrides_json, created_at, updated_at "
+            "FROM audiobook_voice_profiles WHERE profile_id = ? AND user_id = ?"
+        )
+        row = self.backend.execute(q, (profile_id, self.user_id)).first
+        if not row:
+            raise KeyError("voice_profile_not_found")
+        return VoiceProfileRow(**row)
+
+    def list_voice_profiles(self, *, limit: int = 100, offset: int = 0) -> list[VoiceProfileRow]:
+        q = (
+            "SELECT profile_id, user_id, name, default_voice, default_speed, chapter_overrides_json, created_at, updated_at "
+            "FROM audiobook_voice_profiles WHERE user_id = ? ORDER BY created_at DESC LIMIT ? OFFSET ?"
+        )
+        rows = self.backend.execute(q, (self.user_id, limit, offset)).rows
+        return [VoiceProfileRow(**row) for row in rows]
+
+    def delete_voice_profile(self, profile_id: str) -> None:
+        q = "DELETE FROM audiobook_voice_profiles WHERE profile_id = ? AND user_id = ?"
+        res = self.backend.execute(q, (profile_id, self.user_id))
+        if res.rowcount <= 0:
+            raise KeyError("voice_profile_not_found")
+
+    # ------------------------
+    # Reading digest schedules API
+    # ------------------------
+    @staticmethod
+    def _coerce_truthy(value: Any) -> bool:
+        if isinstance(value, bool):
+            return value
+        if value is None:
+            return False
+        if isinstance(value, (int, float)):
+            return value != 0
+        return str(value).strip().lower() in {"1", "true", "yes", "y", "on", "t"}
+
+    def _reading_digest_row_from_db(self, row: Dict[str, Any]) -> ReadingDigestScheduleRow:
+        return ReadingDigestScheduleRow(
+            id=str(row.get("id")),
+            tenant_id=str(row.get("tenant_id") or "default"),
+            user_id=str(row.get("user_id")),
+            name=row.get("name"),
+            cron=str(row.get("cron")),
+            timezone=row.get("timezone"),
+            enabled=self._coerce_truthy(row.get("enabled")),
+            require_online=self._coerce_truthy(row.get("require_online")),
+            filters_json=row.get("filters_json") or "{}",
+            template_id=row.get("template_id"),
+            template_name=row.get("template_name"),
+            format=str(row.get("format") or "md"),
+            retention_days=row.get("retention_days"),
+            last_run_at=row.get("last_run_at"),
+            next_run_at=row.get("next_run_at"),
+            last_status=row.get("last_status"),
+            created_at=row.get("created_at"),
+            updated_at=row.get("updated_at"),
+        )
+
+    def create_reading_digest_schedule(
+        self,
+        *,
+        id: str,
+        tenant_id: str,
+        name: Optional[str],
+        cron: str,
+        timezone: Optional[str],
+        enabled: bool,
+        require_online: bool,
+        filters: Dict[str, Any],
+        template_id: Optional[int],
+        template_name: Optional[str],
+        format: str,
+        retention_days: Optional[int],
+    ) -> ReadingDigestScheduleRow:
+        """Create a reading digest schedule for the current user.
+
+        Params:
+            id: Schedule identifier to persist.
+            tenant_id: Tenant identifier.
+            name: Optional display name.
+            cron: Cron expression.
+            timezone: Optional IANA timezone.
+            enabled: Whether the schedule is active.
+            require_online: Whether runs require online status.
+            filters: Filter payload stored as JSON.
+            template_id: Optional output template id.
+            template_name: Optional output template name.
+            format: Output format ("md" or "html").
+            retention_days: Optional retention window in days.
+
+        Returns:
+            Newly created schedule row.
+
+        Raises:
+            DatabaseError: Insert or lookup failure.
+            KeyError: Schedule not found after insert.
+        """
+        now = _utcnow_iso()
+        enabled_flag = self._coerce_bool_flag(enabled, postgres=self.backend.backend_type == BackendType.POSTGRESQL)
+        online_flag = self._coerce_bool_flag(require_online, postgres=self.backend.backend_type == BackendType.POSTGRESQL)
+        params = (
+            id,
+            tenant_id,
+            self.user_id,
+            name,
+            cron,
+            timezone,
+            enabled_flag,
+            online_flag,
+            json.dumps(filters or {}),
+            template_id,
+            template_name,
+            format or "md",
+            retention_days,
+            None,
+            None,
+            None,
+            now,
+            now,
+        )
+        q = (
+            "INSERT INTO reading_digest_schedules ("
+            "id, tenant_id, user_id, name, cron, timezone, enabled, require_online, filters_json, "
+            "template_id, template_name, format, retention_days, last_run_at, next_run_at, last_status, created_at, updated_at"
+            ") VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
+        )
+        self._execute_insert(q, params)
+        return self.get_reading_digest_schedule(id)
+
+    def update_reading_digest_schedule(self, schedule_id: str, patch: Dict[str, Any]) -> ReadingDigestScheduleRow:
+        """Update a reading digest schedule for the current user.
+
+        Params:
+            schedule_id: Schedule identifier to update.
+            patch: Fields to update (filters, schedule fields, or history columns).
+
+        Returns:
+            Updated schedule row.
+
+        Raises:
+            KeyError: Schedule not found.
+            DatabaseError: Update or lookup failure.
+        """
+        if not patch:
+            return self.get_reading_digest_schedule(schedule_id)
+        fields = []
+        params: List[Any] = []
+        if "filters" in patch:
+            fields.append("filters_json = ?")
+            params.append(json.dumps(patch.get("filters") or {}))
+        if "enabled" in patch:
+            fields.append("enabled = ?")
+            params.append(self._coerce_bool_flag(patch.get("enabled"), postgres=self.backend.backend_type == BackendType.POSTGRESQL))
+        if "require_online" in patch:
+            fields.append("require_online = ?")
+            params.append(self._coerce_bool_flag(patch.get("require_online"), postgres=self.backend.backend_type == BackendType.POSTGRESQL))
+        for key in (
+            "name",
+            "cron",
+            "timezone",
+            "template_id",
+            "template_name",
+            "format",
+            "retention_days",
+            "last_run_at",
+            "next_run_at",
+            "last_status",
+        ):
+            if key in patch:
+                fields.append(f"{key} = ?")
+                params.append(patch.get(key))
+        fields.append("updated_at = ?")
+        params.append(_utcnow_iso())
+        params.extend([schedule_id, self.user_id])
+        q = f"UPDATE reading_digest_schedules SET {', '.join(fields)} WHERE id = ? AND user_id = ?"
+        res = self.backend.execute(q, tuple(params))
+        if res.rowcount <= 0:
+            raise KeyError("reading_digest_schedule_not_found")
+        return self.get_reading_digest_schedule(schedule_id)
+
+    def delete_reading_digest_schedule(self, schedule_id: str) -> bool:
+        """Delete a reading digest schedule for the current user.
+
+        Params:
+            schedule_id: Schedule identifier to delete.
+
+        Returns:
+            True when a row was deleted, otherwise False.
+
+        Raises:
+            DatabaseError: Delete failure.
+        """
+        q = "DELETE FROM reading_digest_schedules WHERE id = ? AND user_id = ?"
+        res = self.backend.execute(q, (schedule_id, self.user_id))
+        return res.rowcount > 0
+
+    def get_reading_digest_schedule(self, schedule_id: str) -> ReadingDigestScheduleRow:
+        """Fetch a reading digest schedule for the current user.
+
+        Params:
+            schedule_id: Schedule identifier to retrieve.
+
+        Returns:
+            Schedule row.
+
+        Raises:
+            KeyError: Schedule not found.
+            DatabaseError: Query failure.
+        """
+        q = "SELECT * FROM reading_digest_schedules WHERE id = ? AND user_id = ?"
+        row = self.backend.execute(q, (schedule_id, self.user_id)).first
+        if not row:
+            raise KeyError("reading_digest_schedule_not_found")
+        return self._reading_digest_row_from_db(row)
+
+    def list_reading_digest_schedules(
+        self,
+        *,
+        tenant_id: str,
+        limit: int = 50,
+        offset: int = 0,
+    ) -> Tuple[List[ReadingDigestScheduleRow], int]:
+        """List reading digest schedules for the current user and tenant.
+
+        Params:
+            tenant_id: Tenant identifier to filter schedules.
+            limit: Maximum number of rows to return.
+            offset: Starting offset for pagination.
+
+        Returns:
+            Tuple of (schedule rows, total count).
+
+        Raises:
+            DatabaseError: Query failure.
+        """
+        where = "user_id = ? AND tenant_id = ?"
+        params: List[Any] = [self.user_id, tenant_id]
+        count_q = f"SELECT COUNT(*) AS cnt FROM reading_digest_schedules WHERE {where}"
+        total = int(self.backend.execute(count_q, tuple(params)).scalar or 0)
+        q = (
+            "SELECT * FROM reading_digest_schedules "
+            f"WHERE {where} ORDER BY created_at DESC LIMIT ? OFFSET ?"
+        )
+        rows = self.backend.execute(q, tuple([*params, limit, offset])).rows
+        return [self._reading_digest_row_from_db(row) for row in rows], total
+
+    def set_reading_digest_history(
+        self,
+        schedule_id: str,
+        *,
+        last_run_at: Optional[str] = None,
+        next_run_at: Optional[str] = None,
+        last_status: Optional[str] = None,
+    ) -> None:
+        """Update reading digest schedule history fields for the current user.
+
+        Params:
+            schedule_id: Schedule identifier to update.
+            last_run_at: ISO timestamp of last run (optional).
+            next_run_at: ISO timestamp of next scheduled run (optional).
+            last_status: Last run status string (optional).
+
+        Returns:
+            None.
+
+        Raises:
+            KeyError: Schedule not found.
+            DatabaseError: Update failure.
+        """
+        update: Dict[str, Any] = {}
+        if last_run_at is not None:
+            update["last_run_at"] = last_run_at
+        if next_run_at is not None:
+            update["next_run_at"] = next_run_at
+        if last_status is not None:
+            update["last_status"] = last_status
+        if not update:
+            return
+        self.update_reading_digest_schedule(schedule_id, update)
+
+    def try_claim_reading_digest_run(
+        self,
+        schedule_id: str,
+        *,
+        expected_next_run_at: Optional[str],
+        next_run_at: Optional[str],
+        last_run_at: Optional[str],
+        last_status: Optional[str],
+        disallow_statuses: Optional[tuple[str, ...]] = None,
+    ) -> bool:
+        """Attempt to claim a schedule run by updating run timestamps/status.
+
+        Params:
+            schedule_id: Schedule identifier to claim.
+            expected_next_run_at: Required current next_run_at for optimistic claim.
+            next_run_at: New next_run_at timestamp to set.
+            last_run_at: Last run timestamp to set.
+            last_status: Last run status to set.
+            disallow_statuses: Status values that block the claim.
+
+        Returns:
+            True if the schedule was updated (claim succeeded), otherwise False.
+
+        Raises:
+            DatabaseError: Update failure.
+        """
+        fields = ["next_run_at = ?", "last_run_at = ?", "last_status = ?"]
+        params: list[Any] = [next_run_at, last_run_at, last_status, schedule_id, self.user_id]
+        status_clause = ""
+        status_params: list[Any] = []
+        if disallow_statuses:
+            placeholders = ", ".join(["?"] * len(disallow_statuses))
+            status_clause = f" AND (last_status IS NULL OR last_status NOT IN ({placeholders}))"
+            status_params.extend(disallow_statuses)
+        if expected_next_run_at is None:
+            q = (
+                f"UPDATE reading_digest_schedules SET {', '.join(fields)} "
+                "WHERE id = ? AND user_id = ? AND next_run_at IS NULL"
+                f"{status_clause}"
+            )
+        else:
+            q = (
+                f"UPDATE reading_digest_schedules SET {', '.join(fields)} "
+                "WHERE id = ? AND user_id = ? AND next_run_at = ?"
+                f"{status_clause}"
+            )
+            params.append(expected_next_run_at)
+        params.extend(status_params)
+        res = self.backend.execute(q, tuple(params))
+        return res.rowcount > 0
 
     def purge_expired_outputs(self) -> int:
         """Hard delete expired/retained outputs. Returns number of rows removed."""

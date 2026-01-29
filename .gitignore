@@ -322,6 +322,8 @@ Config_Files/session_encryption.key
 /.venv-ci
 :memory:
 /tldw_Server_API/WebUI/node_modules
+/apps/node_modules
+/node_modules
 /.mkdocs-venv
 /tmp_dir
 /tldw_Server_API/app/core/Ingestion_Media_Processing/Audio/models
@@ -335,3 +337,10 @@ wizard.log
 /tldw_Server_API/Config_Files/acp_runner_home/go
 /tldw_Server_API/Config_Files/acp_runner_home
 /Demo
+/apps/tldw-frontend/test-results
+apps/Databases/system_logs.jsonl.lock
+apps/Databases/system_logs.jsonl
+tldw_Server_API/Config_Files/session_encryption.key
+tldw_Server_API/Config_Files/session_encryption.key
+Dockerfiles/Monitoring/secrets/
+/apps/extension/.output

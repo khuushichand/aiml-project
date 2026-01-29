@@ -1,6 +1,7 @@
 'use client';
 
 import { useCallback, useEffect, useMemo, useState, Suspense } from 'react';
+import { useRouter } from 'next/navigation';
 import { useForm, FormProvider } from 'react-hook-form';
 import { z } from 'zod';
 import { zodResolver } from '@hookform/resolvers/zod';
@@ -18,7 +19,8 @@ import { Pagination } from '@/components/ui/pagination';
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle, DialogTrigger } from '@/components/ui/dialog';
 import { Checkbox } from '@/components/ui/checkbox';
 import { Form, FormCheckbox, FormInput, FormSelect } from '@/components/ui/form';
-import { Eye, Key, Search, Plus, Trash2, UserCheck, UserX, BookmarkPlus, BookmarkX } from 'lucide-react';
+import { Eye, Key, Search, Plus, RefreshCw, Trash2, UserCheck, UserX, BookmarkPlus, BookmarkX } from 'lucide-react';
+import { AccessibleIconButton } from '@/components/ui/accessible-icon-button';
 import { api } from '@/lib/api-client';
 import { User } from '@/types';
 import { ExportMenu } from '@/components/ui/export-menu';
@@ -28,7 +30,6 @@ import { useUrlState, useUrlPagination } from '@/lib/use-url-state';
 import { useConfirm } from '@/components/ui/confirm-dialog';
 import { useToast } from '@/components/ui/toast';
 import { useOrgContext } from '@/components/OrgContextSwitcher';
-import Link from 'next/link';
 
 type SavedUserView = {
   id: string;
@@ -50,6 +51,7 @@ const createUserSchema = z.object({
 type CreateUserFormData = z.infer<typeof createUserSchema>;
 
 function UsersPageContent() {
+  const router = useRouter();
   const confirm = useConfirm();
   const { success, error: showError } = useToast();
   const { selectedOrg } = useOrgContext();
@@ -63,6 +65,7 @@ function UsersPageContent() {
   const [showCreateUserDialog, setShowCreateUserDialog] = useState(false);
   const [createUserError, setCreateUserError] = useState('');
   const [creatingUser, setCreatingUser] = useState(false);
+  const [deletingUserIds, setDeletingUserIds] = useState<Set<number>>(new Set());
   const [savedViews, setSavedViews] = useState<SavedUserView[]>([]);
   const [showSaveViewDialog, setShowSaveViewDialog] = useState(false);
   const [saveViewName, setSaveViewName] = useState('');
@@ -431,6 +434,8 @@ function UsersPageContent() {
       showError('Cannot delete yourself', 'You cannot delete your own account.');
       return;
     }
+    const userId = user.id;
+    if (deletingUserIds.has(userId)) return;
     const confirmed = await confirm({
       title: 'Delete User',
       message: `Delete ${user.username || user.email}? This cannot be undone.`,
@@ -441,12 +446,23 @@ function UsersPageContent() {
     if (!confirmed) return;
 
     try {
-      await api.deleteUser(user.id.toString());
+      setDeletingUserIds((prev) => {
+        const next = new Set(prev);
+        next.add(userId);
+        return next;
+      });
+      await api.deleteUser(String(userId));
       success('User deleted', `${user.username || user.email} removed.`);
       void loadUsers();
     } catch (err: unknown) {
       const message = err instanceof Error ? err.message : 'Failed to delete user';
       showError('Delete failed', message);
+    } finally {
+      setDeletingUserIds((prev) => {
+        const next = new Set(prev);
+        next.delete(userId);
+        return next;
+      });
     }
   };
 
@@ -558,8 +574,12 @@ function UsersPageContent() {
               <CardContent className="pt-6">
                 <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
                   <div className="relative max-w-md w-full">
-                    <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
+                    <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" aria-hidden="true" />
+                    <label htmlFor="users-search" className="sr-only">
+                      Search users by username, email, or role
+                    </label>
                     <Input
+                      id="users-search"
                       placeholder="Search by username, email, or role..."
                       value={searchQuery || ''}
                       onChange={(e) => handleSearchChange(e.target.value)}
@@ -730,6 +750,7 @@ function UsersPageContent() {
                             user.storage_quota_mb || 0
                           );
                           const isCurrentUser = currentUserId === user.id;
+                          const isDeleting = deletingUserIds.has(user.id);
                           return (
                             <TableRow key={user.id}>
                               <TableCell>
@@ -761,7 +782,17 @@ function UsersPageContent() {
                               <TableCell>
                                 <div className="space-y-1">
                                   <div className="text-xs">{storage.text}</div>
-                                  <div className="w-20 bg-gray-200 rounded-full h-1.5">
+                                  <div
+                                    className="w-20 bg-gray-200 rounded-full h-1.5"
+                                    role="progressbar"
+                                    aria-valuenow={Math.round(storage.percentage)}
+                                    aria-valuemin={0}
+                                    aria-valuemax={100}
+                                    aria-label={`Storage usage: ${Math.round(storage.percentage)}%${
+                                      storage.percentage > 90 ? ', critical' :
+                                      storage.percentage > 70 ? ', warning' : ''
+                                    }`}
+                                  >
                                     <div
                                       className={`h-1.5 rounded-full ${
                                         storage.percentage > 90 ? 'bg-red-500' :
@@ -780,37 +811,36 @@ function UsersPageContent() {
                               </TableCell>
                               <TableCell className="text-right">
                                 <div className="flex justify-end gap-1">
-                                  <Link href={`/users/${user.id}`}>
-                                    <Button variant="ghost" size="sm" title="View details">
-                                      <Eye className="h-4 w-4" />
-                                    </Button>
-                                  </Link>
-                                  <Link href={`/users/${user.id}/api-keys`}>
-                                    <Button variant="ghost" size="sm" title="Manage API keys">
-                                      <Key className="h-4 w-4" />
-                                    </Button>
-                                  </Link>
-                                  <Button
+                                  <AccessibleIconButton
+                                    icon={Eye}
+                                    label="View user details"
                                     variant="ghost"
                                     size="sm"
-                                    title={user.is_active ? 'Deactivate user' : 'Activate user'}
+                                    onClick={() => router.push(`/users/${user.id}`)}
+                                  />
+                                  <AccessibleIconButton
+                                    icon={Key}
+                                    label="Manage API keys"
+                                    variant="ghost"
+                                    size="sm"
+                                    onClick={() => router.push(`/users/${user.id}/api-keys`)}
+                                  />
+                                  <AccessibleIconButton
+                                    icon={user.is_active ? UserX : UserCheck}
+                                    label={user.is_active ? 'Deactivate user' : 'Activate user'}
+                                    variant="ghost"
+                                    size="sm"
                                     onClick={() => handleToggleActive(user)}
-                                  >
-                                    {user.is_active ? (
-                                      <UserX className="h-4 w-4" />
-                                    ) : (
-                                      <UserCheck className="h-4 w-4" />
-                                    )}
-                                  </Button>
-                                  <Button
+                                  />
+                                  <AccessibleIconButton
+                                    icon={isDeleting ? RefreshCw : Trash2}
+                                    label={isDeleting ? 'Deleting user' : isCurrentUser ? 'Cannot delete yourself' : 'Delete user'}
                                     variant="ghost"
                                     size="sm"
-                                    title={isCurrentUser ? 'Cannot delete yourself' : 'Delete user'}
                                     onClick={() => handleDeleteUser(user)}
-                                    disabled={isCurrentUser}
-                                  >
-                                    <Trash2 className="h-4 w-4 text-destructive" />
-                                  </Button>
+                                    disabled={isCurrentUser || isDeleting}
+                                    iconClassName={isDeleting ? 'animate-spin text-destructive' : 'text-destructive'}
+                                  />
                                 </div>
                               </TableCell>
                             </TableRow>

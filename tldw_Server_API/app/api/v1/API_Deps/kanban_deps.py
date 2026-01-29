@@ -396,6 +396,37 @@ KANBAN_RATE_LIMITS: Dict[str, int] = {
     "kanban.links.delete": int(os.getenv("KANBAN_RATE_LIMIT_LINKS_DELETE", "60")),
     "kanban.links.bulk": int(os.getenv("KANBAN_RATE_LIMIT_LINKS_BULK", "30")),
     "kanban.links.lookup": int(os.getenv("KANBAN_RATE_LIMIT_LINKS_LOOKUP", "120")),
+
+    # Comment operations
+    "kanban.comments.create": int(os.getenv("KANBAN_RATE_LIMIT_COMMENTS_CREATE", "120")),
+    "kanban.comments.list": int(os.getenv("KANBAN_RATE_LIMIT_COMMENTS_LIST", "200")),
+    "kanban.comments.get": int(os.getenv("KANBAN_RATE_LIMIT_COMMENTS_GET", "200")),
+    "kanban.comments.update": int(os.getenv("KANBAN_RATE_LIMIT_COMMENTS_UPDATE", "120")),
+    "kanban.comments.delete": int(os.getenv("KANBAN_RATE_LIMIT_COMMENTS_DELETE", "60")),
+
+    # Label operations
+    "kanban.labels.create": int(os.getenv("KANBAN_RATE_LIMIT_LABELS_CREATE", "60")),
+    "kanban.labels.list": int(os.getenv("KANBAN_RATE_LIMIT_LABELS_LIST", "200")),
+    "kanban.labels.get": int(os.getenv("KANBAN_RATE_LIMIT_LABELS_GET", "200")),
+    "kanban.labels.update": int(os.getenv("KANBAN_RATE_LIMIT_LABELS_UPDATE", "60")),
+    "kanban.labels.delete": int(os.getenv("KANBAN_RATE_LIMIT_LABELS_DELETE", "60")),
+    "kanban.labels.assign": int(os.getenv("KANBAN_RATE_LIMIT_LABELS_ASSIGN", "120")),
+    "kanban.labels.remove": int(os.getenv("KANBAN_RATE_LIMIT_LABELS_REMOVE", "120")),
+
+    # Checklist operations
+    "kanban.checklists.create": int(os.getenv("KANBAN_RATE_LIMIT_CHECKLISTS_CREATE", "120")),
+    "kanban.checklists.list": int(os.getenv("KANBAN_RATE_LIMIT_CHECKLISTS_LIST", "200")),
+    "kanban.checklists.get": int(os.getenv("KANBAN_RATE_LIMIT_CHECKLISTS_GET", "200")),
+    "kanban.checklists.update": int(os.getenv("KANBAN_RATE_LIMIT_CHECKLISTS_UPDATE", "120")),
+    "kanban.checklists.delete": int(os.getenv("KANBAN_RATE_LIMIT_CHECKLISTS_DELETE", "60")),
+    "kanban.checklists.reorder": int(os.getenv("KANBAN_RATE_LIMIT_CHECKLISTS_REORDER", "120")),
+    "kanban.checklist_items.create": int(os.getenv("KANBAN_RATE_LIMIT_CHECKLIST_ITEMS_CREATE", "200")),
+    "kanban.checklist_items.list": int(os.getenv("KANBAN_RATE_LIMIT_CHECKLIST_ITEMS_LIST", "200")),
+    "kanban.checklist_items.get": int(os.getenv("KANBAN_RATE_LIMIT_CHECKLIST_ITEMS_GET", "200")),
+    "kanban.checklist_items.update": int(os.getenv("KANBAN_RATE_LIMIT_CHECKLIST_ITEMS_UPDATE", "200")),
+    "kanban.checklist_items.delete": int(os.getenv("KANBAN_RATE_LIMIT_CHECKLIST_ITEMS_DELETE", "120")),
+    "kanban.checklist_items.reorder": int(os.getenv("KANBAN_RATE_LIMIT_CHECKLIST_ITEMS_REORDER", "120")),
+    "kanban.checklist_items.toggle_all": int(os.getenv("KANBAN_RATE_LIMIT_CHECKLIST_ITEMS_TOGGLE_ALL", "120")),
 }
 
 # In-memory rate limit tracking (per-user, per-action)

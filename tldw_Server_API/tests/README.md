@@ -48,8 +48,10 @@ This directory contains the end-to-end, integration, and unit tests for `tldw_se
 | Setting | Default | Effect | Notes |
 | --- | --- | --- | --- |
 | `RUN_TTS_LEGACY_INTEGRATION` | disabled | Runs legacy TTS adapter tests under `tests/TTS/`. | Requires provider-specific keys (e.g., `ELEVENLABS_API_KEY`, local model paths). |
+| `ECHO_TTS_MODULE_PATH` | unset | Points to an Echo-TTS checkout for the CUDA initialization test under `tests/TTS_NEW/integration/`. | If unset, the test looks for `../echo-tts` next to the repo. |
+| `HF_HUB_OFFLINE` / `TRANSFORMERS_OFFLINE` | unset | Force offline mode for the Echo-TTS CUDA generation test under `tests/TTS_NEW/integration/`. | The test only runs when the Echo-TTS model repos are already cached locally. |
 | `ALLOW_HEAVY_AUDIO_SMOKE` | disabled | Enables the audio worker smoke test (`tests/AudioJobs/test_audio_worker_smoke.py`). | Install `ffmpeg` and ensure audio models are available. |
-| `RUN_AUDIO_E2E` | disabled | Allows the optional WebUI audio upload E2E test. | Requires a running server plus audio processing dependencies. |
+| `RUN_AUDIO_E2E` | disabled | Allows the optional audio upload E2E test. | Requires a running server plus audio processing dependencies. |
 
 ### Workflows, MCP, and Services
 | Setting | Default | Effect | Notes |
@@ -60,7 +62,7 @@ This directory contains the end-to-end, integration, and unit tests for `tldw_se
 ### End-to-End Harness
 | Setting | Default | Effect | Notes |
 | --- | --- | --- | --- |
-| `E2E_TEST_BASE_URL` | `http://localhost:8000` | Base URL for WebUI/API E2E tests. | Ensure the server is running before starting the suite. |
+| `E2E_TEST_BASE_URL` | `http://localhost:8000` | Base URL for API E2E tests. | Ensure the server is running before starting the suite. |
 | `E2E_AUTH_MODE` | `auto` | Overrides auth mode detection for E2E tests. | Choose `single_user` or `multi_user` to force a mode. |
 | `E2E_RATE_LIMIT_DELAY` | `0.5` | Seconds to wait before retrying on rate-limit responses. | Adjust if the server is under heavy load. |
 | `E2E_MAX_RETRIES` | `3` | Retry attempts after rate limits. | Increase for slower deployments. |
@@ -68,7 +70,7 @@ This directory contains the end-to-end, integration, and unit tests for `tldw_se
 | `E2E_ADMIN_BEARER` | unset | Bearer token used for admin-level E2E scenarios. | Required for multi-user onboarding tests. |
 
 ### Admin UI Playwright Checks
-The `tests/webui_e2e/test_admin_ui_api_key_storage.py` test targets the Next.js admin UI login screen.
+The frontend E2E tests for the Next.js admin UI live under `apps/tldw-frontend/e2e`.
 
 - Required: the API server must be running in `single_user` mode with a valid `SINGLE_USER_API_KEY`.
 - Optional: the test can auto-start the admin UI with `npm run dev` if `ADMIN_UI_URL` is not reachable.

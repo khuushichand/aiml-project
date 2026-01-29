@@ -57,6 +57,18 @@ class _DummyServer:
         self.last_metadata = metadata or {}
         return MCPResponse(result={"ok": True}, id=getattr(request, "id", None))
 
+    async def handle_http_batch(
+        self,
+        requests,
+        client_id: Optional[str] = None,
+        user_id: Optional[str] = None,
+        metadata: Optional[Dict[str, Any]] = None,
+    ):
+        from tldw_Server_API.app.core.MCP_unified.protocol import MCPResponse
+
+        self.last_metadata = metadata or {}
+        return [MCPResponse(result={"ok": True}, id=getattr(req, "id", None)) for req in requests]
+
 
 def _install_dummy_server(monkeypatch) -> _DummyServer:
 
@@ -201,6 +213,66 @@ def test_http_api_key_scopes_enforced(monkeypatch):
     assert r1.status_code == 200
     body = r1.json()
     assert body.get("error", {}).get("code") == -32602
+
+
+def test_tools_list_attaches_api_key_metadata(monkeypatch):
+    """
+    Ensure /mcp/tools attaches API key metadata (org/team/scopes) for convenience endpoints.
+    """
+    monkeypatch.setenv("MCP_SINGLE_USER_COMPAT_SHIM", "0")
+    monkeypatch.setattr(mcp_ep, "is_single_user_mode", lambda: False)
+    monkeypatch.setattr(mcp_ep, "is_single_user_profile_mode", lambda: False)
+
+    class _DummyApiManager:
+        async def validate_api_key(self, key: str, ip_address: Optional[str] = None) -> Dict[str, Any]:
+            return {"user_id": "123", "org_id": 9, "team_id": 7, "scope": ["read"]}
+
+    async def _fake_get_api_key_manager():
+        return _DummyApiManager()
+
+    monkeypatch.setattr(mcp_ep, "get_api_key_manager", _fake_get_api_key_manager)
+
+    server = _install_dummy_server(monkeypatch)
+
+    r = client.get("/api/v1/mcp/tools", headers={"X-API-KEY": "test-api-key"})
+    assert r.status_code == 200, r.text
+
+    assert server.last_metadata is not None
+    assert server.last_metadata.get("org_id") == 9
+    assert server.last_metadata.get("team_id") == 7
+    assert server.last_metadata.get("api_key_scopes") == ["read"]
+
+
+def test_tools_execute_api_key_scopes_enforced(monkeypatch):
+    """
+    Ensure /mcp/tools/execute respects API key scopes.
+    """
+    monkeypatch.setenv("MCP_SINGLE_USER_COMPAT_SHIM", "0")
+    monkeypatch.setattr(mcp_ep, "is_single_user_mode", lambda: False)
+    monkeypatch.setattr(mcp_ep, "is_single_user_profile_mode", lambda: False)
+
+    class _DummyApiManager:
+        async def validate_api_key(self, key: str, ip_address: Optional[str] = None) -> Dict[str, Any]:
+            scope = ["mcp:tool:media.search"] if key == "scope-match" else ["mcp:tool:other"]
+            return {"user_id": "123", "org_id": 9, "team_id": 7, "scope": scope}
+
+    async def _fake_get_api_key_manager():
+        return _DummyApiManager()
+
+    monkeypatch.setattr(mcp_ep, "get_api_key_manager", _fake_get_api_key_manager)
+
+    server = _ScopeServer()
+    monkeypatch.setattr(mcp_ep, "get_mcp_server", lambda: server)
+
+    payload = {"tool_name": "media.search", "arguments": {"query": "hello"}}
+
+    # Scope mismatch -> authorization error (403)
+    r0 = client.post("/api/v1/mcp/tools/execute", headers={"X-API-KEY": "scope-mismatch"}, json=payload)
+    assert r0.status_code == 403
+
+    # Scope match -> passes auth (handler will fail later with tool-not-found)
+    r1 = client.post("/api/v1/mcp/tools/execute", headers={"X-API-KEY": "scope-match"}, json=payload)
+    assert r1.status_code == 400
 
 
 @pytest.mark.asyncio

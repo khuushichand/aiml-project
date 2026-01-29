@@ -1,0 +1,20 @@
+{"source":"README.md","dest":"tldw_readme.md","query":"What is tldw_server and its core features?"}
+{"source":"Project_Guidelines.md","dest":"project_guidelines.md","query":"What are the project philosophy principles?"}
+{"source":"Docs/Architecture.md","dest":"architecture_overview.md","query":"What is the high-level architecture of the server?"}
+{"source":"tldw_Server_API/app/core/RAG/README.md","dest":"rag_core_readme.md","query":"How does the unified RAG pipeline work?"}
+{"source":"tldw_Server_API/app/core/RAG/API_DOCUMENTATION.md","dest":"rag_api_documentation.md","query":"What are the key /rag/search request fields?"}
+{"source":"Docs/Product/RAG-Upgrades-PRD.md","dest":"rag_upgrades_prd.md","query":"What are the phases and goals of the RAG upgrades PRD?"}
+{"source":"Docs/Design/RAG-Benchmarking.md","dest":"rag_benchmarking_prd.md","query":"What metrics are used in the RAG benchmarking PRD?"}
+{"source":"Docs/Design/RAG_Pipeline_Evaluation.md","dest":"rag_pipeline_evaluation.md","query":"What does the RAG pipeline evaluation measure?"}
+{"source":"Docs/Design/RAG_Plan.md","dest":"rag_plan.md","query":"What is the RAG plan overview?"}
+{"source":"Docs/Design/RAG_Features_Evaluation_And_Plan.md","dest":"rag_features_plan.md","query":"What features are covered in the RAG features evaluation and plan?"}
+{"source":"Docs/Published/User_Guides/RAG_Deployment_Guide.md","dest":"rag_deployment_guide.md","query":"How do you deploy the RAG service?"}
+{"source":"Docs/Published/User_Guides/RAG_Production_Configuration_Guide.md","dest":"rag_production_config_guide.md","query":"What production RAG config knobs are recommended?"}
+{"source":"Docs/Deployment/Monitoring/README.md","dest":"monitoring_readme.md","query":"What monitoring components exist for RAG?"}
+{"source":"Docs/Deployment/Monitoring/Alerts/rag-slo-alerts.yml","dest":"rag_slo_alerts.yml","query":"What are the RAG SLO alert rules?"}
+{"source":"Docs/Published/Monitoring/Metrics_Cheatsheet.md","dest":"metrics_cheatsheet.md","query":"Which metrics are tracked for RAG?"}
+{"source":"Docs/Operations/Env_Vars.md","dest":"env_vars_ops.md","query":"Which RAG environment variables are available?"}
+{"source":"Docs/Published/API-related/Evaluations_API_Unified_Reference.md","dest":"evals_api_unified_reference.md","query":"What metrics are supported by the evaluations API?"}
+{"source":"Docs/Published/User_Guides/Evaluations_User_Guide.md","dest":"evals_user_guide.md","query":"How do you run evaluations in the UI?"}
+{"source":"Docs/Published/Code_Documentation/Answer_Time_Claims_Engine.md","dest":"claims_engine.md","query":"How does the claims engine evaluate faithfulness?"}
+{"source":"Docs/Published/Code_Documentation/Claims_Extraction.md","dest":"claims_extraction.md","query":"What is claim_faithfulness and how is it computed?"}

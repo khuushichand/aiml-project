@@ -22,7 +22,7 @@ Key Directories
   - moderation_service.py: Central moderation/guardrails engine and persistence helpers.
 - tldw_Server_API/app/core/Audit/
   - unified_audit_service.py: Audit event logging, PII detector, and daily stats.
-- tldw_Server_API/WebUI/
+- apps/tldw-frontend/
   - tabs/admin_content.html: Admin Moderation tab sections and JS helpers.
   - js/api-client.js: Frontend API client used by the Admin UI.
 

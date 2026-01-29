@@ -17,6 +17,7 @@ import asyncio
 import gc
 import glob
 import inspect
+import hashlib
 import json
 import multiprocessing
 import os
@@ -31,7 +32,7 @@ import threading
 import time
 import queue
 from functools import lru_cache
-from typing import Optional, Union, List, Dict, Any, Tuple, Callable
+from typing import Optional, Sequence, Union, List, Dict, Any, Tuple, Callable
 #
 # DEBUG Imports
 #from memory_profiler import profile
@@ -46,13 +47,15 @@ from transformers import AutoProcessor, Qwen2AudioForConditionalGeneration
 try:
     from tldw_Server_API.app.core.Ingestion_Media_Processing.Audio.Diarization_Lib import (
         DiarizationService,
-        DiarizationError
+        DiarizationError,
+        load_diarization_config,
     )
     DIARIZATION_AVAILABLE = True
 except ImportError:
     DIARIZATION_AVAILABLE = False
     DiarizationService = None
     DiarizationError = Exception  # Fallback to base Exception
+    load_diarization_config = lambda: {}  # type: ignore[assignment]
 #
 # Import Local
 from tldw_Server_API.app.core.Utils.Utils import sanitize_filename, logging
@@ -117,6 +120,12 @@ def _coerce_float(val):
         return float(val)
     except Exception:
         return None
+
+
+def _looks_like_error_text(text: Any) -> bool:
+    if not isinstance(text, str):
+        return False
+    return text.strip().startswith("[Error:")
 
 
 # Conservative defaults to prevent unbounded cache growth unless explicitly
@@ -635,6 +644,7 @@ def perform_transcription(
     diarize: bool = False,
     overwrite: bool = False,
     transcription_language: str = 'en',
+    hotwords: Optional[Sequence[str] | str] = None,
     temp_dir: Optional[str] = None,
     end_seconds: Optional[int] = None,
     cancel_check: Optional[Callable[[], bool]] = None,
@@ -664,6 +674,9 @@ def perform_transcription(
             exists, it will be loaded.
         transcription_language: The language code (e.g., 'en', 'es') for
             transcription. Defaults to 'en'.
+        hotwords: Optional hotword hints. Accepts a list/sequence or a JSON/CSV
+            string. This is primarily used by VibeVoice-ASR and ignored by other
+            providers.
         temp_dir: An optional path to a temporary directory. When provided,
             the input and output paths must resolve under this directory.
         end_seconds: Optional absolute end time (in seconds) for transcription.
@@ -751,11 +764,20 @@ def perform_transcription(
         _assert_no_symlink(audio_path_obj, label="Audio output path")
         cache_dir = _resolve_transcript_cache_dir(audio_path_obj, base_dir=base_dir_path)
         transcription_model_sanitized = _sanitize_transcription_model_name(transcription_model)
+        hotwords_suffix = _hotwords_cache_suffix(hotwords)
         segments_json_path = (
-            cache_dir / f"{audio_path_obj.stem}-transcription_model-{transcription_model_sanitized}.segments.json"
+            cache_dir
+            / (
+                f"{audio_path_obj.stem}-transcription_model-"
+                f"{transcription_model_sanitized}{hotwords_suffix}.segments.json"
+            )
         )
         diarized_json_path = (
-            cache_dir / f"{audio_path_obj.stem}-transcription_model-{transcription_model_sanitized}.diarized.json"
+            cache_dir
+            / (
+                f"{audio_path_obj.stem}-transcription_model-"
+                f"{transcription_model_sanitized}{hotwords_suffix}.diarized.json"
+            )
         )
 
         # --- Perform Diarization and Combination (if requested) ---
@@ -793,63 +815,117 @@ def perform_transcription(
                         logging.warning(f"Failed to read/parse existing diarized file: {e}")
                         # Continue to regenerate
 
-                # First, get the transcription segments via the unified STT helper
-                logging.info(f"Generating transcription for diarization")
-                artifact = run_stt_batch_via_registry(
-                    audio_file_path,
-                    transcription_model,
-                    vad_filter=vad_use,
-                    selected_source_lang=transcription_language,
-                    base_dir=base_dir_path,
-                    cancel_check=cancel_check,
-                )
-                transcription_segments = artifact.get("segments") or []
+                # Optional: NeMo multitalk diarization (coupled Parakeet ASR)
+                diarization_config = load_diarization_config()
+                backend = str(diarization_config.get("backend", "embedding") or "embedding").lower()
+                if backend == "nemo_multitalk":
+                    provider = None
+                    variant = None
+                    try:
+                        from tldw_Server_API.app.core.Ingestion_Media_Processing.Audio.stt_provider_adapter import (
+                            get_stt_provider_registry,
+                        )
 
-                if transcription_segments is None:
-                    logging.error(f"Transcription generation failed for {audio_file_path}")
-                    return audio_file_path, None
+                        registry = get_stt_provider_registry()
+                        provider, _, variant = registry.resolve_provider_for_model(transcription_model or "")
+                    except Exception as exc:
+                        logging.warning(f"Unable to resolve STT provider for multitalk diarization: {exc}")
 
-                # Now perform diarization
-                try:
-                    logging.info(f"Performing speaker diarization...")
-                    diarization_service = DiarizationService()
+                    if provider != "parakeet":
+                        logging.error(
+                            "NeMo multitalk diarization requires Parakeet STT provider; disabling diarization."
+                        )
+                        diarize = False
+                    elif variant not in (None, "standard"):
+                        logging.error(
+                            "NeMo multitalk diarization only supports Parakeet 'standard' (NeMo) variant; "
+                            f"got '{variant}'. Disabling diarization."
+                        )
+                        diarize = False
+                    if diarize and provider == "parakeet":
+                        try:
+                            from tldw_Server_API.app.core.Ingestion_Media_Processing.Audio.Diarization_Nemo_Multitalk import (
+                                transcribe_with_nemo_multitalk,
+                            )
 
-                    if not diarization_service.is_available:
-                        logging.warning("Diarization service is not available (missing dependencies)")
-                        logging.info("Returning transcription without speaker labels")
-                        return audio_file_path, transcription_segments
+                            diarized_result = transcribe_with_nemo_multitalk(
+                                audio_file_path,
+                                diarization_config,
+                                output_path=str(diarized_json_path),
+                            )
 
-                    # Perform diarization with transcription segments
-                    diarized_segments = diarization_service.diarize(
-                        audio_path=audio_file_path,
-                        transcription_segments=transcription_segments
+                            if isinstance(diarized_result, dict) and diarized_result.get("segments"):
+                                final_segments = diarized_result["segments"]
+                                _assert_no_symlink(diarized_json_path, label="Diarized transcript cache file")
+                                with open(diarized_json_path, 'w', encoding='utf-8') as f:
+                                    json.dump({'segments': final_segments}, f, ensure_ascii=False, indent=2)
+
+                                logging.info(f"NeMo multitalk diarization successful. Saved to {diarized_json_path}")
+                                return audio_file_path, final_segments
+
+                            logging.warning("NeMo multitalk diarization returned no segments; falling back.")
+                        except Exception as exc:
+                            logging.error(f"NeMo multitalk diarization failed: {exc}")
+
+                if diarize:
+                    # First, get the transcription segments via the unified STT helper
+                    logging.info(f"Generating transcription for diarization")
+                    artifact = run_stt_batch_via_registry(
+                        audio_file_path,
+                        transcription_model,
+                        vad_filter=vad_use,
+                        selected_source_lang=transcription_language,
+                        hotwords=hotwords,
+                        base_dir=base_dir_path,
+                        cancel_check=cancel_check,
                     )
+                    transcription_segments = artifact.get("segments") or []
 
-                    if diarized_segments and 'segments' in diarized_segments:
-                        final_segments = diarized_segments['segments']
+                    if transcription_segments is None:
+                        logging.error(f"Transcription generation failed for {audio_file_path}")
+                        return audio_file_path, None
 
-                        # Save diarized results
-                        _assert_no_symlink(diarized_json_path, label="Diarized transcript cache file")
-                        with open(diarized_json_path, 'w', encoding='utf-8') as f:
-                            json.dump({'segments': final_segments}, f, ensure_ascii=False, indent=2)
+                    # Now perform diarization
+                    try:
+                        logging.info(f"Performing speaker diarization...")
+                        diarization_service = DiarizationService()
 
-                        logging.info(f"Diarization successful. Saved to {diarized_json_path}")
-                        return audio_file_path, final_segments
-                    else:
-                        logging.warning("Diarization returned no segments")
+                        if not diarization_service.is_available:
+                            logging.warning("Diarization service is not available (missing dependencies)")
+                            logging.info("Returning transcription without speaker labels")
+                            return audio_file_path, transcription_segments
+
+                        # Perform diarization with transcription segments
+                        diarized_segments = diarization_service.diarize(
+                            audio_path=audio_file_path,
+                            transcription_segments=transcription_segments
+                        )
+
+                        if diarized_segments and 'segments' in diarized_segments:
+                            final_segments = diarized_segments['segments']
+
+                            # Save diarized results
+                            _assert_no_symlink(diarized_json_path, label="Diarized transcript cache file")
+                            with open(diarized_json_path, 'w', encoding='utf-8') as f:
+                                json.dump({'segments': final_segments}, f, ensure_ascii=False, indent=2)
+
+                            logging.info(f"Diarization successful. Saved to {diarized_json_path}")
+                            return audio_file_path, final_segments
+                        else:
+                            logging.warning("Diarization returned no segments")
+                            return audio_file_path, transcription_segments
+
+                    except DiarizationError as e:
+                        logging.error(f"Diarization failed for {audio_file_path}: {e}")
+                        logging.warning("Proceeding with transcription only due to diarization error.")
+                        # Add a warning to the first segment if possible
+                        if transcription_segments:
+                            transcription_segments[0]['Text'] = f"[Note: Speaker diarization failed] " + transcription_segments[0].get('Text', '')
                         return audio_file_path, transcription_segments
 
-                except DiarizationError as e:
-                    logging.error(f"Diarization failed for {audio_file_path}: {e}")
-                    logging.warning("Proceeding with transcription only due to diarization error.")
-                    # Add a warning to the first segment if possible
-                    if transcription_segments:
-                        transcription_segments[0]['Text'] = f"[Note: Speaker diarization failed] " + transcription_segments[0].get('Text', '')
-                    return audio_file_path, transcription_segments
-
-                except Exception as e:
-                    logging.error(f"Unexpected error during diarization: {e}", exc_info=True)
-                    return audio_file_path, transcription_segments
+                    except Exception as e:
+                        logging.error(f"Unexpected error during diarization: {e}", exc_info=True)
+                        return audio_file_path, transcription_segments
 
         # If we get here and diarize was set to False (either originally or as fallback), continue with regular path
 
@@ -887,6 +963,7 @@ def perform_transcription(
                 transcription_model,
                 vad_filter=vad_use,
                 selected_source_lang=transcription_language,
+                hotwords=hotwords,
                 base_dir=base_dir_path,
                 cancel_check=cancel_check,
             )
@@ -895,11 +972,14 @@ def perform_transcription(
                 logging.error(f"Transcription generation failed for {audio_file_path} (no segments)")
                 return audio_file_path, None  # Return path, None segments
 
-            # Saving is handled within speech_to_text called by re_generate_transcription
-            # but we already checked for overwrite flag above. If overwrite=True,
-            # speech_to_text should ideally handle the overwrite when saving.
-            # If speech_to_text doesn't handle overwrite, you might need to explicitly delete
-            # the old file here before calling re_generate_transcription if overwrite is True.
+            # Persist a cache artifact keyed by model + hotwords to avoid
+            # cross-contaminating hotword-guided transcripts.
+            try:
+                _assert_no_symlink(segments_json_path, label="Transcript cache file")
+                with open(segments_json_path, "w", encoding="utf-8") as f:
+                    json.dump({"segments": segments}, f, ensure_ascii=False, indent=2)
+            except Exception as cache_err:
+                logging.debug(f"Failed to persist transcript cache artifact: {cache_err}")
 
             logging.info(f"Successfully generated/loaded transcription for {audio_file_path}")
             return audio_file_path, segments
@@ -1465,6 +1545,22 @@ def _map_openai_audio_model_to_whisper_for_jobs(model: Optional[str]) -> str:
 
     m = raw.lower()
     valid_sizes = _valid_whisper_model_sizes_for_jobs()
+    valid_sizes_lower = {s.lower() for s in valid_sizes}
+    if not valid_sizes_lower:
+        valid_sizes_lower = {
+            "tiny",
+            "tiny.en",
+            "base",
+            "base.en",
+            "small",
+            "small.en",
+            "medium",
+            "medium.en",
+            "large-v1",
+            "large-v2",
+            "large-v3",
+            "large",
+        }
 
     # Pass through known internal sizes and HF ids
     if raw in valid_sizes or m in valid_sizes or "/" in raw:
@@ -1473,9 +1569,55 @@ def _map_openai_audio_model_to_whisper_for_jobs(model: Optional[str]) -> str:
     # OpenAI-compatible aliases
     if m == "whisper-1":
         return default_model
+    if m in {"whisper-large-v3-turbo", "whisper-large-v3-turbo-ct2", "large-v3-turbo"}:
+        return "deepdml/faster-whisper-large-v3-turbo-ct2"
+    if m.startswith("whisper-") and m.endswith("-ct2"):
+        ct2_tail = m[len("whisper-"):-4]
+        if ct2_tail in valid_sizes_lower:
+            return ct2_tail
 
     # Fallback to default
     return default_model
+
+
+def _normalize_hotwords(hotwords: Optional[Sequence[str] | str]) -> Optional[List[str]]:
+    """Normalize hotwords from either a list/sequence or a JSON/CSV string."""
+    if hotwords is None:
+        return None
+    if isinstance(hotwords, str):
+        raw = hotwords.strip()
+        if not raw:
+            return None
+        if raw.startswith("["):
+            try:
+                parsed = json.loads(raw)
+                if isinstance(parsed, list):
+                    out = [str(x).strip() for x in parsed if str(x).strip()]
+                    return out or None
+            except Exception:
+                pass
+        out = [part.strip() for part in raw.split(",") if part.strip()]
+        return out or None
+    out = [str(x).strip() for x in hotwords if str(x).strip()]
+    return out or None
+
+
+def _hotwords_cache_suffix(hotwords: Optional[Sequence[str] | str]) -> str:
+    """
+    Return a short, stable cache-key suffix derived from hotwords.
+
+    When hotwords are provided, caching must differentiate between different
+    hotword sets to avoid reusing an incompatible transcript.
+    """
+    hotwords_norm = _normalize_hotwords(hotwords)
+    if not hotwords_norm:
+        return ""
+    canonical = sorted({str(x).strip() for x in hotwords_norm if str(x).strip()})
+    if not canonical:
+        return ""
+    raw = json.dumps(canonical, ensure_ascii=True, separators=(",", ":"))
+    digest = hashlib.sha256(raw.encode("utf-8")).hexdigest()[:12]
+    return f"-hotwords-{digest}"
 
 
 def run_stt_batch_via_registry(
@@ -1484,6 +1626,7 @@ def run_stt_batch_via_registry(
     *,
     vad_filter: bool = False,
     selected_source_lang: str = "en",
+    hotwords: Optional[Sequence[str] | str] = None,
     duration_seconds: Optional[float] = None,
     base_dir: Optional[Path] = None,
     cancel_check: Optional[Callable[[], bool]] = None,
@@ -1495,6 +1638,9 @@ def run_stt_batch_via_registry(
     For Whisper-family models it delegates to `re_generate_transcription` to
     preserve existing caching behaviour; for other providers it uses the
     adapter-based `transcribe_batch` implementation.
+
+    Hotwords are passed through to providers that support them (for example
+    VibeVoice-ASR) and ignored elsewhere.
     """
     from tldw_Server_API.app.core.Ingestion_Media_Processing.Audio.stt_provider_adapter import (  # type: ignore
         get_stt_provider_registry,
@@ -1503,6 +1649,7 @@ def run_stt_batch_via_registry(
     registry = get_stt_provider_registry()
     provider, provider_model, _ = registry.resolve_provider_for_model(transcription_model or "")
     adapter = registry.get_adapter(provider)
+    hotwords_norm = _normalize_hotwords(hotwords)
 
     # Whisper-family models: reuse the canonical regeneration helper so that
     # transcript cache files and error semantics remain unchanged.
@@ -1542,6 +1689,7 @@ def run_stt_batch_via_registry(
         task="transcribe",
         word_timestamps=False,
         prompt=None,
+        hotwords=hotwords_norm,
         base_dir=base_dir,
         cancel_check=cancel_check,
     )
@@ -1563,6 +1711,7 @@ def run_stt_job_via_registry(
     wav_path: str,
     model: Optional[str],
     language: Optional[str],
+    hotwords: Optional[Sequence[str] | str] = None,
     base_dir: Optional[Path] = None,
 ) -> Dict[str, Any]:
     """
@@ -1573,6 +1722,9 @@ def run_stt_job_via_registry(
     Whisper-family models by reusing the same OpenAI-style model mapping
     semantics (e.g., 'whisper-1' -> 'large-v3') while delegating to provider
     adapters for non-Whisper providers.
+
+    Hotwords are passed through to providers that support them (for example
+    VibeVoice-ASR) and ignored elsewhere.
     """
     from tldw_Server_API.app.core.Ingestion_Media_Processing.Audio.stt_provider_adapter import (  # type: ignore
         get_stt_provider_registry,
@@ -1583,6 +1735,7 @@ def run_stt_job_via_registry(
     requested_model = (model or "").strip()
     provider, provider_model, _ = registry.resolve_provider_for_model(requested_model)
     adapter = registry.get_adapter(provider)
+    hotwords_norm = _normalize_hotwords(hotwords)
 
     # Whisper-family models: reuse the OpenAI-compatible alias mapping so
     # that 'whisper-1' and similar identifiers resolve consistently across
@@ -1597,6 +1750,7 @@ def run_stt_job_via_registry(
             task="transcribe",
             word_timestamps=False,
             prompt=None,
+            hotwords=hotwords_norm,
             base_dir=base_dir,
         )
         return artifact
@@ -1610,6 +1764,7 @@ def run_stt_job_via_registry(
         task="transcribe",
         word_timestamps=False,
         prompt=None,
+        hotwords=hotwords_norm,
         base_dir=base_dir,
     )
     return artifact
@@ -2176,6 +2331,7 @@ def parse_transcription_model(model_name: str) -> tuple:
     Returns:
         Tuple of (provider, model, variant)
     """
+    model_name = (model_name or "").strip()
     model_lower = model_name.lower()
 
     # Check for Parakeet models with variants
@@ -2207,6 +2363,18 @@ def parse_transcription_model(model_name: str) -> tuple:
     elif "qwen2audio" in model_lower or "qwen2-audio" in model_lower:
         return ("qwen2audio", model_name, None)
 
+    # Check for VibeVoice-ASR models
+    elif "vibevoice" in model_lower:
+        # Treat bare aliases as the configured default model id.
+        if model_lower in {"vibevoice", "vibevoice-asr", "vibevoice_asr"}:
+            try:
+                stt_cfg = get_stt_config() or {}
+            except Exception:
+                stt_cfg = {}
+            model_id = str(stt_cfg.get("vibevoice_model_id", "microsoft/VibeVoice-ASR")).strip()
+            return ("vibevoice", model_id or "microsoft/VibeVoice-ASR", None)
+        return ("vibevoice", model_name, None)
+
     # Default to whisper for all other models
     else:
         # This includes whisper-*, distil-whisper-*, deepdml/*, etc.
@@ -2236,6 +2404,11 @@ def parse_transcription_model(model_name: str) -> tuple:
             "small.en",
         }
 
+        if model_lower == "whisper-1":
+            return ("whisper", "large-v3", None)
+        if model_lower in {"whisper-large-v3-turbo", "whisper-large-v3-turbo-ct2"}:
+            return ("whisper", "deepdml/faster-whisper-large-v3-turbo-ct2", None)
+
         if model_lower.startswith(distil_prefix):
             tail = model_lower[len(distil_prefix):]
             if tail in distil_sizes:
@@ -2243,6 +2416,10 @@ def parse_transcription_model(model_name: str) -> tuple:
 
         if model_lower.startswith(whisper_prefix):
             tail = model_lower[len(whisper_prefix):]
+            if tail.endswith("-ct2"):
+                ct2_tail = tail[:-4]
+                if ct2_tail in whisper_sizes:
+                    return ("whisper", ct2_tail, None)
             if tail in whisper_sizes:
                 return ("whisper", tail, None)
 
@@ -2420,8 +2597,67 @@ def speech_to_text_parakeet(
                     logging.warning("MLX not available on this platform, falling back to standard Parakeet")
                     variant = "standard"
                 else:
-                    # MLX implementation expects file path directly
-                    text = transcribe_with_parakeet_mlx(audio_file_path)
+                    stt_cfg = get_stt_config() or {}
+                    raw_chunk_duration = stt_cfg.get("mlx_chunk_duration")
+                    raw_overlap_duration = stt_cfg.get("mlx_overlap_duration")
+
+                    chunk_duration = _coerce_float(raw_chunk_duration)
+                    if chunk_duration is None:
+                        chunk_duration = 30.0
+
+                    overlap_duration = _coerce_float(raw_overlap_duration)
+                    if overlap_duration is None:
+                        overlap_duration = 5.0
+
+                    if chunk_duration <= 0:
+                        text = transcribe_with_parakeet_mlx(
+                            audio_file_path,
+                            chunk_duration=None,
+                            overlap_duration=15.0,
+                        )
+                    else:
+                        use_buffered = audio_duration is None or audio_duration > chunk_duration
+                        if use_buffered:
+                            from tldw_Server_API.app.core.Ingestion_Media_Processing.Audio.Audio_Buffered_Transcription import (
+                                transcribe_long_audio, MergeAlgorithm
+                            )
+
+                            merge_algo = stt_cfg.get("buffered_merge_algo", "middle")
+                            try:
+                                MergeAlgorithm(merge_algo)
+                            except Exception:
+                                merge_algo = "middle"
+
+                            total_buffer = None
+                            if "buffered_total_buffer" in stt_cfg:
+                                total_buffer = _coerce_float(stt_cfg.get("buffered_total_buffer"))
+                                if total_buffer is not None and (
+                                    total_buffer <= chunk_duration or total_buffer >= 3.0 * chunk_duration
+                                ):
+                                    total_buffer = None
+                            else:
+                                total_buffer = chunk_duration + (2.0 * overlap_duration)
+                                if total_buffer <= chunk_duration or total_buffer >= 3.0 * chunk_duration:
+                                    total_buffer = None
+
+                            text = transcribe_long_audio(
+                                audio_file_path,
+                                model_name="parakeet",
+                                variant="mlx",
+                                chunk_duration=chunk_duration,
+                                total_buffer=total_buffer,
+                                merge_algo=merge_algo,
+                            )
+                        else:
+                            text = transcribe_with_parakeet_mlx(
+                                audio_file_path,
+                                chunk_duration=chunk_duration,
+                                overlap_duration=overlap_duration,
+                            )
+
+                    if _looks_like_error_text(text):
+                        raise RuntimeError(text)
+
                     # Default to sentence-level segmentation
                     return create_segments_from_text(text, audio_duration, segmentation="sentence")
 
@@ -2559,6 +2795,7 @@ def speech_to_text(
     cache_max_total_mb: Optional[float] = None,
     cache_max_files_per_source: Optional[int] = None,
     initial_prompt: Optional[str] = None,
+    hotwords: Optional[Sequence[str] | str] = None,
     task: str = "transcribe",
     input_sample_rate: Optional[int] = None,
     base_dir: Optional[Path] = None,
@@ -2585,6 +2822,9 @@ def speech_to_text(
             segments.
         diarize: Placeholder for diarization flag. This parameter is not currently
             used within this function's transcription logic.
+        hotwords: Optional hotword hints. Accepts a list/sequence or a JSON/CSV
+            string. This is currently used by the VibeVoice-ASR provider and
+            ignored by others.
         task: Whisper decoding task to perform. Valid values are "transcribe"
             (default, transcribe in source language) and "translate" (translate
             non-English speech to English, when supported by the underlying
@@ -2638,6 +2878,7 @@ def speech_to_text(
 
     # Parse the model name to determine the provider
     provider, model, variant = parse_transcription_model(whisper_model)
+    hotwords_norm = _normalize_hotwords(hotwords)
 
     # Normalize task for Whisper-based providers. For non-Whisper providers,
     # this is ignored and we always perform transcription.
@@ -2748,6 +2989,40 @@ def speech_to_text(
             return segments_qwen
         except Exception as e:
             logging.error(f"Qwen2Audio transcription failed, falling back to whisper: {e}")
+            provider = "whisper"
+            model = "distil-whisper-large-v3"
+
+    elif provider == "vibevoice":
+        _check_cancel(cancel_check, label="speech-to-text")
+        if file_path is None:
+            raise ValueError("speech-to-text: VibeVoice-ASR provider requires an audio file path")
+        logging.info("Routing to VibeVoice-ASR transcription")
+        try:
+            from tldw_Server_API.app.core.Ingestion_Media_Processing.Audio.stt_provider_adapter import (  # type: ignore
+                get_stt_provider_registry,
+            )
+
+            registry = get_stt_provider_registry()
+            adapter = registry.get_adapter("vibevoice")
+            model_name_for_provider = model or whisper_model
+            artifact = adapter.transcribe_batch(
+                str(file_path),
+                model=model_name_for_provider,
+                language=selected_source_lang,
+                task=task_normalized,
+                word_timestamps=word_timestamps,
+                prompt=initial_prompt,
+                hotwords=hotwords_norm,
+                base_dir=base_dir_resolved,
+                cancel_check=cancel_check,
+            )
+            segments_vibe = artifact.get("segments") or []
+            language_vibe = artifact.get("language") or selected_source_lang
+            if return_language:
+                return segments_vibe, language_vibe
+            return segments_vibe
+        except Exception as e:
+            logging.error(f"VibeVoice-ASR transcription failed, falling back to whisper: {e}")
             provider = "whisper"
             model = "distil-whisper-large-v3"
 

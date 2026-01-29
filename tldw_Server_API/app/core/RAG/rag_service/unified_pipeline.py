@@ -304,6 +304,7 @@ async def unified_rag_pipeline(
     media_db_path: Optional[str] = None,
     notes_db_path: Optional[str] = None,
     character_db_path: Optional[str] = None,
+    kanban_db_path: Optional[str] = None,
 
     # ========== SEARCH CONFIGURATION ==========
     search_mode: Literal["fts", "vector", "hybrid"] = "hybrid",
@@ -633,7 +634,7 @@ async def unified_rag_pipeline(
     cache_namespace = index_namespace or (user_id or None)
     if cache_namespace is None:
         try:
-            parts = [media_db_path, notes_db_path, character_db_path]
+            parts = [media_db_path, notes_db_path, character_db_path, kanban_db_path]
             if any(parts):
                 joined = "|".join([str(p or "") for p in parts])
                 cache_namespace = f"db:{hashlib.sha256(joined.encode('utf-8')).hexdigest()[:12]}"
@@ -1198,6 +1199,8 @@ async def unified_rag_pipeline(
                         db_paths["notes_db"] = notes_db_path
                     if character_db_path:
                         db_paths["character_cards_db"] = character_db_path
+                    if kanban_db_path:
+                        db_paths["kanban_db"] = kanban_db_path
 
                     # Initialize retriever (minimal signature). Tests may patch this constructor.
                     try:
@@ -1254,7 +1257,9 @@ async def unified_rag_pipeline(
                         "media": DataSource.MEDIA_DB,
                         "notes": DataSource.NOTES,
                         "characters": DataSource.CHARACTER_CARDS,
-                        "chats": DataSource.CHARACTER_CARDS
+                        "chats": DataSource.CHARACTER_CARDS,
+                        "kanban": DataSource.KANBAN,
+                        "kanban_db": DataSource.KANBAN,
                     }
 
                     data_sources = [source_map.get(s, DataSource.MEDIA_DB) for s in sources]
@@ -2961,6 +2966,8 @@ async def unified_rag_pipeline(
                                     db_paths["notes_db"] = notes_db_path
                                 if character_db_path:
                                     db_paths["character_cards_db"] = character_db_path
+                                if kanban_db_path:
+                                    db_paths["kanban_db"] = kanban_db_path
                                 # Initialize multi retriever scoped to user's databases
                                 try:
                                     mdr = MultiDatabaseRetriever(
@@ -2984,6 +2991,8 @@ async def unified_rag_pipeline(
                                     "notes": DataSource.NOTES,
                                     "characters": DataSource.CHARACTER_CARDS,
                                     "chats": DataSource.CHARACTER_CARDS,
+                                    "kanban": DataSource.KANBAN,
+                                    "kanban_db": DataSource.KANBAN,
                                 }
                                 ds = [source_map.get(s, DataSource.MEDIA_DB) for s in claim_sources]
 
@@ -3294,6 +3303,7 @@ async def unified_rag_pipeline(
                             media_db_path=media_db_path,
                             notes_db_path=notes_db_path,
                             character_db_path=character_db_path,
+                            kanban_db_path=kanban_db_path,
                             # Prefer adapters to avoid raw SQL in prod
                             media_db=media_db,
                             chacha_db=chacha_db,
@@ -3897,6 +3907,7 @@ async def simple_search(
     media_db_path: Optional[str] = None,
     notes_db_path: Optional[str] = None,
     character_db_path: Optional[str] = None,
+    kanban_db_path: Optional[str] = None,
     user_id: Optional[str] = None,
 ) -> List[Document]:
     """
@@ -3921,6 +3932,7 @@ async def simple_search(
         media_db_path=media_db_path,
         notes_db_path=notes_db_path,
         character_db_path=character_db_path,
+        kanban_db_path=kanban_db_path,
         user_id=user_id,
     )
     return result.documents

@@ -523,6 +523,6 @@ class TestBenchmarks:
                 client_id=f"bench-card-{counter[0]}-{uuid.uuid4().hex[:8]}"
             )
 
-        # Use pedantic mode with fewer iterations to avoid hitting the 500 card limit
-        result = benchmark.pedantic(create_card, iterations=10, rounds=20)
+        # Use pedantic mode with fewer iterations to stay under the per-list card limit.
+        result = benchmark.pedantic(create_card, iterations=10, rounds=10)
         assert result is not None

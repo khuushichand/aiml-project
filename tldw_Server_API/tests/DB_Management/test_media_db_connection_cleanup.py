@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from contextvars import ContextVar
 from pathlib import Path
 import sqlite3
 from unittest.mock import MagicMock
@@ -60,8 +61,8 @@ def test_postgres_get_connection_reapplies_scope() -> None:
     backend.get_pool.return_value = pool
     backend.apply_scope = MagicMock()
     db.backend = backend
-    db._txn_conn = None
-    db._persistent_conn = None
+    db._txn_conn_var = ContextVar("test_txn_conn", default=None)
+    db._persistent_conn_var = ContextVar("test_persistent_conn", default=None)
 
     first = MediaDatabase.get_connection(db)
     second = MediaDatabase.get_connection(db)

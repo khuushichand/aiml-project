@@ -21,7 +21,7 @@ from .policy import SandboxPolicy, SandboxPolicyConfig, compute_policy_hash
 from .store import get_store_mode
 from .orchestrator import SandboxOrchestrator, IdempotencyConflict
 from .runners.docker_runner import docker_available
-from .runners.firecracker_runner import firecracker_available
+from .runners.firecracker_runner import firecracker_available, firecracker_real_enabled
 from .runners.docker_runner import DockerRunner
 from .runners.firecracker_runner import FirecrackerRunner
 from tldw_Server_API.app.core.config import settings as app_settings
@@ -58,6 +58,60 @@ class SandboxService:
             super().__init__(f"Unsupported spec_version '{provided}'")
             self.provided = provided
             self.supported = supported
+
+    class InvalidFirecrackerConfig(Exception):
+        def __init__(self, message: str, details: dict) -> None:
+            super().__init__(message)
+            self.details = details
+
+    def _validate_firecracker_config(self, spec: RunSpec | SessionSpec) -> None:
+        # Only validate when real Firecracker execution is enabled.
+        try:
+            if spec.runtime != RuntimeType.firecracker:
+                return
+        except Exception:
+            return
+        if not firecracker_real_enabled():
+            return
+
+        errors: dict[str, str] = {}
+        base_image = getattr(spec, "base_image", None)
+        rootfs_path: Optional[str] = None
+        if base_image:
+            try:
+                if os.path.exists(str(base_image)):
+                    if os.path.isfile(str(base_image)):
+                        rootfs_path = str(base_image)
+                    else:
+                        errors["base_image"] = "not_file"
+            except Exception:
+                pass
+        if not rootfs_path:
+            rootfs_path = os.getenv("SANDBOX_FC_ROOTFS_PATH")
+
+        kernel_path = os.getenv("SANDBOX_FC_KERNEL_PATH")
+        if not kernel_path:
+            errors["kernel_path"] = "missing"
+        elif not os.path.exists(kernel_path):
+            errors["kernel_path"] = "not_found"
+        elif not os.path.isfile(kernel_path):
+            errors["kernel_path"] = "not_file"
+
+        if not rootfs_path:
+            errors["rootfs_path"] = "missing"
+        elif not os.path.exists(rootfs_path):
+            errors["rootfs_path"] = "not_found"
+        elif not os.path.isfile(rootfs_path):
+            errors["rootfs_path"] = "not_file"
+
+        if errors:
+            raise SandboxService.InvalidFirecrackerConfig(
+                "firecracker_config_invalid",
+                {
+                    "runtime": "firecracker",
+                    "errors": errors,
+                },
+            )
 
     def _validate_spec_version(self, spec_version: Optional[str]) -> None:
         if not spec_version:
@@ -249,14 +303,18 @@ class SandboxService:
         self._validate_spec_version(spec_version)
         fc_ok = firecracker_available()
         spec = self.policy.apply_to_session(spec, firecracker_available=fc_ok)
+        # Validate Firecracker kernel/rootfs when real execution is enabled
+        self._validate_firecracker_config(spec)
         # delegate to orchestrator (with idempotency)
         sess = self._orch.create_session(user_id=user_id, spec=spec, spec_version=spec_version, idem_key=idem_key, body=raw_body)
         return sess
 
     def destroy_session(self, session_id: str) -> bool:
-        # No stateful sessions yet; pretend success
-        logger.info(f"Destroyed sandbox session {session_id} (noop scaffold)")
-        return True
+        try:
+            return bool(self._orch.destroy_session(session_id))
+        except Exception as e:
+            logger.debug(f"destroy_session failed: {e}")
+            return False
 
     def parse_inline_files(self, files: Optional[List[dict]]) -> list[tuple[str, bytes]]:
         results: list[tuple[str, bytes]] = []
@@ -278,6 +336,8 @@ class SandboxService:
         # Apply policy then enqueue via orchestrator (idempotency-aware)
         fc_ok = firecracker_available()
         spec = self.policy.apply_to_run(spec, firecracker_available=fc_ok)
+        # Validate Firecracker kernel/rootfs when real execution is enabled
+        self._validate_firecracker_config(spec)
         status = self._orch.enqueue_run(user_id=user_id, spec=spec, spec_version=spec_version, idem_key=idem_key, body=raw_body)
         # Configure stdin caps in hub if interactive is requested (spec 1.1)
         try:
@@ -493,7 +553,18 @@ class SandboxService:
                     except Exception:
                         pass
             except Exception as e:
-                logger.warning(f"Firecracker execution failed; keeping enqueue status. Error: {e}")
+                logger.warning(f"Firecracker execution failed; marking run failed. Error: {e}")
+                try:
+                    status.phase = RunPhase.failed
+                    status.message = "firecracker_failed"
+                    status.finished_at = datetime.utcnow()
+                    self._orch.update_run(status.id, status)
+                    try:
+                        get_hub().publish_event(status.id, "end", {"exit_code": status.exit_code, "reason": "firecracker_failed"})
+                    except Exception:
+                        pass
+                except Exception:
+                    pass
         else:
             # Stub artifacts even without execution
             artifacts: dict[str, bytes] = {}

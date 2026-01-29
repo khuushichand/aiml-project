@@ -1,6 +1,6 @@
 'use client';
 
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { PermissionGuard } from '@/components/PermissionGuard';
 import { ResponsiveLayout } from '@/components/ResponsiveLayout';
 import { Badge } from '@/components/ui/badge';
@@ -12,7 +12,20 @@ import { useOrgContext } from '@/components/OrgContextSwitcher';
 import { useToast } from '@/components/ui/toast';
 import { api } from '@/lib/api-client';
 import type { AuditLog } from '@/types';
-import { KeyRound, RefreshCw } from 'lucide-react';
+import { Input } from '@/components/ui/input';
+import { Label } from '@/components/ui/label';
+import { Select } from '@/components/ui/select';
+import { useConfirm } from '@/components/ui/confirm-dialog';
+import { KeyRound, RefreshCw, Plus, Trash2, Send, Server, X } from 'lucide-react';
+import { AccessibleIconButton } from '@/components/ui/accessible-icon-button';
+
+type SharedProviderKey = {
+  scope_type: 'org' | 'team';
+  scope_id: number;
+  provider: string;
+  key_hint?: string;
+  last_used_at?: string;
+};
 
 type MetricSample = {
   name: string;
@@ -97,9 +110,25 @@ const formatCount = (value: number | null) => {
   return `${(value / 1000000).toFixed(1)}m`;
 };
 
+const PROVIDER_OPTIONS = [
+  'openai',
+  'anthropic',
+  'cohere',
+  'deepseek',
+  'google',
+  'groq',
+  'huggingface',
+  'mistral',
+  'openrouter',
+  'qwen',
+  'moonshot',
+  'zai',
+] as const;
+
 export default function ByokDashboardPage() {
   const { selectedOrg } = useOrgContext();
-  const { error: showError } = useToast();
+  const confirm = useConfirm();
+  const { success: toastSuccess, error: showError } = useToast();
   const [metricsLoading, setMetricsLoading] = useState(false);
   const [metricsError, setMetricsError] = useState<string | null>(null);
   const [resolutionBySource, setResolutionBySource] = useState<Record<string, number>>({});
@@ -109,6 +138,23 @@ export default function ByokDashboardPage() {
   const [auditEntries, setAuditEntries] = useState<AuditLog[]>([]);
   const [auditError, setAuditError] = useState<string | null>(null);
   const [auditLoading, setAuditLoading] = useState(false);
+
+  // Shared Provider Keys
+  const [sharedKeys, setSharedKeys] = useState<SharedProviderKey[]>([]);
+  const [sharedKeysLoading, setSharedKeysLoading] = useState(false);
+  const [sharedKeysError, setSharedKeysError] = useState<string | null>(null);
+  const [showAddKey, setShowAddKey] = useState(false);
+  const [newKeyProvider, setNewKeyProvider] = useState('openai');
+  const [newKeyValue, setNewKeyValue] = useState('');
+  const [addingKey, setAddingKey] = useState(false);
+  const [testingKey, setTestingKey] = useState<string | null>(null);
+  const [deletingKey, setDeletingKey] = useState<string | null>(null);
+  const sharedKeysRequestIdRef = useRef(0);
+
+  const resetAddKeyForm = useCallback(() => {
+    setShowAddKey(false);
+    setNewKeyValue('');
+  }, []);
 
   const loadMetrics = useCallback(async () => {
     setMetricsLoading(true);
@@ -182,10 +228,116 @@ export default function ByokDashboardPage() {
     }
   }, [selectedOrg?.id]);
 
+  const loadSharedKeys = useCallback(async () => {
+    const requestId = sharedKeysRequestIdRef.current + 1;
+    sharedKeysRequestIdRef.current = requestId;
+    setSharedKeysLoading(true);
+    setSharedKeysError(null);
+    setSharedKeys([]);
+    try {
+      const orgId = selectedOrg?.id;
+      // Filter by selected org if one is selected
+      const params = orgId
+        ? { scope_type: 'org', scope_id: orgId }
+        : undefined;
+      const data = await api.getSharedProviderKeys(params);
+      if (sharedKeysRequestIdRef.current !== requestId) return;
+      const result = data as { keys?: SharedProviderKey[]; items?: SharedProviderKey[] };
+      setSharedKeys(
+        Array.isArray(result.keys) ? result.keys :
+        Array.isArray(result.items) ? result.items :
+        Array.isArray(result) ? result as SharedProviderKey[] : []
+      );
+    } catch (err) {
+      if (sharedKeysRequestIdRef.current !== requestId) return;
+      const message = err instanceof Error ? err.message : 'Failed to load shared keys.';
+      setSharedKeysError(message);
+    } finally {
+      if (sharedKeysRequestIdRef.current === requestId) {
+        setSharedKeysLoading(false);
+      }
+    }
+  }, [selectedOrg?.id]);
+
+  const handleAddSharedKey = async () => {
+    if (!newKeyValue.trim()) {
+      showError('API key required', 'Please enter the API key value.');
+      return;
+    }
+
+    if (!selectedOrg?.id) {
+      showError('Organization required', 'Please select an organization to add a shared key.');
+      return;
+    }
+
+    try {
+      setAddingKey(true);
+      await api.createSharedProviderKey({
+        scope_type: 'org',
+        scope_id: selectedOrg.id,
+        provider: newKeyProvider,
+        api_key: newKeyValue.trim(),
+      });
+      toastSuccess('Key added', `Shared key for ${newKeyProvider} has been added.`);
+      setShowAddKey(false);
+      setNewKeyProvider('openai');
+      setNewKeyValue('');
+      void loadSharedKeys();
+    } catch (err) {
+      const message = err instanceof Error ? err.message : 'Failed to add shared key.';
+      showError('Add failed', message);
+    } finally {
+      setAddingKey(false);
+    }
+  };
+
+  const handleDeleteSharedKey = async (key: SharedProviderKey) => {
+    const keyId = `${key.scope_type}:${key.scope_id}:${key.provider}`;
+    const confirmed = await confirm({
+      title: 'Delete Shared Key',
+      message: `Delete the shared key for "${key.provider}"? Users and orgs will fall back to their own keys.`,
+      confirmText: 'Delete',
+      variant: 'danger',
+      icon: 'delete',
+    });
+    if (!confirmed) return;
+
+    try {
+      setDeletingKey(keyId);
+      await api.deleteSharedProviderKey(key.scope_type, key.scope_id, key.provider);
+      toastSuccess('Key deleted', `Shared key for ${key.provider} has been removed.`);
+      void loadSharedKeys();
+    } catch (err) {
+      const message = err instanceof Error ? err.message : 'Failed to delete shared key.';
+      showError('Delete failed', message);
+    } finally {
+      setDeletingKey(null);
+    }
+  };
+
+  const handleTestSharedKey = async (key: SharedProviderKey) => {
+    const keyId = `${key.scope_type}:${key.scope_id}:${key.provider}`;
+    try {
+      setTestingKey(keyId);
+      await api.testSharedProviderKey({
+        scope_type: key.scope_type,
+        scope_id: key.scope_id,
+        provider: key.provider,
+      });
+      toastSuccess('Test passed', `Shared key for ${key.provider} is valid.`);
+    } catch (err) {
+      const message = err instanceof Error ? err.message : 'Key test failed.';
+      showError('Test failed', message);
+    } finally {
+      setTestingKey(null);
+    }
+  };
+
   useEffect(() => {
     loadMetrics();
     loadAudit();
-  }, [loadMetrics, loadAudit]);
+    loadSharedKeys();
+  }, [loadMetrics, loadAudit, loadSharedKeys]);
 
   const summaryCards = useMemo(() => {
     const byokTotal = sumValues(
@@ -345,6 +497,146 @@ export default function ByokDashboardPage() {
               </CardContent>
             </Card>
           </div>
+
+          {/* Shared Provider Keys (Organization-Level) */}
+          <Card>
+            <CardHeader>
+              <div className="flex items-center justify-between">
+                <div>
+                  <CardTitle className="flex items-center gap-2 text-base">
+                    <Server className="h-5 w-5" />
+                    Organization Provider Keys
+                  </CardTitle>
+                  <CardDescription>
+                    Shared API keys for the selected organization. Users in the org can use these when they don&apos;t have their own keys.
+                    <br />
+                    <span className="text-xs">Resolution order: User → Organization</span>
+                  </CardDescription>
+                </div>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={() => setShowAddKey(true)}
+                  disabled={showAddKey || !selectedOrg?.id}
+                  title={!selectedOrg?.id ? 'Select an organization first' : undefined}
+                >
+                  <Plus className="mr-2 h-4 w-4" />
+                  Add Key
+                </Button>
+              </div>
+            </CardHeader>
+            <CardContent className="space-y-4">
+              {sharedKeysError && (
+                <Alert variant="destructive">
+                  <AlertDescription>{sharedKeysError}</AlertDescription>
+                </Alert>
+              )}
+
+              {/* Add Key Form */}
+              {showAddKey && (
+                <div className="p-4 border rounded-lg space-y-3">
+                  <div className="flex items-center justify-between">
+                    <span className="font-medium">Add Organization Provider Key</span>
+                    <AccessibleIconButton
+                      icon={X}
+                      label="Close form"
+                      variant="ghost"
+                      onClick={resetAddKeyForm}
+                    />
+                  </div>
+                  <div className="grid gap-3 sm:grid-cols-2">
+                    <div className="space-y-1">
+                      <Label htmlFor="key-provider">Provider</Label>
+                      <Select
+                        id="key-provider"
+                        value={newKeyProvider}
+                        onChange={(e) => setNewKeyProvider(e.target.value)}
+                      >
+                        {PROVIDER_OPTIONS.map((provider) => (
+                          <option key={provider} value={provider}>
+                            {provider.charAt(0).toUpperCase() + provider.slice(1)}
+                          </option>
+                        ))}
+                      </Select>
+                    </div>
+                    <div className="space-y-1">
+                      <Label htmlFor="key-value">API Key</Label>
+                      <Input
+                        id="key-value"
+                        type="password"
+                        placeholder="sk-..."
+                        value={newKeyValue}
+                        onChange={(e) => setNewKeyValue(e.target.value)}
+                      />
+                    </div>
+                  </div>
+                  <div className="flex gap-2">
+                    <Button onClick={handleAddSharedKey} disabled={addingKey || !newKeyValue.trim()}>
+                      {addingKey ? 'Adding...' : 'Add Key'}
+                    </Button>
+                    <Button variant="outline" onClick={resetAddKeyForm}>
+                      Cancel
+                    </Button>
+                  </div>
+                </div>
+              )}
+
+              {/* Keys List */}
+              {sharedKeysLoading ? (
+                <div className="text-center text-muted-foreground py-4">Loading organization keys...</div>
+              ) : sharedKeys.length === 0 ? (
+                <div className="text-center text-muted-foreground py-8 border rounded-lg">
+                  No organization-level provider keys configured.
+                  <br />
+                  <span className="text-xs">Users must provide their own keys or select an organization.</span>
+                </div>
+              ) : (
+                <div className="space-y-2">
+                  {sharedKeys.map((key) => {
+                    const keyId = `${key.scope_type}:${key.scope_id}:${key.provider}`;
+                    return (
+                    <div
+                      key={keyId}
+                      className="flex items-center justify-between p-3 rounded-lg border bg-background"
+                    >
+                      <div className="flex items-center gap-3">
+                        <KeyRound className="h-4 w-4 text-muted-foreground" />
+                        <div>
+                          <div className="font-medium capitalize">{key.provider}</div>
+                          <div className="text-xs text-muted-foreground">
+                            {key.key_hint ? `Key: ${key.key_hint}` : `${key.scope_type} key`}
+                            {key.last_used_at && ` • Last used: ${new Date(key.last_used_at).toLocaleDateString()}`}
+                          </div>
+                        </div>
+                      </div>
+                      <div className="flex items-center gap-2">
+                        <Badge variant="secondary" className="capitalize">{key.scope_type}</Badge>
+                        <AccessibleIconButton
+                          icon={Send}
+                          label="Test key"
+                          variant="ghost"
+                          size="sm"
+                          onClick={() => handleTestSharedKey(key)}
+                          disabled={testingKey === keyId}
+                          iconClassName={testingKey === keyId ? 'animate-pulse' : ''}
+                        />
+                        <AccessibleIconButton
+                          icon={Trash2}
+                          label="Delete key"
+                          variant="ghost"
+                          size="sm"
+                          onClick={() => handleDeleteSharedKey(key)}
+                          disabled={deletingKey === keyId}
+                          iconClassName="text-red-500"
+                        />
+                      </div>
+                    </div>
+                  );
+                  })}
+                </div>
+              )}
+            </CardContent>
+          </Card>
 
           <Card>
             <CardHeader>

@@ -86,3 +86,46 @@ def test_seed_watchlists_templates_refresh_updates_output_templates(seeded_db):
     assert refreshed.description == "Updated template"
     meta = json.loads(refreshed.metadata_json or "{}")
     assert meta.get("seeded_from") == "watchlists_templates"
+
+
+def test_seed_watchlists_templates_refresh_format_change_md_to_html(seeded_db):
+    template_dir = seeded_db
+    cdb = CollectionsDatabase.for_user(user_id=904)
+    seeded = cdb.get_output_template_by_name("seeded")
+    assert seeded.format == "md"
+
+    (template_dir / "seeded.md").unlink(missing_ok=True)
+    (template_dir / "seeded.html").write_text("<h1>{{ title }}</h1>", encoding="utf-8")
+    (template_dir / "seeded.meta.json").write_text(
+        json.dumps({"description": "Seeded HTML template"}), encoding="utf-8"
+    )
+
+    cdb_refresh = CollectionsDatabase.for_user(user_id=904)
+    refreshed = cdb_refresh.get_output_template_by_name("seeded")
+    assert refreshed.format == "html"
+    assert refreshed.type == "newsletter_html"
+    assert refreshed.body == "<h1>{{ title }}</h1>"
+    assert refreshed.description == "Seeded HTML template"
+
+
+def test_seed_watchlists_templates_does_not_override_user_template(seeded_db, monkeypatch):
+    monkeypatch.setenv("WATCHLISTS_SEED_OUTPUT_TEMPLATES", "false")
+
+    cdb = CollectionsDatabase.for_user(user_id=905)
+    cdb.create_output_template(
+        name="seeded",
+        type_="briefing_markdown",
+        format_="md",
+        body="User body",
+        description="User description",
+        is_default=False,
+    )
+    row = cdb.get_output_template_by_name("seeded")
+    assert json.loads(row.metadata_json or "{}").get("seeded_from") is None
+
+    monkeypatch.setenv("WATCHLISTS_SEED_OUTPUT_TEMPLATES", "true")
+    cdb_refresh = CollectionsDatabase.for_user(user_id=905)
+    refreshed = cdb_refresh.get_output_template_by_name("seeded")
+    assert refreshed.body == "User body"
+    assert refreshed.description == "User description"
+    assert json.loads(refreshed.metadata_json or "{}").get("seeded_from") is None

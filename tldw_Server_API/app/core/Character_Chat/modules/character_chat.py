@@ -31,10 +31,28 @@ from .character_utils import (
     NON_CHARACTER_SENDER_ALIASES as _NON_CHARACTER_SENDER_ALIASES,
 )
 from tldw_Server_API.app.core.config import settings
+from tldw_Server_API.app.core.Character_Chat.constants import MAX_PERSIST_CONTENT_LENGTH
 
 
 # Aliases are sourced from character_utils for consistency across modules.
 _DEFAULT_FIRST_MESSAGE_TEMPLATE = "Hello, I am {{char}}. How can I help you, {{user}}?"
+_PLACEHOLDER_TOKENS_FOR_LENGTH = (
+    "{{char}}",
+    "{{user}}",
+    "{{random_user}}",
+    "<USER>",
+    "<CHAR>",
+)
+
+
+def _content_length_for_guardrails(text: str) -> int:
+    """Estimate content length for guardrails, discounting placeholder tokens."""
+    if not text:
+        return 0
+    normalized = text
+    for token in _PLACEHOLDER_TOKENS_FOR_LENGTH:
+        normalized = normalized.replace(token, "X")
+    return len(normalized)
 
 
 def _extract_message_attachments(msg_data: Dict[str, Any]) -> List[Dict[str, Any]]:
@@ -181,15 +199,9 @@ def _compute_additional_char_aliases(
             if next_lower and next_lower in char_neighbors:
                 char_context += 1
 
-        if char_context > user_context and char_context > 0:
-            # Alias clusters with other character-like senders → likely a multi-user persona
-            if alias_lower not in user_aliases:
-                inferred_user_aliases.append(alias_original)
-                user_aliases.add(alias_lower)
-        else:
-            # Alias doesn't cluster with other candidates → default to character alias
-            # (covers legacy/renamed characters that respond to user messages)
-            filtered_char_aliases.append(alias_original)
+        # Always treat inferred aliases as character aliases; do not promote to user.
+        # Multi-speaker or multi-character sessions should not be reclassified as user.
+        filtered_char_aliases.append(alias_original)
 
     return filtered_char_aliases, inferred_user_aliases
 
@@ -282,6 +294,10 @@ def process_db_messages_to_rich_ui_history(
 
     user_msg_detail_buffer: Optional[Dict[str, Any]] = None
 
+    explicit_char_sender_lower = None
+    if actual_char_sender_id_in_db:
+        explicit_char_sender_lower = str(actual_char_sender_id_in_db).strip().lower()
+
     char_first_message_normalized = None
     if isinstance(char_first_message, str):
         char_first_message_normalized = char_first_message.strip()
@@ -349,7 +365,11 @@ def process_db_messages_to_rich_ui_history(
 
         is_non_character_sender = False
         if sender_lower:
-            if sender_lower in non_character_aliases:
+            # Allow explicit character sender override to avoid misclassifying
+            # characters named like reserved system/tool aliases (including prefix forms).
+            if explicit_char_sender_lower and sender_lower == explicit_char_sender_lower:
+                is_non_character_sender = False
+            elif sender_lower in non_character_aliases:
                 is_non_character_sender = True
             else:
                 for alias in non_character_aliases:
@@ -714,14 +734,33 @@ def start_new_chat_session(
 
     original_first_message_content: Optional[str] = None
     original_alternate_greetings: Optional[List[str]] = None
+
+    def _normalize_alt_greeting(value: Any) -> Optional[str]:
+        """Normalize value (Any) to UTF-8 text or None (Optional[str]); bytes/memoryview are decoded with errors replaced."""
+        if isinstance(value, str):
+            return value
+        if isinstance(value, memoryview):
+            value = value.tobytes()
+        if isinstance(value, (bytes, bytearray)):
+            try:
+                return bytes(value).decode("utf-8")
+            except Exception:
+                return bytes(value).decode("utf-8", errors="replace")
+        return None
+
     try:
         raw_char_data_for_first_message = db.get_character_card_by_id(character_id)
         if raw_char_data_for_first_message:
             original_first_message_content = raw_char_data_for_first_message.get("first_message")
             ag = raw_char_data_for_first_message.get("alternate_greetings")
             if isinstance(ag, list):
-                # Ensure only strings
-                original_alternate_greetings = [str(x) for x in ag if isinstance(x, (str, bytes))]
+                # Normalize bytes-like greetings to text
+                normalized: List[str] = []
+                for entry in ag:
+                    greeting = _normalize_alt_greeting(entry)
+                    if isinstance(greeting, str):
+                        normalized.append(greeting)
+                original_alternate_greetings = normalized
         else:
             logger.warning(
                 "Could not load raw character data for ID %s to get original first message.",
@@ -1112,6 +1151,22 @@ def post_message_to_conversation(
         logger.error("Cannot post message: Message must have text content or image data.")
         raise InputError("Message must have text content or image data.")
 
+    # Optional preflight content size guard (mirrors DB constraints for clearer API errors)
+    if message_content:
+        max_content_len = MAX_PERSIST_CONTENT_LENGTH
+        try:
+            configured_max = settings.get("MAX_PERSIST_CONTENT_LENGTH", None)
+            if configured_max is not None:
+                max_content_len = int(configured_max)
+        except Exception:
+            pass
+        if max_content_len and len(message_content) > max_content_len:
+            effective_len = _content_length_for_guardrails(message_content)
+            if effective_len > max_content_len:
+                raise InputError(
+                    f"Message content exceeds maximum length of {max_content_len} characters"
+                )
+
     # Optional preflight image size guard (mirrors DB constraints for clearer API errors)
     if image_data is not None:
         try:
@@ -1282,7 +1337,7 @@ def retrieve_conversation_messages_for_ui(
             additional_char_sender_ids=additional_aliases,
             additional_user_sender_ids=extra_user_aliases,
             char_first_message=char_first_message_processed,
-            keep_trailing_user=not rich_output,
+            keep_trailing_user=True,
         )
 
         if order_upper == "DESC":

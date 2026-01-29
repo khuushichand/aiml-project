@@ -372,7 +372,7 @@ All env vars above are documented in `Env_Vars.md`.
      -d '{"model":"kokoro","voice":"af_bella","input":"Hello from tldw_server","response_format":"mp3","stream":true}' \
      --output tts-test.mp3
    ```
-4. **WebUI**: Visit `http://127.0.0.1:8000/webui/#/audio` ➜ pick provider ➜ synthesize sample text.
+4. **WebUI**: Open the Next.js WebUI (`apps/tldw-frontend`) and use the Audio page to pick a provider and synthesize sample text.
 
 ---
 
