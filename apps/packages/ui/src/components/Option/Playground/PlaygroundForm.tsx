@@ -30,6 +30,7 @@ import {
   Hash,
   SlidersHorizontal,
   StopCircleIcon,
+  Star,
   X,
   FileIcon,
   FileText,
@@ -130,6 +131,21 @@ type CollapsedRange = {
   end: number
 }
 
+type ModelSortMode = "favorites" | "az" | "provider" | "localFirst"
+
+const LOCAL_PROVIDERS = new Set([
+  "lmstudio",
+  "llamafile",
+  "ollama",
+  "ollama2",
+  "llamacpp",
+  "vllm",
+  "custom",
+  "local",
+  "tldw",
+  "chrome"
+])
+
 type Props = {
   droppedFiles: File[]
 }
@@ -204,6 +220,16 @@ export const PlaygroundForm = ({ droppedFiles }: Props) => {
   const isMobileViewport = useMobile()
   const [openModelSettings, setOpenModelSettings] = React.useState(false)
   const [openActorSettings, setOpenActorSettings] = React.useState(false)
+  const [modelDropdownOpen, setModelDropdownOpen] = React.useState(false)
+  const [modelSearchQuery, setModelSearchQuery] = React.useState("")
+  const [favoriteModels, setFavoriteModels] = useStorage<string[]>(
+    "favoriteChatModels",
+    []
+  )
+  const [modelSortMode, setModelSortMode] = useStorage<ModelSortMode>(
+    "modelSelectSortMode",
+    "provider"
+  )
   const apiProvider = useStoreChatModelSettings((state) => state.apiProvider)
   const numCtx = useStoreChatModelSettings((state) => state.numCtx)
   const systemPrompt = useStoreChatModelSettings((state) => state.systemPrompt)
@@ -506,27 +532,200 @@ export const PlaygroundForm = ({ droppedFiles }: Props) => {
     return `${providerLabel} / ${modelSummaryLabel}`
   }, [modelSummaryLabel, providerLabel, selectedModel, t])
 
-  // Grouped menu items for quick model selection dropdown
-  const modelDropdownItems = React.useMemo(() => {
-    const models = (composerModels as any[]) || []
-    const groups = new Map<string, any[]>()
+  const favoriteModelSet = React.useMemo(
+    () => new Set((favoriteModels || []).map((value) => String(value))),
+    [favoriteModels]
+  )
 
-    for (const model of models) {
-      const groupKey = model.provider?.toLowerCase() || "other"
-      if (!groups.has(groupKey)) groups.set(groupKey, [])
-      groups.get(groupKey)!.push({
+  const toggleFavoriteModel = React.useCallback(
+    (modelId: string) => {
+      void setFavoriteModels((prev) => {
+        const list = Array.isArray(prev) ? prev.map(String) : []
+        const next = new Set(list)
+        if (next.has(modelId)) {
+          next.delete(modelId)
+        } else {
+          next.add(modelId)
+        }
+        return Array.from(next)
+      })
+      setModelDropdownOpen(true)
+    },
+    [setFavoriteModels]
+  )
+
+  const filteredModels = React.useMemo(() => {
+    const list = (composerModels as any[]) || []
+    const q = modelSearchQuery.trim().toLowerCase()
+    if (!q) return list
+    return list.filter((model) => {
+      const providerRaw = String(model.provider || "").toLowerCase()
+      const providerLabel = getProviderDisplayName(providerRaw).toLowerCase()
+      const name = String(model.nickname || model.model || "").toLowerCase()
+      const modelId = String(model.model || "").toLowerCase()
+      return (
+        providerRaw.includes(q) ||
+        providerLabel.includes(q) ||
+        name.includes(q) ||
+        modelId.includes(q)
+      )
+    })
+  }, [composerModels, modelSearchQuery])
+
+  const modelDropdownMenuItems = React.useMemo(() => {
+    const models = filteredModels || []
+    const allModels = (composerModels as any[]) || []
+
+    if (allModels.length === 0) {
+      return [
+        {
+          key: "no-models",
+          disabled: true,
+          label: (
+            <div className="px-1 py-1 text-xs text-text-muted">
+              {t(
+                "playground:composer.noModelsAvailable",
+                "No models available. Connect your server in Settings."
+              )}
+            </div>
+          )
+        },
+        {
+          type: "divider" as const,
+          key: "no-models-divider"
+        },
+        {
+          key: "open-model-settings",
+          label: t(
+            "playground:composer.openModelSettings",
+            "Open model settings"
+          ),
+          onClick: () => navigate("/settings/tldw")
+        }
+      ]
+    }
+
+    if (models.length === 0) {
+      return [
+        {
+          key: "no-matches",
+          disabled: true,
+          label: (
+            <div className="px-1 py-1 text-xs text-text-muted">
+              {t(
+                "playground:composer.noModelsMatch",
+                "No models match your search."
+              )}
+            </div>
+          )
+        }
+      ]
+    }
+
+    const toProviderKey = (provider?: string) =>
+      typeof provider === "string" && provider.trim()
+        ? provider.trim().toLowerCase()
+        : "other"
+
+    const toGroupKey = (providerRaw: string) =>
+      providerRaw === "chrome"
+        ? "default"
+        : LOCAL_PROVIDERS.has(providerRaw)
+          ? "custom"
+          : providerRaw
+
+    const byLabel = (a: any, b: any) => {
+      const aProvider = getProviderDisplayName(toProviderKey(a.provider))
+      const bProvider = getProviderDisplayName(toProviderKey(b.provider))
+      const aLabel = `${aProvider} ${a.nickname || a.model}`.toLowerCase()
+      const bLabel = `${bProvider} ${b.nickname || b.model}`.toLowerCase()
+      return aLabel.localeCompare(bLabel)
+    }
+
+    const buildItem = (model: any) => {
+      const providerRaw = toProviderKey(model.provider)
+      const modelLabel = model.nickname || model.model
+      const isFavorite = favoriteModelSet.has(String(model.model))
+      const favoriteTitle = isFavorite
+        ? t("playground:composer.favoriteRemove", "Remove from favorites")
+        : t("playground:composer.favoriteAdd", "Add to favorites")
+
+      return {
         key: model.model,
         label: (
           <div className="flex items-center gap-2 text-sm">
-            <ProviderIcons provider={model.provider} className="h-3 w-3 text-text-subtle" />
-            <span className="truncate">{model.nickname || model.model}</span>
+            <ProviderIcons provider={providerRaw} className="h-3 w-3 text-text-subtle" />
+            <span className="truncate flex-1">{modelLabel}</span>
+            <button
+              type="button"
+              className="rounded p-0.5 text-text-subtle transition hover:bg-surface2"
+              onMouseDown={(event) => {
+                event.preventDefault()
+                event.stopPropagation()
+              }}
+              onClick={(event) => {
+                event.preventDefault()
+                event.stopPropagation()
+                toggleFavoriteModel(String(model.model))
+              }}
+              aria-label={favoriteTitle}
+              title={favoriteTitle}
+            >
+              <Star
+                className={`h-3.5 w-3.5 ${
+                  isFavorite ? "fill-warn text-warn" : "text-text-subtle"
+                }`}
+              />
+            </button>
           </div>
         ),
         onClick: () => setSelectedModel(model.model)
+      }
+    }
+
+    if (modelSortMode === "az") {
+      return models.slice().sort(byLabel).map(buildItem)
+    }
+
+    if (modelSortMode === "favorites") {
+      const favorites = models.filter((model) =>
+        favoriteModelSet.has(String(model.model))
+      )
+      const others = models.filter(
+        (model) => !favoriteModelSet.has(String(model.model))
+      )
+      const items: any[] = []
+      if (favorites.length > 0) {
+        items.push({
+          type: "group" as const,
+          key: "favorites",
+          label: t("playground:composer.favorites", "Favorites"),
+          children: favorites.slice().sort(byLabel).map(buildItem)
+        })
+      }
+      items.push(...others.slice().sort(byLabel).map(buildItem))
+      return items
+    }
+
+    const groups = new Map<string, any[]>()
+    for (const model of models) {
+      const providerRaw = toProviderKey(model.provider)
+      const groupKey = toGroupKey(providerRaw)
+      if (!groups.has(groupKey)) groups.set(groupKey, [])
+      groups.get(groupKey)!.push(buildItem(model))
+    }
+
+    const entries = Array.from(groups.entries())
+    if (modelSortMode === "localFirst") {
+      entries.sort(([aKey], [bKey]) => {
+        const aLocal = LOCAL_PROVIDERS.has(aKey) || aKey === "default"
+        const bLocal = LOCAL_PROVIDERS.has(bKey) || bKey === "default"
+        if (aLocal !== bLocal) return aLocal ? -1 : 1
+        return aKey.localeCompare(bKey)
       })
     }
 
-    return Array.from(groups).map(([key, children]) => ({
+    return entries.map(([key, children]) => ({
       type: "group" as const,
       key: `group-${key}`,
       label: (
@@ -537,39 +736,17 @@ export const PlaygroundForm = ({ droppedFiles }: Props) => {
       ),
       children
     }))
-  }, [composerModels, setSelectedModel])
-  const modelDropdownMenuItems = React.useMemo(() => {
-    if (modelDropdownItems.length > 0) {
-      return modelDropdownItems
-    }
-
-    return [
-      {
-        key: "no-models",
-        disabled: true,
-        label: (
-          <div className="px-1 py-1 text-xs text-text-muted">
-            {t(
-              "playground:composer.noModelsAvailable",
-              "No models available. Connect your server in Settings."
-            )}
-          </div>
-        )
-      },
-      {
-        type: "divider" as const,
-        key: "no-models-divider"
-      },
-      {
-        key: "open-model-settings",
-        label: t(
-          "playground:composer.openModelSettings",
-          "Open model settings"
-        ),
-        onClick: () => navigate("/settings/tldw")
-      }
-    ]
-  }, [modelDropdownItems, navigate, t])
+  }, [
+    composerModels,
+    favoriteModelSet,
+    filteredModels,
+    modelSearchQuery,
+    modelSortMode,
+    navigate,
+    setSelectedModel,
+    t,
+    toggleFavoriteModel
+  ])
 
   const sendLabel = React.useMemo(() => {
     if (compareModeActive && compareSelectedModels.length > 1) {
@@ -1063,12 +1240,49 @@ export const PlaygroundForm = ({ droppedFiles }: Props) => {
     <div className="inline-flex items-center gap-2">
       {showModelLabel && (
         <Dropdown
+          open={modelDropdownOpen}
+          onOpenChange={(open) => {
+            setModelDropdownOpen(open)
+            if (!open) {
+              setModelSearchQuery("")
+            }
+          }}
           menu={{
             items: modelDropdownMenuItems,
-            style: { maxHeight: 400, overflowY: "auto" },
             className: "no-scrollbar",
             activeKey: selectedModel ?? undefined
           }}
+          dropdownRender={(menu) => (
+            <div className="bg-surface rounded-lg shadow-lg border border-border">
+              <div className="p-2 border-b border-border flex items-center gap-2">
+                <Input
+                  size="small"
+                  placeholder={t("playground:composer.modelSearchPlaceholder", "Search models")}
+                  value={modelSearchQuery}
+                  allowClear
+                  className="flex-1"
+                  onChange={(event) => setModelSearchQuery(event.target.value)}
+                  onKeyDown={(event) => event.stopPropagation()}
+                />
+                <Select
+                  size="small"
+                  value={modelSortMode}
+                  onChange={(value) => setModelSortMode(value as ModelSortMode)}
+                  options={[
+                    { value: "favorites", label: t("playground:composer.sort.favorites", "Favorites") },
+                    { value: "az", label: t("playground:composer.sort.az", "A-Z") },
+                    { value: "provider", label: t("playground:composer.sort.provider", "Provider") },
+                    { value: "localFirst", label: t("playground:composer.sort.localFirst", "Local-first") }
+                  ]}
+                  className="min-w-[120px]"
+                  onKeyDown={(event) => event.stopPropagation()}
+                />
+              </div>
+              <div className="max-h-[400px] overflow-y-auto no-scrollbar">
+                {menu}
+              </div>
+            </div>
+          )}
           trigger={["click"]}
           placement="topLeft"
         >
