@@ -442,13 +442,17 @@ export const savePrompt = async ({
     content: resolvedContent,
     is_system: !!is_system,
     createdAt,
+    updatedAt: createdAt,
     tags: resolvedKeywords,
     keywords: resolvedKeywords,
     favorite,
     author,
     details,
     system_prompt: system_prompt ?? (is_system ? resolvedContent : undefined),
-    user_prompt: user_prompt ?? (!is_system ? resolvedContent : undefined)
+    user_prompt: user_prompt ?? (!is_system ? resolvedContent : undefined),
+    // Default sync values for new prompts
+    syncStatus: 'local' as const,
+    sourceSystem: 'workspace' as const
   }
   await db.addPrompt(prompt)
   await savePromptFB(prompt)
@@ -456,10 +460,62 @@ export const savePrompt = async ({
 }
 
 export const deletePromptById = async (id: string) => {
+  // Soft delete: moves prompt to trash
   const db = new PageAssistDatabase()
   await db.deletePrompt(id)
+  // Note: Firefox storage doesn't support soft delete, so we keep it there until permanent delete
+  return id
+}
+
+export const permanentlyDeletePrompt = async (id: string) => {
+  // Hard delete: removes from both Dexie and Firefox storage
+  const db = new PageAssistDatabase()
+  await db.permanentlyDeletePrompt(id)
   await deletePromptByIdFB(id)
   return id
+}
+
+export const restorePrompt = async (id: string) => {
+  // Restore from trash
+  const db = new PageAssistDatabase()
+  await db.restorePrompt(id)
+  return id
+}
+
+export const getDeletedPrompts = async () => {
+  try {
+    const db = new PageAssistDatabase()
+    return await db.getDeletedPrompts()
+  } catch (e) {
+    if (isDatabaseClosedError(e)) {
+      // Firefox storage doesn't support soft delete tracking
+      return []
+    }
+    return []
+  }
+}
+
+export const emptyTrash = async () => {
+  const db = new PageAssistDatabase()
+  const deletedPrompts = await db.getDeletedPrompts()
+  // Also remove from Firefox storage
+  for (const prompt of deletedPrompts) {
+    await deletePromptByIdFB(prompt.id)
+  }
+  return await db.emptyTrash()
+}
+
+export const autoCleanupTrash = async (maxAgeDays: number = 30) => {
+  const db = new PageAssistDatabase()
+  // Get prompts that will be deleted
+  const cutoff = Date.now() - (maxAgeDays * 24 * 60 * 60 * 1000)
+  const deletedPrompts = await db.getDeletedPrompts()
+  const expiredPrompts = deletedPrompts.filter(p => p.deletedAt && p.deletedAt < cutoff)
+  // Remove from Firefox storage
+  for (const prompt of expiredPrompts) {
+    await deletePromptByIdFB(prompt.id)
+  }
+  return await db.autoCleanupTrash(maxAgeDays)
 }
 
 export const updatePrompt = async ({

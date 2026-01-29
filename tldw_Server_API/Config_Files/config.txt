@@ -937,6 +937,44 @@ transcript_cache_max_age_days =
 # Leave empty for defaults or set 0/negative to disable size-based pruning.
 transcript_cache_max_total_mb =
 
+# --- Qwen3-ASR Settings ---
+# Qwen3-ASR offers state-of-the-art multilingual transcription.
+# Models must be manually downloaded before use:
+#   huggingface-cli download Qwen/Qwen3-ASR-1.7B --local-dir ./models/qwen3_asr/1.7B
+#   huggingface-cli download Qwen/Qwen3-ASR-0.6B --local-dir ./models/qwen3_asr/0.6B
+#   huggingface-cli download Qwen/Qwen3-ForcedAligner-0.6B --local-dir ./models/qwen3_asr/aligner
+qwen3_asr_enabled = false
+# LOCAL path to downloaded model (required if enabled, no auto-download)
+qwen3_asr_model_path = ./models/qwen3_asr/1.7B
+# Device: cuda or cpu
+qwen3_asr_device = cuda
+# Data type: bfloat16, float16, or float32
+qwen3_asr_dtype = bfloat16
+# Maximum batch size for inference
+qwen3_asr_max_batch_size = 32
+# Maximum new tokens for generation
+qwen3_asr_max_new_tokens = 4096
+# Enforce manual download (set to false to allow auto-download from HuggingFace)
+qwen3_asr_allow_download = false
+# Target sample rate for audio (default 16000 Hz)
+qwen3_asr_sample_rate = 16000
+
+# --- Qwen3-ASR Forced Aligner (for word-level timestamps) ---
+# Enable forced alignment for word-level timestamps (requires separate model)
+qwen3_asr_aligner_enabled = false
+# LOCAL path to forced aligner model
+qwen3_asr_aligner_path = ./models/qwen3_asr/aligner
+
+# --- Qwen3-ASR Backend ---
+# Backend: transformers (default) or vllm (for streaming, optional)
+qwen3_asr_backend = transformers
+# GPU memory utilization when using vLLM backend (0.0-1.0)
+qwen3_asr_vllm_gpu_memory_utilization = 0.7
+# Optional: vLLM HTTP server URL for external vLLM delegation (P2 feature)
+# When set, transcription requests are delegated to this vLLM server
+# Example: http://localhost:8000
+qwen3_asr_vllm_base_url =
+
 # --- Audio validation ---
 # When true, skip ffprobe-based audio validation and rely on ffmpeg + STT to
 # surface bad files (env: STT_SKIP_AUDIO_PREVALIDATION).

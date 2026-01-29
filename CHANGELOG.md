@@ -17,6 +17,19 @@ and this project adheres to Some kind of Versioning
 - Workspace selector remove handler now uses the imported MouseEvent type instead of the React namespace.
 
 
+## [0.1.19] 2026-01-29
+
+### Added
+- Soft delete support for notes/character cards
+- Qwen3-STT
+
+### Changed
+
+### Removed
+
+### Fixed
+- Workspace selector remove handler now uses the imported MouseEvent type instead of the React namespace.
+
 
 ## [0.1.18] 2026-01-29
 

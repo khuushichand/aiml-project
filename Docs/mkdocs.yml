@@ -90,8 +90,16 @@ nav:
       - Audio Jobs API: API-related/Audio_Jobs_API.md
       - AuthNZ API Guide: API-related/AuthNZ-API-Guide.md
       - Notes API: API-related/Notes_API_Documentation.md
+      - Notes Graph API: API-related/Notes_Graph_API.md
       - Reading List API: API-related/Reading_List_API.md
+      - Items API: API-related/Items_API.md
       - Collections Feeds API: API-related/Collections_Feeds_API.md
+      - Quizzes API: API-related/Quizzes_API.md
+      - Writing API: API-related/Writing_API.md
+      - Data Tables API: API-related/Data_Tables_API.md
+      - File Artifacts API: API-related/File_Artifacts_API.md
+      - Storage API: API-related/Storage_API_Documentation.md
+      - Sync API: API-related/Sync_API.md
       - Chat API Documentation: API-related/Chat_API_Documentation.md
       - Chat Module Integration: API-related/Chat_Module_Integration_Guide.md
       - Chatbook API: API-related/Chatbook_API_Documentation.md
@@ -111,7 +119,9 @@ nav:
       - Providers API: API-related/Providers_API_Documentation.md
       - RAG API: API-related/RAG_API_Documentation.md
       - RAG API Guide: API-related/RAG-API-Guide.md
+      - Feedback API: API-related/Feedback_API.md
       - Slides API: API/Slides.md
+      - Voice Assistant API: API/Voice_Assistant.md
       - Orgs & Billing API: API-related/Orgs_Billing_API.md
       - Transcript Segmentation API: API-related/Transcript_Segmentation_API.md
       - User Registration API: API-related/User_Registration_API_Documentation.md

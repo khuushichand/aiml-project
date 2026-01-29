@@ -1364,6 +1364,30 @@ export class TldwApiClient {
     })
   }
 
+  async exportCharacter(
+    id: string | number,
+    options?: { format?: 'v3' | 'v2' | 'json'; includeWorldBooks?: boolean }
+  ): Promise<any> {
+    const cid = String(id)
+    const params = new URLSearchParams()
+    if (options?.format) {
+      params.set('format', options.format)
+    }
+    if (options?.includeWorldBooks) {
+      params.set('include_world_books', 'true')
+    }
+    const qp = params.toString() ? `?${params.toString()}` : ''
+    const template = await this.resolveApiPath("characters.export", [
+      "/api/v1/characters/{id}/export",
+      "/api/v1/characters/{id}/export/"
+    ])
+    const path = this.fillPathParams(template, cid) + qp
+    return await bgRequest<any>({
+      path,
+      method: 'GET'
+    })
+  }
+
   async updateCharacter(id: string | number, payload: Record<string, any>, expectedVersion?: number): Promise<any> {
     const cid = String(id)
     const qp = expectedVersion != null ? `?expected_version=${encodeURIComponent(String(expectedVersion))}` : ''
@@ -1391,6 +1415,14 @@ export class TldwApiClient {
     const path = this.fillPathParams(template, cid)
     await bgRequest<void>({ path, method: 'DELETE' })
     this.characterCache.delete(cid)
+  }
+
+  async restoreCharacter(id: string | number, expectedVersion: number): Promise<any> {
+    const cid = String(id)
+    const path = `/api/v1/characters/${cid}/restore?expected_version=${expectedVersion}`
+    const res = await bgRequest<any>({ path, method: 'POST' })
+    this.characterCache.delete(cid)
+    return res
   }
 
   // Character chat sessions
@@ -1934,6 +1966,15 @@ export class TldwApiClient {
   async deleteWorldBookEntry(entry_id: number | string): Promise<any> {
     const eid = String(entry_id)
     return await bgRequest<any>({ path: `/api/v1/characters/world-books/entries/${eid}`, method: 'DELETE' })
+  }
+
+  async bulkWorldBookEntries(payload: { entry_ids: number[]; operation: string; priority?: number }): Promise<any> {
+    return await bgRequest<any>({
+      path: '/api/v1/characters/world-books/entries/bulk',
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: payload
+    })
   }
 
   async attachWorldBookToCharacter(character_id: number | string, world_book_id: number | string): Promise<any> {

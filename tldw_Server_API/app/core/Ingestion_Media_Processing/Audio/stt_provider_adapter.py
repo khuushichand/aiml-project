@@ -86,6 +86,10 @@ def _resolve_default_model_for_provider(
         return "nemo-canary-1b", "standard"
     if normalized == SttProviderName.QWEN2AUDIO.value:
         return "qwen2audio", None
+    if normalized == SttProviderName.QWEN3_ASR.value:
+        # Default to 1.7B model (production quality)
+        model_path = str(stt_cfg.get("qwen3_asr_model_path", "./models/qwen3_asr/1.7B")).strip()
+        return model_path or "qwen3-asr-1.7b", None
     if normalized == SttProviderName.VIBEVOICE.value:
         model_id = str(stt_cfg.get("vibevoice_model_id", "microsoft/VibeVoice-ASR")).strip()
         return model_id or "microsoft/VibeVoice-ASR", None
@@ -101,6 +105,7 @@ class SttProviderName(str, Enum):
     PARAKEET = "parakeet"
     CANARY = "canary"
     QWEN2AUDIO = "qwen2audio"
+    QWEN3_ASR = "qwen3-asr"
     VIBEVOICE = "vibevoice"
     EXTERNAL = "external"
 
@@ -460,6 +465,73 @@ class Qwen2AudioAdapter(SttProviderAdapter):
         }
 
 
+class Qwen3ASRAdapter(SttProviderAdapter):
+    """Adapter for Qwen3-ASR models (1.7B and 0.6B variants).
+
+    Features:
+    - 30 languages + 22 Chinese dialects (auto-detected)
+    - State-of-the-art accuracy (1.63 WER on LibriSpeech clean)
+    - Optional word-level timestamps via Qwen3-ForcedAligner
+    - Default model: 1.7B (production quality)
+    """
+
+    def __init__(self) -> None:
+        super().__init__(SttProviderName.QWEN3_ASR)
+
+    def get_capabilities(self) -> SttProviderCapabilities:
+        # Qwen3-ASR supports batch transcription; streaming requires vLLM (P1)
+        # Word timestamps via forced aligner are supported when configured
+        return SttProviderCapabilities(
+            name=self.name,
+            supports_batch=True,
+            supports_streaming=False,  # Streaming requires vLLM backend
+            supports_diarization=False,
+            notes="Qwen3-ASR: 30 languages, word timestamps via ForcedAligner",
+        )
+
+    def transcribe_batch(
+        self,
+        audio_path: str,
+        *,
+        model: Optional[str] = None,
+        language: Optional[str] = None,
+        task: str = "transcribe",
+        word_timestamps: bool = False,
+        prompt: Optional[str] = None,
+        hotwords: Optional[Sequence[str]] = None,
+        base_dir: Optional[Path] = None,
+        cancel_check: Optional[Callable[[], bool]] = None,
+    ) -> Dict[str, Any]:
+        from tldw_Server_API.app.core.Ingestion_Media_Processing.Audio.Audio_Transcription_Qwen3ASR import (
+            transcribe_with_qwen3_asr,
+        )
+
+        # Resolve model path from config if not provided
+        if model:
+            model_path = model
+        else:
+            try:
+                stt_cfg = get_stt_config() or {}
+            except Exception:
+                stt_cfg = {}
+            model_path, _ = _resolve_default_model_for_provider(self.name.value, stt_cfg)
+            if not model_path:
+                model_path = "./models/qwen3_asr/1.7B"
+
+        _raise_if_cancelled(cancel_check)
+        artifact = transcribe_with_qwen3_asr(
+            audio_path,
+            model_path=model_path,
+            language=language,
+            word_timestamps=word_timestamps,
+            base_dir=base_dir,
+            cancel_check=cancel_check,
+        )
+        if not isinstance(artifact, dict):
+            raise BadRequestError("Qwen3-ASR transcription did not return a valid artifact")
+        return artifact
+
+
 class VibeVoiceAdapter(SttProviderAdapter):
     """Adapter metadata for VibeVoice-ASR models."""
 
@@ -591,6 +663,7 @@ def _normalize_provider_name(name: Optional[str]) -> str:
     - Accepts both 'faster_whisper' and 'faster-whisper' and normalizes to
       'faster-whisper'.
     - Accepts 'vibevoice-asr' aliases and normalizes to 'vibevoice'.
+    - Accepts 'qwen3-asr', 'qwen3_asr', 'qwen3asr' aliases.
     - Returns lower-cased identifiers for consistency.
     """
     if not name:
@@ -600,6 +673,8 @@ def _normalize_provider_name(name: Optional[str]) -> str:
         return "faster-whisper"
     if lowered in {"vibevoice-asr", "vibevoice_asr"}:
         return "vibevoice"
+    if lowered in {"qwen3-asr", "qwen3_asr", "qwen3asr"}:
+        return "qwen3-asr"
     return lowered
 
 
@@ -617,6 +692,7 @@ class SttProviderRegistry:
             SttProviderName.PARAKEET.value: ParakeetAdapter(),
             SttProviderName.CANARY.value: CanaryAdapter(),
             SttProviderName.QWEN2AUDIO.value: Qwen2AudioAdapter(),
+            SttProviderName.QWEN3_ASR.value: Qwen3ASRAdapter(),
             SttProviderName.VIBEVOICE.value: VibeVoiceAdapter(),
             SttProviderName.EXTERNAL.value: ExternalAdapter(),
         }
@@ -698,6 +774,17 @@ class SttProviderRegistry:
             if lowered == "qwen":
                 provider = SttProviderName.QWEN2AUDIO.value
                 return provider, "qwen2audio", None
+            # Handle qwen3-asr model names
+            if lowered.startswith("qwen3-asr") or lowered.startswith("qwen3_asr"):
+                provider = SttProviderName.QWEN3_ASR.value
+                # Map model name to HuggingFace path
+                if "0.6b" in lowered:
+                    return provider, "Qwen/Qwen3-ASR-0.6B", None
+                elif "1.7b" in lowered:
+                    return provider, "Qwen/Qwen3-ASR-1.7B", None
+                else:
+                    # Default to 1.7B
+                    return provider, "Qwen/Qwen3-ASR-1.7B", None
             if lowered.startswith("external:"):
                 provider = SttProviderName.EXTERNAL.value
                 return provider, normalized_name, None

@@ -309,6 +309,17 @@ class TestToolsAndFunctions:
         assert len(request.tools) == 1
         assert request.tool_choice == "auto"
 
+    @pytest.mark.unit
+    def test_request_with_gemini_tools(self):
+        """Test request accepts Gemini-native tools."""
+        request = ChatCompletionRequest(
+            api_provider="google",
+            model="gemini-1.5-pro",
+            messages=[{"role": "user", "content": "Hello"}],
+            tools=[{"function_declarations": [{"name": "lookup"}]}],
+        )
+        assert len(request.tools) == 1
+
 # ========================================================================
 # Edge Cases and Error Handling
 # ========================================================================

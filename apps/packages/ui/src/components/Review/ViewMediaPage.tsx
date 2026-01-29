@@ -20,6 +20,8 @@ import { ResultsList } from '@/components/Media/ResultsList'
 import { ContentViewer } from '@/components/Media/ContentViewer'
 import { Pagination } from '@/components/Media/Pagination'
 import { JumpToNavigator } from '@/components/Media/JumpToNavigator'
+import { KeyboardShortcutsOverlay } from '@/components/Media/KeyboardShortcutsOverlay'
+import { FilterChips } from '@/components/Media/FilterChips'
 import type { MediaResultItem } from '@/components/Media/types'
 import { setSetting } from '@/services/settings/registry'
 import {
@@ -219,6 +221,7 @@ const MediaPageContent: React.FC = () => {
     setRagMediaIds
   } = useMessageOption()
 
+  const [shortcutsOverlayOpen, setShortcutsOverlayOpen] = useState(false)
   const [query, setQuery] = useState<string>('')
   const [debouncedQuery, setDebouncedQuery] = useState<string>('')
   const [kinds, setKinds] = useState<{ media: boolean; notes: boolean }>({
@@ -931,16 +934,22 @@ const MediaPageContent: React.FC = () => {
       const itemTitle =
         item.title ||
         `${t('review:mediaPage.media', { defaultValue: 'Media' })} ${idStr}`
+
+      // Helper to parse version from various sources
+      const parseVersionCandidate = (value: unknown): number | null => {
+        if (typeof value === 'number' && Number.isFinite(value)) return value
+        if (typeof value === 'string') {
+          const trimmed = value.trim()
+          if (/^\d+$/.test(trimmed)) return Number.parseInt(trimmed, 10)
+        }
+        return null
+      }
+
+      // Store the version used for delete so we can use it for restore (incremented by 1)
+      let deletedAtVersion: number | null = null
+
       try {
         if (item.kind === 'note') {
-          const parseVersionCandidate = (value: unknown): number | null => {
-            if (typeof value === 'number' && Number.isFinite(value)) return value
-            if (typeof value === 'string') {
-              const trimmed = value.trim()
-              if (/^\d+$/.test(trimmed)) return Number.parseInt(trimmed, 10)
-            }
-            return null
-          }
           let expectedVersion: number | null = null
           const versionCandidates = [
             detail?.version,
@@ -984,6 +993,8 @@ const MediaPageContent: React.FC = () => {
             method: 'DELETE' as any,
             headers: { 'expected-version': String(expectedVersion) }
           })
+          // After soft-delete, the version is incremented by 1
+          deletedAtVersion = expectedVersion + 1
         } else {
           await bgRequest({
             path: `/api/v1/media/${id}` as any,
@@ -1036,46 +1047,56 @@ const MediaPageContent: React.FC = () => {
       }
 
       void refetch()
-      if (item.kind === 'media') {
-        showUndoNotification({
-          title: t('review:mediaPage.itemMovedToTrash', {
-            defaultValue: 'Moved to trash'
-          }),
-          description: t('review:mediaPage.itemMovedToTrashDesc', {
-            defaultValue: '"{{title}}" moved to trash.',
-            title: itemTitle
-          }),
-          onUndo: async () => {
+
+      // Show undo notification for both media and notes
+      showUndoNotification({
+        title: t('review:mediaPage.itemMovedToTrash', {
+          defaultValue: 'Moved to trash'
+        }),
+        description: t('review:mediaPage.itemMovedToTrashDesc', {
+          defaultValue: '"{{title}}" moved to trash.',
+          title: itemTitle
+        }),
+        onUndo: async () => {
+          if (item.kind === 'note') {
+            // Restore note using the new API
+            if (deletedAtVersion != null) {
+              await bgRequest({
+                path: `/api/v1/notes/${id}/restore?expected_version=${deletedAtVersion}` as any,
+                method: 'POST' as any
+              })
+            }
+          } else {
             await bgRequest({
               path: `/api/v1/media/${id}/restore` as any,
               method: 'POST' as any
             })
-            if (wasFavorite) {
-              setFavorites((prev: string[] | undefined) => {
-                const next = new Set(prev || [])
-                next.add(idStr)
-                return Array.from(next)
-              })
-            }
-            const refreshed = await refetch()
-            const restoredItem = refreshed.data?.find(
-              (r: MediaResultItem) => String(r.id) === idStr
-            )
-            if (restoredItem) {
-              setSelected((prev) => {
-                const prevId = prev?.id != null ? String(prev.id) : null
-                if (!prevId || prevId === idStr) return restoredItem
-                return prev
-              })
-            }
           }
-        })
-      }
+          if (wasFavorite) {
+            setFavorites((prev: string[] | undefined) => {
+              const next = new Set(prev || [])
+              next.add(idStr)
+              return Array.from(next)
+            })
+          }
+          const refreshed = await refetch()
+          const restoredItem = refreshed.data?.find(
+            (r: MediaResultItem) => String(r.id) === idStr
+          )
+          if (restoredItem) {
+            setSelected((prev) => {
+              const prevId = prev?.id != null ? String(prev.id) : null
+              if (!prevId || prevId === idStr) return restoredItem
+              return prev
+            })
+          }
+        }
+      })
     },
     [displayResults, favoritesSet, refetch, setFavorites, showUndoNotification, t]
   )
 
-  // Keyboard shortcuts for navigation (j/k for items, arrows for pages)
+  // Keyboard shortcuts for navigation (j/k for items, arrows for pages, ? for help)
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
       // Ignore if typing in input
@@ -1088,6 +1109,10 @@ const MediaPageContent: React.FC = () => {
       }
 
       switch (e.key) {
+        case '?':
+          e.preventDefault()
+          setShortcutsOverlayOpen((prev) => !prev)
+          break
         case 'j':
           if (hasNext) {
             e.preventDefault()
@@ -1403,6 +1428,25 @@ const MediaPageContent: React.FC = () => {
             )}
           </div>
 
+          {/* Active Filter Chips */}
+          <FilterChips
+            mediaTypes={mediaTypes}
+            keywords={keywordTokens}
+            showFavoritesOnly={showFavoritesOnly}
+            onRemoveMediaType={(type) => {
+              setMediaTypes((prev) => prev.filter((t) => t !== type))
+            }}
+            onRemoveKeyword={(keyword) => {
+              setKeywordTokens((prev) => prev.filter((k) => k !== keyword))
+            }}
+            onToggleFavorites={() => setShowFavoritesOnly(false)}
+            onClearAll={() => {
+              setMediaTypes([])
+              setKeywordTokens([])
+              setShowFavoritesOnly(false)
+            }}
+          />
+
           {/* Results */}
           <div className="flex-1 overflow-y-auto min-h-0" style={{ minHeight: '325px' }}>
             <ResultsList
@@ -1448,6 +1492,20 @@ const MediaPageContent: React.FC = () => {
               itemsPerPage={pageSize}
               currentItemsCount={results.length}
             />
+            {/* Keyboard shortcuts hint */}
+            <div className="px-4 py-1.5 border-t border-border flex items-center justify-center">
+              <button
+                type="button"
+                onClick={() => setShortcutsOverlayOpen(true)}
+                className="inline-flex items-center gap-1.5 text-xs text-text-muted hover:text-text transition-colors"
+                title={t('review:shortcuts.pressForHelp', { defaultValue: 'Press ? for keyboard shortcuts' })}
+              >
+                <kbd className="inline-flex items-center justify-center min-w-[18px] h-5 px-1 text-[10px] font-mono bg-surface2 border border-border rounded text-text-muted">
+                  ?
+                </kbd>
+                <span>{t('review:shortcuts.forKeyboardShortcuts', { defaultValue: 'for shortcuts' })}</span>
+              </button>
+            </div>
           </div>
         </div>
       </div>
@@ -1498,6 +1556,12 @@ const MediaPageContent: React.FC = () => {
           contentRef={contentRef}
         />
       </div>
+
+      {/* Keyboard Shortcuts Overlay */}
+      <KeyboardShortcutsOverlay
+        open={shortcutsOverlayOpen}
+        onClose={() => setShortcutsOverlayOpen(false)}
+      />
     </div>
   )
 }

@@ -1,7 +1,7 @@
-import { UserCircle2 } from "lucide-react"
+import { UserCircle2, MessageCircle } from "lucide-react"
 import { useTranslation } from "react-i18next"
 import { useMemo, useState, useEffect } from "react"
-import { Tooltip } from "antd"
+import { Tooltip, Badge } from "antd"
 import { createImageDataUrl } from "@/utils/image-utils"
 
 interface CharacterGalleryCardProps {
@@ -13,11 +13,13 @@ interface CharacterGalleryCardProps {
     image_base64?: string
   }
   onClick: () => void
+  conversationCount?: number
 }
 
 export function CharacterGalleryCard({
   character,
-  onClick
+  onClick,
+  conversationCount
 }: CharacterGalleryCardProps) {
   const { t } = useTranslation(["settings"])
   const [avatarImgError, setAvatarImgError] = useState(false)
@@ -61,6 +63,20 @@ export function CharacterGalleryCard({
           <div className="flex h-full w-full items-center justify-center rounded-lg bg-surface2 ring-2 ring-border group-hover:ring-primary/30">
             <UserCircle2 className="h-16 w-16 text-text-subtle" />
           </div>
+        )}
+        {/* Conversation count badge */}
+        {typeof conversationCount === 'number' && conversationCount > 0 && (
+          <Tooltip
+            title={t("settings:manageCharacters.gallery.conversationCount", {
+              defaultValue: "{{count}} conversation(s)",
+              count: conversationCount
+            })}
+          >
+            <div className="absolute -bottom-1 -right-1 flex items-center gap-0.5 rounded-full bg-primary px-1.5 py-0.5 text-[10px] font-medium text-white shadow-sm">
+              <MessageCircle className="h-3 w-3" />
+              <span>{conversationCount > 99 ? '99+' : conversationCount}</span>
+            </div>
+          </Tooltip>
         )}
       </div>
 

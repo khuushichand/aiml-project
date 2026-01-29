@@ -107,6 +107,16 @@ class TestValidateToolDefinitions:
         result = validate_tool_definitions(tools)
         assert result == tools
 
+    def test_google_allows_gemini_native_tools(self):
+        """Test Gemini-native tools are allowed for Google provider."""
+        tools = [
+            {
+                "function_declarations": [{"name": "lookup"}]
+            }
+        ]
+        result = validate_tool_definitions(tools, provider="google")
+        assert result == tools
+
     def test_none_value(self):
         """Test None value is allowed."""
         result = validate_tool_definitions(None)

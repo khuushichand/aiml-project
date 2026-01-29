@@ -98,11 +98,36 @@ export type Webshare = {
   createdAt: number;
 };
 
+// ─────────────────────────────────────────────────────────────────────────────
+// Prompt Studio Types (for sync)
+// ─────────────────────────────────────────────────────────────────────────────
+
+export type PromptModule = {
+  type: string;
+  enabled?: boolean;
+  config?: Record<string, any> | null;
+};
+
+export type FewShotExample = {
+  inputs: Record<string, any>;
+  outputs: Record<string, any>;
+  explanation?: string | null;
+};
+
+export type PromptSyncStatus = 'local' | 'synced' | 'pending' | 'conflict';
+export type PromptSourceSystem = 'workspace' | 'studio' | 'copilot';
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Unified Prompt Type
+// ─────────────────────────────────────────────────────────────────────────────
+
 export type Prompt = {
+  // Identity - Local
   id: string;
   title: string;
   content: string;
   is_system: boolean;
+
   // API-aligned fields
   name?: string;
   author?: string;
@@ -112,9 +137,33 @@ export type Prompt = {
   keywords?: string[];
   createdBy?: string;
   createdAt: number;
-  // optional metadata
+  updatedAt?: number;
+
+  // Optional metadata
   tags?: string[];
   favorite?: boolean;
+
+  // Soft delete support
+  deletedAt?: number | null;
+
+  // ─── Server Sync Fields (Prompt Studio integration) ───
+  serverId?: number | null;           // Server ID if synced to Prompt Studio
+  studioProjectId?: number | null;    // Prompt Studio project link
+  studioPromptId?: number | null;     // Prompt Studio prompt link (same as serverId usually)
+
+  // Sync state
+  syncStatus?: PromptSyncStatus;      // 'local' | 'synced' | 'pending' | 'conflict'
+  sourceSystem?: PromptSourceSystem;  // 'workspace' | 'studio' | 'copilot'
+  lastSyncedAt?: number | null;       // Timestamp of last successful sync
+  serverUpdatedAt?: string | null;    // Server's updated_at for conflict detection
+
+  // ─── Studio-specific Fields (progressive disclosure) ───
+  fewShotExamples?: FewShotExample[] | null;
+  modulesConfig?: PromptModule[] | null;
+  versionNumber?: number | null;
+  changeDescription?: string | null;
+  parentVersionId?: string | null;    // Local ID of parent version (for local branching)
+  serverParentVersionId?: number | null; // Server's parent_version_id
 };
 
 export type UserSettings = {

@@ -1244,6 +1244,82 @@ async def delete_note(
         handle_db_errors(e, "note")
 
 
+@router.post(
+    "/{note_id}/restore",
+    response_model=NoteResponse,
+    summary="Restore a soft-deleted note",
+    tags=["notes"],
+    responses={
+        status.HTTP_404_NOT_FOUND: {"model": DetailResponse},
+        status.HTTP_409_CONFLICT: {"model": DetailResponse}
+    }
+)
+async def restore_note(
+        note_id: str,
+        expected_version: int = Query(..., description="The expected version of the note for optimistic locking"),
+        db: CharactersRAGDB = Depends(get_chacha_db_for_user),
+        rate_limiter: RateLimiter = Depends(get_rate_limiter_dep),
+        current_user: User = Depends(get_request_user),
+        _: None = Depends(rbac_rate_limit("notes.restore")),
+) -> NoteResponse:
+    """
+    Restores a soft-deleted note.
+
+    Requires the `expected_version` query parameter for optimistic locking.
+    Returns the restored note on success.
+    """
+    try:
+        # Rate limit: notes.restore
+        try:
+            allowed, meta = await rate_limiter.check_user_rate_limit(int(current_user.id), "notes.restore")
+        except Exception:
+            allowed, meta = True, {}
+        if not allowed:
+            raise HTTPException(status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+                                detail="Rate limit exceeded for notes.restore",
+                                headers={"Retry-After": str(meta.get("retry_after", 60))})
+
+        logger.info(
+            f"User (DB client_id: {db.client_id}) restoring note: ID='{note_id}', Version={expected_version}")
+
+        success = db.restore_note(
+            note_id=note_id,
+            expected_version=expected_version
+        )
+        if not success:
+            raise CharactersRAGDBError("Note restore reported non-success without specific exception.")
+
+        logger.info(
+            f"Note '{note_id}' restored successfully for user (DB client_id: {db.client_id}).")
+
+        # Fetch the restored note to return it
+        restored_note = db.get_note_by_id(note_id)
+        if not restored_note:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND,
+                                detail=f"Note '{note_id}' not found after restore.")
+
+        # Fetch keywords for the note
+        keywords = db.get_keywords_for_note(note_id)
+        keyword_responses = [
+            KeywordResponse(id=str(kw['id']), keyword=kw['keyword'])
+            for kw in keywords
+        ] if keywords else []
+
+        return NoteResponse(
+            id=str(restored_note['id']),
+            title=restored_note.get('title', ''),
+            content=restored_note.get('content', ''),
+            created_at=restored_note.get('created_at'),
+            last_modified=restored_note.get('last_modified'),
+            version=restored_note.get('version', 1),
+            client_id=restored_note.get('client_id', ''),
+            deleted=bool(restored_note.get('deleted', False)),
+            keywords=keyword_responses
+        )
+    except Exception as e:
+        handle_db_errors(e, "note")
+
+
 # --- Keyword Endpoints (related to Notes) ---
 
 @router.post(

@@ -388,6 +388,35 @@ export const MEDIA_REVIEW_AUTO_VIEW_MODE_SETTING = defineSetting(
   }
 )
 
+const coerceIdArray = (value: unknown): Array<string | number> => {
+  if (!Array.isArray(value)) return []
+  return value.filter(
+    (entry) => typeof entry === "string" || typeof entry === "number"
+  )
+}
+
+export const MEDIA_REVIEW_SELECTION_SETTING = defineSetting(
+  "media-review-selection",
+  [] as Array<string | number>,
+  coerceIdArray,
+  {
+    area: "local"
+  }
+)
+
+export const MEDIA_REVIEW_FOCUSED_ID_SETTING = defineSetting(
+  "media-review-focused-id",
+  null as string | number | null,
+  (value) => {
+    if (value === null || value === undefined) return null
+    if (typeof value === "string" || typeof value === "number") return value
+    return null
+  },
+  {
+    area: "local"
+  }
+)
+
 export type DiscussMediaPrompt = {
   mediaId?: string
   url?: string

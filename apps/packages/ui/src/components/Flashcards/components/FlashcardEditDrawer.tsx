@@ -1,5 +1,6 @@
 import React from "react"
 import {
+  Badge,
   Button,
   Collapse,
   Drawer,
@@ -56,6 +57,14 @@ export const FlashcardEditDrawer: React.FC<FlashcardEditDrawerProps> = ({
   const markdownSupportHint = t("option:flashcards.markdownSupportHint", {
     defaultValue: "Supports Markdown and LaTeX."
   })
+
+  // Count how many additional fields have values for the badge indicator
+  const additionalFieldCount = React.useMemo(() => {
+    let count = 0
+    if (extraPreview && extraPreview.trim()) count++
+    if (notesPreview && notesPreview.trim()) count++
+    return count
+  }, [extraPreview, notesPreview])
 
   // Sync form with card data when card changes
   React.useEffect(() => {
@@ -271,9 +280,23 @@ export const FlashcardEditDrawer: React.FC<FlashcardEditDrawerProps> = ({
         {/* Section: Additional (collapsed) */}
         <Collapse ghost>
           <Collapse.Panel
-            header={t("option:flashcards.additionalFields", {
-              defaultValue: "Additional fields"
-            })}
+            header={
+              <span className="inline-flex items-center gap-2">
+                {t("option:flashcards.additionalFields", {
+                  defaultValue: "Additional fields"
+                })}
+                {additionalFieldCount > 0 && (
+                  <Badge
+                    count={additionalFieldCount}
+                    size="small"
+                    title={t("option:flashcards.additionalFieldsSet", {
+                      defaultValue: "{{count}} field(s) set",
+                      count: additionalFieldCount
+                    })}
+                  />
+                )}
+              </span>
+            }
             key="additional"
           >
             <Form.Item

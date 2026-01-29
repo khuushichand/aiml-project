@@ -2375,6 +2375,29 @@ def parse_transcription_model(model_name: str) -> tuple:
             return ("vibevoice", model_id or "microsoft/VibeVoice-ASR", None)
         return ("vibevoice", model_name, None)
 
+    # Check for Qwen3-ASR models
+    elif "qwen3" in model_lower and "asr" in model_lower:
+        # Get config path and derive the appropriate model path based on size
+        try:
+            stt_cfg = get_stt_config() or {}
+        except Exception:
+            stt_cfg = {}
+        base_path = str(stt_cfg.get("qwen3_asr_model_path", "./models/qwen3_asr/1.7B")).strip()
+        if not base_path:
+            base_path = "./models/qwen3_asr/1.7B"
+        # If user requests 0.6B, derive path by replacing 1.7B with 0.6B in the configured path
+        if "0.6b" in model_lower:
+            # Try to derive 0.6B path from the configured 1.7B path
+            if "1.7B" in base_path or "1.7b" in base_path:
+                model_path = base_path.replace("1.7B", "0.6B").replace("1.7b", "0.6b")
+            else:
+                # If the path doesn't contain 1.7B, append 0.6B to parent dir
+                model_path = str(Path(base_path).parent / "0.6B")
+        else:
+            # Default to configured path (typically 1.7B)
+            model_path = base_path
+        return ("qwen3-asr", model_path, None)
+
     # Default to whisper for all other models
     else:
         # This includes whisper-*, distil-whisper-*, deepdml/*, etc.
@@ -2989,6 +3012,40 @@ def speech_to_text(
             return segments_qwen
         except Exception as e:
             logging.error(f"Qwen2Audio transcription failed, falling back to whisper: {e}")
+            provider = "whisper"
+            model = "distil-whisper-large-v3"
+
+    elif provider == "qwen3-asr":
+        _check_cancel(cancel_check, label="speech-to-text")
+        if file_path is None:
+            raise ValueError("speech-to-text: Qwen3-ASR provider requires an audio file path")
+        logging.info("Routing to Qwen3-ASR transcription")
+        try:
+            from tldw_Server_API.app.core.Ingestion_Media_Processing.Audio.stt_provider_adapter import (  # type: ignore
+                get_stt_provider_registry,
+            )
+
+            registry = get_stt_provider_registry()
+            adapter = registry.get_adapter("qwen3-asr")
+            model_name_for_provider = model or whisper_model
+            artifact = adapter.transcribe_batch(
+                str(file_path),
+                model=model_name_for_provider,
+                language=selected_source_lang,
+                task=task_normalized,
+                word_timestamps=word_timestamps,
+                prompt=initial_prompt,
+                hotwords=hotwords_norm,
+                base_dir=base_dir_resolved,
+                cancel_check=cancel_check,
+            )
+            segments_qwen3 = artifact.get("segments") or []
+            language_qwen3 = artifact.get("language") or selected_source_lang
+            if return_language:
+                return segments_qwen3, language_qwen3
+            return segments_qwen3
+        except Exception as e:
+            logging.error(f"Qwen3-ASR transcription failed, falling back to whisper: {e}")
             provider = "whisper"
             model = "distil-whisper-large-v3"
 

@@ -1,5 +1,6 @@
 import React from "react"
 import {
+  Badge,
   Button,
   Collapse,
   Divider,
@@ -68,6 +69,16 @@ export const FlashcardCreateDrawer: React.FC<FlashcardCreateDrawerProps> = ({
   const backPreview = useDebouncedFormField(form, "back")
   const extraPreview = useDebouncedFormField(form, "extra")
   const notesPreview = useDebouncedFormField(form, "notes")
+  const tagsValue = useDebouncedFormField(form, "tags")
+
+  // Count how many advanced fields have values for the badge indicator
+  const advancedFieldCount = React.useMemo(() => {
+    let count = 0
+    if (Array.isArray(tagsValue) && tagsValue.length > 0) count++
+    if (extraPreview && extraPreview.trim()) count++
+    if (notesPreview && notesPreview.trim()) count++
+    return count
+  }, [tagsValue, extraPreview, notesPreview])
 
   // Inline deck creation state
   const [showInlineCreate, setShowInlineCreate] = React.useState(false)
@@ -366,11 +377,23 @@ export const FlashcardCreateDrawer: React.FC<FlashcardCreateDrawerProps> = ({
             {
               key: "advanced",
               label: (
-                <Text type="secondary">
-                  {t("option:flashcards.advancedOptions", {
-                    defaultValue: "Advanced options (tags, extra, notes)"
-                  })}
-                </Text>
+                <span className="inline-flex items-center gap-2">
+                  <Text type="secondary">
+                    {t("option:flashcards.advancedOptions", {
+                      defaultValue: "Advanced options (tags, extra, notes)"
+                    })}
+                  </Text>
+                  {advancedFieldCount > 0 && (
+                    <Badge
+                      count={advancedFieldCount}
+                      size="small"
+                      title={t("option:flashcards.advancedFieldsSet", {
+                        defaultValue: "{{count}} field(s) set",
+                        count: advancedFieldCount
+                      })}
+                    />
+                  )}
+                </span>
               ),
               children: (
                 <div className="space-y-4">

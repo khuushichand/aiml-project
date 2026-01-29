@@ -1,5 +1,5 @@
 import { Modal, Button, Tooltip } from "antd"
-import { MessageCircle, Pen, Copy, History, Trash2 } from "lucide-react"
+import { MessageCircle, Pen, Copy, History, Trash2, Download } from "lucide-react"
 import { useTranslation } from "react-i18next"
 import { CharacterPreview } from "./CharacterPreview"
 
@@ -21,9 +21,11 @@ interface CharacterPreviewPopupProps {
   onChat: () => void
   onEdit: () => void
   onDuplicate: () => void
+  onExport: () => void
   onDelete: () => void
   onViewConversations: () => void
   deleting?: boolean
+  exporting?: boolean
 }
 
 export function CharacterPreviewPopup({
@@ -33,9 +35,11 @@ export function CharacterPreviewPopup({
   onChat,
   onEdit,
   onDuplicate,
+  onExport,
   onDelete,
   onViewConversations,
-  deleting = false
+  deleting = false,
+  exporting = false
 }: CharacterPreviewPopupProps) {
   const { t } = useTranslation(["settings", "common"])
 
@@ -55,6 +59,9 @@ export function CharacterPreviewPopup({
   })
   const duplicateLabel = t("settings:manageCharacters.actions.duplicate", {
     defaultValue: "Duplicate"
+  })
+  const exportLabel = t("settings:manageCharacters.actions.export", {
+    defaultValue: "Export"
   })
   const deleteLabel = t("settings:manageCharacters.actions.delete", {
     defaultValue: "Delete"
@@ -122,6 +129,20 @@ export function CharacterPreviewPopup({
               })}
             >
               {duplicateLabel}
+            </Button>
+          </Tooltip>
+
+          <Tooltip title={exportLabel}>
+            <Button
+              icon={<Download className="w-4 h-4" />}
+              onClick={onExport}
+              loading={exporting}
+              aria-label={t("settings:manageCharacters.aria.export", {
+                defaultValue: "Export character {{name}}",
+                name: displayName
+              })}
+            >
+              {exportLabel}
             </Button>
           </Tooltip>
 

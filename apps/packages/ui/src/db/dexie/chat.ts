@@ -420,23 +420,70 @@ export class PageAssistDatabase {
 
   // Prompts Methods
   async getAllPrompts(): Promise<Prompts> {
-    return await db.prompts.orderBy('createdAt').reverse().toArray();
+    // Only return non-deleted prompts
+    return await db.prompts
+      .filter(p => !p.deletedAt)
+      .reverse()
+      .sortBy('createdAt');
+  }
+
+  async getDeletedPrompts(): Promise<Prompts> {
+    // Return soft-deleted prompts (trash)
+    return await db.prompts
+      .filter(p => !!p.deletedAt)
+      .reverse()
+      .sortBy('deletedAt');
   }
 
   async addPrompt(prompt: Prompt) {
     const mergedKeywords = prompt.keywords ?? prompt.tags;
+    const now = Date.now();
     const normalized: Prompt = {
       ...prompt,
       title: prompt.title || prompt.name,
       name: prompt.name ?? prompt.title,
       tags: mergedKeywords ?? prompt.tags,
-      keywords: mergedKeywords ?? prompt.keywords ?? prompt.tags
+      keywords: mergedKeywords ?? prompt.keywords ?? prompt.tags,
+      deletedAt: null,
+      updatedAt: now
     };
     await db.prompts.add(normalized);
   }
 
   async deletePrompt(id: string) {
+    // Soft delete: set deletedAt timestamp
+    const now = Date.now();
+    await db.prompts.update(id, { deletedAt: now, updatedAt: now });
+  }
+
+  async permanentlyDeletePrompt(id: string) {
+    // Hard delete: remove from database entirely
     await db.prompts.delete(id);
+  }
+
+  async restorePrompt(id: string) {
+    // Restore from trash: clear deletedAt
+    const now = Date.now();
+    await db.prompts.update(id, { deletedAt: null, updatedAt: now });
+  }
+
+  async emptyTrash(): Promise<number> {
+    // Permanently delete all trashed prompts
+    const deleted = await db.prompts.filter(p => !!p.deletedAt).toArray();
+    const ids = deleted.map(p => p.id);
+    await db.prompts.bulkDelete(ids);
+    return ids.length;
+  }
+
+  async autoCleanupTrash(maxAgeDays: number = 30): Promise<number> {
+    // Auto-purge prompts deleted more than maxAgeDays ago
+    const cutoff = Date.now() - (maxAgeDays * 24 * 60 * 60 * 1000);
+    const expired = await db.prompts
+      .filter(p => !!p.deletedAt && p.deletedAt < cutoff)
+      .toArray();
+    const ids = expired.map(p => p.id);
+    await db.prompts.bulkDelete(ids);
+    return ids.length;
   }
 
   async updatePrompt(
@@ -466,6 +513,60 @@ export class PageAssistDatabase {
 
   async getPromptById(id: string): Promise<Prompt | undefined> {
     return await db.prompts.get(id);
+  }
+
+  // ─── Prompt Sync Methods ───
+
+  async getPromptByServerId(serverId: number): Promise<Prompt | undefined> {
+    return await db.prompts
+      .where('serverId')
+      .equals(serverId)
+      .first();
+  }
+
+  async getPromptsBySyncStatus(status: string): Promise<Prompts> {
+    return await db.prompts
+      .where('syncStatus')
+      .equals(status)
+      .filter(p => !p.deletedAt)
+      .toArray();
+  }
+
+  async getPromptsByStudioProject(projectId: number): Promise<Prompts> {
+    return await db.prompts
+      .where('studioProjectId')
+      .equals(projectId)
+      .filter(p => !p.deletedAt)
+      .toArray();
+  }
+
+  async getSyncedPrompts(): Promise<Prompts> {
+    return await db.prompts
+      .filter(p => !p.deletedAt && !!p.serverId)
+      .toArray();
+  }
+
+  async getLocalOnlyPrompts(): Promise<Prompts> {
+    return await db.prompts
+      .filter(p => !p.deletedAt && !p.serverId && p.syncStatus !== 'synced')
+      .toArray();
+  }
+
+  async updatePromptSyncStatus(id: string, updates: {
+    syncStatus?: string;
+    serverId?: number | null;
+    studioProjectId?: number | null;
+    studioPromptId?: number | null;
+    lastSyncedAt?: number | null;
+    serverUpdatedAt?: string | null;
+  }) {
+    const existing = await db.prompts.get(id);
+    if (!existing) return;
+
+    await db.prompts.update(id, {
+      ...updates,
+      updatedAt: Date.now()
+    });
   }
 
   // Webshare Methods

@@ -44,10 +44,10 @@ The server supports two modes:
 - Single-user: API key via `X-API-KEY` header
 - Multi-user: JWT bearer tokens (login/registration)
 
-Quick setup using the template:
+Quick setup using the AuthNZ template:
 
 ```bash
-cp .env.authnz.template .env
+cp tldw_Server_API/Config_Files/.env.authnz.template .env
 # Edit .env and set AUTH_MODE and keys
 #  - AUTH_MODE=single_user and SINGLE_USER_API_KEY=<your_key>
 #  - OR AUTH_MODE=multi_user and JWT_SECRET_KEY=<secure-32+ chars>
@@ -59,17 +59,53 @@ Initialize AuthNZ (creates DBs, tables, and admin in multi-user mode):
 python -m tldw_Server_API.app.core.AuthNZ.initialize
 ```
 
+Tip:
+- Generate a secure key with `python -c "import secrets; print(secrets.token_urlsafe(32))"`.
+- For a full provider list, see `tldw_Server_API/Config_Files/.env.template`.
+
 Environment variables of interest (from `.env`):
 - `AUTH_MODE`: `single_user` or `multi_user`
 - `SINGLE_USER_API_KEY` (single-user)
 - `JWT_SECRET_KEY` (multi-user)
+- `MCP_JWT_SECRET`, `MCP_API_KEY_SALT` (MCP Unified)
 - `DATABASE_URL` (auth DB; defaults to SQLite; use PostgreSQL for multi-user prod)
+- `tldw_production` / `SHOW_API_KEY_ON_STARTUP` (production guards and API key logging)
 - `REDIS_URL` (optional; background services)
+
+### Docker Compose (optional)
+
+If you prefer containers, use the base Compose stack (app + postgres + redis). Run from repo root:
+
+```bash
+# Single-user
+export SINGLE_USER_API_KEY=$(python -c "import secrets; print(secrets.token_urlsafe(32))")
+docker compose -f Dockerfiles/docker-compose.yml up -d --build
+
+# Multi-user (Postgres)
+export AUTH_MODE=multi_user
+export DATABASE_URL=postgresql://tldw_user:TestPassword123!@postgres:5432/tldw_users
+docker compose -f Dockerfiles/docker-compose.yml up -d --build
+
+# Optional: production hardening overlay
+docker compose -f Dockerfiles/docker-compose.yml \
+             -f Dockerfiles/docker-compose.override.yml up -d --build
+```
+
+Initialize AuthNZ inside the container on first run:
+
+```bash
+docker compose -f Dockerfiles/docker-compose.yml exec app \
+  python -m tldw_Server_API.app.core.AuthNZ.initialize
+```
+
+See `Dockerfiles/README.md` for overlays and deployment variants.
 
 ## 4) Provider keys (LLMs, embeddings, TTS)
 
-You can set provider keys either in `.env` or `tldw_Server_API/Config_Files/config.txt`:
+You can set provider keys in `.env` and defaults in `tldw_Server_API/Config_Files/config.txt`:
 - Examples: `OPENAI_API_KEY`, `ANTHROPIC_API_KEY`, `GOOGLE_API_KEY`, etc.
+- In `config.txt`, the `[API]` section sets per-provider defaults (model, temperature, base URL) and `default_api`.
+- Verify configured providers with `GET /api/v1/llm/providers`.
 - The WebUI’s Provider tab and API docs list supported providers.
 
 ## 5) Optional: Local inference (llama.cpp / MLX)
@@ -113,7 +149,7 @@ GET /api/v1/llamacpp/status
 ```
 
 Optional chat routing:
-- If you want `/api/v1/chat/completions` to use llama.cpp, set `[Local-API] llama_api_IP` to the base URL of your running llama.cpp server (for example `http://127.0.0.1:8080` or `http://127.0.0.1:8080/v1`), then use `provider=llama.cpp`.
+- If you want `/api/v1/chat/completions` to use llama.cpp, set `[Local-API] llama_api_IP` to the endpoint your llama.cpp server exposes (OpenAI-compatible `/v1/chat/completions` or legacy `/completion`), and set `llama_model` if the server requires an explicit model. Then use `api_provider=llama.cpp` in requests.
 
 ### MLX (Apple Silicon)
 
@@ -149,7 +185,7 @@ POST /api/v1/llm/providers/mlx/unload
 
 Notes:
 - `mlx_model_path` can be a local path or a repo id; downloads and caching are handled by `mlx-lm`.
-- Use `/api/v1/chat/completions` with `provider=mlx`. `/api/v1/embeddings` works when the model supports embeddings.
+- Use `/api/v1/chat/completions` with `api_provider=mlx`. `/api/v1/embeddings` works when the model supports embeddings.
 
 Quick usage examples (use `X-API-KEY` for single-user or `Authorization: Bearer` for multi-user):
 
@@ -159,7 +195,7 @@ curl -s http://127.0.0.1:8000/api/v1/chat/completions \
   -H "Content-Type: application/json" \
   -H "X-API-KEY: YOUR_API_KEY" \
   -d '{
-    "provider": "llama.cpp",
+    "api_provider": "llama.cpp",
     "model": "your-model-id",
     "messages": [{"role":"user","content":"Hello!"}]
   }'
@@ -168,7 +204,7 @@ curl -s http://127.0.0.1:8000/api/v1/chat/completions \
   -H "Content-Type: application/json" \
   -H "X-API-KEY: YOUR_API_KEY" \
   -d '{
-    "provider": "mlx",
+    "api_provider": "mlx",
     "model": "your-mlx-model-id",
     "messages": [{"role":"user","content":"Hello!"}]
   }'

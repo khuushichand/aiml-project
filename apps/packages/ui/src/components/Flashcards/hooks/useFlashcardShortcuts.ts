@@ -10,6 +10,7 @@ const RATING_MAP: Record<string, number> = {
 type FlashcardShortcutAction =
   | { type: "flip" }
   | { type: "rate"; rating: number }
+  | { type: "undo" }
 
 export type FlashcardShortcutResult = {
   preventDefault: boolean
@@ -18,8 +19,17 @@ export type FlashcardShortcutResult = {
 
 export function getFlashcardShortcutResult(
   key: string,
-  showingAnswer: boolean
+  showingAnswer: boolean,
+  ctrlOrMeta: boolean
 ): FlashcardShortcutResult | null {
+  // Ctrl/Cmd+Z for undo (platform standard)
+  if (ctrlOrMeta && key.toLowerCase() === "z") {
+    return {
+      preventDefault: true,
+      action: { type: "undo" }
+    }
+  }
+
   if (key === " ") {
     return {
       preventDefault: true,
@@ -46,6 +56,8 @@ interface FlashcardShortcutsOptions {
   onFlip: () => void
   /** Callback to submit a rating (0=Again, 2=Hard, 3=Good, 5=Easy) */
   onRate: (rating: number) => void
+  /** Callback to undo last rating (Ctrl/Cmd+Z) */
+  onUndo?: () => void
 }
 
 /**
@@ -57,12 +69,14 @@ interface FlashcardShortcutsOptions {
  * - 2: Rate Hard (2)
  * - 3: Rate Good (3)
  * - 4: Rate Easy (5)
+ * - Ctrl/Cmd+Z: Undo last rating
  */
 export function useFlashcardShortcuts({
   enabled = true,
   showingAnswer,
   onFlip,
-  onRate
+  onRate,
+  onUndo
 }: FlashcardShortcutsOptions) {
   const handleKeyDown = useCallback(
     (e: KeyboardEvent) => {
@@ -76,7 +90,8 @@ export function useFlashcardShortcuts({
         return
       }
 
-      const result = getFlashcardShortcutResult(e.key, showingAnswer)
+      const ctrlOrMeta = e.ctrlKey || e.metaKey
+      const result = getFlashcardShortcutResult(e.key, showingAnswer, ctrlOrMeta)
       if (!result) return
       if (result.preventDefault) {
         e.preventDefault()
@@ -86,9 +101,13 @@ export function useFlashcardShortcuts({
         onFlip()
         return
       }
+      if (result.action.type === "undo") {
+        onUndo?.()
+        return
+      }
       onRate(result.action.rating)
     },
-    [showingAnswer, onFlip, onRate]
+    [showingAnswer, onFlip, onRate, onUndo]
   )
 
   useEffect(() => {

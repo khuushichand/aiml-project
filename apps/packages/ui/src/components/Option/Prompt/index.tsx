@@ -12,9 +12,11 @@ import {
   Select,
   Alert
 } from "antd"
-import { Computer, Zap, Star, UploadCloud, Download, Trash2, Pen } from "lucide-react"
+import { Computer, Zap, Star, UploadCloud, Download, Trash2, Pen, Undo2, AlertTriangle, Layers } from "lucide-react"
 import { PromptActionsMenu } from "./PromptActionsMenu"
 import { PromptDrawer } from "./PromptDrawer"
+import { SyncStatusBadge } from "./SyncStatusBadge"
+import { ProjectSelector } from "./ProjectSelector"
 import React, { useMemo, useRef, useState } from "react"
 import { useTranslation } from "react-i18next"
 import { useNavigate } from "react-router-dom"
@@ -24,7 +26,11 @@ import {
   savePrompt,
   updatePrompt,
   exportPrompts,
-  importPromptsV2
+  importPromptsV2,
+  getDeletedPrompts,
+  restorePrompt,
+  permanentlyDeletePrompt,
+  emptyTrash
 } from "@/db/dexie/helpers"
 import {
   getAllCopilotPrompts,
@@ -37,6 +43,11 @@ import { useServerOnline } from "@/hooks/useServerOnline"
 import FeatureEmptyState from "@/components/Common/FeatureEmptyState"
 import ConnectFeatureBanner from "@/components/Common/ConnectFeatureBanner"
 import { useMessageOption } from "@/hooks/useMessageOption"
+import {
+  pushToStudio,
+  pullFromStudio,
+  unlinkPrompt as unlinkPromptFromServer
+} from "@/services/prompt-sync"
 
 export const PromptBody = () => {
   const queryClient = useQueryClient()
@@ -47,7 +58,7 @@ export const PromptBody = () => {
   const { t } = useTranslation(["settings", "common", "option"])
   const navigate = useNavigate()
   const isOnline = useServerOnline()
-  const [selectedSegment, setSelectedSegment] = useState<"custom" | "copilot">(
+  const [selectedSegment, setSelectedSegment] = useState<"custom" | "copilot" | "trash">(
     "custom"
   )
   const [searchText, setSearchText] = useState("")
@@ -65,6 +76,10 @@ export const PromptBody = () => {
   } | null>(null)
   const confirmDanger = useConfirmDanger()
 
+  // Sync state
+  const [projectSelectorOpen, setProjectSelectorOpen] = useState(false)
+  const [promptToSync, setPromptToSync] = useState<string | null>(null)
+
   const [openCopilotEdit, setOpenCopilotEdit] = useState(false)
   const [editCopilotId, setEditCopilotId] = useState("")
   const [editCopilotForm] = Form.useForm()
@@ -80,6 +95,11 @@ export const PromptBody = () => {
     queryKey: ["fetchCopilotPrompts"],
     queryFn: getAllCopilotPrompts,
     enabled: isOnline
+  })
+
+  const { data: trashData, status: trashStatus } = useQuery({
+    queryKey: ["fetchDeletedPrompts"],
+    queryFn: getDeletedPrompts
   })
 
   const promptLoadFailed = status === "error"
@@ -119,6 +139,7 @@ export const PromptBody = () => {
   }, [isFireFoxPrivateMode, t])
 
   React.useEffect(() => {
+    // Only redirect from copilot tab when offline (trash is local-only so always available)
     if (!isOnline && selectedSegment === "copilot") {
       setSelectedSegment("custom")
     }
@@ -180,9 +201,77 @@ export const PromptBody = () => {
       queryClient.invalidateQueries({
         queryKey: ["fetchAllPrompts"]
       })
+      queryClient.invalidateQueries({
+        queryKey: ["fetchDeletedPrompts"]
+      })
       notification.success({
         message: t("managePrompts.notification.deletedSuccess"),
-        description: t("managePrompts.notification.deletedSuccessDesc")
+        description: t("managePrompts.notification.movedToTrash", {
+          defaultValue: "The prompt has been moved to trash. You can restore it within 30 days."
+        })
+      })
+    },
+    onError: (error) => {
+      notification.error({
+        message: t("managePrompts.notification.error"),
+        description: error?.message || t("managePrompts.notification.someError")
+      })
+    }
+  })
+
+  const { mutate: restorePromptMutation } = useMutation({
+    mutationFn: restorePrompt,
+    onSuccess: () => {
+      queryClient.invalidateQueries({
+        queryKey: ["fetchAllPrompts"]
+      })
+      queryClient.invalidateQueries({
+        queryKey: ["fetchDeletedPrompts"]
+      })
+      notification.success({
+        message: t("managePrompts.notification.restoredSuccess", { defaultValue: "Prompt restored" }),
+        description: t("managePrompts.notification.restoredSuccessDesc", { defaultValue: "The prompt has been restored from trash." })
+      })
+    },
+    onError: (error) => {
+      notification.error({
+        message: t("managePrompts.notification.error"),
+        description: error?.message || t("managePrompts.notification.someError")
+      })
+    }
+  })
+
+  const { mutate: permanentDeletePromptMutation } = useMutation({
+    mutationFn: permanentlyDeletePrompt,
+    onSuccess: () => {
+      queryClient.invalidateQueries({
+        queryKey: ["fetchDeletedPrompts"]
+      })
+      notification.success({
+        message: t("managePrompts.notification.permanentDeleteSuccess", { defaultValue: "Prompt permanently deleted" }),
+        description: t("managePrompts.notification.permanentDeleteSuccessDesc", { defaultValue: "The prompt has been permanently removed." })
+      })
+    },
+    onError: (error) => {
+      notification.error({
+        message: t("managePrompts.notification.error"),
+        description: error?.message || t("managePrompts.notification.someError")
+      })
+    }
+  })
+
+  const { mutate: emptyTrashMutation, isPending: isEmptyingTrash } = useMutation({
+    mutationFn: emptyTrash,
+    onSuccess: (count) => {
+      queryClient.invalidateQueries({
+        queryKey: ["fetchDeletedPrompts"]
+      })
+      notification.success({
+        message: t("managePrompts.notification.trashEmptied", { defaultValue: "Trash emptied" }),
+        description: t("managePrompts.notification.trashEmptiedDesc", {
+          defaultValue: "{{count}} prompts permanently deleted.",
+          count
+        })
       })
     },
     onError: (error) => {
@@ -436,26 +525,66 @@ export const PromptBody = () => {
       const text = await file.text()
       const json = JSON.parse(text)
       const prompts = Array.isArray(json) ? json : json?.prompts || []
+
       if (importMode === "replace") {
+        // Get current prompts count for confirmation message
+        const currentPrompts = data || []
+        const currentCount = currentPrompts.length
+
         const ok = await confirmDanger({
-          title: t("common:confirmTitle", { defaultValue: "Please confirm" }),
-          content: t("managePrompts.importMode.replaceConfirm", {
+          title: t("managePrompts.importMode.replaceTitle", { defaultValue: "Replace all prompts?" }),
+          content: t("managePrompts.importMode.replaceConfirmWithCount", {
             defaultValue:
-              "Replace will overwrite all current prompts with the imported file. Continue?"
+              "This will delete {{currentCount}} existing prompts and import {{newCount}} new prompts. A backup will be downloaded automatically before replacing.",
+            currentCount,
+            newCount: prompts.length
           }),
-          okText: t("common:continue", { defaultValue: "Continue" }),
+          okText: t("managePrompts.importMode.replaceAndBackup", { defaultValue: "Backup & Replace" }),
           cancelText: t("common:cancel", { defaultValue: "Cancel" })
         })
         if (!ok) return
+
+        // Auto-backup current prompts before replacing
+        if (currentCount > 0) {
+          try {
+            const backupItems = await exportPrompts()
+            const blob = new Blob([JSON.stringify(backupItems, null, 2)], {
+              type: "application/json"
+            })
+            const url = URL.createObjectURL(blob)
+            const a = document.createElement("a")
+            a.href = url
+            const safeStamp = new Date().toISOString().replace(/[:]/g, "-")
+            a.download = `prompts_backup_before_replace_${safeStamp}.json`
+            a.click()
+            URL.revokeObjectURL(url)
+            // Small delay to ensure download starts
+            await new Promise(resolve => setTimeout(resolve, 100))
+          } catch (backupError) {
+            // If backup fails, warn user but continue
+            notification.warning({
+              message: t("managePrompts.notification.backupFailed", { defaultValue: "Backup failed" }),
+              description: t("managePrompts.notification.backupFailedDesc", {
+                defaultValue: "Could not create backup, but proceeding with import."
+              })
+            })
+          }
+        }
       }
+
       await importPromptsV2(prompts, {
         replaceExisting: importMode === "replace",
         mergeData: importMode === "merge"
       })
       queryClient.invalidateQueries({ queryKey: ["fetchAllPrompts"] })
+      queryClient.invalidateQueries({ queryKey: ["fetchDeletedPrompts"] })
       notification.success({
         message: t("managePrompts.notification.addSuccess"),
-        description: t("managePrompts.notification.addSuccessDesc")
+        description: importMode === "replace"
+          ? t("managePrompts.notification.replaceSuccessDesc", {
+              defaultValue: "Prompts replaced successfully. Check your downloads for the backup file."
+            })
+          : t("managePrompts.notification.addSuccessDesc")
       })
     } catch (e) {
       notification.error({
@@ -465,11 +594,21 @@ export const PromptBody = () => {
     }
   }
 
-  const handleInsertChoice = (choice: "system" | "quick") => {
+  const handleInsertChoice = (choice: "system" | "quick" | "both") => {
     if (!insertPrompt) return
     if (choice === "system") {
       setSelectedSystemPrompt(insertPrompt.id)
       setSelectedQuickPrompt(undefined)
+      setInsertPrompt(null)
+      navigate("/")
+      return
+    }
+    if (choice === "both") {
+      // Apply both system instruction and insert user template
+      setSelectedSystemPrompt(insertPrompt.id)
+      if (insertPrompt.userText) {
+        setSelectedQuickPrompt(insertPrompt.userText)
+      }
       setInsertPrompt(null)
       navigate("/")
       return
@@ -595,10 +734,10 @@ export const PromptBody = () => {
                   data-testid="prompts-import-mode"
                   options={[
                     { label: t("managePrompts.importMode.merge", { defaultValue: "Merge" }), value: "merge" },
-                    { label: t("managePrompts.importMode.replace", { defaultValue: "Replace" }), value: "replace" }
+                    { label: t("managePrompts.importMode.replaceWithBackup", { defaultValue: "Replace (backup)" }), value: "replace" }
                   ]}
                   variant="borderless"
-                  style={{ width: 95 }}
+                  style={{ width: 130 }}
                   popupMatchSelectWidth={false}
                 />
               </div>
@@ -617,9 +756,7 @@ export const PromptBody = () => {
             </div>
             {/* Right: Filters */}
             <div className="flex flex-wrap items-center gap-2">
-              <Tooltip title={t("managePrompts.filterHelp", {
-                defaultValue: "Search matches name, author, details, prompt text, and keywords."
-              })}>
+              <div className="flex flex-col">
                 <Input
                   allowClear
                   placeholder={t("managePrompts.search", { defaultValue: "Search prompts..." })}
@@ -628,7 +765,12 @@ export const PromptBody = () => {
                   data-testid="prompts-search"
                   style={{ width: 220 }}
                 />
-              </Tooltip>
+                <span className="text-xs text-text-muted mt-0.5">
+                  {t("managePrompts.searchScope", {
+                    defaultValue: "Searches name, author, content, keywords"
+                  })}
+                </span>
+              </div>
               <Select
                 value={typeFilter}
                 onChange={(v) => setTypeFilter(v as any)}
@@ -997,8 +1139,162 @@ export const PromptBody = () => {
     )
   }
 
+  function trashPrompts() {
+    const trashCount = trashData?.length || 0
+    const formatDeletedAt = (timestamp: number | null | undefined) => {
+      if (!timestamp) return ""
+      const date = new Date(timestamp)
+      const now = new Date()
+      const diffMs = now.getTime() - date.getTime()
+      const diffDays = Math.floor(diffMs / (1000 * 60 * 60 * 24))
+      if (diffDays === 0) return t("managePrompts.trash.today", { defaultValue: "Today" })
+      if (diffDays === 1) return t("managePrompts.trash.yesterday", { defaultValue: "Yesterday" })
+      if (diffDays < 7) return t("managePrompts.trash.daysAgo", { defaultValue: "{{count}} days ago", count: diffDays })
+      return date.toLocaleDateString()
+    }
+
+    return (
+      <div data-testid="prompts-trash">
+        <div className="mb-6">
+          {trashCount > 0 && (
+            <div className="flex items-center justify-between p-3 bg-warn/10 rounded-md border border-warn/30 mb-4">
+              <div className="flex items-center gap-2">
+                <AlertTriangle className="size-4 text-warn" />
+                <span className="text-sm">
+                  {t("managePrompts.trash.autoDeleteWarning", {
+                    defaultValue: "Prompts in trash are automatically deleted after 30 days."
+                  })}
+                </span>
+              </div>
+              <button
+                onClick={async () => {
+                  const ok = await confirmDanger({
+                    title: t("managePrompts.trash.emptyConfirmTitle", { defaultValue: "Empty Trash?" }),
+                    content: t("managePrompts.trash.emptyConfirmContent", {
+                      defaultValue: "This will permanently delete {{count}} prompts. This action cannot be undone.",
+                      count: trashCount
+                    }),
+                    okText: t("managePrompts.trash.emptyTrash", { defaultValue: "Empty Trash" }),
+                    cancelText: t("common:cancel", { defaultValue: "Cancel" })
+                  })
+                  if (!ok) return
+                  emptyTrashMutation()
+                }}
+                disabled={isEmptyingTrash}
+                className="inline-flex items-center gap-1 px-2 py-1 text-sm rounded border border-danger/30 text-danger hover:bg-danger/10 disabled:opacity-50">
+                <Trash2 className="size-3" />
+                {t("managePrompts.trash.emptyTrash", { defaultValue: "Empty Trash" })}
+              </button>
+            </div>
+          )}
+        </div>
+
+        {trashStatus === "pending" && <Skeleton paragraph={{ rows: 8 }} />}
+
+        {trashStatus === "success" && trashCount === 0 && (
+          <FeatureEmptyState
+            title={t("managePrompts.trash.emptyTitle", { defaultValue: "Trash is empty" })}
+            description={t("managePrompts.trash.emptyDescription", {
+              defaultValue: "Deleted prompts will appear here for 30 days before being permanently removed."
+            })}
+            examples={[
+              t("managePrompts.trash.emptyExample1", {
+                defaultValue: "You can restore deleted prompts at any time while they're in the trash."
+              })
+            ]}
+          />
+        )}
+
+        {trashStatus === "success" && trashCount > 0 && (
+          <Table
+            data-testid="prompts-trash-table"
+            columns={[
+              {
+                title: t("managePrompts.columns.title"),
+                dataIndex: "title",
+                key: "title",
+                render: (_: any, record: any) => (
+                  <div className="flex max-w-64 flex-col">
+                    <span className="line-clamp-1 font-medium text-text-muted">
+                      {record?.name || record?.title}
+                    </span>
+                    {record?.author && (
+                      <span className="text-xs text-text-muted opacity-70">
+                        {t("managePrompts.form.author.label", { defaultValue: "Author" })}: {record.author}
+                      </span>
+                    )}
+                  </div>
+                )
+              },
+              {
+                title: t("managePrompts.trash.deletedAt", { defaultValue: "Deleted" }),
+                key: "deletedAt",
+                width: 140,
+                render: (_: any, record: any) => (
+                  <span className="text-sm text-text-muted">
+                    {formatDeletedAt(record.deletedAt)}
+                  </span>
+                )
+              },
+              {
+                title: t("managePrompts.columns.actions"),
+                width: 160,
+                render: (_: any, record: any) => (
+                  <div className="flex items-center gap-2">
+                    <Tooltip title={t("managePrompts.trash.restore", { defaultValue: "Restore" })}>
+                      <button
+                        onClick={() => restorePromptMutation(record.id)}
+                        className="inline-flex items-center gap-1 px-2 py-1 text-sm rounded border border-primary/30 text-primary hover:bg-primary/10">
+                        <Undo2 className="size-3" />
+                        {t("managePrompts.trash.restore", { defaultValue: "Restore" })}
+                      </button>
+                    </Tooltip>
+                    <Tooltip title={t("managePrompts.trash.deletePermanently", { defaultValue: "Delete permanently" })}>
+                      <button
+                        onClick={async () => {
+                          const ok = await confirmDanger({
+                            title: t("managePrompts.trash.permanentDeleteTitle", { defaultValue: "Delete permanently?" }),
+                            content: t("managePrompts.trash.permanentDeleteContent", {
+                              defaultValue: "This prompt will be permanently deleted. This action cannot be undone."
+                            }),
+                            okText: t("common:delete", { defaultValue: "Delete" }),
+                            cancelText: t("common:cancel", { defaultValue: "Cancel" })
+                          })
+                          if (!ok) return
+                          permanentDeletePromptMutation(record.id)
+                        }}
+                        className="text-text-muted hover:text-danger">
+                        <Trash2 className="size-4" />
+                      </button>
+                    </Tooltip>
+                  </div>
+                )
+              }
+            ]}
+            bordered
+            dataSource={trashData}
+            rowKey={(record) => record.id}
+          />
+        )}
+      </div>
+    )
+  }
+
   return (
     <div>
+      {/* Firefox Private Mode Warning */}
+      {isFireFoxPrivateMode && (
+        <Alert
+          type="warning"
+          showIcon
+          icon={<AlertTriangle className="size-4" />}
+          className="mb-4"
+          message={t("managePrompts.privateMode.title", { defaultValue: "Limited functionality in Private Mode" })}
+          description={t("managePrompts.privateMode.description", {
+            defaultValue: "Firefox Private Mode doesn't support IndexedDB. You can view existing prompts, but creating, editing, or importing prompts is disabled. Use a normal window for full functionality."
+          })}
+        />
+      )}
       {(promptLoadFailed || copilotLoadFailed) && (
         <Alert
           type="error"
@@ -1006,7 +1302,7 @@ export const PromptBody = () => {
           className="mb-4"
           message={t(
             "managePrompts.partialLoad",
-            "Some prompt data isn’t available"
+            "Some prompt data isn't available"
           )}
           description={
             loadErrorDescription ||
@@ -1037,12 +1333,26 @@ export const PromptBody = () => {
               ),
               value: "copilot",
               disabled: !isOnline
+            },
+            {
+              label: (
+                <span className="flex items-center gap-1">
+                  <Trash2 className="size-3" />
+                  {t("managePrompts.segmented.trash", { defaultValue: "Trash" })}
+                  {(trashData?.length || 0) > 0 && (
+                    <span className="text-xs bg-text-muted/20 px-1.5 py-0.5 rounded-full">
+                      {trashData?.length}
+                    </span>
+                  )}
+                </span>
+              ),
+              value: "trash"
             }
           ]}
           data-testid="prompts-segmented"
           value={selectedSegment}
           onChange={(value) => {
-            setSelectedSegment(value as "custom" | "copilot")
+            setSelectedSegment(value as "custom" | "copilot" | "trash")
           }}
         />
         <p className="text-xs text-text-muted ">
@@ -1051,14 +1361,20 @@ export const PromptBody = () => {
                 defaultValue:
                   "Create and manage reusable prompts you can insert into chat."
               })
-            : t("managePrompts.segmented.helpCopilot", {
+            : selectedSegment === "copilot"
+            ? t("managePrompts.segmented.helpCopilot", {
                 defaultValue:
                   "View and tweak predefined Copilot prompts provided by your server."
+              })
+            : t("managePrompts.segmented.helpTrash", {
+                defaultValue:
+                  "Restore or permanently delete prompts. Items auto-delete after 30 days."
               })}
         </p>
       </div>
       {selectedSegment === "custom" && customPrompts()}
       {selectedSegment === "copilot" && copilotPrompts()}
+      {selectedSegment === "trash" && trashPrompts()}
 
       <PromptDrawer
         open={drawerOpen}
@@ -1184,6 +1500,29 @@ export const PromptBody = () => {
               <div className="bg-surface2 rounded p-2 text-xs line-clamp-3 font-mono text-text-muted">
                 {insertPrompt.userText}
               </div>
+            </button>
+          )}
+
+          {/* Use Both option - shown when prompt has both system and user */}
+          {insertPrompt?.systemText && insertPrompt?.userText && (
+            <button
+              type="button"
+              onClick={() => handleInsertChoice("both")}
+              data-testid="prompt-insert-both"
+              className="w-full text-left p-4 rounded-lg border-2 border-primary/50 bg-primary/5 hover:border-primary hover:bg-primary/10 transition-colors">
+              <div className="flex items-center gap-2 mb-2">
+                <Layers className="size-5 text-primary" />
+                <span className="font-medium text-primary">
+                  {t("option:promptInsert.useBoth", {
+                    defaultValue: "Use Both (Recommended)"
+                  })}
+                </span>
+              </div>
+              <p className="text-xs text-text-muted mb-2">
+                {t("option:promptInsert.bothDescription", {
+                  defaultValue: "Sets the system instruction AND inserts the message template. Best for prompts designed to work together."
+                })}
+              </p>
             </button>
           )}
         </div>

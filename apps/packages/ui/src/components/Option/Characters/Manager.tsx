@@ -15,14 +15,23 @@ import {
   Pagination,
   Upload
 } from "antd"
-import type { InputRef } from "antd"
+import type { InputRef, FormInstance } from "antd"
 import React from "react"
 import { tldwClient, type ServerChatSummary } from "@/services/tldw/TldwApiClient"
-import { History, Pen, Trash2, UserCircle2, MessageCircle, Copy, ChevronDown, ChevronUp, LayoutGrid, List } from "lucide-react"
+import { fetchChatModels } from "@/services/tldw-server"
+import { History, Pen, Trash2, UserCircle2, MessageCircle, Copy, ChevronDown, ChevronUp, LayoutGrid, List, Keyboard, Download } from "lucide-react"
 import { CharacterPreview } from "./CharacterPreview"
 import { CharacterGalleryCard } from "./CharacterGalleryCard"
 import { CharacterPreviewPopup } from "./CharacterPreviewPopup"
 import { AvatarField, extractAvatarValues, createAvatarValue } from "./AvatarField"
+import { GenerateCharacterPanel, GenerationPreviewModal } from "./GenerateCharacterPanel"
+import { GenerateFieldButton } from "./GenerateFieldButton"
+import { useCharacterGeneration } from "@/hooks/useCharacterGeneration"
+import { useFormDraft, formatDraftAge } from "@/hooks/useFormDraft"
+import { useCharacterShortcuts } from "@/hooks/useCharacterShortcuts"
+import { CHARACTER_TEMPLATES, type CharacterTemplate } from "@/data/character-templates"
+import type { GeneratedCharacter, CharacterField } from "@/services/character-generation"
+import { useStorage } from "@plasmohq/storage/hook"
 import { validateAndCreateImageDataUrl } from "@/utils/image-utils"
 import { useTranslation } from "react-i18next"
 import { useConfirmDanger } from "@/components/Common/confirm-danger"
@@ -178,6 +187,7 @@ export const CharactersManager: React.FC<CharactersManagerProps> = ({
   const lastEditTriggerRef = React.useRef<HTMLButtonElement | null>(null)
   const createNameRef = React.useRef<InputRef>(null)
   const editNameRef = React.useRef<InputRef>(null)
+  const searchInputRef = React.useRef<InputRef>(null)
   const [searchTerm, setSearchTerm] = React.useState("")
   const [filterTags, setFilterTags] = React.useState<string[]>([])
   const [matchAllTags, setMatchAllTags] = React.useState(false)
@@ -193,8 +203,8 @@ export const CharactersManager: React.FC<CharactersManagerProps> = ({
   const [editFormDirty, setEditFormDirty] = React.useState(false)
   const [debouncedSearchTerm, setDebouncedSearchTerm] = React.useState("")
   const searchDebounceRef = React.useRef<ReturnType<typeof setTimeout> | null>(null)
-  const [showCreatePreview, setShowCreatePreview] = React.useState(false)
-  const [showEditPreview, setShowEditPreview] = React.useState(false)
+  const [showCreatePreview, setShowCreatePreview] = React.useState(true)
+  const [showEditPreview, setShowEditPreview] = React.useState(true)
   const autoOpenCreateHandledRef = React.useRef(false)
   const [viewMode, setViewMode] = React.useState<'table' | 'gallery'>(() => {
     if (typeof window !== 'undefined') {
@@ -203,9 +213,251 @@ export const CharactersManager: React.FC<CharactersManagerProps> = ({
     }
     return 'table'
   })
+  const [sortColumn, setSortColumn] = React.useState<string | null>(() => {
+    if (typeof window !== 'undefined') {
+      return localStorage.getItem('characters-sort-column')
+    }
+    return null
+  })
+  const [sortOrder, setSortOrder] = React.useState<'ascend' | 'descend' | null>(() => {
+    if (typeof window !== 'undefined') {
+      const saved = localStorage.getItem('characters-sort-order')
+      return saved === 'ascend' || saved === 'descend' ? saved : null
+    }
+    return null
+  })
   const [currentPage, setCurrentPage] = React.useState(1)
   const [importing, setImporting] = React.useState(false)
   const [previewCharacter, setPreviewCharacter] = React.useState<any | null>(null)
+
+  // Character generation state
+  const {
+    isGenerating,
+    generatingField,
+    error: generationError,
+    generateFullCharacter,
+    generateField,
+    cancel: cancelGeneration,
+    clearError: clearGenerationError
+  } = useCharacterGeneration()
+  const [selectedGenModel] = useStorage<string | null>("characterGenModel", null)
+
+  // Fetch models to get provider for selected model
+  const { data: generationModels } = useQuery<Array<{ model: string; provider?: string }>>({
+    queryKey: ["getModelsForFieldGeneration"],
+    queryFn: () => fetchChatModels({ returnEmpty: true }),
+    staleTime: 5 * 60 * 1000 // 5 minutes
+  })
+
+  // Get the provider for the selected generation model
+  const selectedGenModelProvider = React.useMemo(() => {
+    if (!selectedGenModel || !generationModels) return undefined
+    const modelData = generationModels.find((m) => m.model === selectedGenModel)
+    return modelData?.provider
+  }, [selectedGenModel, generationModels])
+
+  const [generationPreviewData, setGenerationPreviewData] = React.useState<GeneratedCharacter | null>(null)
+  const [generationPreviewField, setGenerationPreviewField] = React.useState<string | null>(null)
+  const [generationPreviewOpen, setGenerationPreviewOpen] = React.useState(false)
+  const [generationTargetForm, setGenerationTargetForm] = React.useState<'create' | 'edit'>('create')
+
+  // Template selection state
+  const [showTemplates, setShowTemplates] = React.useState(false)
+
+  // Form draft autosave (H4)
+  const {
+    hasDraft: hasCreateDraft,
+    draftData: createDraftData,
+    saveDraft: saveCreateDraft,
+    clearDraft: clearCreateDraft,
+    applyDraft: applyCreateDraft,
+    dismissDraft: dismissCreateDraft,
+    lastSaved: createLastSaved
+  } = useFormDraft<Record<string, any>>({
+    storageKey: 'character-form-draft-create',
+    formType: 'create',
+    autoSaveInterval: 30000
+  })
+
+  const {
+    hasDraft: hasEditDraft,
+    draftData: editDraftData,
+    saveDraft: saveEditDraft,
+    clearDraft: clearEditDraft,
+    applyDraft: applyEditDraft,
+    dismissDraft: dismissEditDraft,
+    lastSaved: editLastSaved
+  } = useFormDraft<Record<string, any>>({
+    storageKey: 'character-form-draft-edit',
+    formType: 'edit',
+    editId: editId ?? undefined,
+    autoSaveInterval: 30000
+  })
+
+  // Keyboard shortcuts (H1)
+  const modalOpen = open || openEdit || conversationsOpen || generationPreviewOpen
+  useCharacterShortcuts({
+    modalOpen,
+    onNewCharacter: () => {
+      if (!modalOpen) setOpen(true)
+    },
+    onFocusSearch: () => {
+      searchInputRef.current?.focus()
+    },
+    onCloseModal: () => {
+      if (generationPreviewOpen) {
+        setGenerationPreviewOpen(false)
+      } else if (conversationsOpen) {
+        setConversationsOpen(false)
+      } else if (openEdit) {
+        setOpenEdit(false)
+      } else if (open) {
+        setOpen(false)
+      }
+    },
+    onTableView: () => setViewMode('table'),
+    onGalleryView: () => setViewMode('gallery'),
+    enabled: true
+  })
+
+  // Helper to get current form values as GeneratedCharacter
+  const getFormFieldsAsCharacter = (form: FormInstance): Partial<GeneratedCharacter> => {
+    const values = form.getFieldsValue()
+    return {
+      name: values.name,
+      description: values.description,
+      personality: values.personality,
+      scenario: values.scenario,
+      system_prompt: values.system_prompt,
+      first_message: values.greeting || values.first_message,
+      message_example: values.message_example,
+      creator_notes: values.creator_notes,
+      tags: values.tags,
+      alternate_greetings: values.alternate_greetings
+    }
+  }
+
+  // Handle full character generation
+  const handleGenerateFullCharacter = async (concept: string, model: string, apiProvider?: string) => {
+    const result = await generateFullCharacter(concept, { model, apiProvider })
+    if (result) {
+      setGenerationPreviewData(result)
+      setGenerationPreviewField(null)
+      setGenerationTargetForm('create')
+      setGenerationPreviewOpen(true)
+    }
+  }
+
+  // Handle single field generation
+  const handleGenerateField = async (
+    field: CharacterField,
+    form: FormInstance,
+    targetForm: 'create' | 'edit'
+  ) => {
+    if (!selectedGenModel) {
+      notification.warning({
+        message: t("settings:manageCharacters.generate.noModelSelected", {
+          defaultValue: "No model selected"
+        }),
+        description: t("settings:manageCharacters.generate.noModelSelectedDesc", {
+          defaultValue: "Please select a model in the generation panel first."
+        })
+      })
+      return
+    }
+
+    const existingFields = getFormFieldsAsCharacter(form)
+    const currentValue = (existingFields as any)[field]
+
+    const result = await generateField(field, existingFields, {
+      model: selectedGenModel,
+      apiProvider: selectedGenModelProvider
+    })
+
+    if (result !== null) {
+      // If field has existing content, show preview
+      if (currentValue && String(currentValue).trim().length > 0) {
+        setGenerationPreviewData({ [field]: result } as GeneratedCharacter)
+        setGenerationPreviewField(field)
+        setGenerationTargetForm(targetForm)
+        setGenerationPreviewOpen(true)
+      } else {
+        // Apply directly if field is empty
+        applyGeneratedFieldToForm(field, result, form)
+      }
+    }
+  }
+
+  // Apply generated data to form
+  const applyGeneratedFieldToForm = (
+    field: string,
+    value: any,
+    form: FormInstance
+  ) => {
+    // Map field names to form field names
+    const fieldMap: Record<string, string> = {
+      first_message: 'greeting'
+    }
+    const formField = fieldMap[field] || field
+    form.setFieldValue(formField, value)
+    if (generationTargetForm === 'create') {
+      setCreateFormDirty(true)
+    } else {
+      setEditFormDirty(true)
+    }
+  }
+
+  // Apply full character generation preview
+  const applyGenerationPreview = () => {
+    if (!generationPreviewData) return
+
+    const form = generationTargetForm === 'create' ? createForm : editForm
+
+    if (generationPreviewField) {
+      // Single field
+      const value = (generationPreviewData as any)[generationPreviewField]
+      if (value !== undefined) {
+        applyGeneratedFieldToForm(generationPreviewField, value, form)
+      }
+    } else {
+      // Full character - apply all non-empty fields
+      const fieldMap: Record<string, string> = {
+        first_message: 'greeting'
+      }
+
+      Object.entries(generationPreviewData).forEach(([key, value]) => {
+        if (value !== undefined && value !== null && value !== '') {
+          const formField = fieldMap[key] || key
+          form.setFieldValue(formField, value)
+        }
+      })
+
+      // Auto-expand advanced section if advanced fields were generated
+      const hasAdvanced = generationPreviewData.personality ||
+        generationPreviewData.scenario ||
+        generationPreviewData.message_example ||
+        generationPreviewData.creator_notes ||
+        (generationPreviewData.alternate_greetings && generationPreviewData.alternate_greetings.length > 0)
+
+      if (hasAdvanced) {
+        if (generationTargetForm === 'create') {
+          setShowCreateAdvanced(true)
+        } else {
+          setShowEditAdvanced(true)
+        }
+      }
+
+      if (generationTargetForm === 'create') {
+        setCreateFormDirty(true)
+      } else {
+        setEditFormDirty(true)
+      }
+    }
+
+    setGenerationPreviewOpen(false)
+    setGenerationPreviewData(null)
+    setGenerationPreviewField(null)
+  }
 
   React.useEffect(() => {
     if (forwardedNewButtonRef && newButtonRef.current) {
@@ -249,9 +501,54 @@ export const CharactersManager: React.FC<CharactersManagerProps> = ({
     }
   }, [viewMode])
 
+  // Persist sort preference
+  React.useEffect(() => {
+    if (typeof window !== 'undefined') {
+      if (sortColumn) {
+        localStorage.setItem('characters-sort-column', sortColumn)
+      } else {
+        localStorage.removeItem('characters-sort-column')
+      }
+      if (sortOrder) {
+        localStorage.setItem('characters-sort-order', sortOrder)
+      } else {
+        localStorage.removeItem('characters-sort-order')
+      }
+    }
+  }, [sortColumn, sortOrder])
+
+  // Keyboard shortcut: "/" to focus search
+  React.useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      // Skip if user is typing in an input/textarea or a modal is open
+      const target = e.target as HTMLElement
+      const isTyping = target.tagName === 'INPUT' || target.tagName === 'TEXTAREA' || target.isContentEditable
+      const modalOpen = open || openEdit || conversationsOpen
+
+      if (isTyping || modalOpen) return
+
+      if (e.key === '/') {
+        e.preventDefault()
+        searchInputRef.current?.focus()
+      }
+    }
+
+    window.addEventListener('keydown', handleKeyDown)
+    return () => window.removeEventListener('keydown', handleKeyDown)
+  }, [open, openEdit, conversationsOpen])
+
   React.useEffect(() => {
     setCurrentPage(1)
   }, [debouncedSearchTerm, filterTags, matchAllTags])
+
+  // Cleanup pending delete timeout on unmount
+  React.useEffect(() => {
+    return () => {
+      if (undoDeleteRef.current) {
+        clearTimeout(undoDeleteRef.current)
+      }
+    }
+  }, [])
 
   const resolveImportDetail = (error: unknown) => {
     const details = (error as any)?.details
@@ -478,6 +775,32 @@ export const CharactersManager: React.FC<CharactersManagerProps> = ({
     [allTags, filterTags]
   )
 
+  // Fetch conversation counts for all characters (H3)
+  const characterIds = React.useMemo(() => {
+    if (!Array.isArray(data)) return []
+    return data.map((c: any) => String(c.id || c.slug || c.name)).filter(Boolean)
+  }, [data])
+
+  const { data: conversationCounts } = useQuery<Record<string, number>>({
+    queryKey: ["tldw:characterConversationCounts", characterIds],
+    queryFn: async () => {
+      if (characterIds.length === 0) return {}
+      await tldwClient.initialize()
+      // Fetch all chats once and count by character_id
+      const chats = await tldwClient.listChats({ limit: 1000 })
+      const counts: Record<string, number> = {}
+      for (const chat of chats) {
+        const charId = String(chat.character_id ?? "")
+        if (charId && characterIds.includes(charId)) {
+          counts[charId] = (counts[charId] || 0) + 1
+        }
+      }
+      return counts
+    },
+    enabled: characterIds.length > 0,
+    staleTime: 60 * 1000 // Cache for 1 minute
+  })
+
   const { mutate: createCharacter, isPending: creating } = useMutation({
     mutationFn: async (values: any) =>
       tldwClient.createCharacter(buildCharacterPayload(values)),
@@ -485,6 +808,8 @@ export const CharactersManager: React.FC<CharactersManagerProps> = ({
       qc.invalidateQueries({ queryKey: ["tldw:listCharacters"] })
       setOpen(false)
       createForm.resetFields()
+      clearCreateDraft()
+      setShowTemplates(false)
       notification.success({
         message: t("settings:manageCharacters.notification.addSuccess", {
           defaultValue: "Character created"
@@ -584,6 +909,7 @@ export const CharactersManager: React.FC<CharactersManagerProps> = ({
       setOpenEdit(false)
       editForm.resetFields()
       setEditId(null)
+      clearEditDraft()
       notification.success({
         message: t("settings:manageCharacters.notification.updatedSuccess", {
           defaultValue: "Character updated"
@@ -606,17 +932,24 @@ export const CharactersManager: React.FC<CharactersManagerProps> = ({
       })
   })
 
+  // State for undo delete functionality
+  const [pendingDelete, setPendingDelete] = React.useState<{
+    character: any
+    timeoutId: ReturnType<typeof setTimeout>
+  } | null>(null)
+  const undoDeleteRef = React.useRef<ReturnType<typeof setTimeout> | null>(null)
+
   const { mutate: deleteCharacter, isPending: deleting } = useMutation({
     mutationFn: async (id: string) => tldwClient.deleteCharacter(id),
-    onSuccess: () => {
-      qc.invalidateQueries({ queryKey: ["tldw:listCharacters"] })
-      notification.success({
-        message: t("settings:manageCharacters.notification.deletedSuccess", {
-          defaultValue: "Character deleted"
-        })
-      })
+    onSuccess: (_data, _variables, context: any) => {
+      // Don't invalidate immediately - wait for undo timeout
+      // The character is already removed from UI optimistically
     },
-    onError: (e: any) =>
+    onError: (e: any, _variables, context: any) => {
+      // Restore character to list on error
+      if (context?.character) {
+        qc.invalidateQueries({ queryKey: ["tldw:listCharacters"] })
+      }
       notification.error({
         message: t("settings:manageCharacters.notification.error", {
           defaultValue: "Error"
@@ -627,7 +960,64 @@ export const CharactersManager: React.FC<CharactersManagerProps> = ({
             defaultValue: "Something went wrong. Please try again later"
           })
       })
+    }
   })
+
+  const { mutate: restoreCharacter } = useMutation({
+    mutationFn: async ({ id, version }: { id: string; version: number }) =>
+      tldwClient.restoreCharacter(id, version),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["tldw:listCharacters"] })
+      notification.success({
+        message: t("settings:manageCharacters.notification.restored", {
+          defaultValue: "Character restored"
+        })
+      })
+    },
+    onError: (e: any) => {
+      qc.invalidateQueries({ queryKey: ["tldw:listCharacters"] })
+      notification.error({
+        message: t("settings:manageCharacters.notification.restoreError", {
+          defaultValue: "Failed to restore character"
+        }),
+        description: e?.message
+      })
+    }
+  })
+
+  const [exporting, setExporting] = React.useState<string | null>(null)
+  const handleExport = React.useCallback(async (record: any) => {
+    const id = record.id || record.slug || record.name
+    const name = record.name || record.title || record.slug || "character"
+    try {
+      setExporting(id)
+      const data = await tldwClient.exportCharacter(id, { format: 'v3' })
+      // Create downloadable file
+      const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' })
+      const url = URL.createObjectURL(blob)
+      const link = document.createElement('a')
+      link.href = url
+      link.download = `${name.replace(/[^a-z0-9]/gi, '_')}_character.json`
+      document.body.appendChild(link)
+      link.click()
+      document.body.removeChild(link)
+      URL.revokeObjectURL(url)
+      notification.success({
+        message: t("settings:manageCharacters.notification.exported", {
+          defaultValue: "Character exported"
+        })
+      })
+    } catch (e: any) {
+      notification.error({
+        message: t("settings:manageCharacters.notification.exportError", {
+          defaultValue: "Failed to export character"
+        }),
+        description: e?.message
+      })
+    } finally {
+      setExporting(null)
+    }
+  }, [notification, t])
 
   // Extracted action handlers for reuse between table and gallery views
   const handleChat = React.useCallback((record: any) => {
@@ -729,30 +1119,81 @@ export const CharactersManager: React.FC<CharactersManagerProps> = ({
     })
     setShowCreateAdvanced(hasAdvancedData(record, extensionsValue))
     setOpen(true)
-  }, [createForm])
+
+    // Show duplicate notification
+    const name = record.name || record.title || record.slug || ""
+    notification.info({
+      message: t("settings:manageCharacters.notification.duplicated", {
+        defaultValue: "Duplicated '{{name}}'. Editing copy.",
+        name
+      })
+    })
+  }, [createForm, notification, t])
 
   const handleDelete = React.useCallback(async (record: any) => {
     const name = record?.name || record?.title || record?.slug || ""
-    const ok = await confirmDanger({
-      title: t("common:confirmTitle", {
-        defaultValue: "Please confirm"
-      }),
-      content: t(
-        "settings:manageCharacters.confirm.delete",
-        {
-          defaultValue:
-            "Are you sure you want to delete this character? This action cannot be undone."
-        }
-      ),
-      okText: t("common:delete", { defaultValue: "Delete" }),
-      cancelText: t("common:cancel", {
-        defaultValue: "Cancel"
-      })
-    })
-    if (ok) {
-      deleteCharacter(record.id || record.slug || record.name)
+    const characterId = record.id || record.slug || record.name
+    const characterVersion = record.version
+
+    // Clear any existing undo timeout
+    if (undoDeleteRef.current) {
+      clearTimeout(undoDeleteRef.current)
+      undoDeleteRef.current = null
     }
-  }, [confirmDanger, t, deleteCharacter])
+    if (pendingDelete?.timeoutId) {
+      clearTimeout(pendingDelete.timeoutId)
+    }
+
+    // Delete the character (soft delete on backend)
+    deleteCharacter(characterId, {
+      onSuccess: () => {
+        // Optimistically remove from UI
+        qc.setQueryData(
+          ["tldw:listCharacters", { search: debouncedSearchTerm.trim() || "", tags: filterTags.slice().sort(), matchAll: matchAllTags }],
+          (old: any[] | undefined) => old?.filter((c: any) => (c.id || c.slug || c.name) !== characterId) ?? []
+        )
+
+        // Create undo timeout - after 10 seconds, finalize delete
+        const timeoutId = setTimeout(() => {
+          setPendingDelete(null)
+          undoDeleteRef.current = null
+          // Refresh list to ensure consistency
+          qc.invalidateQueries({ queryKey: ["tldw:listCharacters"] })
+        }, 10000)
+
+        undoDeleteRef.current = timeoutId
+        setPendingDelete({ character: record, timeoutId })
+
+        // Show undo notification
+        notification.info({
+          message: t("settings:manageCharacters.notification.deletedWithUndo", {
+            defaultValue: "Character '{{name}}' deleted",
+            name
+          }),
+          description: (
+            <button
+              type="button"
+              className="mt-1 text-sm font-medium text-primary hover:underline"
+              onClick={() => {
+                // Cancel the timeout
+                if (undoDeleteRef.current) {
+                  clearTimeout(undoDeleteRef.current)
+                  undoDeleteRef.current = null
+                }
+                setPendingDelete(null)
+
+                // Restore the character
+                // Version incremented by 1 after soft delete
+                restoreCharacter({ id: String(characterId), version: (characterVersion ?? 0) + 1 })
+              }}>
+              {t("common:undo", { defaultValue: "Undo" })}
+            </button>
+          ),
+          duration: 10
+        })
+      }
+    })
+  }, [deleteCharacter, notification, t, qc, debouncedSearchTerm, filterTags, matchAllTags, pendingDelete, restoreCharacter])
 
   const handleViewConversations = React.useCallback((record: any) => {
     setConversationCharacter(record)
@@ -786,21 +1227,25 @@ export const CharactersManager: React.FC<CharactersManagerProps> = ({
           </Upload>
         </div>
         <div className="flex flex-1 flex-col gap-2 sm:flex-row sm:items-center sm:justify-end">
-          <Input
-            allowClear
-            value={searchTerm}
-            onChange={(e) => setSearchTerm(e.target.value)}
-            placeholder={t(
-              "settings:manageCharacters.search.placeholder",
-              {
+          <Tooltip title={t("settings:manageCharacters.search.shortcut", { defaultValue: "Press / to search" })}>
+            <Input
+              ref={searchInputRef}
+              allowClear
+              value={searchTerm}
+              onChange={(e) => setSearchTerm(e.target.value)}
+              placeholder={t(
+                "settings:manageCharacters.search.placeholder",
+                {
+                  defaultValue: "Search characters"
+                }
+              )}
+              aria-label={t("settings:manageCharacters.search.label", {
                 defaultValue: "Search characters"
-              }
-            )}
-            aria-label={t("settings:manageCharacters.search.label", {
-              defaultValue: "Search characters"
-            })}
-            className="sm:max-w-xs"
-          />
+              })}
+              className="sm:max-w-xs"
+              suffix={<span className="text-xs text-text-subtle hidden sm:inline">/</span>}
+            />
+          </Tooltip>
           <div className="flex flex-col gap-1 sm:flex-row sm:items-center">
             <Select
               mode="multiple"
@@ -833,6 +1278,19 @@ export const CharactersManager: React.FC<CharactersManagerProps> = ({
                 defaultValue: "Match all tags"
               })}
             </Checkbox>
+            {hasFilters && (
+              <Button
+                size="small"
+                onClick={() => {
+                  setSearchTerm("")
+                  setFilterTags([])
+                  setMatchAllTags(false)
+                }}>
+                {t("settings:manageCharacters.filter.clear", {
+                  defaultValue: "Clear filters"
+                })}
+              </Button>
+            )}
             <Segmented
               value={viewMode}
               onChange={(v) => setViewMode(v as 'table' | 'gallery')}
@@ -856,6 +1314,26 @@ export const CharactersManager: React.FC<CharactersManagerProps> = ({
                 defaultValue: "View mode"
               })}
             />
+            {/* Keyboard shortcuts help (H1) */}
+            <Tooltip
+              title={
+                <div className="text-xs space-y-1">
+                  <div className="font-medium mb-1">{t("settings:manageCharacters.shortcuts.title", { defaultValue: "Keyboard shortcuts" })}</div>
+                  <div><kbd className="px-1 bg-white/20 rounded">N</kbd> {t("settings:manageCharacters.shortcuts.new", { defaultValue: "New character" })}</div>
+                  <div><kbd className="px-1 bg-white/20 rounded">/</kbd> {t("settings:manageCharacters.shortcuts.search", { defaultValue: "Focus search" })}</div>
+                  <div><kbd className="px-1 bg-white/20 rounded">G</kbd> <kbd className="px-1 bg-white/20 rounded">T</kbd> {t("settings:manageCharacters.shortcuts.tableView", { defaultValue: "Table view" })}</div>
+                  <div><kbd className="px-1 bg-white/20 rounded">G</kbd> <kbd className="px-1 bg-white/20 rounded">G</kbd> {t("settings:manageCharacters.shortcuts.galleryView", { defaultValue: "Gallery view" })}</div>
+                  <div><kbd className="px-1 bg-white/20 rounded">Esc</kbd> {t("settings:manageCharacters.shortcuts.close", { defaultValue: "Close modal" })}</div>
+                </div>
+              }
+              placement="bottomRight">
+              <Button
+                type="text"
+                size="small"
+                icon={<Keyboard className="w-4 h-4" />}
+                aria-label={t("settings:manageCharacters.shortcuts.ariaLabel", { defaultValue: "Keyboard shortcuts" })}
+              />
+            </Tooltip>
           </div>
         </div>
       </div>
@@ -980,6 +1458,13 @@ export const CharactersManager: React.FC<CharactersManagerProps> = ({
               pageSize: DEFAULT_PAGE_SIZE,
               onChange: (page) => setCurrentPage(page)
             }}
+            onChange={(_pagination, _filters, sorter) => {
+              // Handle sort state for persistence
+              if (!Array.isArray(sorter)) {
+                setSortColumn(sorter.columnKey as string || null)
+                setSortOrder(sorter.order || null)
+              }
+            }}
             columns={[
             {
               title: (
@@ -1019,6 +1504,8 @@ export const CharactersManager: React.FC<CharactersManagerProps> = ({
               key: "name",
               sorter: (a: any, b: any) => (a.name || "").localeCompare(b.name || ""),
               sortDirections: ["ascend", "descend"] as const,
+              sortOrder: sortColumn === "name" ? sortOrder : undefined,
+              defaultSortOrder: sortColumn === "name" ? sortOrder ?? undefined : undefined,
               render: (v: string) => (
                 <span className="line-clamp-1" title={v || undefined}>
                   {truncateText(v, MAX_NAME_LENGTH)}
@@ -1090,6 +1577,40 @@ export const CharactersManager: React.FC<CharactersManagerProps> = ({
               }
             },
             {
+              title: t("settings:manageCharacters.columns.conversations", {
+                defaultValue: "Chats"
+              }),
+              key: "conversations",
+              width: 70,
+              align: "center" as const,
+              sorter: (a: any, b: any) => {
+                const aId = String(a.id || a.slug || a.name)
+                const bId = String(b.id || b.slug || b.name)
+                const aCount = conversationCounts?.[aId] || 0
+                const bCount = conversationCounts?.[bId] || 0
+                return aCount - bCount
+              },
+              render: (_: any, record: any) => {
+                const charId = String(record.id || record.slug || record.name)
+                const count = conversationCounts?.[charId] || 0
+                return count > 0 ? (
+                  <Tooltip
+                    title={t("settings:manageCharacters.gallery.conversationCount", {
+                      defaultValue: "{{count}} conversation(s)",
+                      count
+                    })}
+                  >
+                    <span className="inline-flex items-center gap-1 rounded-full bg-primary/10 px-2 py-0.5 text-xs font-medium text-primary">
+                      <MessageCircle className="h-3 w-3" />
+                      {count > 99 ? '99+' : count}
+                    </span>
+                  </Tooltip>
+                ) : (
+                  <span className="text-text-subtle">—</span>
+                )
+              }
+            },
+            {
               title: t("settings:manageCharacters.columns.actions", {
                 defaultValue: "Actions"
               }),
@@ -1114,6 +1635,12 @@ export const CharactersManager: React.FC<CharactersManagerProps> = ({
                   "settings:manageCharacters.actions.duplicate",
                   {
                     defaultValue: "Duplicate"
+                  }
+                )
+                const exportLabel = t(
+                  "settings:manageCharacters.actions.export",
+                  {
+                    defaultValue: "Export"
                   }
                 )
                 const name = record?.name || record?.title || record?.slug || ""
@@ -1289,6 +1816,23 @@ export const CharactersManager: React.FC<CharactersManagerProps> = ({
                       </button>
                     </Tooltip>
                     <Tooltip
+                      title={exportLabel}>
+                      <button
+                        type="button"
+                        className="inline-flex items-center gap-1 rounded-md border border-transparent px-2 py-1 text-text-muted transition hover:border-border hover:bg-surface2 focus:outline-none focus:ring-2 focus:ring-focus focus:ring-offset-1 focus:ring-offset-bg disabled:cursor-not-allowed disabled:opacity-60"
+                        aria-label={t("settings:manageCharacters.aria.export", {
+                          defaultValue: "Export character {{name}}",
+                          name
+                        })}
+                        disabled={exporting === (record.id || record.slug || record.name)}
+                        onClick={() => handleExport(record)}>
+                        <Download className="w-4 h-4" />
+                        <span className="hidden sm:inline text-xs font-medium">
+                          {exportLabel}
+                        </span>
+                      </button>
+                    </Tooltip>
+                    <Tooltip
                       title={deleteLabel}>
                       <button
                         type="button"
@@ -1338,13 +1882,17 @@ export const CharactersManager: React.FC<CharactersManagerProps> = ({
       {status === "success" && Array.isArray(data) && data.length > 0 && viewMode === 'gallery' && (
         <div className="space-y-4">
           <div className="grid grid-cols-2 gap-4 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6">
-            {pagedGalleryData.map((character: any) => (
-              <CharacterGalleryCard
-                key={character.id || character.slug || character.name}
-                character={character}
-                onClick={() => setPreviewCharacter(character)}
-              />
-            ))}
+            {pagedGalleryData.map((character: any) => {
+              const charId = String(character.id || character.slug || character.name)
+              return (
+                <CharacterGalleryCard
+                  key={charId}
+                  character={character}
+                  onClick={() => setPreviewCharacter(character)}
+                  conversationCount={conversationCounts?.[charId]}
+                />
+              )
+            })}
           </div>
           {data.length > DEFAULT_PAGE_SIZE && (
             <div className="flex justify-end">
@@ -1383,6 +1931,11 @@ export const CharactersManager: React.FC<CharactersManagerProps> = ({
             setPreviewCharacter(null)
           }
         }}
+        onExport={async () => {
+          if (previewCharacter) {
+            await handleExport(previewCharacter)
+          }
+        }}
         onDelete={async () => {
           if (previewCharacter) {
             await handleDelete(previewCharacter)
@@ -1396,6 +1949,7 @@ export const CharactersManager: React.FC<CharactersManagerProps> = ({
           }
         }}
         deleting={deleting}
+        exporting={!!exporting && exporting === (previewCharacter?.id || previewCharacter?.slug || previewCharacter?.name)}
       />
 
       <Modal
@@ -1701,16 +2255,138 @@ export const CharactersManager: React.FC<CharactersManagerProps> = ({
             defaultValue: "Define a reusable character you can chat with in the sidebar."
           })}
         </p>
+
+        {/* Draft Recovery Banner (H4) */}
+        {hasCreateDraft && createDraftData && (
+          <Alert
+            type="info"
+            showIcon
+            className="mb-4"
+            message={
+              <span>
+                {t("settings:manageCharacters.draft.found", {
+                  defaultValue: "Resume unsaved character?"
+                })}
+                {createDraftData.formData?.name && (
+                  <strong className="ml-1">"{createDraftData.formData.name}"</strong>
+                )}
+                <span className="text-text-muted ml-1">
+                  ({formatDraftAge(createDraftData.savedAt)})
+                </span>
+              </span>
+            }
+            action={
+              <div className="flex gap-2">
+                <Button
+                  size="small"
+                  type="primary"
+                  onClick={() => {
+                    const draft = applyCreateDraft()
+                    if (draft) {
+                      createForm.setFieldsValue(draft)
+                      setCreateFormDirty(true)
+                      if (hasAdvancedData(draft, draft.extensions || '')) {
+                        setShowCreateAdvanced(true)
+                      }
+                    }
+                  }}>
+                  {t("settings:manageCharacters.draft.restore", { defaultValue: "Restore" })}
+                </Button>
+                <Button
+                  size="small"
+                  onClick={dismissCreateDraft}>
+                  {t("settings:manageCharacters.draft.discard", { defaultValue: "Discard" })}
+                </Button>
+              </div>
+            }
+          />
+        )}
+
+        {/* Template Selection (M4) */}
+        {!showTemplates ? (
+          <div className="mb-4">
+            <Button
+              type="link"
+              size="small"
+              className="p-0"
+              onClick={() => setShowTemplates(true)}>
+              {t("settings:manageCharacters.templates.startFrom", {
+                defaultValue: "Start from a template..."
+              })}
+            </Button>
+          </div>
+        ) : (
+          <div className="mb-4 p-3 bg-surface rounded-lg border border-border">
+            <div className="flex justify-between items-center mb-2">
+              <span className="text-sm font-medium">
+                {t("settings:manageCharacters.templates.title", {
+                  defaultValue: "Choose a template"
+                })}
+              </span>
+              <Button
+                type="link"
+                size="small"
+                onClick={() => setShowTemplates(false)}>
+                {t("common:cancel", { defaultValue: "Cancel" })}
+              </Button>
+            </div>
+            <div className="grid grid-cols-1 gap-2">
+              {CHARACTER_TEMPLATES.map((template) => (
+                <button
+                  key={template.id}
+                  type="button"
+                  className="text-left p-2 rounded border border-border hover:border-primary hover:bg-surface-hover transition-colors"
+                  onClick={() => {
+                    createForm.setFieldsValue({
+                      name: template.name,
+                      description: template.description,
+                      system_prompt: template.system_prompt,
+                      greeting: template.greeting,
+                      tags: template.tags
+                    })
+                    setCreateFormDirty(true)
+                    setShowTemplates(false)
+                    notification.info({
+                      message: t("settings:manageCharacters.templates.applied", {
+                        defaultValue: "Template applied"
+                      }),
+                      description: t("settings:manageCharacters.templates.appliedDesc", {
+                        defaultValue: "You can customize all fields before saving."
+                      })
+                    })
+                  }}>
+                  <div className="font-medium text-sm">{template.name}</div>
+                  <div className="text-xs text-text-muted">{template.description}</div>
+                </button>
+              ))}
+            </div>
+          </div>
+        )}
+
+        {/* AI Character Generation Panel */}
+        <GenerateCharacterPanel
+          isGenerating={isGenerating && generatingField === 'all'}
+          error={generationError}
+          onGenerate={handleGenerateFullCharacter}
+          onCancel={cancelGeneration}
+          onClearError={clearGenerationError}
+        />
+
         <Form
           layout="vertical"
           form={createForm}
           className="space-y-3"
-          onValuesChange={() => setCreateFormDirty(true)}
+          onValuesChange={(_, allValues) => {
+            setCreateFormDirty(true)
+            saveCreateDraft(allValues)
+          }}
           onFinish={(v) => {
             createCharacter(v)
+            clearCreateDraft()
             setCreateFormDirty(false)
             setShowCreateAdvanced(false)
           }}>
+          {/* Field order: Name → System Prompt (required) → Greeting → Description → Tags → Avatar */}
           <Form.Item
             name="name"
             label={
@@ -1719,6 +2395,11 @@ export const CharactersManager: React.FC<CharactersManagerProps> = ({
                   defaultValue: "Name"
                 })}
                 <span className="text-danger ml-0.5">*</span>
+                <GenerateFieldButton
+                  isGenerating={generatingField === 'name'}
+                  disabled={isGenerating}
+                  onClick={() => handleGenerateField('name', createForm, 'create')}
+                />
               </span>
             }
             rules={[
@@ -1739,79 +2420,6 @@ export const CharactersManager: React.FC<CharactersManagerProps> = ({
             />
           </Form.Item>
           <Form.Item
-            name="description"
-            label={t("settings:manageCharacters.form.description.label", {
-              defaultValue: "Description"
-            })}>
-            <Input
-              placeholder={t(
-                "settings:manageCharacters.form.description.placeholder",
-                { defaultValue: "Short description" }
-              )}
-            />
-          </Form.Item>
-          <Form.Item
-            noStyle
-            shouldUpdate={(prev, cur) =>
-              prev?.name !== cur?.name || prev?.description !== cur?.description
-            }>
-            {({ getFieldValue }) => (
-              <Form.Item
-                name="avatar"
-                label={t("settings:manageCharacters.avatar.label", {
-                  defaultValue: "Avatar (optional)"
-                })}>
-                <AvatarField
-                  characterName={getFieldValue("name")}
-                  characterDescription={getFieldValue("description")}
-                />
-              </Form.Item>
-            )}
-          </Form.Item>
-          <Form.Item
-            name="tags"
-            label={t("settings:manageCharacters.tags.label", {
-              defaultValue: "Tags"
-            })}
-            help={t("settings:manageCharacters.tags.help", {
-              defaultValue:
-                "Use tags to group characters by use case (e.g., 'writing', 'teaching')."
-            })}>
-            <Select
-              mode="tags"
-              allowClear
-              placeholder={t(
-                "settings:manageCharacters.tags.placeholder",
-                {
-                  defaultValue: "Add tags"
-                }
-              )}
-              options={allTags.map((tag) => ({ label: tag, value: tag }))}
-            />
-          </Form.Item>
-          <Form.Item
-            name="greeting"
-            label={t("settings:manageCharacters.form.greeting.label", {
-              defaultValue: "Greeting message (optional)"
-            })}
-            help={t("settings:manageCharacters.form.greeting.help", {
-              defaultValue:
-                "Optional first message the character will send when you start a chat."
-            })}>
-            <Input.TextArea
-              autoSize={{ minRows: 2, maxRows: 6 }}
-              placeholder={t(
-                "settings:manageCharacters.form.greeting.placeholder",
-                {
-                  defaultValue:
-                    "Hi there! I'm your writing coach. Paste your draft and I'll help you tighten it up."
-                }
-              )}
-              showCount
-              maxLength={1000}
-            />
-          </Form.Item>
-          <Form.Item
             name="system_prompt"
             label={
               <span>
@@ -1821,6 +2429,11 @@ export const CharactersManager: React.FC<CharactersManagerProps> = ({
                 )}
                 <span className="text-danger ml-0.5" aria-hidden="true">*</span>
                 <span className="sr-only"> ({t("common:required", { defaultValue: "required" })})</span>
+                <GenerateFieldButton
+                  isGenerating={generatingField === 'system_prompt'}
+                  disabled={isGenerating}
+                  onClick={() => handleGenerateField('system_prompt', createForm, 'create')}
+                />
               </span>
             }
             help={t(
@@ -1875,6 +2488,106 @@ export const CharactersManager: React.FC<CharactersManagerProps> = ({
               )}
             />
           </Form.Item>
+          <Form.Item
+            name="greeting"
+            label={
+              <span>
+                {t("settings:manageCharacters.form.greeting.label", {
+                  defaultValue: "Greeting message (optional)"
+                })}
+                <GenerateFieldButton
+                  isGenerating={generatingField === 'first_message'}
+                  disabled={isGenerating}
+                  onClick={() => handleGenerateField('first_message', createForm, 'create')}
+                />
+              </span>
+            }
+            help={t("settings:manageCharacters.form.greeting.help", {
+              defaultValue:
+                "Optional first message the character will send when you start a chat."
+            })}>
+            <Input.TextArea
+              autoSize={{ minRows: 2, maxRows: 6 }}
+              placeholder={t(
+                "settings:manageCharacters.form.greeting.placeholder",
+                {
+                  defaultValue:
+                    "Hi there! I'm your writing coach. Paste your draft and I'll help you tighten it up."
+                }
+              )}
+              showCount
+              maxLength={1000}
+            />
+          </Form.Item>
+          <Form.Item
+            name="description"
+            label={
+              <span>
+                {t("settings:manageCharacters.form.description.label", {
+                  defaultValue: "Description"
+                })}
+                <GenerateFieldButton
+                  isGenerating={generatingField === 'description'}
+                  disabled={isGenerating}
+                  onClick={() => handleGenerateField('description', createForm, 'create')}
+                />
+              </span>
+            }>
+            <Input
+              placeholder={t(
+                "settings:manageCharacters.form.description.placeholder",
+                { defaultValue: "Short description" }
+              )}
+            />
+          </Form.Item>
+          <Form.Item
+            name="tags"
+            label={
+              <span>
+                {t("settings:manageCharacters.tags.label", {
+                  defaultValue: "Tags"
+                })}
+                <GenerateFieldButton
+                  isGenerating={generatingField === 'tags'}
+                  disabled={isGenerating}
+                  onClick={() => handleGenerateField('tags', createForm, 'create')}
+                />
+              </span>
+            }
+            help={t("settings:manageCharacters.tags.help", {
+              defaultValue:
+                "Use tags to group characters by use case (e.g., 'writing', 'teaching')."
+            })}>
+            <Select
+              mode="tags"
+              allowClear
+              placeholder={t(
+                "settings:manageCharacters.tags.placeholder",
+                {
+                  defaultValue: "Add tags"
+                }
+              )}
+              options={allTags.map((tag) => ({ label: tag, value: tag }))}
+            />
+          </Form.Item>
+          <Form.Item
+            noStyle
+            shouldUpdate={(prev, cur) =>
+              prev?.name !== cur?.name || prev?.description !== cur?.description
+            }>
+            {({ getFieldValue }) => (
+              <Form.Item
+                name="avatar"
+                label={t("settings:manageCharacters.avatar.label", {
+                  defaultValue: "Avatar (optional)"
+                })}>
+                <AvatarField
+                  characterName={getFieldValue("name")}
+                  characterDescription={getFieldValue("description")}
+                />
+              </Form.Item>
+            )}
+          </Form.Item>
           <button
             type="button"
             className="mb-2 text-xs font-medium text-primary underline-offset-2 hover:underline"
@@ -1891,16 +2604,34 @@ export const CharactersManager: React.FC<CharactersManagerProps> = ({
             <div className="space-y-3 rounded-md border border-dashed border-border p-3">
               <Form.Item
                 name="personality"
-                label={t("settings:manageCharacters.form.personality.label", {
-                  defaultValue: "Personality"
-                })}>
+                label={
+                  <span>
+                    {t("settings:manageCharacters.form.personality.label", {
+                      defaultValue: "Personality"
+                    })}
+                    <GenerateFieldButton
+                      isGenerating={generatingField === 'personality'}
+                      disabled={isGenerating}
+                      onClick={() => handleGenerateField('personality', createForm, 'create')}
+                    />
+                  </span>
+                }>
                 <Input.TextArea autoSize={{ minRows: 2, maxRows: 6 }} />
               </Form.Item>
               <Form.Item
                 name="scenario"
-                label={t("settings:manageCharacters.form.scenario.label", {
-                  defaultValue: "Scenario"
-                })}>
+                label={
+                  <span>
+                    {t("settings:manageCharacters.form.scenario.label", {
+                      defaultValue: "Scenario"
+                    })}
+                    <GenerateFieldButton
+                      isGenerating={generatingField === 'scenario'}
+                      disabled={isGenerating}
+                      onClick={() => handleGenerateField('scenario', createForm, 'create')}
+                    />
+                  </span>
+                }>
                 <Input.TextArea autoSize={{ minRows: 2, maxRows: 6 }} />
               </Form.Item>
               <Form.Item
@@ -1912,32 +2643,59 @@ export const CharactersManager: React.FC<CharactersManagerProps> = ({
               </Form.Item>
               <Form.Item
                 name="message_example"
-                label={t(
-                  "settings:manageCharacters.form.messageExample.label",
-                  {
-                    defaultValue: "Message example"
-                  }
-                )}>
+                label={
+                  <span>
+                    {t(
+                      "settings:manageCharacters.form.messageExample.label",
+                      {
+                        defaultValue: "Message example"
+                      }
+                    )}
+                    <GenerateFieldButton
+                      isGenerating={generatingField === 'message_example'}
+                      disabled={isGenerating}
+                      onClick={() => handleGenerateField('message_example', createForm, 'create')}
+                    />
+                  </span>
+                }>
                 <Input.TextArea autoSize={{ minRows: 2, maxRows: 6 }} />
               </Form.Item>
               <Form.Item
                 name="creator_notes"
-                label={t(
-                  "settings:manageCharacters.form.creatorNotes.label",
-                  {
-                    defaultValue: "Creator notes"
-                  }
-                )}>
+                label={
+                  <span>
+                    {t(
+                      "settings:manageCharacters.form.creatorNotes.label",
+                      {
+                        defaultValue: "Creator notes"
+                      }
+                    )}
+                    <GenerateFieldButton
+                      isGenerating={generatingField === 'creator_notes'}
+                      disabled={isGenerating}
+                      onClick={() => handleGenerateField('creator_notes', createForm, 'create')}
+                    />
+                  </span>
+                }>
                 <Input.TextArea autoSize={{ minRows: 2, maxRows: 6 }} />
               </Form.Item>
               <Form.Item
                 name="alternate_greetings"
-                label={t(
-                  "settings:manageCharacters.form.alternateGreetings.label",
-                  {
-                    defaultValue: "Alternate greetings"
-                  }
-                )}
+                label={
+                  <span>
+                    {t(
+                      "settings:manageCharacters.form.alternateGreetings.label",
+                      {
+                        defaultValue: "Alternate greetings"
+                      }
+                    )}
+                    <GenerateFieldButton
+                      isGenerating={generatingField === 'alternate_greetings'}
+                      disabled={isGenerating}
+                      onClick={() => handleGenerateField('alternate_greetings', createForm, 'create')}
+                    />
+                  </span>
+                }
                 help={t(
                   "settings:manageCharacters.form.alternateGreetings.help",
                   {
@@ -2095,15 +2853,64 @@ export const CharactersManager: React.FC<CharactersManagerProps> = ({
             defaultValue: "Update the character's name, behavior, and other settings."
           })}
         </p>
+
+        {/* Draft Recovery Banner for Edit Form (H4) */}
+        {hasEditDraft && editDraftData && (
+          <Alert
+            type="info"
+            showIcon
+            className="mb-4"
+            message={
+              <span>
+                {t("settings:manageCharacters.draft.resumeEdit", {
+                  defaultValue: "Resume unsaved changes?"
+                })}
+                <span className="text-text-muted ml-1">
+                  ({formatDraftAge(editDraftData.savedAt)})
+                </span>
+              </span>
+            }
+            action={
+              <div className="flex gap-2">
+                <Button
+                  size="small"
+                  type="primary"
+                  onClick={() => {
+                    const draft = applyEditDraft()
+                    if (draft) {
+                      editForm.setFieldsValue(draft)
+                      setEditFormDirty(true)
+                      if (hasAdvancedData(draft, draft.extensions || '')) {
+                        setShowEditAdvanced(true)
+                      }
+                    }
+                  }}>
+                  {t("settings:manageCharacters.draft.restore", { defaultValue: "Restore" })}
+                </Button>
+                <Button
+                  size="small"
+                  onClick={dismissEditDraft}>
+                  {t("settings:manageCharacters.draft.discard", { defaultValue: "Discard" })}
+                </Button>
+              </div>
+            }
+          />
+        )}
+
         <Form
           layout="vertical"
           form={editForm}
           className="space-y-3"
-          onValuesChange={() => setEditFormDirty(true)}
+          onValuesChange={(_, allValues) => {
+            setEditFormDirty(true)
+            saveEditDraft(allValues)
+          }}
           onFinish={(v) => {
             updateCharacter(v)
+            clearEditDraft()
             setEditFormDirty(false)
           }}>
+          {/* Field order: Name → System Prompt (required) → Greeting → Description → Tags → Avatar */}
           <Form.Item
             name="name"
             label={
@@ -2112,6 +2919,11 @@ export const CharactersManager: React.FC<CharactersManagerProps> = ({
                   defaultValue: "Name"
                 })}
                 <span className="text-danger ml-0.5">*</span>
+                <GenerateFieldButton
+                  isGenerating={generatingField === 'name'}
+                  disabled={isGenerating}
+                  onClick={() => handleGenerateField('name', editForm, 'edit')}
+                />
               </span>
             }
             rules={[
@@ -2132,79 +2944,6 @@ export const CharactersManager: React.FC<CharactersManagerProps> = ({
             />
           </Form.Item>
           <Form.Item
-            name="description"
-            label={t("settings:manageCharacters.form.description.label", {
-              defaultValue: "Description"
-            })}>
-            <Input
-              placeholder={t(
-                "settings:manageCharacters.form.description.placeholder",
-                { defaultValue: "Short description" }
-              )}
-            />
-          </Form.Item>
-          <Form.Item
-            noStyle
-            shouldUpdate={(prev, cur) =>
-              prev?.name !== cur?.name || prev?.description !== cur?.description
-            }>
-            {({ getFieldValue }) => (
-              <Form.Item
-                name="avatar"
-                label={t("settings:manageCharacters.avatar.label", {
-                  defaultValue: "Avatar (optional)"
-                })}>
-                <AvatarField
-                  characterName={getFieldValue("name")}
-                  characterDescription={getFieldValue("description")}
-                />
-              </Form.Item>
-            )}
-          </Form.Item>
-          <Form.Item
-            name="tags"
-            label={t("settings:manageCharacters.tags.label", {
-              defaultValue: "Tags"
-            })}
-            help={t("settings:manageCharacters.tags.help", {
-              defaultValue:
-                "Use tags to group characters by use case (e.g., 'writing', 'teaching')."
-            })}>
-            <Select
-              mode="tags"
-              allowClear
-              placeholder={t(
-                "settings:manageCharacters.tags.placeholder",
-                {
-                  defaultValue: "Add tags"
-                }
-              )}
-              options={allTags.map((tag) => ({ label: tag, value: tag }))}
-            />
-          </Form.Item>
-          <Form.Item
-            name="greeting"
-            label={t("settings:manageCharacters.form.greeting.label", {
-              defaultValue: "Greeting message (optional)"
-            })}
-            help={t("settings:manageCharacters.form.greeting.help", {
-              defaultValue:
-                "Optional first message the character will send when you start a chat."
-            })}>
-            <Input.TextArea
-              autoSize={{ minRows: 2, maxRows: 6 }}
-              placeholder={t(
-                "settings:manageCharacters.form.greeting.placeholder",
-                {
-                  defaultValue:
-                    "Hi there! I'm your writing coach. Paste your draft and I'll help you tighten it up."
-                }
-              )}
-              showCount
-              maxLength={1000}
-            />
-          </Form.Item>
-          <Form.Item
             name="system_prompt"
             label={
               <span>
@@ -2214,6 +2953,11 @@ export const CharactersManager: React.FC<CharactersManagerProps> = ({
                 )}
                 <span className="text-danger ml-0.5" aria-hidden="true">*</span>
                 <span className="sr-only"> ({t("common:required", { defaultValue: "required" })})</span>
+                <GenerateFieldButton
+                  isGenerating={generatingField === 'system_prompt'}
+                  disabled={isGenerating}
+                  onClick={() => handleGenerateField('system_prompt', editForm, 'edit')}
+                />
               </span>
             }
             help={t(
@@ -2268,6 +3012,106 @@ export const CharactersManager: React.FC<CharactersManagerProps> = ({
               )}
             />
           </Form.Item>
+          <Form.Item
+            name="greeting"
+            label={
+              <span>
+                {t("settings:manageCharacters.form.greeting.label", {
+                  defaultValue: "Greeting message (optional)"
+                })}
+                <GenerateFieldButton
+                  isGenerating={generatingField === 'first_message'}
+                  disabled={isGenerating}
+                  onClick={() => handleGenerateField('first_message', editForm, 'edit')}
+                />
+              </span>
+            }
+            help={t("settings:manageCharacters.form.greeting.help", {
+              defaultValue:
+                "Optional first message the character will send when you start a chat."
+            })}>
+            <Input.TextArea
+              autoSize={{ minRows: 2, maxRows: 6 }}
+              placeholder={t(
+                "settings:manageCharacters.form.greeting.placeholder",
+                {
+                  defaultValue:
+                    "Hi there! I'm your writing coach. Paste your draft and I'll help you tighten it up."
+                }
+              )}
+              showCount
+              maxLength={1000}
+            />
+          </Form.Item>
+          <Form.Item
+            name="description"
+            label={
+              <span>
+                {t("settings:manageCharacters.form.description.label", {
+                  defaultValue: "Description"
+                })}
+                <GenerateFieldButton
+                  isGenerating={generatingField === 'description'}
+                  disabled={isGenerating}
+                  onClick={() => handleGenerateField('description', editForm, 'edit')}
+                />
+              </span>
+            }>
+            <Input
+              placeholder={t(
+                "settings:manageCharacters.form.description.placeholder",
+                { defaultValue: "Short description" }
+              )}
+            />
+          </Form.Item>
+          <Form.Item
+            name="tags"
+            label={
+              <span>
+                {t("settings:manageCharacters.tags.label", {
+                  defaultValue: "Tags"
+                })}
+                <GenerateFieldButton
+                  isGenerating={generatingField === 'tags'}
+                  disabled={isGenerating}
+                  onClick={() => handleGenerateField('tags', editForm, 'edit')}
+                />
+              </span>
+            }
+            help={t("settings:manageCharacters.tags.help", {
+              defaultValue:
+                "Use tags to group characters by use case (e.g., 'writing', 'teaching')."
+            })}>
+            <Select
+              mode="tags"
+              allowClear
+              placeholder={t(
+                "settings:manageCharacters.tags.placeholder",
+                {
+                  defaultValue: "Add tags"
+                }
+              )}
+              options={allTags.map((tag) => ({ label: tag, value: tag }))}
+            />
+          </Form.Item>
+          <Form.Item
+            noStyle
+            shouldUpdate={(prev, cur) =>
+              prev?.name !== cur?.name || prev?.description !== cur?.description
+            }>
+            {({ getFieldValue }) => (
+              <Form.Item
+                name="avatar"
+                label={t("settings:manageCharacters.avatar.label", {
+                  defaultValue: "Avatar (optional)"
+                })}>
+                <AvatarField
+                  characterName={getFieldValue("name")}
+                  characterDescription={getFieldValue("description")}
+                />
+              </Form.Item>
+            )}
+          </Form.Item>
           <button
             type="button"
             className="mb-2 text-xs font-medium text-primary underline-offset-2 hover:underline"
@@ -2284,16 +3128,34 @@ export const CharactersManager: React.FC<CharactersManagerProps> = ({
             <div className="space-y-3 rounded-md border border-dashed border-border p-3">
               <Form.Item
                 name="personality"
-                label={t("settings:manageCharacters.form.personality.label", {
-                  defaultValue: "Personality"
-                })}>
+                label={
+                  <span>
+                    {t("settings:manageCharacters.form.personality.label", {
+                      defaultValue: "Personality"
+                    })}
+                    <GenerateFieldButton
+                      isGenerating={generatingField === 'personality'}
+                      disabled={isGenerating}
+                      onClick={() => handleGenerateField('personality', editForm, 'edit')}
+                    />
+                  </span>
+                }>
                 <Input.TextArea autoSize={{ minRows: 2, maxRows: 6 }} />
               </Form.Item>
               <Form.Item
                 name="scenario"
-                label={t("settings:manageCharacters.form.scenario.label", {
-                  defaultValue: "Scenario"
-                })}>
+                label={
+                  <span>
+                    {t("settings:manageCharacters.form.scenario.label", {
+                      defaultValue: "Scenario"
+                    })}
+                    <GenerateFieldButton
+                      isGenerating={generatingField === 'scenario'}
+                      disabled={isGenerating}
+                      onClick={() => handleGenerateField('scenario', editForm, 'edit')}
+                    />
+                  </span>
+                }>
                 <Input.TextArea autoSize={{ minRows: 2, maxRows: 6 }} />
               </Form.Item>
               <Form.Item
@@ -2308,32 +3170,59 @@ export const CharactersManager: React.FC<CharactersManagerProps> = ({
               </Form.Item>
               <Form.Item
                 name="message_example"
-                label={t(
-                  "settings:manageCharacters.form.messageExample.label",
-                  {
-                    defaultValue: "Message example"
-                  }
-                )}>
+                label={
+                  <span>
+                    {t(
+                      "settings:manageCharacters.form.messageExample.label",
+                      {
+                        defaultValue: "Message example"
+                      }
+                    )}
+                    <GenerateFieldButton
+                      isGenerating={generatingField === 'message_example'}
+                      disabled={isGenerating}
+                      onClick={() => handleGenerateField('message_example', editForm, 'edit')}
+                    />
+                  </span>
+                }>
                 <Input.TextArea autoSize={{ minRows: 2, maxRows: 6 }} />
               </Form.Item>
               <Form.Item
                 name="creator_notes"
-                label={t(
-                  "settings:manageCharacters.form.creatorNotes.label",
-                  {
-                    defaultValue: "Creator notes"
-                  }
-                )}>
+                label={
+                  <span>
+                    {t(
+                      "settings:manageCharacters.form.creatorNotes.label",
+                      {
+                        defaultValue: "Creator notes"
+                      }
+                    )}
+                    <GenerateFieldButton
+                      isGenerating={generatingField === 'creator_notes'}
+                      disabled={isGenerating}
+                      onClick={() => handleGenerateField('creator_notes', editForm, 'edit')}
+                    />
+                  </span>
+                }>
                 <Input.TextArea autoSize={{ minRows: 2, maxRows: 6 }} />
               </Form.Item>
               <Form.Item
                 name="alternate_greetings"
-                label={t(
-                  "settings:manageCharacters.form.alternateGreetings.label",
-                  {
-                    defaultValue: "Alternate greetings"
-                  }
-                )}
+                label={
+                  <span>
+                    {t(
+                      "settings:manageCharacters.form.alternateGreetings.label",
+                      {
+                        defaultValue: "Alternate greetings"
+                      }
+                    )}
+                    <GenerateFieldButton
+                      isGenerating={generatingField === 'alternate_greetings'}
+                      disabled={isGenerating}
+                      onClick={() => handleGenerateField('alternate_greetings', editForm, 'edit')}
+                    />
+                  </span>
+                }
                 help={t(
                   "settings:manageCharacters.form.alternateGreetings.help",
                   {
@@ -2447,6 +3336,19 @@ export const CharactersManager: React.FC<CharactersManagerProps> = ({
           </Button>
         </Form>
       </Modal>
+
+      {/* Generation Preview Modal */}
+      <GenerationPreviewModal
+        open={generationPreviewOpen}
+        generatedData={generationPreviewData}
+        fieldName={generationPreviewField}
+        onApply={applyGenerationPreview}
+        onCancel={() => {
+          setGenerationPreviewOpen(false)
+          setGenerationPreviewData(null)
+          setGenerationPreviewField(null)
+        }}
+      />
     </div>
   )
 }

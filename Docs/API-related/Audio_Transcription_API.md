@@ -24,7 +24,7 @@ The tldw_server provides a comprehensive audio transcription API that is fully c
 
 ### Core Capabilities
 - **OpenAI API Compatible**: Drop-in replacement for OpenAI's audio transcription endpoints
-- **Multiple Transcription Engines**: Choose from faster-whisper, NVIDIA Nemo models, or Qwen2Audio
+- **Multiple Transcription Engines**: Choose from faster-whisper, NVIDIA Nemo models, Qwen2Audio, Qwen3-ASR, or VibeVoice
 - **Live Transcription**: Real-time audio streaming with VAD and silence detection
 - **Model Optimization**: Support for ONNX and MLX variants for better performance
 - **Multi-format Support**: Handle various audio formats (WAV, MP3, M4A, etc.)
@@ -68,6 +68,23 @@ The tldw_server provides a comprehensive audio transcription API that is fully c
 - **Languages**: Multiple languages
 - **Best For**: Complex audio understanding tasks
 
+### 5. Qwen3-ASR
+- **Model**: `qwen3-asr-1.7b`, `qwen3-asr-0.6b`, `qwen3-asr`
+- **Variants**:
+  - **1.7B** (default): Production quality, ~8-16GB VRAM
+  - **0.6B**: Resource-constrained / high-throughput, ~2-4GB VRAM
+- **Languages**: 30 languages + 22 Chinese dialects (auto-detected)
+- **Best For**: Chinese transcription, high-accuracy multilingual content
+- **Special Features**: Optional word-level timestamps via Forced Aligner
+- **Note**: Requires manual model download. See [Qwen3-ASR Setup Guide](../STT-TTS/QWEN3_ASR_SETUP.md)
+
+### 6. VibeVoice-ASR
+- **Model**: `vibevoice-asr`, `vibevoice`
+- **Size**: 7 billion parameters
+- **Languages**: ~50 languages
+- **Best For**: Long-form audio, speaker-aware transcripts, domain-specific vocabularies
+- **Special Features**: Built-in diarization metadata, hotwords support
+
 #### Model ID patterns (HTTP + ingestion)
 
 The `model` string for `/api/v1/audio/transcriptions` is parsed via the same logic as the ingestion pipeline (`parse_transcription_model` in `Audio_Transcription_Lib.py`), so the following patterns are accepted:
@@ -83,6 +100,12 @@ The `model` string for `/api/v1/audio/transcriptions` is parsed via the same log
 - **Qwen2Audio**
   - `qwen2audio`, `qwen2audio-*` (all map to provider `"qwen2audio"`)
   - Convenience alias `qwen` also maps to `qwen2audio` in the HTTP API.
+- **Qwen3-ASR**
+  - `qwen3-asr-1.7b`, `qwen3-asr-0.6b`, `qwen3-asr` (all map to provider `"qwen3-asr"`)
+  - Bare `qwen3-asr` defaults to the configured model path (typically 1.7B)
+  - Underscore variants also accepted: `qwen3_asr_1.7b`, `qwen3_asr_0.6b`
+- **VibeVoice-ASR**
+  - `vibevoice-asr`, `vibevoice`, `vibevoice_asr` (all map to provider `"vibevoice"`)
 
 ## API Endpoints
 
@@ -102,7 +125,7 @@ Transcribe audio into text.
 | Parameter | Type | Required | Description |
 |-----------|------|----------|-------------|
 | file | file | Yes | The audio file to transcribe (default max 25MB; actual limit may vary by quota tier) |
-| model | string | No | Model to use. Supported examples: `whisper-1` (`whisper` alias), raw faster-whisper ids like `large-v3` or `distil-whisper-large-v3`; NVIDIA variants such as `parakeet`, `parakeet-onnx`, `parakeet-mlx`; Canary via `canary`; Qwen via `qwen2audio` or `qwen2audio-*` (default: `whisper-1`). |
+| model | string | No | Model to use. Supported examples: `whisper-1` (`whisper` alias), raw faster-whisper ids like `large-v3` or `distil-whisper-large-v3`; NVIDIA variants such as `parakeet`, `parakeet-onnx`, `parakeet-mlx`; Canary via `canary`; Qwen via `qwen2audio` or `qwen2audio-*`; Qwen3-ASR via `qwen3-asr-1.7b`, `qwen3-asr-0.6b`, or `qwen3-asr`; VibeVoice via `vibevoice-asr` (default: `whisper-1`). |
 | language | string | No | Language code in ISO-639-1 format (e.g., 'en', 'es'). When omitted, Whisper models auto-detect the language and the detected code is included in the JSON response. |
 | prompt | string | No | Optional text to guide the model's style |
 | response_format | string | No | Output format: `json`, `text`, `srt`, `vtt`, `verbose_json` (default: `json`) |
@@ -156,9 +179,13 @@ Internal STT helpers:
 - `speech_to_text(...)` (file or NumPy input) is the canonical segment-based helper used by media ingestion and offline workers; it returns a list of segments (or `(segments, language)` when requested).
 - `transcribe_audio(...)` (NumPy waveform input) is the canonical plain-text helper used by this HTTP endpoint, speech-chat, and streaming sinks; it routes to the configured provider and returns a single transcript string. Provider failures are surfaced as error sentinel strings (for example, `"[Transcription error] Qwen2Audio ..."`), which HTTP handlers detect via `is_transcription_error_message(...)` and map to appropriate HTTP error responses rather than returning the sentinel text as user content.
 
-### Word-level Timestamps Example (Whisper only)
+### Word-level Timestamps Example
 
-When `timestamp_granularities` includes `word`, each segment contains `words` with start/end per tokenized word:
+When `timestamp_granularities` includes `word`, each segment contains `words` with start/end per tokenized word.
+
+**Supported providers:**
+- **Whisper**: Built-in word timestamp support
+- **Qwen3-ASR**: Via Forced Aligner (requires `qwen3_asr_aligner_enabled=true` in config)
 
 ```json
 {

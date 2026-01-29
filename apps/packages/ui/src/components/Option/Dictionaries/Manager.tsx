@@ -1,14 +1,15 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
-import { Button, Collapse, Divider, Form, Input, Modal, Skeleton, Switch, Table, Tooltip, Tag, InputNumber, Select, Descriptions } from "antd"
+import { Button, Collapse, Divider, Form, Input, Modal, Skeleton, Switch, Table, Tooltip, Tag, InputNumber, Select, Descriptions, Popover } from "antd"
 import { useTranslation } from "react-i18next"
 import React from "react"
 import { tldwClient } from "@/services/tldw/TldwApiClient"
-import { Pen, Trash2, Book } from "lucide-react"
+import { Pen, Trash2, Book, Play, ChevronDown, ChevronUp, AlertCircle, CheckCircle2, AlertTriangle, Loader2 } from "lucide-react"
 import { useConfirmDanger } from "@/components/Common/confirm-danger"
 import { useServerOnline } from "@/hooks/useServerOnline"
 import FeatureEmptyState from "@/components/Common/FeatureEmptyState"
 import { useServerCapabilities } from "@/hooks/useServerCapabilities"
 import { useAntdNotification } from "@/hooks/useAntdNotification"
+import { LabelWithHelp } from "@/components/Common/LabelWithHelp"
 
 export const DictionariesManager: React.FC = () => {
   const { t } = useTranslation(["common", "option"])
@@ -27,6 +28,53 @@ export const DictionariesManager: React.FC = () => {
   const [statsFor, setStatsFor] = React.useState<any | null>(null)
   const { capabilities, loading: capsLoading } = useServerCapabilities()
   const confirmDanger = useConfirmDanger()
+
+  // Track validation status per dictionary: { [id]: { status: 'valid' | 'warning' | 'error' | 'loading', message?: string } }
+  const [validationStatus, setValidationStatus] = React.useState<Record<number, { status: 'valid' | 'warning' | 'error' | 'loading' | 'unknown'; message?: string }>>({})
+
+  // Validate dictionary on demand
+  const validateDictionary = React.useCallback(async (dictId: number) => {
+    setValidationStatus(prev => ({ ...prev, [dictId]: { status: 'loading' } }))
+    try {
+      await tldwClient.initialize()
+      const dict = await tldwClient.getDictionary(dictId)
+      const entries = await tldwClient.listDictionaryEntries(dictId)
+      const entryList = entries?.entries || []
+
+      const payload = {
+        data: {
+          name: dict?.name || undefined,
+          description: dict?.description || undefined,
+          entries: entryList.map((entry: any) => ({
+            pattern: entry.pattern,
+            replacement: entry.replacement,
+            type: entry.type,
+            probability: entry.probability,
+            enabled: entry.enabled,
+            case_sensitive: entry.case_sensitive,
+            group: entry.group,
+            max_replacements: entry.max_replacements
+          }))
+        },
+        schema_version: 1,
+        strict: false
+      }
+      const result = await tldwClient.validateDictionary(payload)
+
+      const errors = Array.isArray(result?.errors) ? result.errors : []
+      const warnings = Array.isArray(result?.warnings) ? result.warnings : []
+
+      if (errors.length > 0) {
+        setValidationStatus(prev => ({ ...prev, [dictId]: { status: 'error', message: `${errors.length} error(s)` } }))
+      } else if (warnings.length > 0) {
+        setValidationStatus(prev => ({ ...prev, [dictId]: { status: 'warning', message: `${warnings.length} warning(s)` } }))
+      } else {
+        setValidationStatus(prev => ({ ...prev, [dictId]: { status: 'valid', message: 'Valid' } }))
+      }
+    } catch (e: any) {
+      setValidationStatus(prev => ({ ...prev, [dictId]: { status: 'error', message: e?.message || 'Validation failed' } }))
+    }
+  }, [])
 
   const { data, status } = useQuery({
     queryKey: ['tldw:listDictionaries'],
@@ -62,19 +110,174 @@ export const DictionariesManager: React.FC = () => {
     !capsLoading && capabilities && !capabilities.hasChatDictionaries
 
   const columns = [
-    { title: '', key: 'icon', width: 40, render: () => <Book className="w-4 h-4" /> },
+    { title: '', key: 'icon', width: 48, render: () => <Book className="w-5 h-5 text-text-muted" aria-hidden="true" /> },
     { title: 'Name', dataIndex: 'name', key: 'name' },
     { title: 'Description', dataIndex: 'description', key: 'description', render: (v: string) => <span className="line-clamp-1">{v}</span> },
     { title: 'Active', dataIndex: 'is_active', key: 'is_active', render: (v: boolean) => v ? <Tag color="green">Active</Tag> : <Tag>Inactive</Tag> },
     { title: 'Entries', dataIndex: 'entry_count', key: 'entry_count' },
+    {
+      title: 'Status',
+      key: 'validation_status',
+      width: 100,
+      render: (_: any, record: any) => {
+        const status = validationStatus[record.id]
+        if (!status) {
+          return (
+            <Tooltip title="Click to validate">
+              <button
+                className="min-w-[36px] min-h-[36px] flex items-center justify-center text-text-muted hover:text-text hover:bg-surface2 rounded-md transition-colors"
+                onClick={() => validateDictionary(record.id)}
+                aria-label={`Validate dictionary ${record.name}`}
+              >
+                <CheckCircle2 className="w-4 h-4 opacity-30" />
+              </button>
+            </Tooltip>
+          )
+        }
+        if (status.status === 'loading') {
+          return (
+            <Tooltip title="Validating...">
+              <Loader2 className="w-4 h-4 animate-spin text-text-muted" />
+            </Tooltip>
+          )
+        }
+        if (status.status === 'valid') {
+          return (
+            <Tooltip title={status.message || 'Valid'}>
+              <button
+                className="min-w-[36px] min-h-[36px] flex items-center justify-center text-green-600 hover:bg-green-50 rounded-md transition-colors"
+                onClick={() => validateDictionary(record.id)}
+                aria-label={`Dictionary ${record.name} is valid. Click to re-validate.`}
+              >
+                <CheckCircle2 className="w-4 h-4" />
+              </button>
+            </Tooltip>
+          )
+        }
+        if (status.status === 'warning') {
+          return (
+            <Tooltip title={status.message || 'Has warnings'}>
+              <button
+                className="min-w-[36px] min-h-[36px] flex items-center justify-center text-yellow-600 hover:bg-yellow-50 rounded-md transition-colors"
+                onClick={() => validateDictionary(record.id)}
+                aria-label={`Dictionary ${record.name} has warnings. Click to re-validate.`}
+              >
+                <AlertTriangle className="w-4 h-4" />
+              </button>
+            </Tooltip>
+          )
+        }
+        // error
+        return (
+          <Tooltip title={status.message || 'Has errors'}>
+            <button
+              className="min-w-[36px] min-h-[36px] flex items-center justify-center text-danger hover:bg-danger/10 rounded-md transition-colors"
+              onClick={() => validateDictionary(record.id)}
+              aria-label={`Dictionary ${record.name} has errors. Click to re-validate.`}
+            >
+              <AlertCircle className="w-4 h-4" />
+            </button>
+          </Tooltip>
+        )
+      }
+    },
     { title: 'Actions', key: 'actions', render: (_: any, record: any) => (
-      <div className="flex gap-3">
-        <Tooltip title="Edit"><button className="text-text-muted" onClick={() => { setEditId(record.id); editForm.setFieldsValue(record); setOpenEdit(true) }}><Pen className="w-4 h-4" /></button></Tooltip>
-        <Tooltip title="Manage Entries"><button className="text-text-muted" onClick={() => setOpenEntries(record.id)}>Entries</button></Tooltip>
-        <Tooltip title="Export JSON"><button className="text-text-muted" onClick={async () => { try { const exp = await tldwClient.exportDictionaryJSON(record.id); const blob = new Blob([JSON.stringify(exp, null, 2)], { type: 'application/json' }); const url = URL.createObjectURL(blob); const a = document.createElement('a'); a.href = url; a.download = `${record.name || 'dictionary'}.json`; a.click(); URL.revokeObjectURL(url) } catch (e: any) { notification.error({ message: 'Export failed', description: e?.message }) } }}>Export JSON</button></Tooltip>
-        <Tooltip title="Export Markdown"><button className="text-text-muted" onClick={async () => { try { const exp = await tldwClient.exportDictionaryMarkdown(record.id); const blob = new Blob([exp?.content || '' ], { type: 'text/markdown' }); const url = URL.createObjectURL(blob); const a = document.createElement('a'); a.href = url; a.download = `${record.name || 'dictionary'}.md`; a.click(); URL.revokeObjectURL(url) } catch (e: any) { notification.error({ message: 'Export failed', description: e?.message }) } }}>Export MD</button></Tooltip>
-        <Tooltip title="Statistics"><button className="text-text-muted" onClick={async () => { try { const s = await tldwClient.dictionaryStatistics(record.id); setStatsFor(s) } catch (e: any) { notification.error({ message: 'Stats failed', description: e?.message }) } }}>Stats</button></Tooltip>
-        <Tooltip title="Delete"><button className="text-danger" onClick={async () => { const ok = await confirmDanger({ title: t('common:confirmTitle', { defaultValue: 'Please confirm' }), content: 'Delete dictionary?', okText: t('common:delete', { defaultValue: 'Delete' }), cancelText: t('common:cancel', { defaultValue: 'Cancel' }) }); if (ok) deleteDict(record.id) }}><Trash2 className="w-4 h-4" /></button></Tooltip>
+      <div className="flex gap-1 flex-wrap items-center">
+        <Tooltip title="Edit dictionary">
+          <button
+            className="min-w-[44px] min-h-[44px] flex items-center justify-center text-text-muted hover:text-text hover:bg-surface2 rounded-md transition-colors"
+            onClick={() => { setEditId(record.id); editForm.setFieldsValue(record); setOpenEdit(true) }}
+            aria-label={`Edit dictionary ${record.name}`}
+          >
+            <Pen className="w-5 h-5" />
+          </button>
+        </Tooltip>
+        <Tooltip title="Manage entries">
+          <button
+            className="min-w-[44px] min-h-[44px] px-2 flex items-center justify-center text-text-muted hover:text-text hover:bg-surface2 rounded-md transition-colors text-sm"
+            onClick={() => setOpenEntries(record.id)}
+            aria-label={`Manage entries for ${record.name}`}
+          >
+            Entries
+          </button>
+        </Tooltip>
+        <Tooltip title="Export as JSON">
+          <button
+            className="min-w-[44px] min-h-[44px] px-2 flex items-center justify-center text-text-muted hover:text-text hover:bg-surface2 rounded-md transition-colors text-sm"
+            onClick={async () => {
+              try {
+                const exp = await tldwClient.exportDictionaryJSON(record.id)
+                const blob = new Blob([JSON.stringify(exp, null, 2)], { type: 'application/json' })
+                const url = URL.createObjectURL(blob)
+                const a = document.createElement('a')
+                a.href = url
+                a.download = `${record.name || 'dictionary'}.json`
+                a.click()
+                URL.revokeObjectURL(url)
+              } catch (e: any) {
+                notification.error({ message: 'Export failed', description: e?.message })
+              }
+            }}
+            aria-label={`Export ${record.name} as JSON`}
+          >
+            JSON
+          </button>
+        </Tooltip>
+        <Tooltip title="Export as Markdown">
+          <button
+            className="min-w-[44px] min-h-[44px] px-2 flex items-center justify-center text-text-muted hover:text-text hover:bg-surface2 rounded-md transition-colors text-sm"
+            onClick={async () => {
+              try {
+                const exp = await tldwClient.exportDictionaryMarkdown(record.id)
+                const blob = new Blob([exp?.content || '' ], { type: 'text/markdown' })
+                const url = URL.createObjectURL(blob)
+                const a = document.createElement('a')
+                a.href = url
+                a.download = `${record.name || 'dictionary'}.md`
+                a.click()
+                URL.revokeObjectURL(url)
+              } catch (e: any) {
+                notification.error({ message: 'Export failed', description: e?.message })
+              }
+            }}
+            aria-label={`Export ${record.name} as Markdown`}
+          >
+            MD
+          </button>
+        </Tooltip>
+        <Tooltip title="View statistics">
+          <button
+            className="min-w-[44px] min-h-[44px] px-2 flex items-center justify-center text-text-muted hover:text-text hover:bg-surface2 rounded-md transition-colors text-sm"
+            onClick={async () => {
+              try {
+                const s = await tldwClient.dictionaryStatistics(record.id)
+                setStatsFor(s)
+              } catch (e: any) {
+                notification.error({ message: 'Stats failed', description: e?.message })
+              }
+            }}
+            aria-label={`View statistics for ${record.name}`}
+          >
+            Stats
+          </button>
+        </Tooltip>
+        <Tooltip title="Delete dictionary">
+          <button
+            className="min-w-[44px] min-h-[44px] flex items-center justify-center text-danger hover:bg-danger/10 rounded-md transition-colors"
+            onClick={async () => {
+              const ok = await confirmDanger({
+                title: t('common:confirmTitle', { defaultValue: 'Please confirm' }),
+                content: 'Delete dictionary?',
+                okText: t('common:delete', { defaultValue: 'Delete' }),
+                cancelText: t('common:cancel', { defaultValue: 'Cancel' })
+              })
+              if (ok) deleteDict(record.id)
+            }}
+            aria-label={`Delete dictionary ${record.name}`}
+          >
+            <Trash2 className="w-5 h-5" />
+          </button>
+        </Tooltip>
       </div>
     )}
   ]
@@ -165,6 +368,24 @@ export const DictionariesManager: React.FC = () => {
   )
 }
 
+/** Validates regex pattern and returns error message or null if valid */
+function validateRegexPattern(pattern: string): string | null {
+  if (!pattern) return null
+  try {
+    // Check if it looks like a regex pattern (starts and ends with /)
+    const regexMatch = pattern.match(/^\/(.*)\/([gimsuvy]*)$/)
+    if (regexMatch) {
+      new RegExp(regexMatch[1], regexMatch[2])
+    } else {
+      // Try as plain regex
+      new RegExp(pattern)
+    }
+    return null
+  } catch (e: any) {
+    return e.message || "Invalid regex pattern"
+  }
+}
+
 const DictionaryEntryManager: React.FC<{ dictionaryId: number; form: any }> = ({
   dictionaryId,
   form
@@ -172,6 +393,7 @@ const DictionaryEntryManager: React.FC<{ dictionaryId: number; form: any }> = ({
   const { t } = useTranslation(["common", "option"])
   const qc = useQueryClient()
   const confirmDanger = useConfirmDanger()
+  const notification = useAntdNotification()
   const [validationStrict, setValidationStrict] = React.useState(false)
   const [validationReport, setValidationReport] = React.useState<any | null>(null)
   const [validationError, setValidationError] = React.useState<string | null>(null)
@@ -180,6 +402,21 @@ const DictionaryEntryManager: React.FC<{ dictionaryId: number; form: any }> = ({
   const [previewMaxIterations, setPreviewMaxIterations] = React.useState<number | null>(5)
   const [previewResult, setPreviewResult] = React.useState<any | null>(null)
   const [previewError, setPreviewError] = React.useState<string | null>(null)
+
+  // Simple/Advanced mode toggle
+  const [advancedMode, setAdvancedMode] = React.useState(false)
+
+  // Inline regex validation state
+  const [regexError, setRegexError] = React.useState<string | null>(null)
+
+  // Entry editing state
+  const [editingEntry, setEditingEntry] = React.useState<any | null>(null)
+  const [editEntryForm] = Form.useForm()
+
+  // Inline test popover state
+  const [testingEntryId, setTestingEntryId] = React.useState<number | null>(null)
+  const [inlineTestInput, setInlineTestInput] = React.useState("")
+  const [inlineTestResult, setInlineTestResult] = React.useState<string | null>(null)
 
   const { data: dictionaryMeta } = useQuery({
     queryKey: ["tldw:getDictionary", dictionaryId],
@@ -211,6 +448,20 @@ const DictionaryEntryManager: React.FC<{ dictionaryId: number; form: any }> = ({
     mutationFn: (id: number) => tldwClient.deleteDictionaryEntry(id),
     onSuccess: () =>
       qc.invalidateQueries({ queryKey: ["tldw:listDictionaryEntries", dictionaryId] })
+  })
+
+  const { mutate: updateEntry, isPending: updatingEntry } = useMutation({
+    mutationFn: ({ entryId, data }: { entryId: number; data: any }) =>
+      tldwClient.updateDictionaryEntry(entryId, data),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["tldw:listDictionaryEntries", dictionaryId] })
+      setEditingEntry(null)
+      editEntryForm.resetFields()
+      notification.success({ message: "Entry updated" })
+    },
+    onError: (e: any) => {
+      notification.error({ message: "Update failed", description: e?.message })
+    }
   })
 
   const { mutate: runValidation, isPending: validating } = useMutation({
@@ -595,6 +846,10 @@ const DictionaryEntryManager: React.FC<{ dictionaryId: number; form: any }> = ({
 
       <Divider className="!my-2" />
 
+      <h3 className="text-sm font-medium text-text mt-4 mb-2">
+        {t("option:dictionaries.entriesHeading", "Dictionary Entries")}
+      </h3>
+
       {entriesStatus === "pending" && <Skeleton active paragraph={{ rows: 4 }} />}
       {entriesStatus === "success" && (
         <Table
@@ -602,29 +857,148 @@ const DictionaryEntryManager: React.FC<{ dictionaryId: number; form: any }> = ({
           rowKey={(r: any) => r.id}
           dataSource={entries}
           columns={[
-            { title: "Pattern", dataIndex: "pattern", key: "pattern" },
+            {
+              title: "Pattern",
+              dataIndex: "pattern",
+              key: "pattern",
+              render: (v: string, r: any) => (
+                <span className="font-mono text-xs">
+                  {v}
+                  {r.type === "regex" && (
+                    <Tag color="blue" className="ml-1 text-[10px]">regex</Tag>
+                  )}
+                </span>
+              )
+            },
             {
               title: "Replacement",
               dataIndex: "replacement",
-              key: "replacement"
+              key: "replacement",
+              render: (v: string) => <span className="text-xs">{v}</span>
             },
-            { title: "Type", dataIndex: "type", key: "type" },
-            { title: "Prob.", dataIndex: "probability", key: "probability" },
-            { title: "Group", dataIndex: "group", key: "group" },
             {
               title: "Enabled",
               dataIndex: "enabled",
               key: "enabled",
-              render: (v: boolean) => (v ? "Yes" : "No")
+              width: 80,
+              render: (v: boolean) => (
+                v ? (
+                  <Tag color="green" icon={<CheckCircle2 className="w-3 h-3 inline mr-1" />}>On</Tag>
+                ) : (
+                  <Tag>Off</Tag>
+                )
+              )
             },
             {
               title: "Actions",
               key: "actions",
+              width: 180,
               render: (_: any, r: any) => (
-                <div className="flex gap-2">
-                  <Tooltip title="Delete">
+                <div className="flex gap-1 items-center">
+                  {/* Inline Test Button */}
+                  <Popover
+                    trigger="click"
+                    open={testingEntryId === r.id}
+                    onOpenChange={(open) => {
+                      if (open) {
+                        setTestingEntryId(r.id)
+                        setInlineTestInput("")
+                        setInlineTestResult(null)
+                      } else {
+                        setTestingEntryId(null)
+                      }
+                    }}
+                    content={
+                      <div className="w-64 space-y-2">
+                        <div className="text-xs font-medium">Test this entry</div>
+                        <Input
+                          size="small"
+                          placeholder="Enter test text..."
+                          value={inlineTestInput}
+                          onChange={(e) => setInlineTestInput(e.target.value)}
+                          onPressEnter={() => {
+                            if (!inlineTestInput.trim()) return
+                            try {
+                              let result = inlineTestInput
+                              if (r.type === "regex") {
+                                const regexMatch = r.pattern.match(/^\/(.*)\/([gimsuvy]*)$/)
+                                const regex = regexMatch
+                                  ? new RegExp(regexMatch[1], regexMatch[2])
+                                  : new RegExp(r.pattern, r.case_sensitive ? "" : "i")
+                                result = inlineTestInput.replace(regex, r.replacement)
+                              } else {
+                                const flags = r.case_sensitive ? "g" : "gi"
+                                result = inlineTestInput.replace(new RegExp(r.pattern.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), flags), r.replacement)
+                              }
+                              setInlineTestResult(result)
+                            } catch (e: any) {
+                              setInlineTestResult(`Error: ${e.message}`)
+                            }
+                          }}
+                        />
+                        <Button
+                          size="small"
+                          type="primary"
+                          className="w-full"
+                          onClick={() => {
+                            if (!inlineTestInput.trim()) return
+                            try {
+                              let result = inlineTestInput
+                              if (r.type === "regex") {
+                                const regexMatch = r.pattern.match(/^\/(.*)\/([gimsuvy]*)$/)
+                                const regex = regexMatch
+                                  ? new RegExp(regexMatch[1], regexMatch[2])
+                                  : new RegExp(r.pattern, r.case_sensitive ? "" : "i")
+                                result = inlineTestInput.replace(regex, r.replacement)
+                              } else {
+                                const flags = r.case_sensitive ? "g" : "gi"
+                                result = inlineTestInput.replace(new RegExp(r.pattern.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), flags), r.replacement)
+                              }
+                              setInlineTestResult(result)
+                            } catch (e: any) {
+                              setInlineTestResult(`Error: ${e.message}`)
+                            }
+                          }}
+                        >
+                          Test
+                        </Button>
+                        {inlineTestResult !== null && (
+                          <div className="mt-2 p-2 bg-surface2 rounded text-xs">
+                            <div className="text-text-muted mb-1">Result:</div>
+                            <div className="font-mono break-all">{inlineTestResult}</div>
+                          </div>
+                        )}
+                      </div>
+                    }
+                  >
+                    <Tooltip title="Test entry">
+                      <button
+                        className="min-w-[36px] min-h-[36px] flex items-center justify-center text-text-muted hover:text-text hover:bg-surface2 rounded-md transition-colors"
+                        aria-label={`Test entry ${r.pattern}`}
+                      >
+                        <Play className="w-4 h-4" />
+                      </button>
+                    </Tooltip>
+                  </Popover>
+
+                  {/* Edit Button */}
+                  <Tooltip title="Edit entry">
                     <button
-                      className="text-danger"
+                      className="min-w-[36px] min-h-[36px] flex items-center justify-center text-text-muted hover:text-text hover:bg-surface2 rounded-md transition-colors"
+                      onClick={() => {
+                        setEditingEntry(r)
+                        editEntryForm.setFieldsValue(r)
+                      }}
+                      aria-label={`Edit entry ${r.pattern}`}
+                    >
+                      <Pen className="w-4 h-4" />
+                    </button>
+                  </Tooltip>
+
+                  {/* Delete Button */}
+                  <Tooltip title="Delete entry">
+                    <button
+                      className="min-w-[36px] min-h-[36px] flex items-center justify-center text-danger hover:bg-danger/10 rounded-md transition-colors"
                       onClick={async () => {
                         const ok = await confirmDanger({
                           title: t("common:confirmTitle", {
@@ -637,7 +1011,9 @@ const DictionaryEntryManager: React.FC<{ dictionaryId: number; form: any }> = ({
                           })
                         })
                         if (ok) deleteEntry(r.id)
-                      }}>
+                      }}
+                      aria-label={`Delete entry ${r.pattern}`}
+                    >
                       <Trash2 className="w-4 h-4" />
                     </button>
                   </Tooltip>
@@ -647,49 +1023,291 @@ const DictionaryEntryManager: React.FC<{ dictionaryId: number; form: any }> = ({
           ] as any}
         />
       )}
-      <Form layout="vertical" form={form} onFinish={(v) => addEntry(v)}>
-        <Form.Item name="pattern" label="Pattern" rules={[{ required: true }]}>
-          <Input placeholder="hello or /hel+o/i" />
-        </Form.Item>
-        <Form.Item name="replacement" label="Replacement" rules={[{ required: true }]}>
-          <Input />
-        </Form.Item>
-        <Form.Item name="type" label="Type" initialValue="literal">
-          <Select
-            options={[
-              { label: "Literal", value: "literal" },
-              { label: "Regex", value: "regex" }
-            ]}
-          />
-        </Form.Item>
-        <Form.Item name="probability" label="Probability" initialValue={1}>
-          <InputNumber
-            min={0}
-            max={1}
-            step={0.01}
-            style={{ width: "100%" }}
-          />
-        </Form.Item>
-        <Form.Item name="group" label="Group">
-          <Input />
-        </Form.Item>
-        <Form.Item name="max_replacements" label="Max Replacements">
-          <InputNumber min={0} style={{ width: "100%" }} />
-        </Form.Item>
-        <Form.Item
-          name="enabled"
-          label="Enabled"
-          valuePropName="checked"
-          initialValue={true}>
-          <Switch />
-        </Form.Item>
-        <Form.Item name="case_sensitive" label="Case Sensitive" valuePropName="checked">
-          <Switch />
-        </Form.Item>
-        <Button type="primary" htmlType="submit" loading={adding} className="w-full">
-          Add Entry
-        </Button>
-      </Form>
+
+      {/* Edit Entry Modal */}
+      <Modal
+        title="Edit Entry"
+        open={!!editingEntry}
+        onCancel={() => {
+          setEditingEntry(null)
+          editEntryForm.resetFields()
+        }}
+        footer={null}
+      >
+        <Form
+          layout="vertical"
+          form={editEntryForm}
+          onFinish={(v) => {
+            if (editingEntry?.id) {
+              updateEntry({ entryId: editingEntry.id, data: v })
+            }
+          }}
+        >
+          <Form.Item
+            name="pattern"
+            label={<LabelWithHelp label="Pattern" help="The text or regex pattern to match. For regex, use /pattern/flags format." />}
+            rules={[{ required: true }]}
+          >
+            <Input placeholder="e.g., KCl or /hel+o/i" className="font-mono" />
+          </Form.Item>
+          <Form.Item
+            name="replacement"
+            label={<LabelWithHelp label="Replacement" help="The text to replace matches with." />}
+            rules={[{ required: true }]}
+          >
+            <Input placeholder="e.g., Potassium Chloride" />
+          </Form.Item>
+          <Form.Item name="type" label="Type" initialValue="literal">
+            <Select
+              options={[
+                { label: "Literal (exact match)", value: "literal" },
+                { label: "Regex (pattern match)", value: "regex" }
+              ]}
+            />
+          </Form.Item>
+          <Form.Item name="enabled" label="Enabled" valuePropName="checked" initialValue={true}>
+            <Switch />
+          </Form.Item>
+          <Form.Item name="probability" label="Probability" initialValue={1}>
+            <InputNumber min={0} max={1} step={0.01} style={{ width: "100%" }} />
+          </Form.Item>
+          <Form.Item name="group" label="Group">
+            <Input />
+          </Form.Item>
+          <Form.Item name="max_replacements" label="Max Replacements">
+            <InputNumber min={0} style={{ width: "100%" }} />
+          </Form.Item>
+          <Form.Item name="case_sensitive" label="Case Sensitive" valuePropName="checked">
+            <Switch />
+          </Form.Item>
+          <Button type="primary" htmlType="submit" loading={updatingEntry} className="w-full">
+            Save Changes
+          </Button>
+        </Form>
+      </Modal>
+      {/* Add Entry Form */}
+      <div className="border border-border rounded-lg p-4 bg-surface2/30 mt-4">
+        <div className="flex items-center justify-between mb-3">
+          <h4 className="text-sm font-medium text-text">
+            {t("option:dictionaries.addEntry", "Add New Entry")}
+          </h4>
+          <button
+            type="button"
+            className="flex items-center gap-1 text-xs text-text-muted hover:text-text transition-colors"
+            onClick={() => setAdvancedMode(!advancedMode)}
+            aria-expanded={advancedMode}
+          >
+            {advancedMode ? (
+              <>
+                <ChevronUp className="w-3 h-3" />
+                {t("option:dictionaries.simpleMode", "Simple mode")}
+              </>
+            ) : (
+              <>
+                <ChevronDown className="w-3 h-3" />
+                {t("option:dictionaries.advancedMode", "Advanced options")}
+              </>
+            )}
+          </button>
+        </div>
+
+        <Form
+          layout="vertical"
+          form={form}
+          onFinish={(v) => {
+            // Validate regex before submitting
+            const entryType = form.getFieldValue("type") || "literal"
+            if (entryType === "regex") {
+              const pattern = form.getFieldValue("pattern")
+              const error = validateRegexPattern(pattern)
+              if (error) {
+                setRegexError(error)
+                return
+              }
+            }
+            addEntry(v)
+          }}
+        >
+          <div className="grid gap-3 sm:grid-cols-2">
+            <Form.Item
+              name="pattern"
+              label={
+                <LabelWithHelp
+                  label={t("option:dictionaries.patternLabel", "Find")}
+                  help={t(
+                    "option:dictionaries.patternHelp",
+                    "Text to find. For simple terms like 'KCl', just type it. For patterns, select Regex type and use /pattern/flags format."
+                  )}
+                  required
+                />
+              }
+              rules={[{ required: true, message: "Pattern is required" }]}
+              validateStatus={regexError ? "error" : undefined}
+              help={regexError}
+            >
+              <Input
+                placeholder={t("option:dictionaries.patternPlaceholder", "e.g., KCl or /hel+o/i")}
+                className="font-mono"
+                onChange={(e) => {
+                  // Real-time regex validation
+                  const entryType = form.getFieldValue("type") || "literal"
+                  if (entryType === "regex") {
+                    const error = validateRegexPattern(e.target.value)
+                    setRegexError(error)
+                  } else {
+                    setRegexError(null)
+                  }
+                }}
+                aria-describedby="pattern-help"
+              />
+            </Form.Item>
+            <Form.Item
+              name="replacement"
+              label={
+                <LabelWithHelp
+                  label={t("option:dictionaries.replacementLabel", "Replace with")}
+                  help={t(
+                    "option:dictionaries.replacementHelp",
+                    "The text that will replace matches. For regex, you can use $1, $2 for capture groups."
+                  )}
+                  required
+                />
+              }
+              rules={[{ required: true, message: "Replacement is required" }]}
+            >
+              <Input
+                placeholder={t("option:dictionaries.replacementPlaceholder", "e.g., Potassium Chloride")}
+                aria-describedby="replacement-help"
+              />
+            </Form.Item>
+          </div>
+
+          <Form.Item
+            name="type"
+            label={
+              <LabelWithHelp
+                label={t("option:dictionaries.typeLabel", "Match type")}
+                help={t(
+                  "option:dictionaries.typeHelp",
+                  "Literal matches exact text. Regex allows pattern matching with regular expressions."
+                )}
+              />
+            }
+            initialValue="literal"
+          >
+            <Select
+              options={[
+                { label: t("option:dictionaries.typeLiteral", "Literal (exact match)"), value: "literal" },
+                { label: t("option:dictionaries.typeRegex", "Regex (pattern match)"), value: "regex" }
+              ]}
+              onChange={(value) => {
+                // Re-validate pattern when type changes
+                const pattern = form.getFieldValue("pattern")
+                if (value === "regex" && pattern) {
+                  setRegexError(validateRegexPattern(pattern))
+                } else {
+                  setRegexError(null)
+                }
+              }}
+            />
+          </Form.Item>
+
+          {/* Show validation warning for regex */}
+          {regexError && (
+            <div className="flex items-start gap-2 p-2 mb-3 rounded bg-danger/10 text-danger text-xs">
+              <AlertCircle className="w-4 h-4 shrink-0 mt-0.5" />
+              <div>
+                <div className="font-medium">Invalid regex pattern</div>
+                <div className="text-danger/80">{regexError}</div>
+              </div>
+            </div>
+          )}
+
+          {/* Advanced options - hidden by default */}
+          {advancedMode && (
+            <div className="grid gap-3 sm:grid-cols-2 mt-3 pt-3 border-t border-border">
+              <Form.Item
+                name="probability"
+                label={
+                  <LabelWithHelp
+                    label={t("option:dictionaries.probabilityLabel", "Probability")}
+                    help={t(
+                      "option:dictionaries.probabilityHelp",
+                      "Chance of applying this replacement (0-1). Use 1 for always, 0.5 for 50% of the time."
+                    )}
+                  />
+                }
+                initialValue={1}
+              >
+                <InputNumber min={0} max={1} step={0.01} style={{ width: "100%" }} />
+              </Form.Item>
+              <Form.Item
+                name="group"
+                label={
+                  <LabelWithHelp
+                    label={t("option:dictionaries.groupLabel", "Group")}
+                    help={t(
+                      "option:dictionaries.groupHelp",
+                      "Optional category for organizing entries (e.g., 'medications', 'abbreviations')."
+                    )}
+                  />
+                }
+              >
+                <Input placeholder={t("option:dictionaries.groupPlaceholder", "e.g., medications")} />
+              </Form.Item>
+              <Form.Item
+                name="max_replacements"
+                label={
+                  <LabelWithHelp
+                    label={t("option:dictionaries.maxReplacementsLabel", "Max replacements")}
+                    help={t(
+                      "option:dictionaries.maxReplacementsHelp",
+                      "Limit how many times this pattern is replaced per message. Leave empty for unlimited."
+                    )}
+                  />
+                }
+              >
+                <InputNumber min={0} style={{ width: "100%" }} placeholder="Unlimited" />
+              </Form.Item>
+              <div className="flex gap-4">
+                <Form.Item
+                  name="enabled"
+                  label={t("option:dictionaries.enabledLabel", "Enabled")}
+                  valuePropName="checked"
+                  initialValue={true}
+                >
+                  <Switch />
+                </Form.Item>
+                <Form.Item
+                  name="case_sensitive"
+                  label={
+                    <LabelWithHelp
+                      label={t("option:dictionaries.caseSensitiveLabel", "Case sensitive")}
+                      help={t(
+                        "option:dictionaries.caseSensitiveHelp",
+                        "When off (default), 'KCl' matches 'kcl', 'KCL', etc. Recommended off for medical terms."
+                      )}
+                    />
+                  }
+                  valuePropName="checked"
+                >
+                  <Switch />
+                </Form.Item>
+              </div>
+            </div>
+          )}
+
+          <Button
+            type="primary"
+            htmlType="submit"
+            loading={adding}
+            disabled={!!regexError}
+            className="w-full mt-3"
+          >
+            {t("option:dictionaries.addEntryButton", "Add Entry")}
+          </Button>
+        </Form>
+      </div>
     </div>
   )
 }

@@ -16,9 +16,11 @@ import {
   MEDIA_REVIEW_ORIENTATION_SETTING,
   MEDIA_REVIEW_VIEW_MODE_SETTING,
   MEDIA_REVIEW_FILTERS_COLLAPSED_SETTING,
-  MEDIA_REVIEW_AUTO_VIEW_MODE_SETTING
+  MEDIA_REVIEW_AUTO_VIEW_MODE_SETTING,
+  MEDIA_REVIEW_SELECTION_SETTING,
+  MEDIA_REVIEW_FOCUSED_ID_SETTING
 } from "@/services/settings/ui-settings"
-import { clearSetting, getSetting } from "@/services/settings/registry"
+import { clearSetting, getSetting, setSetting } from "@/services/settings/registry"
 
 type MediaItem = {
   id: string | number
@@ -64,6 +66,8 @@ const getContent = (d: MediaDetail): string => {
   return ""
 }
 
+const MINIMAP_COLLAPSE_THRESHOLD = 8
+
 export const MediaReviewPage: React.FC = () => {
   const { t } = useTranslation(['review'])
   const message = useAntdMessage()
@@ -87,6 +91,7 @@ export const MediaReviewPage: React.FC = () => {
   const [contentExpandedIds, setContentExpandedIds] = React.useState<Set<string>>(new Set())
   const [analysisExpandedIds, setAnalysisExpandedIds] = React.useState<Set<string>>(new Set())
   const [detailLoading, setDetailLoading] = React.useState<Record<string | number, boolean>>({})
+  const [failedIds, setFailedIds] = React.useState<Set<string | number>>(new Set())
   const [openAllLimit] = React.useState<number>(30)
   // Persisted view mode
   const [persistedViewMode, setPersistedViewMode] = useSetting(MEDIA_REVIEW_VIEW_MODE_SETTING)
@@ -112,6 +117,8 @@ export const MediaReviewPage: React.FC = () => {
   const lastClickedRef = React.useRef<string | number | null>(null)
   // Ref for viewer panel focus management
   const viewerRef = React.useRef<HTMLDivElement>(null)
+  // Track last Escape press for double-tap detection
+  const lastEscapePressRef = React.useRef<number>(0)
   // Check for reduced motion preference
   const prefersReducedMotion = React.useMemo(() =>
     typeof window !== 'undefined' && window.matchMedia('(prefers-reduced-motion: reduce)').matches,
@@ -119,6 +126,10 @@ export const MediaReviewPage: React.FC = () => {
   )
   const isOnline = useServerOnline()
 
+  // Track whether we've restored selection from storage
+  const [selectionRestored, setSelectionRestored] = React.useState(false)
+
+  // Restore selection state on mount
   React.useEffect(() => {
     let cancelled = false
     void (async () => {
@@ -126,11 +137,35 @@ export const MediaReviewPage: React.FC = () => {
       if (!cancelled && lastMediaId) {
         setPendingInitialMediaId(lastMediaId)
       }
+      // Restore persisted selection
+      const savedSelection = await getSetting(MEDIA_REVIEW_SELECTION_SETTING)
+      const savedFocusedId = await getSetting(MEDIA_REVIEW_FOCUSED_ID_SETTING)
+      if (!cancelled) {
+        if (savedSelection && savedSelection.length > 0) {
+          setSelectedIds(savedSelection)
+        }
+        if (savedFocusedId != null) {
+          setFocusedId(savedFocusedId)
+        }
+        setSelectionRestored(true)
+      }
     })()
     return () => {
       cancelled = true
     }
   }, [])
+
+  // Persist selection state when it changes (after initial restore)
+  React.useEffect(() => {
+    if (!selectionRestored) return
+    void setSetting(MEDIA_REVIEW_SELECTION_SETTING, selectedIds)
+  }, [selectedIds, selectionRestored])
+
+  // Persist focused ID when it changes (after initial restore)
+  React.useEffect(() => {
+    if (!selectionRestored) return
+    void setSetting(MEDIA_REVIEW_FOCUSED_ID_SETTING, focusedId)
+  }, [focusedId, selectionRestored])
 
   const fetchList = async (): Promise<MediaItem[]> => {
     const hasQuery = query.trim().length > 0
@@ -273,16 +308,31 @@ export const MediaReviewPage: React.FC = () => {
 
   React.useEffect(() => { if (isOnline) void loadKeywordSuggestions() }, [loadKeywordSuggestions, isOnline])
 
-  const ensureDetail = React.useCallback(async (id: string | number) => {
+  const ensureDetail = React.useCallback(async (id: string | number, isRetry = false) => {
     if (details[id] || detailLoading[id]) return
     setDetailLoading((prev) => ({ ...prev, [id]: true }))
+    // Clear from failed set if retrying
+    if (isRetry) {
+      setFailedIds((prev) => {
+        const next = new Set(prev)
+        next.delete(id)
+        return next
+      })
+    }
     try {
       const d = await bgRequest<MediaDetail>({ path: `/api/v1/media/${id}` as any, method: 'GET' as any })
       const base = Array.isArray(data) ? (data as MediaItem[]).find((x) => x.id === id) : undefined
       const enriched = { ...d, id, title: (d as any)?.title ?? base?.title, type: (d as any)?.type ?? base?.type, created_at: (d as any)?.created_at ?? base?.created_at } as any
       setDetails((prev) => ({ ...prev, [id]: enriched }))
+      // Remove from failed set on success
+      setFailedIds((prev) => {
+        const next = new Set(prev)
+        next.delete(id)
+        return next
+      })
     } catch {
-      // ignore detail fetch errors but clear loading flag
+      // Track failed fetch
+      setFailedIds((prev) => new Set(prev).add(id))
     } finally {
       setDetailLoading((prev) => {
         const next = { ...prev }
@@ -291,6 +341,50 @@ export const MediaReviewPage: React.FC = () => {
       })
     }
   }, [data, detailLoading, details])
+
+  const retryFetch = React.useCallback((id: string | number) => {
+    // Clear from details to allow re-fetch
+    setDetails((prev) => {
+      const next = { ...prev }
+      delete next[id]
+      return next
+    })
+    void ensureDetail(id, true)
+  }, [ensureDetail])
+
+  const clearSelectionWithGuard = React.useCallback(() => {
+    if (selectedIds.length > 3) {
+      // Capture selection at clear time (not closure reference)
+      const selectionToRestore = [...selectedIds]
+      const focusToRestore = focusedId
+
+      setSelectedIds([])
+      setFocusedId(null)
+
+      message.info(
+        <span>
+          {t('mediaPage.selectionCleared', 'Selection cleared.')}
+          {' '}
+          <Button
+            type="link"
+            size="small"
+            className="!p-0"
+            onClick={() => {
+              setSelectedIds(selectionToRestore)
+              setFocusedId(focusToRestore ?? selectionToRestore[0] ?? null)
+              message.success(t('mediaPage.selectionRestored', 'Selection restored'))
+            }}
+          >
+            {t('mediaPage.undo', 'Undo')}
+          </Button>
+        </span>,
+        5 // 5 second window
+      )
+    } else {
+      setSelectedIds([])
+      setFocusedId(null)
+    }
+  }, [selectedIds, focusedId, t])
 
   const toggleSelect = async (id: string | number, event?: React.MouseEvent) => {
     // Shift+click range selection
@@ -477,6 +571,26 @@ export const MediaReviewPage: React.FC = () => {
       if (tag === 'input' || tag === 'textarea' || tag === 'select') return
 
       switch (e.key) {
+        case 'a': // Select all visible (with Ctrl/Cmd)
+          if (e.ctrlKey || e.metaKey) {
+            e.preventDefault()
+            if (allResults.length === 0) return
+            const slice = allResults.slice(0, Math.min(allResults.length, openAllLimit))
+            setSelectedIds(slice.map((m) => m.id))
+            slice.forEach((m) => void ensureDetail(m.id))
+            if (allResults.length > openAllLimit) {
+              message.info(t("mediaPage.openAllCapped", { defaultValue: "Showing first {{count}} items to keep things smooth", count: openAllLimit }))
+            }
+          }
+          break
+        case 'ArrowDown': // Next in list
+          e.preventDefault()
+          goRelative(1)
+          break
+        case 'ArrowUp': // Previous in list
+          e.preventDefault()
+          goRelative(-1)
+          break
         case 'j': // Next item
           e.preventDefault()
           goRelative(1)
@@ -497,17 +611,30 @@ export const MediaReviewPage: React.FC = () => {
             })
           }
           break
-        case 'Escape': // Clear selection
+        case 'Escape': // Clear selection (double-tap required for >5 items)
           e.preventDefault()
-          setSelectedIds([])
-          setFocusedId(null)
+          if (selectedIds.length > 5) {
+            const now = Date.now()
+            if (now - lastEscapePressRef.current < 500) {
+              // Double-tap detected - clear with guard
+              clearSelectionWithGuard()
+              lastEscapePressRef.current = 0
+            } else {
+              // First tap - show hint
+              lastEscapePressRef.current = now
+              message.info(t('mediaPage.escapeDoubleTapHint', 'Press Escape again to clear {{count}} items', { count: selectedIds.length }), 2)
+            }
+          } else {
+            setSelectedIds([])
+            setFocusedId(null)
+          }
           break
       }
     }
 
     document.addEventListener('keydown', handleKeyDown)
     return () => document.removeEventListener('keydown', handleKeyDown)
-  }, [goRelative, focusedId])
+  }, [goRelative, focusedId, selectedIds.length, clearSelectionWithGuard, t, allResults, openAllLimit, ensureDetail])
 
   // Auto-select view mode by item count
   React.useEffect(() => {
@@ -547,6 +674,7 @@ export const MediaReviewPage: React.FC = () => {
     const contentShown = !contentIsLong || contentExpanded ? content : `${content.slice(0, 2000)}…`
     const analysisShown = !analysisIsLong || analysisExpanded ? analysisText : `${analysisText.slice(0, 1600)}…`
     const isLoadingDetail = detailLoading[d.id]
+    const hasFailed = failedIds.has(d.id)
     const rawSource = (d as any)?.source || (d as any)?.url || (d as any)?.original_url
     const source =
       rawSource && typeof rawSource === "object"
@@ -627,6 +755,20 @@ export const MediaReviewPage: React.FC = () => {
             </Tooltip>
           </div>
         </div>
+
+        {hasFailed && (
+          <Alert
+            type="error"
+            showIcon
+            className="mt-3"
+            message={t('mediaPage.loadFailed', 'Failed to load content')}
+            action={
+              <Button size="small" onClick={() => retryFetch(d.id)}>
+                {t('mediaPage.retry', 'Retry')}
+              </Button>
+            }
+          />
+        )}
 
         <div className="mt-3 rounded border border-border p-2">
           <div className="flex items-center justify-between">
@@ -811,7 +953,7 @@ export const MediaReviewPage: React.FC = () => {
                     size="small"
                     type="link"
                     className="!px-1"
-                    onClick={() => { setSelectedIds([]); setFocusedId(null) }}
+                    onClick={clearSelectionWithGuard}
                   >
                     {t('mediaPage.clearSelection', 'Clear')}
                   </Button>
@@ -878,17 +1020,21 @@ export const MediaReviewPage: React.FC = () => {
                             width: "100%",
                             transform: `translateY(${virtualRow.start}px)`
                           }}
-                          className={`px-3 py-2 border-b border-border cursor-pointer hover:bg-surface2 ${isSelected ? "bg-surface2 ring-2 ring-primary/50" : ""}`}
+                          className={`px-3 py-2 border-b border-border cursor-pointer hover:bg-surface2 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary focus-visible:bg-surface2 ${isSelected ? "bg-surface2 ring-2 ring-primary" : ""}`}
                         >
                           <div className="flex items-start justify-between gap-2">
-                            <Checkbox
-                              checked={isSelected}
+                            <div
+                              className="min-w-[44px] min-h-[44px] flex items-center justify-center cursor-pointer -ml-2 -mt-1"
                               onClick={(e) => {
                                 e.stopPropagation()
                                 toggleSelect(item.id, e)
                               }}
-                              className="mt-1"
-                            />
+                            >
+                              <Checkbox
+                                checked={isSelected}
+                                tabIndex={-1}
+                              />
+                            </div>
                             <div className="min-w-0 flex-1">
                               <div className="font-medium truncate">{item.title}</div>
                               <div className="text-[11px] text-text-muted flex items-center gap-2 mt-1">
@@ -977,18 +1123,25 @@ export const MediaReviewPage: React.FC = () => {
                         <Radio.Button value="spread">
                           <LayoutGrid className="w-3.5 h-3.5 inline mr-1" />
                           {t("mediaPage.spreadMode", "Compare")}
+                          {selectedIds.length > 0 && <span className="ml-1 text-xs opacity-70">({selectedIds.length})</span>}
                         </Radio.Button>
                       </Tooltip>
                       <Tooltip title={t("mediaPage.listModeTooltip", "View one item at a time with navigation")}>
                         <Radio.Button value="list">
                           <Focus className="w-3.5 h-3.5 inline mr-1" />
                           {t("mediaPage.listMode", "Focus")}
+                          {selectedIds.length > 0 && (
+                            <span className="ml-1 text-xs opacity-70">
+                              ({focusedId != null ? selectedIds.indexOf(focusedId) + 1 : 1}/{selectedIds.length})
+                            </span>
+                          )}
                         </Radio.Button>
                       </Tooltip>
                       <Tooltip title={t("mediaPage.allModeTooltip", "View all selected items in a scrollable list")}>
                         <Radio.Button value="all">
                           <Rows3 className="w-3.5 h-3.5 inline mr-1" />
                           {t("mediaPage.allMode", "Stack")}
+                          {selectedIds.length > 0 && <span className="ml-1 text-xs opacity-70">({selectedIds.length})</span>}
                         </Radio.Button>
                       </Tooltip>
                     </Radio.Group>
@@ -1050,6 +1203,28 @@ export const MediaReviewPage: React.FC = () => {
                         label: `${t("mediaPage.openAll", "Review all on page")} (${Math.min(allResults.length, openAllLimit)})`,
                         onClick: openAllCurrent,
                         disabled: allResults.length === 0
+                      },
+                      { type: 'divider' },
+                      {
+                        key: 'clearSession',
+                        label: t("mediaPage.clearSession", "Clear review session"),
+                        danger: true,
+                        onClick: async () => {
+                          // Clear all persisted review state
+                          await clearSetting(MEDIA_REVIEW_SELECTION_SETTING)
+                          await clearSetting(MEDIA_REVIEW_FOCUSED_ID_SETTING)
+                          await clearSetting(MEDIA_REVIEW_VIEW_MODE_SETTING)
+                          await clearSetting(MEDIA_REVIEW_ORIENTATION_SETTING)
+                          await clearSetting(MEDIA_REVIEW_FILTERS_COLLAPSED_SETTING)
+                          // Reset local state
+                          setSelectedIds([])
+                          setFocusedId(null)
+                          setDetails({})
+                          setQuery("")
+                          setTypes([])
+                          setKeywordTokens([])
+                          message.success(t("mediaPage.sessionCleared", "Review session cleared"))
+                        }
                       }
                     ]
                   }}
@@ -1114,7 +1289,7 @@ export const MediaReviewPage: React.FC = () => {
                   title={
                     t(
                       "mediaPage.viewerHelp",
-                      "Keyboard: j/k to navigate items, o to toggle expand, Escape to clear selection. Tab into results list, Enter/Space to stack items. Shift+click for range selection."
+                      "Keyboard: j/k/↑/↓ to navigate, o to expand, Ctrl+A to select all, Escape×2 to clear. Shift+click for range selection."
                     ) as string
                   }
                 >
@@ -1138,22 +1313,62 @@ export const MediaReviewPage: React.FC = () => {
             {selectedIds.length > 0 && (
               <div className="mt-2 flex items-center gap-2 overflow-x-auto text-xs text-text-muted">
                 <span className="font-medium">{t("mediaPage.openMiniMap", "Open items")}</span>
-                {selectedIds.map((id, idx) => {
-                  const d = details[id]
-                  return (
-                    <Button
-                      key={String(id)}
-                      size="small"
-                      type={focusedId === id ? "primary" : "default"}
-                      onClick={() => {
-                        setFocusedId(id)
-                        scrollToCard(id)
-                      }}
-                    >
-                      {idx + 1}. {d?.title || `${t('mediaPage.media', 'Media')} ${id}`} {d?.type ? `(${String(d.type)})` : ""}
+                {selectedIds.length <= MINIMAP_COLLAPSE_THRESHOLD ? (
+                  // Horizontal button bar for ≤8 items
+                  selectedIds.map((id, idx) => {
+                    const d = details[id]
+                    const isLoading = detailLoading[id]
+                    const hasFailed = failedIds.has(id)
+                    return (
+                      <Button
+                        key={String(id)}
+                        size="small"
+                        type={focusedId === id ? "primary" : "default"}
+                        danger={hasFailed}
+                        onClick={() => {
+                          setFocusedId(id)
+                          scrollToCard(id)
+                        }}
+                        className={isLoading ? "animate-pulse" : ""}
+                      >
+                        {isLoading && <Spin size="small" className="mr-1" />}
+                        {idx + 1}. {d?.title || `${t('mediaPage.media', 'Media')} ${id}`} {d?.type ? `(${String(d.type)})` : ""}
+                      </Button>
+                    )
+                  })
+                ) : (
+                  // Dropdown for >8 items
+                  <Dropdown
+                    menu={{
+                      items: selectedIds.map((id, idx) => {
+                        const d = details[id]
+                        const isLoading = detailLoading[id]
+                        const hasFailed = failedIds.has(id)
+                        return {
+                          key: String(id),
+                          label: (
+                            <span className={isLoading ? "animate-pulse" : ""}>
+                              {isLoading && <Spin size="small" className="mr-1" />}
+                              {idx + 1}. {d?.title || `${t('mediaPage.media', 'Media')} ${id}`} {d?.type ? `(${String(d.type)})` : ""}
+                            </span>
+                          ),
+                          danger: hasFailed,
+                          onClick: () => {
+                            setFocusedId(id)
+                            scrollToCard(id)
+                          }
+                        }
+                      }),
+                      selectedKeys: focusedId != null ? [String(focusedId)] : []
+                    }}
+                    trigger={['click']}
+                  >
+                    <Button size="small">
+                      {t("mediaPage.jumpToItem", "Jump to item")} ({selectedIds.length})
+                      <ChevronDown className="w-3 h-3 ml-1" />
                     </Button>
-                  )
-                })}
+                  </Dropdown>
+                )}
               </div>
             )}
           </div>
@@ -1207,7 +1422,7 @@ export const MediaReviewPage: React.FC = () => {
                     className={`relative flex-1 min-h-0 ${viewMode === "all" ? "overflow-visible" : "overflow-auto"}`}
                   >
                     {viewMode === "all" ? (
-                      <div className="space-y-3">
+                      <div className={orientation === 'horizontal' ? 'flex flex-wrap gap-3' : 'space-y-3'}>
                         {viewerItems.map((d, idx) => renderCard(d, idx, { isAllMode: true }))}
                       </div>
                     ) : (

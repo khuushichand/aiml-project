@@ -275,6 +275,22 @@ def delete_character_from_db(db: CharactersRAGDB, character_id: int, expected_ve
         raise CharactersRAGDBError(f"Unexpected error deleting character: {exc}") from exc
 
 
+def restore_character_from_db(db: CharactersRAGDB, character_id: int, expected_version: int) -> bool:
+    """Restore a soft-deleted character from the database."""
+
+    try:
+        success = db.restore_character_card(character_id, expected_version)
+        if success:
+            logger.info("Character ID {} restored successfully.", character_id)
+        return bool(success)
+    except (ConflictError, CharactersRAGDBError) as exc:
+        logger.error("Error restoring character {}: {}", character_id, exc)
+        raise
+    except Exception as exc:
+        logger.error("Unexpected error restoring character {}: {}", character_id, exc, exc_info=True)
+        raise CharactersRAGDBError(f"Unexpected error restoring character: {exc}") from exc
+
+
 def search_characters_by_query_text(
     db: CharactersRAGDB,
     search_term: str,
