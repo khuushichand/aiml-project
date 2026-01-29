@@ -1,1 +1,0 @@
-import{j as o,Y as t}from"./react-instance-check-Bz0kNSNK.js";import{S as r}from"./SpeechPlaygroundPage-CoAqhLDd.js";import"./PageShell-CblLx7Gi.js";import"./useTtsProviderData-O2lwFFE9.js";import"./tts-provider-keys-BZDH3W_B.js";import"./TTSModeSettings-BQFlRu6N.js";import"./index-BctsBY2b.js";const u=()=>o.jsx(t,{children:o.jsx(r,{})});export{u as default};

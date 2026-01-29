@@ -19,7 +19,7 @@ import { RefreshCw, Briefcase, Filter, AlertTriangle, Eye, RotateCcw, XCircle, R
 import { AccessibleIconButton } from '@/components/ui/accessible-icon-button';
 import { api, ApiError } from '@/lib/api-client';
 import { formatDateTime } from '@/lib/format';
-import { formatBytes } from 'admin-ui/lib/format';
+import { formatBytes } from '@/lib/format';
 
 interface SlaPolicy {
   id: string;
@@ -685,7 +685,7 @@ export default function JobsPage() {
                       <Checkbox
                         id="sla-enabled"
                         checked={slaFormEnabled}
-                        onCheckedChange={setSlaFormEnabled}
+                        onCheckedChange={(checked) => setSlaFormEnabled(checked === true)}
                       />
                       <Label htmlFor="sla-enabled">Enabled</Label>
                     </div>

@@ -5,6 +5,6 @@ module.exports = {
   ...shared,
   content: [
     "../packages/ui/src/**/*.{ts,tsx,html}",
-    "./**/*.{ts,tsx,html}"
+    "./entrypoints/**/*.{ts,tsx,html}"
   ]
 }

@@ -1,6 +1,7 @@
 'use client';
 
 import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useRouter } from 'next/navigation';
 import { PermissionGuard } from '@/components/PermissionGuard';
 import { ResponsiveLayout } from '@/components/ResponsiveLayout';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
@@ -27,6 +28,7 @@ import { AccessibleIconButton } from '@/components/ui/accessible-icon-button';
 import { api } from '@/lib/api-client';
 import { AuditLog, LLMProvider, Organization, RegistrationCode, RegistrationSettings, type SecurityHealthData, User } from '@/types';
 import { buildDashboardUIStats, type DashboardUIStats } from '@/lib/dashboard';
+import { isSecurityHealthData } from '@/lib/type-guards';
 import Link from 'next/link';
 
 interface SystemHealth {
@@ -190,6 +192,7 @@ const deriveSystemHealth = (
 };
 
 export default function DashboardPage() {
+  const router = useRouter();
   const { selectedOrg } = useOrgContext();
   const confirm = useConfirm();
   const { success, error: showError } = useToast();
@@ -322,8 +325,8 @@ export default function DashboardPage() {
       setServerStatus({ state: healthState, checkedAt: new Date().toISOString() });
 
       // Process security health
-      if (securityHealthResult.status === 'fulfilled') {
-        setSecurityHealth(securityHealthResult.value as SecurityHealthData);
+      if (securityHealthResult.status === 'fulfilled' && isSecurityHealthData(securityHealthResult.value)) {
+        setSecurityHealth(securityHealthResult.value);
       } else {
         // Set default values if endpoint not available
         setSecurityHealth({
@@ -967,8 +970,8 @@ export default function DashboardPage() {
                       <p className="text-xs text-muted-foreground">Risk Score</p>
                       <div className="flex items-center gap-2">
                         <span className={`text-2xl font-bold ${
-                          (securityHealth?.risk_score ?? 0) > 70 ? 'text-red-500' :
-                          (securityHealth?.risk_score ?? 0) > 30 ? 'text-yellow-500' :
+                          (securityHealth?.risk_score ?? 0) >= 70 ? 'text-red-500' :
+                          (securityHealth?.risk_score ?? 0) >= 40 ? 'text-yellow-500' :
                           'text-green-500'
                         }`}>
                           {securityHealth?.risk_score ?? 0}
@@ -1002,16 +1005,12 @@ export default function DashboardPage() {
                     </div>
                   </div>
                   <div className="mt-4 flex flex-wrap gap-2">
-                    <Link href="/security">
-                      <Button variant="outline" size="sm">
-                        Security Dashboard
-                      </Button>
-                    </Link>
-                    <Link href="/audit?filter=security">
-                      <Button variant="ghost" size="sm">
-                        Security Audit Logs
-                      </Button>
-                    </Link>
+                    <Button variant="outline" size="sm" onClick={() => router.push('/security')}>
+                      Security Dashboard
+                    </Button>
+                    <Button variant="ghost" size="sm" onClick={() => router.push('/audit?filter=security')}>
+                      Security Audit Logs
+                    </Button>
                   </div>
                 </CardContent>
               </Card>

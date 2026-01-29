@@ -1,6 +1,7 @@
 'use client';
 
 import { useCallback, useEffect, useMemo, useState, Suspense } from 'react';
+import { useRouter } from 'next/navigation';
 import { useForm, FormProvider } from 'react-hook-form';
 import { z } from 'zod';
 import { zodResolver } from '@hookform/resolvers/zod';
@@ -29,7 +30,6 @@ import { useUrlState, useUrlPagination } from '@/lib/use-url-state';
 import { useConfirm } from '@/components/ui/confirm-dialog';
 import { useToast } from '@/components/ui/toast';
 import { useOrgContext } from '@/components/OrgContextSwitcher';
-import Link from 'next/link';
 
 type SavedUserView = {
   id: string;
@@ -51,6 +51,7 @@ const createUserSchema = z.object({
 type CreateUserFormData = z.infer<typeof createUserSchema>;
 
 function UsersPageContent() {
+  const router = useRouter();
   const confirm = useConfirm();
   const { success, error: showError } = useToast();
   const { selectedOrg } = useOrgContext();
@@ -64,7 +65,7 @@ function UsersPageContent() {
   const [showCreateUserDialog, setShowCreateUserDialog] = useState(false);
   const [createUserError, setCreateUserError] = useState('');
   const [creatingUser, setCreatingUser] = useState(false);
-  const [deletingUserId, setDeletingUserId] = useState<string | null>(null);
+  const [deletingUserIds, setDeletingUserIds] = useState<Set<number>>(new Set());
   const [savedViews, setSavedViews] = useState<SavedUserView[]>([]);
   const [showSaveViewDialog, setShowSaveViewDialog] = useState(false);
   const [saveViewName, setSaveViewName] = useState('');
@@ -433,8 +434,8 @@ function UsersPageContent() {
       showError('Cannot delete yourself', 'You cannot delete your own account.');
       return;
     }
-    const userId = user.id.toString();
-    if (deletingUserId === userId) return;
+    const userId = user.id;
+    if (deletingUserIds.has(userId)) return;
     const confirmed = await confirm({
       title: 'Delete User',
       message: `Delete ${user.username || user.email}? This cannot be undone.`,
@@ -445,15 +446,23 @@ function UsersPageContent() {
     if (!confirmed) return;
 
     try {
-      setDeletingUserId(userId);
-      await api.deleteUser(userId);
+      setDeletingUserIds((prev) => {
+        const next = new Set(prev);
+        next.add(userId);
+        return next;
+      });
+      await api.deleteUser(String(userId));
       success('User deleted', `${user.username || user.email} removed.`);
       void loadUsers();
     } catch (err: unknown) {
       const message = err instanceof Error ? err.message : 'Failed to delete user';
       showError('Delete failed', message);
     } finally {
-      setDeletingUserId((prev) => (prev === userId ? null : prev));
+      setDeletingUserIds((prev) => {
+        const next = new Set(prev);
+        next.delete(userId);
+        return next;
+      });
     }
   };
 
@@ -740,9 +749,8 @@ function UsersPageContent() {
                             user.storage_used_mb || 0,
                             user.storage_quota_mb || 0
                           );
-                          const userId = user.id.toString();
                           const isCurrentUser = currentUserId === user.id;
-                          const isDeleting = deletingUserId === userId;
+                          const isDeleting = deletingUserIds.has(user.id);
                           return (
                             <TableRow key={user.id}>
                               <TableCell>
@@ -803,22 +811,20 @@ function UsersPageContent() {
                               </TableCell>
                               <TableCell className="text-right">
                                 <div className="flex justify-end gap-1">
-                                  <Link href={`/users/${user.id}`}>
-                                    <AccessibleIconButton
-                                      icon={Eye}
-                                      label="View user details"
-                                      variant="ghost"
-                                      size="sm"
-                                    />
-                                  </Link>
-                                  <Link href={`/users/${user.id}/api-keys`}>
-                                    <AccessibleIconButton
-                                      icon={Key}
-                                      label="Manage API keys"
-                                      variant="ghost"
-                                      size="sm"
-                                    />
-                                  </Link>
+                                  <AccessibleIconButton
+                                    icon={Eye}
+                                    label="View user details"
+                                    variant="ghost"
+                                    size="sm"
+                                    onClick={() => router.push(`/users/${user.id}`)}
+                                  />
+                                  <AccessibleIconButton
+                                    icon={Key}
+                                    label="Manage API keys"
+                                    variant="ghost"
+                                    size="sm"
+                                    onClick={() => router.push(`/users/${user.id}/api-keys`)}
+                                  />
                                   <AccessibleIconButton
                                     icon={user.is_active ? UserX : UserCheck}
                                     label={user.is_active ? 'Deactivate user' : 'Activate user'}

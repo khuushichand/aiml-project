@@ -11,6 +11,7 @@ import { Alert, AlertDescription } from '@/components/ui/alert';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import { api } from '@/lib/api-client';
 import { formatDateTime } from '@/lib/format';
+import { isSecurityHealthData } from '@/lib/type-guards';
 import type { SecurityHealthData } from '@/types';
 import { ShieldAlert, ShieldCheck, RefreshCw, AlertTriangle, Key, Users, Lock } from 'lucide-react';
 import Link from 'next/link';
@@ -31,36 +32,6 @@ type SecurityAlertStatus = {
 
 const isRecord = (value: unknown): value is Record<string, unknown> =>
   typeof value === 'object' && value !== null;
-
-const isSecurityHealthData = (data: unknown): data is SecurityHealthData => {
-  if (!isRecord(data)) return false;
-  const knownKeys = [
-    'risk_score',
-    'recent_security_events',
-    'failed_logins_24h',
-    'suspicious_activity',
-    'mfa_adoption_rate',
-    'active_sessions',
-    'api_keys_active',
-    'last_security_scan',
-  ];
-  if (!knownKeys.some((key) => key in data)) return false;
-  const numberKeys = [
-    'risk_score',
-    'recent_security_events',
-    'failed_logins_24h',
-    'suspicious_activity',
-    'mfa_adoption_rate',
-    'active_sessions',
-    'api_keys_active',
-  ];
-  for (const key of numberKeys) {
-    const value = data[key];
-    if (value !== undefined && typeof value !== 'number') return false;
-  }
-  if (data.last_security_scan !== undefined && typeof data.last_security_scan !== 'string') return false;
-  return true;
-};
 
 const isSecurityAlertStatus = (data: unknown): data is SecurityAlertStatus => {
   if (!isRecord(data)) return false;
@@ -103,6 +74,12 @@ const getRiskLevelColor = (score: number) => {
   if (score >= 70) return 'text-red-500';
   if (score >= 40) return 'text-yellow-500';
   return 'text-green-500';
+};
+
+const getRiskBarColor = (score: number) => {
+  if (score >= 70) return 'bg-red-500';
+  if (score >= 40) return 'bg-yellow-500';
+  return 'bg-green-500';
 };
 
 export default function SecurityPage() {
@@ -225,13 +202,7 @@ export default function SecurityPage() {
                     aria-label={`Security risk score: ${riskScoreClamped}`}
                   >
                     <div
-                      className={`h-full transition-all ${
-                        riskScore >= 70
-                          ? 'bg-red-500'
-                          : riskScore >= 40
-                            ? 'bg-yellow-500'
-                            : 'bg-green-500'
-                      }`}
+                      className={`h-full transition-all ${getRiskBarColor(riskScore)}`}
                       style={{ width: `${riskScoreClamped}%` }}
                     />
                   </div>

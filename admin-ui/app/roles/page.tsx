@@ -43,7 +43,7 @@ export default function RolesPage() {
   // Create role dialog
   const [showCreateRole, setShowCreateRole] = useState(false);
   const [creatingRole, setCreatingRole] = useState(false);
-  const [deletingRoleId, setDeletingRoleId] = useState<string | null>(null);
+  const [deletingRoleIds, setDeletingRoleIds] = useState<Set<string>>(() => new Set());
   const roleForm = useForm<RoleFormData>({
     resolver: zodResolver(roleSchema),
     defaultValues: {
@@ -55,7 +55,7 @@ export default function RolesPage() {
   // Create permission dialog
   const [showCreatePermission, setShowCreatePermission] = useState(false);
   const [creatingPermission, setCreatingPermission] = useState(false);
-  const [deletingPermissionId, setDeletingPermissionId] = useState<string | null>(null);
+  const [deletingPermissionIds, setDeletingPermissionIds] = useState<Set<string>>(() => new Set());
   const permissionForm = useForm<PermissionFormData>({
     resolver: zodResolver(permissionSchema),
     defaultValues: {
@@ -122,7 +122,7 @@ export default function RolesPage() {
       return;
     }
     const roleId = role.id.toString();
-    if (deletingRoleId === roleId) return;
+    if (deletingRoleIds.has(roleId)) return;
 
     const confirmed = await confirm({
       title: 'Delete Role',
@@ -134,7 +134,7 @@ export default function RolesPage() {
     if (!confirmed) return;
 
     try {
-      setDeletingRoleId(roleId);
+      setDeletingRoleIds((prev) => new Set(prev).add(roleId));
       await api.deleteRole(roleId);
       success('Role Deleted', `Role "${role.name}" has been deleted`);
       loadData();
@@ -142,7 +142,12 @@ export default function RolesPage() {
       console.error('Failed to delete role:', err);
       showError('Failed to delete role', err instanceof Error ? err.message : 'Please try again.');
     } finally {
-      setDeletingRoleId((prev) => (prev === roleId ? null : prev));
+      setDeletingRoleIds((prev) => {
+        if (!prev.has(roleId)) return prev;
+        const next = new Set(prev);
+        next.delete(roleId);
+        return next;
+      });
     }
   };
 
@@ -167,7 +172,7 @@ export default function RolesPage() {
 
   const handleDeletePermission = async (perm: Permission) => {
     const permissionId = perm.id.toString();
-    if (deletingPermissionId === permissionId) return;
+    if (deletingPermissionIds.has(permissionId)) return;
     const confirmed = await confirm({
       title: 'Delete Permission',
       message: `Are you sure you want to delete the permission "${perm.name}"?`,
@@ -178,7 +183,7 @@ export default function RolesPage() {
     if (!confirmed) return;
 
     try {
-      setDeletingPermissionId(permissionId);
+      setDeletingPermissionIds((prev) => new Set(prev).add(permissionId));
       await api.deletePermission(permissionId);
       success('Permission Deleted', `Permission "${perm.name}" has been deleted`);
       loadData();
@@ -186,7 +191,12 @@ export default function RolesPage() {
       console.error('Failed to delete permission:', err);
       showError('Failed to delete permission', err instanceof Error ? err.message : 'Please try again.');
     } finally {
-      setDeletingPermissionId((prev) => (prev === permissionId ? null : prev));
+      setDeletingPermissionIds((prev) => {
+        if (!prev.has(permissionId)) return prev;
+        const next = new Set(prev);
+        next.delete(permissionId);
+        return next;
+      });
     }
   };
 
@@ -288,7 +298,7 @@ export default function RolesPage() {
                       <TableBody>
                         {roles.map((role) => {
                           const roleId = role.id.toString();
-                          const isDeleting = deletingRoleId === roleId;
+                          const isDeleting = deletingRoleIds.has(roleId);
                           return (
                           <TableRow key={role.id}>
                             <TableCell>
@@ -420,7 +430,7 @@ export default function RolesPage() {
                       <TableBody>
                         {permissions.map((perm) => {
                           const permissionId = perm.id.toString();
-                          const isDeleting = deletingPermissionId === permissionId;
+                          const isDeleting = deletingPermissionIds.has(permissionId);
                           return (
                           <TableRow key={perm.id}>
                             <TableCell>

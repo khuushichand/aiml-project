@@ -72,11 +72,12 @@ export default function VoiceCommandDetailPage({
     },
   });
 
-  const loadCommand = useCallback(async () => {
+  const loadCommand = useCallback(async (signal?: AbortSignal) => {
     try {
       setLoading(true);
       setError('');
-      const data = await api.getVoiceCommand(commandId);
+      const data = await api.getVoiceCommand(commandId, signal);
+      if (signal?.aborted) return;
       setCommand(data);
 
       // Populate form with existing data
@@ -90,25 +91,31 @@ export default function VoiceCommandDetailPage({
         requires_confirmation: data.requires_confirmation,
       });
     } catch (err: unknown) {
+      if (err instanceof Error && err.name === 'AbortError') return;
       console.error('Failed to load voice command:', err);
       setError(err instanceof Error ? err.message : 'Failed to load voice command');
     } finally {
+      if (signal?.aborted) return;
       setLoading(false);
     }
   }, [commandId, form]);
 
-  const loadUsage = useCallback(async () => {
+  const loadUsage = useCallback(async (signal?: AbortSignal) => {
     try {
-      const data = await api.getVoiceCommandUsage(commandId, { days: 30 });
+      const data = await api.getVoiceCommandUsage(commandId, { days: 30 }, signal);
+      if (signal?.aborted) return;
       setUsage(data);
     } catch (err: unknown) {
+      if (err instanceof Error && err.name === 'AbortError') return;
       console.warn('Failed to load usage data:', err);
     }
   }, [commandId]);
 
   useEffect(() => {
-    loadCommand();
-    loadUsage();
+    const controller = new AbortController();
+    void loadCommand(controller.signal);
+    void loadUsage(controller.signal);
+    return () => controller.abort();
   }, [loadCommand, loadUsage]);
 
   const handleSave = form.handleSubmit(async (data) => {
@@ -248,7 +255,12 @@ export default function VoiceCommandDetailPage({
             </div>
             <div className="flex gap-2">
               <Button variant="outline" onClick={handleToggleEnabled} disabled={isToggling}>
-                {command.enabled ? (
+                {isToggling ? (
+                  <>
+                    <RefreshCw className="mr-2 h-4 w-4 animate-spin" />
+                    {command.enabled ? 'Disabling...' : 'Enabling...'}
+                  </>
+                ) : command.enabled ? (
                   <>
                     <MicOff className="mr-2 h-4 w-4" />
                     Disable

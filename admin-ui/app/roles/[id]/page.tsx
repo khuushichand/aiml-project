@@ -14,6 +14,12 @@ import { useConfirm } from '@/components/ui/confirm-dialog';
 import { ArrowLeft, Shield, Lock, Save, Users, RefreshCw, Trash2, Check, X, Clock, Wrench } from 'lucide-react';
 import { api } from '@/lib/api-client';
 import { parseOptionalInt } from '@/lib/number';
+import {
+  deriveLimitPerMinute,
+  getDerivedLimitPerMin,
+  normalizeRateLimitValue,
+  validateRateLimitInputs,
+} from '@/lib/rate-limits';
 import { Role, Permission, User } from '@/types';
 import { Label } from '@/components/ui/label';
 import Link from 'next/link';
@@ -28,6 +34,12 @@ type RateLimitUpsertPayload = {
   resource: string;
   limit_per_min: number | null;
   burst: number | null;
+};
+
+type RateLimitUpsertResponse = {
+  limit_per_min?: number | null;
+  burst?: number | null;
+  rate_limits?: RateLimits | null;
 };
 
 const DEFAULT_RATE_LIMIT_RESOURCE = 'api.default';
@@ -67,32 +79,64 @@ const PermissionItem = ({ perm, isChecked, onToggle, disabled }: PermissionItemP
   </div>
 );
 
-const normalizeRateLimitValue = (value: number | null): number | null => {
-  if (value === null) return null;
-  return value > 0 ? value : null;
-};
-
-const deriveLimitPerMinute = (value: number | null, divisor: number): number | null => {
-  if (value === null) return null;
-  const perMinute = Math.floor(value / divisor);
-  return perMinute > 0 ? perMinute : 1;
-};
-
 const buildRateLimitPayload = (
   rpm: number | null,
   rph: number | null,
   rpd: number | null
 ): RateLimitUpsertPayload => {
-  const limitPerMin = rpm
-    ?? deriveLimitPerMinute(rph, 60)
-    ?? deriveLimitPerMinute(rpd, 1440);
-  const burst = rph ?? rpd;
+  const limitPerMin = getDerivedLimitPerMin(rpm, rph, rpd);
+  const burstPerMinute = rph != null
+    ? deriveLimitPerMinute(rph, 60)
+    : rpd != null
+      ? deriveLimitPerMinute(rpd, 1440)
+      : null;
+  const burstMultiplier = burstPerMinute != null && limitPerMin
+    ? Math.max(1, burstPerMinute / limitPerMin)
+    : 1;
 
   return {
     resource: DEFAULT_RATE_LIMIT_RESOURCE,
     limit_per_min: normalizeRateLimitValue(limitPerMin),
-    burst: normalizeRateLimitValue(burst),
+    burst: normalizeRateLimitValue(burstMultiplier),
   };
+};
+
+const mergeRateLimitsFromResponse = (
+  base: RateLimits,
+  response: unknown,
+  options: { normalizedRpm: number | null; normalizedRph: number | null; normalizedRpd: number | null }
+): RateLimits => {
+  if (!response || typeof response !== 'object') return base;
+
+  const candidate = response as RateLimitUpsertResponse;
+  if (candidate.rate_limits && typeof candidate.rate_limits === 'object') {
+    return candidate.rate_limits;
+  }
+
+  const merged: RateLimits = { ...base };
+  const limitPerMin = candidate.limit_per_min;
+  const burstMultiplier = candidate.burst;
+
+  if (options.normalizedRpm !== null && (typeof limitPerMin === 'number' || limitPerMin === null)) {
+    merged.requests_per_minute = limitPerMin;
+  }
+
+  if (typeof burstMultiplier === 'number' || burstMultiplier === null) {
+    const burstPerMinute = limitPerMin && burstMultiplier
+      ? limitPerMin * burstMultiplier
+      : burstMultiplier === null
+        ? null
+        : null;
+
+    if (options.normalizedRph !== null) {
+      merged.requests_per_hour = burstPerMinute != null ? Math.round(burstPerMinute * 60) : null;
+    }
+    if (options.normalizedRpd !== null) {
+      merged.requests_per_day = burstPerMinute != null ? Math.round(burstPerMinute * 1440) : null;
+    }
+  }
+
+  return merged;
 };
 
 export default function RoleDetailPage() {
@@ -351,15 +395,34 @@ export default function RoleDetailPage() {
       if (normalizedRph !== null) data.requests_per_hour = normalizedRph;
       if (normalizedRpd !== null) data.requests_per_day = normalizedRpd;
 
-      if (Object.keys(data).length === 0) {
+      const { error: rateLimitError } = validateRateLimitInputs(
+        normalizedRpm,
+        normalizedRph,
+        normalizedRpd
+      );
+      if (rateLimitError) {
         setRateLimitsSaving(false);
-        setError('Please specify at least one rate limit');
+        setError(rateLimitError);
         return;
       }
 
       const payload = buildRateLimitPayload(normalizedRpm, normalizedRph, normalizedRpd);
-      await api.setRoleRateLimits(roleId, payload);
-      setRateLimits(data);
+      const response = await api.setRoleRateLimits(roleId, payload);
+      const nextRateLimits = mergeRateLimitsFromResponse(data, response, {
+        normalizedRpm,
+        normalizedRph,
+        normalizedRpd,
+      });
+      setRateLimits(nextRateLimits);
+      if (normalizedRpm !== null) {
+        setEditRpm(nextRateLimits.requests_per_minute?.toString() || '');
+      }
+      if (normalizedRph !== null) {
+        setEditRph(nextRateLimits.requests_per_hour?.toString() || '');
+      }
+      if (normalizedRpd !== null) {
+        setEditRpd(nextRateLimits.requests_per_day?.toString() || '');
+      }
       setSuccess('Rate limits updated');
     } catch (err: unknown) {
       console.error('Failed to update rate limits:', err);

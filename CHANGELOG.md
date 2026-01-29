@@ -22,12 +22,14 @@ and this project adheres to Some kind of Versioning
 
 ### Added
 - Slides Module
-- NeuTTS, PocketTTS, EchoTTS, Qwen-3 TTS
+- TTS:
+  - Added NeuTTS, PocketTTS (ONNX), EchoTTS, Qwen3-TTS, LuxTTS, VibeVoice-ASR docs; updated streaming/format rules, default voice behavior, and setup guides.
 - moved the tldw_Browser_Assistant project and the tldw-frontent folder into the '/apps/' folder, as moving forward they will share the same base.
     - As a result, new frontend!
 - Kanban: vector search integration, activity logging with filtering, rate limiting on endpoints
 - Reading Collections: async import jobs workflow with job monitoring endpoints
 - Workflows: LLM step type with MCP tool allowlist and scope validation
+- New monorepo development guide, shared UI package scaffold, ambient typings, and testing guide for extension/web UI.
 
 ### Changed
 - Workflows Module
@@ -35,10 +37,13 @@ and this project adheres to Some kind of Versioning
     - MCP tool allowlist and scope validation
     - Stricter approve/reject permission checks
     - Configurable LLM retry cap
-
-
+- Admin-UI Updates
+- New frontend, tldw-frontend
+- New Storage API guide, Voice Assistant API (REST & WebSocket), Watchlists API docs, Anthropic Messages API docs, and expanded /llm/models metadata (image backends & filters).
+- Wide-ranging documentation additions and edits (OCR backends, image generation, storage, benchmarks, guides, link dumps, examples).
 
 ### Removed
+- Legacy webui
 
 ### Fixed
 

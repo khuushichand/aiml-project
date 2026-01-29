@@ -60,6 +60,16 @@ vi.mock('@/components/ui/toast', () => ({
   }),
 }));
 
+vi.mock('next/navigation', () => ({
+  useRouter: () => ({
+    push: vi.fn(),
+    replace: vi.fn(),
+    prefetch: vi.fn(),
+  }),
+  usePathname: () => '/users',
+  useSearchParams: () => new URLSearchParams(),
+}));
+
 vi.mock('@/components/OrgContextSwitcher', () => ({
   useOrgContext: () => ({ selectedOrg: null }),
   OrgContextSwitcher: () => <div data-testid="org-switcher" />,
@@ -141,10 +151,10 @@ describe('UsersPage', () => {
     const checkbox = within(row as HTMLElement).getByRole('checkbox', {
       name: /select user alice/i,
     });
-    expect(checkbox).toBeDisabled();
+    expect((checkbox as HTMLInputElement).disabled).toBe(true);
 
     const deleteButton = within(row as HTMLElement).getByTitle('Cannot delete yourself');
-    expect(deleteButton).toBeDisabled();
+    expect((deleteButton as HTMLButtonElement).disabled).toBe(true);
   });
 
   it('allows deleting another user after confirmation', async () => {
@@ -155,7 +165,7 @@ describe('UsersPage', () => {
     expect(row).not.toBeNull();
 
     const deleteButton = within(row as HTMLElement).getByTitle('Delete user');
-    expect(deleteButton).not.toBeDisabled();
+    expect((deleteButton as HTMLButtonElement).disabled).toBe(false);
 
     const user = userEvent.setup();
     await user.click(deleteButton);

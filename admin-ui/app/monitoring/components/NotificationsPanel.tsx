@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react';
+import { useMemo, useState } from 'react';
 import type { ReactNode } from 'react';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
@@ -15,7 +15,7 @@ type NotificationsPanelProps = {
   recentNotifications: RecentNotification[];
   loading: boolean;
   saving: boolean;
-  onSave: (settings: NotificationSettings) => void;
+  onSave: (settings: NotificationSettings) => Promise<boolean> | boolean;
   onTest: () => void;
 };
 
@@ -113,7 +113,11 @@ const withChannelClientIds = (settings: NotificationSettings): NotificationSetti
 
 const stripChannelClientIds = (settings: NotificationSettings): NotificationSettings => ({
   ...settings,
-  channels: settings.channels.map(({ clientId: _clientId, ...channel }) => channel),
+  channels: settings.channels.map((channel) => {
+    const { clientId, ...rest } = channel;
+    void clientId;
+    return rest;
+  }),
 });
 
 type NotificationsPanelFormProps = Omit<NotificationsPanelProps, 'settings'> & {
@@ -128,60 +132,22 @@ const NotificationsPanelForm = ({
   onSave,
   onTest,
 }: NotificationsPanelFormProps) => {
-  const [editSettings, setEditSettings] = useState<NotificationSettings>(() =>
-    withChannelClientIds(settings)
-  );
+  const baseSettings = useMemo(() => withChannelClientIds(settings), [settings]);
+  const [editSettings, setEditSettings] = useState<NotificationSettings>(() => baseSettings);
   const [isDirty, setIsDirty] = useState(false);
   const [showAddChannel, setShowAddChannel] = useState(false);
   const [newChannelType, setNewChannelType] = useState<NotificationChannel['type']>('email');
   const [newChannelConfig, setNewChannelConfig] = useState('');
-  const settingsId = settings.id ?? 'notification-settings';
-  const previousSettingsIdRef = useRef<string | null>(null);
-  const previousSettingsRef = useRef(settings);
-  const settingsChangedWhileSavingRef = useRef(false);
-  const wasSavingRef = useRef(saving);
-
-  useEffect(() => {
-    if (previousSettingsRef.current !== settings && saving) {
-      settingsChangedWhileSavingRef.current = true;
-    }
-    previousSettingsRef.current = settings;
-  }, [settings, saving]);
-
-  useEffect(() => {
-    const hasNewSettingsId = previousSettingsIdRef.current !== settingsId;
-    previousSettingsIdRef.current = settingsId;
-
-    if (hasNewSettingsId) {
-      setEditSettings(withChannelClientIds(settings));
-      setIsDirty(false);
-      return;
-    }
-
-    if (!isDirty) {
-      setEditSettings(withChannelClientIds(settings));
-    }
-  }, [settings, settingsId, isDirty]);
-
-  useEffect(() => {
-    const justFinishedSaving = wasSavingRef.current && !saving;
-    wasSavingRef.current = saving;
-
-    if (justFinishedSaving && settingsChangedWhileSavingRef.current) {
-      settingsChangedWhileSavingRef.current = false;
-      previousSettingsIdRef.current = settingsId;
-      if (!isDirty) {
-        setEditSettings(withChannelClientIds(settings));
-        setIsDirty(false);
-      }
-    }
-  }, [saving, settings, settingsId, isDirty]);
+  const effectiveSettings = isDirty ? editSettings : baseSettings;
 
   const updateEditSettings = (
     next: NotificationSettings | ((prev: NotificationSettings) => NotificationSettings),
   ) => {
     setIsDirty(true);
-    setEditSettings(next);
+    setEditSettings((prev) => {
+      const current = isDirty ? prev : baseSettings;
+      return typeof next === 'function' ? next(current) : next;
+    });
   };
 
   const handleAddChannel = () => {
@@ -219,11 +185,14 @@ const NotificationsPanelForm = ({
     });
   };
 
-  const handleSave = () => {
-    onSave(stripChannelClientIds(editSettings));
+  const handleSave = async () => {
+    const saved = await onSave(stripChannelClientIds(effectiveSettings));
+    if (saved !== false) {
+      setIsDirty(false);
+    }
   };
 
-  const enabledChannels = editSettings.channels.filter((c) => c.enabled).length;
+  const enabledChannels = effectiveSettings.channels.filter((c) => c.enabled).length;
 
   return (
     <NotificationsPanelShell
@@ -286,13 +255,13 @@ const NotificationsPanelForm = ({
                 </div>
               )}
 
-              {editSettings.channels.length === 0 ? (
+              {effectiveSettings.channels.length === 0 ? (
                 <div className="text-sm text-muted-foreground text-center py-4 border rounded-lg">
                   No notification channels configured
                 </div>
               ) : (
                 <div className="space-y-2">
-                  {editSettings.channels.map((channel, index) => (
+                  {effectiveSettings.channels.map((channel, index) => (
                     <div
                       key={channel.clientId ?? `channel-${index}`}
                       className={`flex items-center justify-between p-3 rounded-lg border ${
@@ -343,7 +312,7 @@ const NotificationsPanelForm = ({
                 <Label htmlFor="alert-threshold">Alert Threshold</Label>
                 <Select
                   id="alert-threshold"
-                  value={editSettings.alert_threshold}
+                  value={effectiveSettings.alert_threshold}
                   onChange={(e) =>
                     updateEditSettings((prev) => ({
                       ...prev,
@@ -362,14 +331,14 @@ const NotificationsPanelForm = ({
                 <Label htmlFor="digest-frequency">Digest Frequency</Label>
                 <Select
                   id="digest-frequency"
-                  value={editSettings.digest_frequency}
+                  value={effectiveSettings.digest_frequency}
                   onChange={(e) =>
                     updateEditSettings((prev) => ({
                       ...prev,
                       digest_frequency: e.target.value as NotificationSettings['digest_frequency'],
                     }))
                   }
-                  disabled={!editSettings.digest_enabled}
+                  disabled={!effectiveSettings.digest_enabled}
                 >
                   {DIGEST_FREQUENCIES.map((freq) => (
                     <option key={freq.value} value={freq.value}>
@@ -382,7 +351,7 @@ const NotificationsPanelForm = ({
                 <div className="flex items-center gap-2">
                   <Checkbox
                     id="digest-enabled"
-                    checked={editSettings.digest_enabled}
+                    checked={effectiveSettings.digest_enabled}
                     onCheckedChange={(checked) =>
                       updateEditSettings((prev) => ({ ...prev, digest_enabled: checked }))
                     }
@@ -450,6 +419,8 @@ export default function NotificationsPanel({
   onSave,
   onTest,
 }: NotificationsPanelProps) {
+  const settingsId = settings?.id ?? 'notification-settings';
+
   if (loading) {
     return (
       <NotificationsPanelShell enabledChannels={0} loading={loading} saving={saving} onTest={onTest}>
@@ -471,6 +442,7 @@ export default function NotificationsPanel({
 
   return (
     <NotificationsPanelForm
+      key={settingsId}
       settings={settings}
       recentNotifications={recentNotifications}
       loading={loading}

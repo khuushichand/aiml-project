@@ -1,6 +1,6 @@
 import { useQuery } from "@tanstack/react-query"
-import { Dropdown, Tooltip, Input, type MenuProps } from "antd"
-import { UserCircle2 } from "lucide-react"
+import { Dropdown, Tooltip, Input, Select, type MenuProps } from "antd"
+import { Star, UserCircle2 } from "lucide-react"
 import React from "react"
 import { useStorage } from "@plasmohq/storage/hook"
 import { useTranslation } from "react-i18next"
@@ -27,6 +27,8 @@ type CharacterSummary = {
   slug?: string
   name?: string
   title?: string
+  description?: string
+  tags?: string[]
   avatar_url?: string
   image_base64?: string
   image_mime?: string
@@ -64,6 +66,14 @@ type CharacterSelection = {
   greeting: string
   alternate_greetings?: string[]
   avatar_url: string
+}
+
+type CharacterSortMode = "favorites" | "az"
+
+type FavoriteCharacter = {
+  id?: string
+  slug?: string
+  name: string
 }
 
 const normalizeCharacter = (
@@ -153,6 +163,14 @@ export const CharacterSelect: React.FC<Props> = ({
   const [menuDensity] = useStorage<"comfortable" | "compact">(
     "menuDensity",
     "comfortable"
+  )
+  const [favoriteCharacters, setFavoriteCharacters] = useStorage<FavoriteCharacter[]>(
+    "favoriteCharacters",
+    []
+  )
+  const [sortMode, setSortMode] = useStorage<CharacterSortMode>(
+    "characterSortMode",
+    "favorites"
   )
   const [searchQuery, setSearchQuery] = React.useState("")
   const selectLabel = t("option:characters.selectCharacter", {
@@ -565,18 +583,89 @@ export const CharacterSelect: React.FC<Props> = ({
     const q = searchQuery.trim().toLowerCase()
     if (!q) return list
     return list.filter((c) => {
-      const name = (
-        c.name ||
-        c.title ||
-        c.slug ||
-        ""
-      ).toString().toLowerCase()
-      return name.includes(q)
+      const name = (c.name || c.title || c.slug || "").toString().toLowerCase()
+      const description = (c.description || "").toString().toLowerCase()
+      const tags = Array.isArray(c.tags) ? c.tags.join(" ").toLowerCase() : ""
+      return (
+        name.includes(q) ||
+        description.includes(q) ||
+        tags.includes(q)
+      )
     })
   }, [data, searchQuery])
 
+  const favoriteIndex = React.useMemo(() => {
+    const ids = new Set<string>()
+    const slugs = new Set<string>()
+    const names = new Set<string>()
+    ;(favoriteCharacters || []).forEach((fav) => {
+      if (fav.id) ids.add(String(fav.id))
+      if (fav.slug) slugs.add(String(fav.slug))
+      if (fav.name) names.add(String(fav.name))
+    })
+    return { ids, slugs, names }
+  }, [favoriteCharacters])
+
+  const getCharacterDisplayName = React.useCallback((character: CharacterSummary) => {
+    return (
+      character.name ||
+      character.title ||
+      character.slug ||
+      (character.id != null ? String(character.id) : "")
+    ).toString()
+  }, [])
+
+  const isFavoriteCharacter = React.useCallback(
+    (character: CharacterSummary) => {
+      const id = character.id != null ? String(character.id) : ""
+      const slug = character.slug ? String(character.slug) : ""
+      const name = getCharacterDisplayName(character)
+      return (
+        (id && favoriteIndex.ids.has(id)) ||
+        (slug && favoriteIndex.slugs.has(slug)) ||
+        (name && favoriteIndex.names.has(name))
+      )
+    },
+    [favoriteIndex, getCharacterDisplayName]
+  )
+
+  const toggleFavoriteCharacter = React.useCallback(
+    (character: CharacterSummary) => {
+      const name = getCharacterDisplayName(character).trim()
+      const id = character.id != null ? String(character.id) : undefined
+      const slug = character.slug ? String(character.slug) : undefined
+      if (!name) return
+      void setFavoriteCharacters((prev) => {
+        const list = Array.isArray(prev) ? prev : []
+        const next = list.filter((fav) => {
+          if (id && fav.id && fav.id === id) return false
+          if (slug && fav.slug && fav.slug === slug) return false
+          if (name && fav.name === name) return false
+          return true
+        })
+        if (next.length === list.length) {
+          next.push({ id, slug, name })
+        }
+        return next
+      })
+    },
+    [getCharacterDisplayName, setFavoriteCharacters]
+  )
+
+  const sortedCharacters = React.useMemo(() => {
+    const list = filteredCharacters || []
+    const byName = (a: CharacterSummary, b: CharacterSummary) =>
+      getCharacterDisplayName(a).localeCompare(getCharacterDisplayName(b))
+    if (sortMode === "favorites") {
+      const favorites = list.filter(isFavoriteCharacter).sort(byName)
+      const others = list.filter((c) => !isFavoriteCharacter(c)).sort(byName)
+      return { favorites, others }
+    }
+    return { favorites: [] as CharacterSummary[], others: list.slice().sort(byName) }
+  }, [filteredCharacters, getCharacterDisplayName, isFavoriteCharacter, sortMode])
+
   const characterItems = React.useMemo<MenuProps["items"]>(() => {
-    return filteredCharacters.reduce<MenuProps["items"]>((items, character, index) => {
+    const buildItem = (character: CharacterSummary, index: number) => {
       const normalized = normalizeCharacter(character)
       if (!normalized) {
         console.debug(
@@ -588,21 +677,24 @@ export const CharacterSelect: React.FC<Props> = ({
             title: character.title
           }
         )
-        return items
+        return null
       }
-      const displayName =
-        normalized.name || character.slug || character.title || ""
+      const displayName = getCharacterDisplayName(character)
       const menuKey =
         character.id ??
         character.slug ??
         character.name ??
         character.title ??
         `character-${index}`
+      const isFavorite = isFavoriteCharacter(character)
+      const favoriteTitle = isFavorite
+        ? t("option:characters.favoriteRemove", "Remove from favorites")
+        : t("option:characters.favoriteAdd", "Add to favorites")
 
-      items.push({
+      return {
         key: String(menuKey),
         label: (
-          <div className="w-56 gap-2 text-sm truncate inline-flex items-center leading-5">
+          <div className="w-56 gap-2 text-sm inline-flex items-center leading-5">
             {normalized.avatar_url ? (
               <img
                 src={normalized.avatar_url}
@@ -612,18 +704,65 @@ export const CharacterSelect: React.FC<Props> = ({
             ) : (
               <UserCircle2 className="w-4 h-4" />
             )}
-            <span className="truncate">
+            <span className="truncate flex-1">
               {displayName || normalized.id || String(menuKey)}
             </span>
+            <button
+              type="button"
+              className="rounded p-0.5 text-text-subtle transition hover:bg-surface2"
+              onMouseDown={(event) => {
+                event.preventDefault()
+                event.stopPropagation()
+              }}
+              onClick={(event) => {
+                event.preventDefault()
+                event.stopPropagation()
+                toggleFavoriteCharacter(character)
+              }}
+              aria-label={favoriteTitle}
+              title={favoriteTitle}
+            >
+              <Star
+                className={`h-3.5 w-3.5 ${
+                  isFavorite ? "fill-warn text-warn" : "text-text-subtle"
+                }`}
+              />
+            </button>
           </div>
         ),
         onClick: () => {
           void applySelection(normalized)
         }
+      } as MenuProps["items"][number]
+    }
+
+    const favorites = sortedCharacters.favorites
+      .map(buildItem)
+      .filter(Boolean) as MenuProps["items"]
+    const others = sortedCharacters.others
+      .map(buildItem)
+      .filter(Boolean) as MenuProps["items"]
+
+    const items: MenuProps["items"] = []
+    if (sortMode === "favorites" && favorites.length > 0) {
+      items.push({
+        type: "group",
+        key: "__favorites__",
+        label: t("option:characters.favorites", "Favorites"),
+        children: favorites
       })
-      return items
-    }, [] as MenuProps["items"])
-  }, [applySelection, filteredCharacters])
+    }
+    items.push(...others)
+    return items
+  }, [
+    applySelection,
+    getCharacterDisplayName,
+    isFavoriteCharacter,
+    sortedCharacters,
+    sortMode,
+    t,
+    toggleFavoriteCharacter
+  ])
 
   const clearItem: MenuProps["items"][number] | null =
     selectedCharacter
@@ -879,13 +1018,14 @@ export const CharacterSelect: React.FC<Props> = ({
         }}
         popupRender={(menu) => (
           <div className="w-64" ref={menuContainerRef}>
-            <div className="px-2 py-2 border-b border-border">
+            <div className="px-2 py-2 border-b border-border flex items-center gap-2">
               <Input
                 size="small"
                 placeholder={searchPlaceholder}
                 value={searchQuery}
                 autoFocus
                 allowClear
+                className="flex-1"
                 onChange={(e) => setSearchQuery(e.target.value)}
                 onKeyDown={(e) => {
                   if (e.key === "ArrowDown") {
@@ -893,6 +1033,20 @@ export const CharacterSelect: React.FC<Props> = ({
                     focusFirstMenuItem()
                   }
                 }}
+              />
+              <Select
+                size="small"
+                value={sortMode}
+                onChange={(value) => setSortMode(value as CharacterSortMode)}
+                options={[
+                  {
+                    value: "favorites",
+                    label: t("option:characters.sort.favorites", "Favorites")
+                  },
+                  { value: "az", label: t("option:characters.sort.az", "A-Z") }
+                ]}
+                className="min-w-[110px]"
+                onKeyDown={(event) => event.stopPropagation()}
               />
             </div>
             <div className="max-h-[420px] overflow-y-auto no-scrollbar">

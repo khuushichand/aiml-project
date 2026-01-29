@@ -58,7 +58,6 @@ export default function OrganizationDetailPage() {
   const [deletingByokProvider, setDeletingByokProvider] = useState<string | null>(null);
 
   // Watchlist Settings
-  const [watchlistSettings, setWatchlistSettings] = useState<WatchlistSettings | null>(null);
   const [watchlistLoading, setWatchlistLoading] = useState(false);
   const [watchlistSaving, setWatchlistSaving] = useState(false);
   const [editWatchlistEnabled, setEditWatchlistEnabled] = useState(false);
@@ -107,17 +106,11 @@ export default function OrganizationDetailPage() {
       setWatchlistLoading(true);
       const watchData = await api.getOrgWatchlistSettings(orgId);
       const settings = watchData as WatchlistSettings;
-      setWatchlistSettings(settings);
       setEditWatchlistEnabled(settings?.watchlists_enabled ?? false);
       setEditWatchlistThreshold(settings?.default_threshold?.toString() || '100');
       setEditWatchlistAlertOnBreach(settings?.alert_on_breach ?? true);
     } catch {
       // Set defaults if endpoint unavailable
-      setWatchlistSettings({
-        watchlists_enabled: false,
-        default_threshold: 100,
-        alert_on_breach: true,
-      });
       setEditWatchlistEnabled(false);
       setEditWatchlistThreshold('100');
       setEditWatchlistAlertOnBreach(true);
@@ -300,12 +293,6 @@ export default function OrganizationDetailPage() {
       setWatchlistSaving(true);
       setError('');
       await api.updateOrgWatchlistSettings(orgId, {
-        watchlists_enabled: editWatchlistEnabled,
-        default_threshold: threshold,
-        alert_on_breach: editWatchlistAlertOnBreach,
-      });
-      setWatchlistSettings({
-        ...watchlistSettings,
         watchlists_enabled: editWatchlistEnabled,
         default_threshold: threshold,
         alert_on_breach: editWatchlistAlertOnBreach,
@@ -840,10 +827,11 @@ export default function OrganizationDetailPage() {
                       <div className="grid gap-4 sm:grid-cols-3">
                         <div className="flex items-center justify-between p-3 border rounded-lg">
                           <div>
-                            <Label>Enable Watchlists</Label>
+                            <Label htmlFor="watchlist-enabled">Enable Watchlists</Label>
                             <p className="text-xs text-muted-foreground">Track usage and spending</p>
                           </div>
                           <Checkbox
+                            id="watchlist-enabled"
                             checked={editWatchlistEnabled}
                             onCheckedChange={setEditWatchlistEnabled}
                           />
@@ -862,10 +850,11 @@ export default function OrganizationDetailPage() {
                         </div>
                         <div className="flex items-center justify-between p-3 border rounded-lg">
                           <div>
-                            <Label>Alert on Breach</Label>
+                            <Label htmlFor="watchlist-alert">Alert on Breach</Label>
                             <p className="text-xs text-muted-foreground">Send notifications when exceeded</p>
                           </div>
                           <Checkbox
+                            id="watchlist-alert"
                             checked={editWatchlistAlertOnBreach}
                             onCheckedChange={setEditWatchlistAlertOnBreach}
                             disabled={!editWatchlistEnabled}

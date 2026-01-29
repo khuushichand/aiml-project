@@ -109,6 +109,9 @@ const parseEmailList = (value: string): ParsedList<string> => {
 const formatFlagDate = (value?: string | null) =>
   formatDateTime(value, { fallback: '—' });
 
+const getFlagId = (flag: FeatureFlagItem) =>
+  `${flag.key}:${flag.scope}:${flag.org_id ?? ''}:${flag.user_id ?? ''}`;
+
 export default function FlagsPage() {
   const confirm = useConfirm();
   const { success, error: showError, warning } = useToast();
@@ -299,7 +302,7 @@ export default function FlagsPage() {
   };
 
   const handleDeleteFlag = async (flag: FeatureFlagItem) => {
-    const flagId = `${flag.key}:${flag.scope}:${flag.org_id ?? ''}:${flag.user_id ?? ''}`;
+    const flagId = getFlagId(flag);
     if (deletingFlagId === flagId) return;
     const confirmed = await confirm({
       title: `Delete flag ${flag.key}?`,
@@ -560,7 +563,7 @@ export default function FlagsPage() {
                                 flag.user_id ?? 'NULL',
                               ])
                             : `flag-index-${index}`;
-                      const flagId = `${flag.key}:${flag.scope}:${flag.org_id ?? ''}:${flag.user_id ?? ''}`;
+                      const flagId = getFlagId(flag);
                       const isDeleting = deletingFlagId === flagId;
                       return (
                         <TableRow key={rowKey}>

@@ -47,13 +47,15 @@ from transformers import AutoProcessor, Qwen2AudioForConditionalGeneration
 try:
     from tldw_Server_API.app.core.Ingestion_Media_Processing.Audio.Diarization_Lib import (
         DiarizationService,
-        DiarizationError
+        DiarizationError,
+        load_diarization_config,
     )
     DIARIZATION_AVAILABLE = True
 except ImportError:
     DIARIZATION_AVAILABLE = False
     DiarizationService = None
     DiarizationError = Exception  # Fallback to base Exception
+    load_diarization_config = lambda: {}  # type: ignore[assignment]
 #
 # Import Local
 from tldw_Server_API.app.core.Utils.Utils import sanitize_filename, logging
@@ -813,64 +815,117 @@ def perform_transcription(
                         logging.warning(f"Failed to read/parse existing diarized file: {e}")
                         # Continue to regenerate
 
-                # First, get the transcription segments via the unified STT helper
-                logging.info(f"Generating transcription for diarization")
-                artifact = run_stt_batch_via_registry(
-                    audio_file_path,
-                    transcription_model,
-                    vad_filter=vad_use,
-                    selected_source_lang=transcription_language,
-                    hotwords=hotwords,
-                    base_dir=base_dir_path,
-                    cancel_check=cancel_check,
-                )
-                transcription_segments = artifact.get("segments") or []
+                # Optional: NeMo multitalk diarization (coupled Parakeet ASR)
+                diarization_config = load_diarization_config()
+                backend = str(diarization_config.get("backend", "embedding") or "embedding").lower()
+                if backend == "nemo_multitalk":
+                    provider = None
+                    variant = None
+                    try:
+                        from tldw_Server_API.app.core.Ingestion_Media_Processing.Audio.stt_provider_adapter import (
+                            get_stt_provider_registry,
+                        )
 
-                if transcription_segments is None:
-                    logging.error(f"Transcription generation failed for {audio_file_path}")
-                    return audio_file_path, None
+                        registry = get_stt_provider_registry()
+                        provider, _, variant = registry.resolve_provider_for_model(transcription_model or "")
+                    except Exception as exc:
+                        logging.warning(f"Unable to resolve STT provider for multitalk diarization: {exc}")
 
-                # Now perform diarization
-                try:
-                    logging.info(f"Performing speaker diarization...")
-                    diarization_service = DiarizationService()
+                    if provider != "parakeet":
+                        logging.error(
+                            "NeMo multitalk diarization requires Parakeet STT provider; disabling diarization."
+                        )
+                        diarize = False
+                    elif variant not in (None, "standard"):
+                        logging.error(
+                            "NeMo multitalk diarization only supports Parakeet 'standard' (NeMo) variant; "
+                            f"got '{variant}'. Disabling diarization."
+                        )
+                        diarize = False
+                    if diarize and provider == "parakeet":
+                        try:
+                            from tldw_Server_API.app.core.Ingestion_Media_Processing.Audio.Diarization_Nemo_Multitalk import (
+                                transcribe_with_nemo_multitalk,
+                            )
 
-                    if not diarization_service.is_available:
-                        logging.warning("Diarization service is not available (missing dependencies)")
-                        logging.info("Returning transcription without speaker labels")
-                        return audio_file_path, transcription_segments
+                            diarized_result = transcribe_with_nemo_multitalk(
+                                audio_file_path,
+                                diarization_config,
+                                output_path=str(diarized_json_path),
+                            )
 
-                    # Perform diarization with transcription segments
-                    diarized_segments = diarization_service.diarize(
-                        audio_path=audio_file_path,
-                        transcription_segments=transcription_segments
+                            if isinstance(diarized_result, dict) and diarized_result.get("segments"):
+                                final_segments = diarized_result["segments"]
+                                _assert_no_symlink(diarized_json_path, label="Diarized transcript cache file")
+                                with open(diarized_json_path, 'w', encoding='utf-8') as f:
+                                    json.dump({'segments': final_segments}, f, ensure_ascii=False, indent=2)
+
+                                logging.info(f"NeMo multitalk diarization successful. Saved to {diarized_json_path}")
+                                return audio_file_path, final_segments
+
+                            logging.warning("NeMo multitalk diarization returned no segments; falling back.")
+                        except Exception as exc:
+                            logging.error(f"NeMo multitalk diarization failed: {exc}")
+
+                if diarize:
+                    # First, get the transcription segments via the unified STT helper
+                    logging.info(f"Generating transcription for diarization")
+                    artifact = run_stt_batch_via_registry(
+                        audio_file_path,
+                        transcription_model,
+                        vad_filter=vad_use,
+                        selected_source_lang=transcription_language,
+                        hotwords=hotwords,
+                        base_dir=base_dir_path,
+                        cancel_check=cancel_check,
                     )
+                    transcription_segments = artifact.get("segments") or []
 
-                    if diarized_segments and 'segments' in diarized_segments:
-                        final_segments = diarized_segments['segments']
+                    if transcription_segments is None:
+                        logging.error(f"Transcription generation failed for {audio_file_path}")
+                        return audio_file_path, None
 
-                        # Save diarized results
-                        _assert_no_symlink(diarized_json_path, label="Diarized transcript cache file")
-                        with open(diarized_json_path, 'w', encoding='utf-8') as f:
-                            json.dump({'segments': final_segments}, f, ensure_ascii=False, indent=2)
+                    # Now perform diarization
+                    try:
+                        logging.info(f"Performing speaker diarization...")
+                        diarization_service = DiarizationService()
 
-                        logging.info(f"Diarization successful. Saved to {diarized_json_path}")
-                        return audio_file_path, final_segments
-                    else:
-                        logging.warning("Diarization returned no segments")
+                        if not diarization_service.is_available:
+                            logging.warning("Diarization service is not available (missing dependencies)")
+                            logging.info("Returning transcription without speaker labels")
+                            return audio_file_path, transcription_segments
+
+                        # Perform diarization with transcription segments
+                        diarized_segments = diarization_service.diarize(
+                            audio_path=audio_file_path,
+                            transcription_segments=transcription_segments
+                        )
+
+                        if diarized_segments and 'segments' in diarized_segments:
+                            final_segments = diarized_segments['segments']
+
+                            # Save diarized results
+                            _assert_no_symlink(diarized_json_path, label="Diarized transcript cache file")
+                            with open(diarized_json_path, 'w', encoding='utf-8') as f:
+                                json.dump({'segments': final_segments}, f, ensure_ascii=False, indent=2)
+
+                            logging.info(f"Diarization successful. Saved to {diarized_json_path}")
+                            return audio_file_path, final_segments
+                        else:
+                            logging.warning("Diarization returned no segments")
+                            return audio_file_path, transcription_segments
+
+                    except DiarizationError as e:
+                        logging.error(f"Diarization failed for {audio_file_path}: {e}")
+                        logging.warning("Proceeding with transcription only due to diarization error.")
+                        # Add a warning to the first segment if possible
+                        if transcription_segments:
+                            transcription_segments[0]['Text'] = f"[Note: Speaker diarization failed] " + transcription_segments[0].get('Text', '')
                         return audio_file_path, transcription_segments
 
-                except DiarizationError as e:
-                    logging.error(f"Diarization failed for {audio_file_path}: {e}")
-                    logging.warning("Proceeding with transcription only due to diarization error.")
-                    # Add a warning to the first segment if possible
-                    if transcription_segments:
-                        transcription_segments[0]['Text'] = f"[Note: Speaker diarization failed] " + transcription_segments[0].get('Text', '')
-                    return audio_file_path, transcription_segments
-
-                except Exception as e:
-                    logging.error(f"Unexpected error during diarization: {e}", exc_info=True)
-                    return audio_file_path, transcription_segments
+                    except Exception as e:
+                        logging.error(f"Unexpected error during diarization: {e}", exc_info=True)
+                        return audio_file_path, transcription_segments
 
         # If we get here and diarize was set to False (either originally or as fallback), continue with regular path
 

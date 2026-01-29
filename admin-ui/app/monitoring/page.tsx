@@ -80,7 +80,7 @@ const SYSTEM_STATUS_DETAILS: Record<SystemStatusKey, Record<SystemHealthStatus, 
   },
 };
 
-const normalizeHealthStatus = (status?: string): SystemHealthStatus => {
+export const normalizeHealthStatus = (status?: string): SystemHealthStatus => {
   const value = (status || '').toLowerCase();
   if (['ok', 'healthy', 'ready', 'alive'].includes(value)) {
     return 'healthy';
@@ -212,6 +212,8 @@ export default function MonitoringPage() {
           Array.isArray(data.items) ? data.items :
           Array.isArray(data) ? data as RecentNotification[] : []
         );
+      } else {
+        setRecentNotifications([]);
       }
 
       // Process metrics
@@ -431,9 +433,11 @@ export default function MonitoringPage() {
       await api.updateNotificationSettings(settings as unknown as Record<string, unknown>);
       setNotificationSettings(settings);
       setSuccess('Notification settings saved');
+      return true;
     } catch (err: unknown) {
       console.error('Failed to save notification settings:', err);
       setError(err instanceof Error && err.message ? err.message : 'Failed to save notification settings');
+      return false;
     } finally {
       setNotificationsSaving(false);
     }

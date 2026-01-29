@@ -1084,9 +1084,13 @@ export default defineBackground({
     })
 
     const actionApi = getActionApi()
+    const openOptionsTab = () => {
+      const url = browser.runtime.getURL("/options.html#/")
+      browser.tabs.create({ url })
+    }
     actionApi?.onClicked?.addListener((tab: any) => {
       if (actionIconClick === "webui") {
-        browser.tabs.create({ url: browser.runtime.getURL("/options.html") })
+        openOptionsTab()
       } else {
         ensureSidepanelOpen(tab?.id)
       }
@@ -1096,9 +1100,7 @@ export default defineBackground({
       if (info.menuItemId === "open-side-panel-pa") {
         ensureSidepanelOpen(tab?.id)
       } else if (info.menuItemId === "open-web-ui-pa") {
-        browser.tabs.create({
-          url: browser.runtime.getURL("/options.html")
-        })
+        openOptionsTab()
       } else if (info.menuItemId === transcribeMenuId.transcribe) {
         await handleTranscribeClick(info, tab, 'transcribe')
       } else if (info.menuItemId === transcribeMenuId.transcribeAndSummarize) {

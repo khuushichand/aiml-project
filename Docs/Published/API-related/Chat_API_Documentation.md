@@ -4,7 +4,7 @@
 - Base path: `/api/v1`
 - Endpoint: `POST /api/v1/chat/completions` (OpenAI-compatible)
 - Purpose: Route chat requests to configured LLM providers with optional streaming and persistence.
-- Scope note: Chat Dictionaries and the Document Generator are implemented as sub-routes under `/api/v1/chat`, but documented in Chatbook features. See `./Chatbook_Features_API_Documentation.md`.
+- Scope note: Chat Dictionaries and the Document Generator are implemented as sub-routes under `/api/v1/chat`, but documented in Chatbook features. See [Chatbook Features API Documentation](./Chatbook_Features_API_Documentation.md).
 - OpenAPI tags: `chat`, `chat-dictionaries`, `chat-documents`
 
 ## Conversation Metadata Endpoints

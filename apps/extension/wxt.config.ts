@@ -9,6 +9,32 @@ export default defineConfig({
   srcDir: sharedRoot,
   entrypointsDir: path.join(__dirname, "entrypoints"),
   publicDir: path.join(__dirname, "public"),
+  manifest: {
+    default_locale: "en",
+    options_ui: {
+      page: "options.html",
+      open_in_tab: true
+    },
+    permissions: [
+      "storage",
+      "contextMenus",
+      "activeTab",
+      "notifications",
+      "sidePanel",
+      "tabs",
+      "scripting"
+    ],
+    action: {
+      default_title: "tldw Assistant",
+      default_icon: {
+        16: "icon/16.png",
+        32: "icon/32.png",
+        48: "icon/48.png",
+        64: "icon/64.png",
+        128: "icon/128.png"
+      }
+    }
+  },
   vite: () => ({
     resolve: {
       alias: {

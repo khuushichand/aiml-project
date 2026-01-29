@@ -1,6 +1,6 @@
 'use client';
 
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import { PermissionGuard } from '@/components/PermissionGuard';
 import { ResponsiveLayout } from '@/components/ResponsiveLayout';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
@@ -62,7 +62,7 @@ export default function ResourceGovernorPage() {
   const { success, error: showError } = useToast();
 
   // Policies state
-  const [policies, setPolicies] = useState<ResourcePolicy[]>([]);
+  const [allPolicies, setAllPolicies] = useState<ResourcePolicy[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
 
@@ -96,23 +96,27 @@ export default function ResourceGovernorPage() {
       setError('');
       const data = (await api.getResourceGovernorPolicy({ include_ids: true }, signal)) as PoliciesResponse;
       const items = data.policies || data.items || [];
-      let filtered = Array.isArray(items) ? items : [];
-      if (scopeFilter) {
-        filtered = filtered.filter((p) => p.scope === scopeFilter);
-      }
-      if (resourceTypeFilter) {
-        filtered = filtered.filter((p) => p.resource_type === resourceTypeFilter);
-      }
-      setPolicies(filtered);
+      setAllPolicies(Array.isArray(items) ? items : []);
     } catch (err: unknown) {
       if (err instanceof Error && err.name === 'AbortError') return;
       const message = err instanceof Error && err.message ? err.message : 'Failed to load policies';
       setError(message);
-      setPolicies([]);
+      setAllPolicies([]);
     } finally {
       setLoading(false);
     }
-  }, [scopeFilter, resourceTypeFilter]);
+  }, []);
+
+  const policies = useMemo(() => {
+    let filtered = allPolicies;
+    if (scopeFilter) {
+      filtered = filtered.filter((policy) => policy.scope === scopeFilter);
+    }
+    if (resourceTypeFilter) {
+      filtered = filtered.filter((policy) => policy.resource_type === resourceTypeFilter);
+    }
+    return filtered;
+  }, [allPolicies, scopeFilter, resourceTypeFilter]);
 
   useEffect(() => {
     const controller = new AbortController();
@@ -198,7 +202,7 @@ export default function ResourceGovernorPage() {
       const maxTokens = parseOptionalInt(formMaxTokens);
       const maxConcurrent = parseOptionalInt(formMaxConcurrent);
       const priority = parseOptionalInt(formPriority);
-      const isEditMode = Boolean(editingPolicy?.id);
+      const isEditMode = editingPolicy?.id != null;
 
       if (maxRpm !== null) payload.max_requests_per_minute = maxRpm;
       else if (isEditMode) payload.max_requests_per_minute = null;
@@ -224,12 +228,12 @@ export default function ResourceGovernorPage() {
         payload.description = formDescription.trim();
       }
 
-      if (editingPolicy?.id) {
+      if (editingPolicy?.id != null) {
         payload.id = editingPolicy.id;
       }
 
       await api.updateResourceGovernorPolicy(payload);
-      success(editingPolicy ? 'Policy updated' : 'Policy created');
+      success(isEditMode ? 'Policy updated' : 'Policy created');
       setShowForm(false);
       resetForm();
       await loadPolicies();
@@ -242,7 +246,7 @@ export default function ResourceGovernorPage() {
   };
 
   const handleDeletePolicy = async (policy: ResourcePolicy) => {
-    if (!policy.id) {
+    if (policy.id == null) {
       showError('Cannot delete policy without ID');
       return;
     }
@@ -555,7 +559,7 @@ export default function ResourceGovernorPage() {
                   </TableHeader>
                   <TableBody>
                     {policies.map((policy, index) => {
-                      const rowKey = policy.id ? `policy-${policy.id}` : `policy-index-${index}`;
+                      const rowKey = policy.id != null ? `policy-${policy.id}` : `policy-index-${index}`;
                       const policyId = policy.id != null ? String(policy.id) : '';
                       const isDeleting = policyId !== '' && deletingPolicyId === policyId;
                       return (

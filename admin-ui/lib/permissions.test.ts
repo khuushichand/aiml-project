@@ -1,4 +1,4 @@
-import { describe, it, expect } from '@jest/globals';
+import { describe, it, expect } from 'vitest';
 import { canEditFromMemberships, type OrgMembership } from './permissions';
 
 const membership = (org_id: number, role: string): OrgMembership => ({ org_id, role });

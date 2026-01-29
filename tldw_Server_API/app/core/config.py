@@ -374,6 +374,9 @@ RAG_SERVICE_CONFIG = {
 
 # Configuration for speaker diarization (config-level defaults)
 DIARIZATION_CONFIG = {
+    # Backend selection
+    "backend": "embedding",  # embedding | nemo_multitalk
+
     # VAD (Voice Activity Detection) settings
     "vad_backend": "silero_hub",  # silero_hub | onnx_silero
     "vad_threshold": 0.5,  # Silero VAD confidence threshold
@@ -418,6 +421,14 @@ DIARIZATION_CONFIG = {
     # Output settings
     "include_embeddings": False,  # Include embeddings in output
     "include_vad_scores": False,  # Include VAD scores in output
+
+    # NeMo multitalk (Parakeet + Sortformer diarization)
+    "nemo_multitalk_asr_model": "nvidia/multitalker-parakeet-streaming-0.6b-v1",
+    "nemo_multitalk_diar_model": "nvidia/diar_streaming_sortformer_4spk-v2.1",
+    "nemo_multitalk_device": "auto",  # auto, cpu, cuda
+    "nemo_multitalk_cache_dir": None,
+    "nemo_multitalk_max_speakers": 4,
+    "nemo_multitalk_disable_cuda_graphs": True,
 }
 
 
@@ -3212,6 +3223,7 @@ def load_and_log_configs():
         diarization_config = dict(DIARIZATION_CONFIG)
         if config_parser_object.has_section('Diarization'):
             # Backend and VAD behavior
+            diarization_config['backend'] = _get_str('Diarization', 'backend', diarization_config.get('backend')) or diarization_config.get('backend')
             diarization_config['vad_backend'] = _get_str('Diarization', 'vad_backend', diarization_config.get('vad_backend')) or diarization_config.get('vad_backend')
             diarization_config['vad_threshold'] = _get_float('Diarization', 'vad_threshold', diarization_config.get('vad_threshold', 0.5))
             diarization_config['vad_min_speech_duration'] = _get_float('Diarization', 'vad_min_speech_duration', diarization_config.get('vad_min_speech_duration', 0.25))
@@ -3219,6 +3231,14 @@ def load_and_log_configs():
             diarization_config['allow_vad_fallback'] = _get_bool('Diarization', 'allow_vad_fallback', diarization_config.get('allow_vad_fallback', True))
             diarization_config['enable_torch_hub_fetch'] = _get_bool('Diarization', 'enable_torch_hub_fetch', diarization_config.get('enable_torch_hub_fetch', True))
             diarization_config['onnx_model_path'] = _get_str('Diarization', 'onnx_model_path', diarization_config.get('onnx_model_path'))
+
+            # NeMo multitalk settings
+            diarization_config['nemo_multitalk_asr_model'] = _get_str('Diarization', 'nemo_multitalk_asr_model', diarization_config.get('nemo_multitalk_asr_model')) or diarization_config.get('nemo_multitalk_asr_model')
+            diarization_config['nemo_multitalk_diar_model'] = _get_str('Diarization', 'nemo_multitalk_diar_model', diarization_config.get('nemo_multitalk_diar_model')) or diarization_config.get('nemo_multitalk_diar_model')
+            diarization_config['nemo_multitalk_device'] = _get_str('Diarization', 'nemo_multitalk_device', diarization_config.get('nemo_multitalk_device')) or diarization_config.get('nemo_multitalk_device')
+            diarization_config['nemo_multitalk_cache_dir'] = _get_str('Diarization', 'nemo_multitalk_cache_dir', diarization_config.get('nemo_multitalk_cache_dir')) or diarization_config.get('nemo_multitalk_cache_dir')
+            diarization_config['nemo_multitalk_max_speakers'] = _get_int('Diarization', 'nemo_multitalk_max_speakers', diarization_config.get('nemo_multitalk_max_speakers', 4))
+            diarization_config['nemo_multitalk_disable_cuda_graphs'] = _get_bool('Diarization', 'nemo_multitalk_disable_cuda_graphs', diarization_config.get('nemo_multitalk_disable_cuda_graphs', True))
 
             # Segmentation
             diarization_config['segment_duration'] = _get_float('Diarization', 'segment_duration', diarization_config.get('segment_duration', 30.0))

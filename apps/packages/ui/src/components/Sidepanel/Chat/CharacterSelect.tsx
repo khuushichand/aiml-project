@@ -1,9 +1,9 @@
 import React, { useState, useMemo, useRef, useEffect } from "react"
 import { useQuery } from "@tanstack/react-query"
-import { Avatar, Dropdown, Empty, Input, Tooltip } from "antd"
+import { Avatar, Dropdown, Empty, Input, Select, Tooltip } from "antd"
 import type { InputRef } from "antd"
 import type { ItemType, MenuItemType } from "antd/es/menu/interface"
-import { User2, Search, X } from "lucide-react"
+import { Star, User2, Search, X } from "lucide-react"
 import { useTranslation } from "react-i18next"
 import { tldwClient } from "@/services/tldw/TldwApiClient"
 import { useServerCapabilities } from "@/hooks/useServerCapabilities"
@@ -35,6 +35,14 @@ type ImportCharacterResponse = {
   character_id?: string | number
   characterId?: string | number
 } & Partial<CharacterApiResponse>
+
+type CharacterSortMode = "favorites" | "az"
+
+type FavoriteCharacter = {
+  id?: string
+  slug?: string
+  name: string
+}
 
 type ImageOnlyErrorDetail = {
   code?: string
@@ -81,6 +89,14 @@ export const CharacterSelect: React.FC<Props> = ({
   const modal = useAntdModal()
   const confirmWithModal = useConfirmModal()
   const [menuDensity] = useStorage("menuDensity", "comfortable")
+  const [favoriteCharacters, setFavoriteCharacters] = useStorage<FavoriteCharacter[]>(
+    "favoriteCharacters",
+    []
+  )
+  const [sortMode, setSortMode] = useStorage<CharacterSortMode>(
+    "characterSortMode",
+    "favorites"
+  )
   const [, setSelectedCharacter] =
     useSelectedCharacter<StoredCharacter | null>(null)
   const clearChat = useClearChat()
@@ -158,6 +174,76 @@ export const CharacterSelect: React.FC<Props> = ({
         char.tags?.some((tag) => tag.toLowerCase().includes(q))
     )
   }, [characters, searchText])
+
+  const favoriteIndex = useMemo(() => {
+    const ids = new Set<string>()
+    const slugs = new Set<string>()
+    const names = new Set<string>()
+    ;(favoriteCharacters || []).forEach((fav) => {
+      if (fav.id) ids.add(String(fav.id))
+      if (fav.slug) slugs.add(String(fav.slug))
+      if (fav.name) names.add(String(fav.name))
+    })
+    return { ids, slugs, names }
+  }, [favoriteCharacters])
+
+  const getCharacterDisplayName = React.useCallback(
+    (character: CharacterApiResponse) =>
+      (character.name ||
+        character.title ||
+        character.slug ||
+        (character.id != null ? String(character.id) : "")).toString(),
+    []
+  )
+
+  const isFavoriteCharacter = React.useCallback(
+    (character: CharacterApiResponse) => {
+      const id = character.id != null ? String(character.id) : ""
+      const slug = character.slug ? String(character.slug) : ""
+      const name = getCharacterDisplayName(character)
+      return (
+        (id && favoriteIndex.ids.has(id)) ||
+        (slug && favoriteIndex.slugs.has(slug)) ||
+        (name && favoriteIndex.names.has(name))
+      )
+    },
+    [favoriteIndex, getCharacterDisplayName]
+  )
+
+  const toggleFavoriteCharacter = React.useCallback(
+    (character: CharacterApiResponse) => {
+      const name = getCharacterDisplayName(character).trim()
+      const id = character.id != null ? String(character.id) : undefined
+      const slug = character.slug ? String(character.slug) : undefined
+      if (!name) return
+      void setFavoriteCharacters((prev) => {
+        const list = Array.isArray(prev) ? prev : []
+        const next = list.filter((fav) => {
+          if (id && fav.id && fav.id === id) return false
+          if (slug && fav.slug && fav.slug === slug) return false
+          if (name && fav.name === name) return false
+          return true
+        })
+        if (next.length === list.length) {
+          next.push({ id, slug, name })
+        }
+        return next
+      })
+    },
+    [getCharacterDisplayName, setFavoriteCharacters]
+  )
+
+  const sortedCharacters = useMemo(() => {
+    const list = filteredCharacters || []
+    const byName = (a: CharacterApiResponse, b: CharacterApiResponse) =>
+      getCharacterDisplayName(a).localeCompare(getCharacterDisplayName(b))
+    if (sortMode === "favorites") {
+      const favorites = list.filter(isFavoriteCharacter).sort(byName)
+      const others = list.filter((char) => !isFavoriteCharacter(char)).sort(byName)
+      return { favorites, others }
+    }
+    return { favorites: [] as CharacterApiResponse[], others: list.slice().sort(byName) }
+  }, [filteredCharacters, getCharacterDisplayName, isFavoriteCharacter, sortMode])
 
   const selectedCharacter = useMemo(() => {
     if (!selectedCharacterId || !characters) return null
@@ -550,28 +636,55 @@ export const CharacterSelect: React.FC<Props> = ({
   )
 
   const createCharacterItem = React.useCallback(
-    (char: CharacterApiResponse): MenuItemType => ({
-      key: String(char.id),
-      label: (
-        <div className="w-56 py-0.5 flex items-center gap-2">
-          {char.avatar_url ? (
-            <Avatar src={char.avatar_url} size="small" />
-          ) : (
-            <Avatar size="small" icon={<User2 className="size-3" />} />
-          )}
-          <div className="flex-1 min-w-0">
-            <div className="truncate font-medium">{char.name}</div>
-            {char.description && (
-              <p className="text-xs text-text-subtle line-clamp-1">
-                {char.description}
-              </p>
+    (char: CharacterApiResponse): MenuItemType => {
+      const isFavorite = isFavoriteCharacter(char)
+      const favoriteTitle = isFavorite
+        ? t("sidepanel:characterSelect.favoriteRemove", "Remove from favorites")
+        : t("sidepanel:characterSelect.favoriteAdd", "Add to favorites")
+      return {
+        key: String(char.id),
+        label: (
+          <div className="w-56 py-0.5 flex items-center gap-2">
+            {char.avatar_url ? (
+              <Avatar src={char.avatar_url} size="small" />
+            ) : (
+              <Avatar size="small" icon={<User2 className="size-3" />} />
             )}
+            <div className="flex-1 min-w-0">
+              <div className="truncate font-medium">{char.name}</div>
+              {char.description && (
+                <p className="text-xs text-text-subtle line-clamp-1">
+                  {char.description}
+                </p>
+              )}
+            </div>
+            <button
+              type="button"
+              className="rounded p-0.5 text-text-subtle transition hover:bg-surface2"
+              onMouseDown={(event) => {
+                event.preventDefault()
+                event.stopPropagation()
+              }}
+              onClick={(event) => {
+                event.preventDefault()
+                event.stopPropagation()
+                toggleFavoriteCharacter(char)
+              }}
+              aria-label={favoriteTitle}
+              title={favoriteTitle}
+            >
+              <Star
+                className={`h-3.5 w-3.5 ${
+                  isFavorite ? "fill-warn text-warn" : "text-text-subtle"
+                }`}
+              />
+            </button>
           </div>
-        </div>
-      ),
-      onClick: () => handleSelect(String(char.id))
-    }),
-    [handleSelect]
+        ),
+        onClick: () => handleSelect(String(char.id))
+      }
+    },
+    [handleSelect, isFavoriteCharacter, t, toggleFavoriteCharacter]
   )
 
   const menuItems = useMemo<ItemType[]>(() => {
@@ -680,8 +793,19 @@ export const CharacterSelect: React.FC<Props> = ({
     items.push(createItem, importItem)
     items.push({ type: "divider" })
 
+    const favoriteItems = sortedCharacters.favorites.map(createCharacterItem)
+    const otherItems = sortedCharacters.others.map(createCharacterItem)
+
+    if (sortMode === "favorites" && favoriteItems.length > 0) {
+      items.push({
+        type: "group",
+        label: t("sidepanel:characterSelect.favorites", "Favorites"),
+        children: favoriteItems
+      })
+    }
+
     // Add character items
-    items.push(...filteredCharacters.map(createCharacterItem))
+    items.push(...otherItems)
 
     return items
   }, [
@@ -693,6 +817,8 @@ export const CharacterSelect: React.FC<Props> = ({
     openDisplayNameModal,
     openCharactersWorkspace,
     searchText,
+    sortedCharacters,
+    sortMode,
     t,
     trimmedDisplayName
   ])
@@ -758,7 +884,7 @@ export const CharacterSelect: React.FC<Props> = ({
         }}
         dropdownRender={(menu) => (
           <div className="bg-surface rounded-lg shadow-lg border border-border">
-            <div className="p-2 border-b border-border">
+            <div className="p-2 border-b border-border flex items-center gap-2">
               <Input
                 ref={searchInputRef}
                 placeholder={t(
@@ -770,7 +896,22 @@ export const CharacterSelect: React.FC<Props> = ({
                 onChange={(e) => setSearchText(e.target.value)}
                 allowClear
                 size="small"
+                className="flex-1"
                 onKeyDown={(e) => e.stopPropagation()}
+              />
+              <Select
+                size="small"
+                value={sortMode}
+                onChange={(value) => setSortMode(value as CharacterSortMode)}
+                options={[
+                  {
+                    value: "favorites",
+                    label: t("sidepanel:characterSelect.sort.favorites", "Favorites")
+                  },
+                  { value: "az", label: t("sidepanel:characterSelect.sort.az", "A-Z") }
+                ]}
+                className="min-w-[110px]"
+                onKeyDown={(event) => event.stopPropagation()}
               />
             </div>
             {menu}

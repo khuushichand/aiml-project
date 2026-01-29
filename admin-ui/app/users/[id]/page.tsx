@@ -19,6 +19,12 @@ import { AccessibleIconButton } from '@/components/ui/accessible-icon-button';
 import { api, ApiError } from '@/lib/api-client';
 import { formatDateTime } from '@/lib/format';
 import { parseOptionalInt } from '@/lib/number';
+import {
+  deriveLimitPerMinute,
+  getDerivedLimitPerMin,
+  normalizeRateLimitValue,
+  validateRateLimitInputs,
+} from '@/lib/rate-limits';
 import { canEditFromMemberships } from '@/lib/permissions';
 import { User, Permission } from '@/types';
 import Link from 'next/link';
@@ -449,32 +455,25 @@ export default function UserDetailPage() {
     }
   };
 
-  const normalizeRateLimitValue = (value: number | null): number | null => {
-    if (value === null) return null;
-    return value > 0 ? value : null;
-  };
-
-  const deriveLimitPerMinute = (value: number | null, divisor: number): number | null => {
-    if (value === null) return null;
-    // Avoid inflating limits when converting larger windows to per-minute values.
-    const perMinute = Math.floor(value / divisor);
-    return perMinute > 0 ? perMinute : 1;
-  };
-
   const buildRateLimitPayload = (
     rpm: number | null,
     rph: number | null,
     rpd: number | null
   ): RateLimitUpsertPayload => {
-    const limitPerMin = rpm
-      ?? deriveLimitPerMinute(rph, 60)
-      ?? deriveLimitPerMinute(rpd, 1440);
-    const burst = rph ?? rpd;
+    const limitPerMin = getDerivedLimitPerMin(rpm, rph, rpd);
+    const burstPerMinute = rph != null
+      ? deriveLimitPerMinute(rph, 60)
+      : rpd != null
+        ? deriveLimitPerMinute(rpd, 1440)
+        : null;
+    const burstMultiplier = burstPerMinute != null && limitPerMin
+      ? Math.max(1, burstPerMinute / limitPerMin)
+      : 1;
 
     return {
       resource: DEFAULT_RATE_LIMIT_RESOURCE,
       limit_per_min: normalizeRateLimitValue(limitPerMin),
-      burst: normalizeRateLimitValue(burst),
+      burst: normalizeRateLimitValue(burstMultiplier),
     };
   };
 
@@ -492,6 +491,17 @@ export default function UserDetailPage() {
       if (normalizedRpm !== null) data.requests_per_minute = normalizedRpm;
       if (normalizedRph !== null) data.requests_per_hour = normalizedRph;
       if (normalizedRpd !== null) data.requests_per_day = normalizedRpd;
+
+      const { error: rateLimitError } = validateRateLimitInputs(
+        normalizedRpm,
+        normalizedRph,
+        normalizedRpd
+      );
+      if (rateLimitError) {
+        setRateLimitsSaving(false);
+        setError(rateLimitError);
+        return;
+      }
 
       const payload = buildRateLimitPayload(normalizedRpm, normalizedRph, normalizedRpd);
       await api.setUserRateLimits(userId, payload);

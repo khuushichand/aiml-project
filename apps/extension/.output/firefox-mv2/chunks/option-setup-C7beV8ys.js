@@ -1,1 +1,0 @@
-import{o as e,O as n,j as s,Y as i,av as o}from"./react-instance-check-jRY8MRSc.js";const u=()=>{const a=e(),t=n.useCallback(()=>{a("/")},[a]);return s.jsx(i,{hideHeader:!0,children:s.jsx(o,{onFinish:t})})};export{u as default};

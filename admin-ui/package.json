@@ -7,11 +7,14 @@
     "build": "next build",
     "start": "next start -p 3001",
     "test": "vitest run",
-    "lint": "eslint ."
+    "lint": "BROWSERSLIST_IGNORE_OLD_DATA=1 BASELINE_BROWSER_MAPPING_IGNORE_OLD_DATA=1 eslint ."
   },
   "keywords": [],
   "author": "",
   "license": "ISC",
+  "overrides": {
+    "baseline-browser-mapping": "2.9.19"
+  },
   "dependencies": {
     "@hookform/resolvers": "^5.2.2",
     "@radix-ui/react-dialog": "^1.1.15",
@@ -44,7 +47,7 @@
   "devDependencies": {
     "@testing-library/react": "^16.3.2",
     "@testing-library/user-event": "^14.6.1",
-    "baseline-browser-mapping": "^2.9.18",
+    "baseline-browser-mapping": "^2.9.19",
     "eslint": "9.39.2",
     "eslint-config-next": "16.1.0",
     "jsdom": "^27.4.0",

@@ -708,8 +708,8 @@ export const api = {
     const queryParams = params ? new URLSearchParams(params).toString() : '';
     return requestJson(`/voice/commands${queryParams ? `?${queryParams}` : ''}`);
   },
-  getVoiceCommand: (commandId: string) =>
-    requestJson(`/voice/commands/${encodeURIComponent(commandId)}`),
+  getVoiceCommand: (commandId: string, signal?: AbortSignal) =>
+    requestJson(`/voice/commands/${encodeURIComponent(commandId)}`, { signal }),
   createVoiceCommand: (data: Record<string, unknown>) =>
     requestJson('/voice/commands', {
       method: 'POST',
@@ -751,13 +751,13 @@ export const api = {
     ).toString() : '';
     return requestJson(`/voice/analytics${queryParams ? `?${queryParams}` : ''}`);
   },
-  getVoiceCommandUsage: (commandId: string, params?: { days?: number }) => {
+  getVoiceCommandUsage: (commandId: string, params?: { days?: number }, signal?: AbortSignal) => {
     const queryParams = params ? new URLSearchParams(
       Object.entries(params)
         .filter(([, v]) => v !== undefined)
         .map(([k, v]) => [k, String(v)])
     ).toString() : '';
-    return requestJson(`/voice/commands/${encodeURIComponent(commandId)}/usage${queryParams ? `?${queryParams}` : ''}`);
+    return requestJson(`/voice/commands/${encodeURIComponent(commandId)}/usage${queryParams ? `?${queryParams}` : ''}`, { signal });
   },
 
   // Voice Workflow Templates
