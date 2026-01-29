@@ -122,6 +122,7 @@ export default function MonitoringPage() {
   const [notificationSettings, setNotificationSettings] = useState<NotificationSettings | null>(null);
   const [recentNotifications, setRecentNotifications] = useState<RecentNotification[]>([]);
   const [notificationsSaving, setNotificationsSaving] = useState(false);
+  const [notificationSettingsStatus, setNotificationSettingsStatus] = useState<'pending' | 'fulfilled' | 'rejected'>('pending');
 
   const appendMetricsHistory = useCallback((cpu: number, memory: number) => {
     const time = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
@@ -149,6 +150,7 @@ export default function MonitoringPage() {
     try {
       setLoading(true);
       setError('');
+      setNotificationSettingsStatus('pending');
 
       const [
         metricsData,
@@ -186,6 +188,7 @@ export default function MonitoringPage() {
       });
 
       // Process notification settings
+      setNotificationSettingsStatus(notificationSettingsData.status);
       if (notificationSettingsData.status === 'fulfilled') {
         const data = notificationSettingsData.value as NotificationSettings;
         setNotificationSettings(data || {
@@ -195,13 +198,7 @@ export default function MonitoringPage() {
           digest_frequency: 'daily',
         });
       } else {
-        // Set default settings if API not available
-        setNotificationSettings({
-          channels: [],
-          alert_threshold: 'warning',
-          digest_enabled: false,
-          digest_frequency: 'daily',
-        });
+        setNotificationSettings(null);
       }
 
       // Process recent notifications
@@ -308,6 +305,8 @@ export default function MonitoringPage() {
     } catch (err: unknown) {
       console.error('Failed to load monitoring data:', err);
       setError(err instanceof Error && err.message ? err.message : 'Failed to load monitoring data');
+      setNotificationSettingsStatus('rejected');
+      setNotificationSettings(null);
     } finally {
       setLoading(false);
     }
@@ -427,6 +426,9 @@ export default function MonitoringPage() {
   };
 
   const handleSaveNotificationSettings = async (settings: NotificationSettings) => {
+    if (notificationSettingsStatus !== 'fulfilled') {
+      return false;
+    }
     try {
       setNotificationsSaving(true);
       setError('');
@@ -543,6 +545,7 @@ export default function MonitoringPage() {
                 recentNotifications={recentNotifications}
                 loading={loading}
                 saving={notificationsSaving}
+                canSave={notificationSettingsStatus === 'fulfilled'}
                 onSave={handleSaveNotificationSettings}
                 onTest={handleTestNotification}
               />

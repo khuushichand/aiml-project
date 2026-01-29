@@ -151,10 +151,10 @@ describe('UsersPage', () => {
     const checkbox = within(row as HTMLElement).getByRole('checkbox', {
       name: /select user alice/i,
     });
-    expect((checkbox as HTMLInputElement).disabled).toBe(true);
+    expect(checkbox).toBeDisabled();
 
     const deleteButton = within(row as HTMLElement).getByTitle('Cannot delete yourself');
-    expect((deleteButton as HTMLButtonElement).disabled).toBe(true);
+    expect(deleteButton).toBeDisabled();
   });
 
   it('allows deleting another user after confirmation', async () => {
@@ -165,7 +165,7 @@ describe('UsersPage', () => {
     expect(row).not.toBeNull();
 
     const deleteButton = within(row as HTMLElement).getByTitle('Delete user');
-    expect((deleteButton as HTMLButtonElement).disabled).toBe(false);
+    expect(deleteButton).not.toBeDisabled();
 
     const user = userEvent.setup();
     await user.click(deleteButton);

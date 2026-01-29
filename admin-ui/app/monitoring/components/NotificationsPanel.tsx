@@ -15,6 +15,7 @@ type NotificationsPanelProps = {
   recentNotifications: RecentNotification[];
   loading: boolean;
   saving: boolean;
+  canSave: boolean;
   onSave: (settings: NotificationSettings) => Promise<boolean> | boolean;
   onTest: () => void;
 };
@@ -129,6 +130,7 @@ const NotificationsPanelForm = ({
   recentNotifications,
   loading,
   saving,
+  canSave,
   onSave,
   onTest,
 }: NotificationsPanelFormProps) => {
@@ -361,7 +363,7 @@ const NotificationsPanelForm = ({
               </div>
             </div>
 
-            <Button onClick={handleSave} disabled={saving || !isDirty}>
+            <Button onClick={handleSave} disabled={saving || !isDirty || !canSave}>
               {saving ? 'Saving...' : 'Save Settings'}
             </Button>
 
@@ -416,6 +418,7 @@ export default function NotificationsPanel({
   recentNotifications,
   loading,
   saving,
+  canSave,
   onSave,
   onTest,
 }: NotificationsPanelProps) {
@@ -447,6 +450,7 @@ export default function NotificationsPanel({
       recentNotifications={recentNotifications}
       loading={loading}
       saving={saving}
+      canSave={canSave}
       onSave={onSave}
       onTest={onTest}
     />

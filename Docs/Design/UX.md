@@ -70,6 +70,7 @@ https://medium.com/@ryan.almeida86/10-tiny-ui-fixes-that-make-a-big-difference-9
 https://www.grug.design/know
 https://github.com/vibeflowing-inc/vibe_figma
 https://ant.design/docs/spec/colors/
+https://animations.dev/
 https://uxplanet.org/14-logic-driven-ui-design-tips-145ee08ea5a5?gi=31c1a5e9d721
 https://medium.com/ui-for-ai/welcome-to-ui-for-ai-eb22aef8d26c
 https://medium.com/ui-for-ai/ui-for-ai-initial-concepts-82b40dc2998c

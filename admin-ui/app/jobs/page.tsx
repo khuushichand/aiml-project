@@ -18,8 +18,7 @@ import { useToast } from '@/components/ui/toast';
 import { RefreshCw, Briefcase, Filter, AlertTriangle, Eye, RotateCcw, XCircle, Repeat, Clock, Plus, X, Paperclip } from 'lucide-react';
 import { AccessibleIconButton } from '@/components/ui/accessible-icon-button';
 import { api, ApiError } from '@/lib/api-client';
-import { formatDateTime } from '@/lib/format';
-import { formatBytes } from '@/lib/format';
+import { formatBytes, formatDateTime, formatDuration } from '@/lib/format';
 
 interface SlaPolicy {
   id: string;
@@ -85,6 +84,9 @@ interface StaleGroup {
 
 const formatJobDateTime = (value?: string | null) =>
   formatDateTime(value, { fallback: '—' });
+
+const formatDurationDisplay = (value?: number | null) =>
+  formatDuration(value, { fallback: '—' });
 
 const statusBadge = (status: string) => {
   const normalized = status.toLowerCase();
@@ -322,13 +324,6 @@ export default function JobsPage() {
     } finally {
       setSlaFormSaving(false);
     }
-  };
-
-  const formatDuration = (seconds: number) => {
-    if (!Number.isFinite(seconds) || seconds < 0) return '—';
-    const mins = Math.floor(seconds / 60);
-    const secs = seconds % 60;
-    return `${mins}m ${secs}s`;
   };
 
   const handleCloseDetail = () => {
@@ -622,8 +617,17 @@ export default function JobsPage() {
                   size="sm"
                   onClick={() => setShowSlaForm(!showSlaForm)}
                 >
-                  <Plus className="mr-2 h-4 w-4" />
-                  New Policy
+                  {showSlaForm ? (
+                    <>
+                      <X className="mr-2 h-4 w-4" />
+                      Cancel
+                    </>
+                  ) : (
+                    <>
+                      <Plus className="mr-2 h-4 w-4" />
+                      New Policy
+                    </>
+                  )}
                 </Button>
               </div>
             </CardHeader>
@@ -724,10 +728,10 @@ export default function JobsPage() {
                         <TableCell className="font-medium">{policy.name}</TableCell>
                         <TableCell>{policy.job_type || 'All'}</TableCell>
                         <TableCell className="text-right">
-                          {formatDuration(policy.max_processing_time_seconds)}
+                          {formatDurationDisplay(policy.max_processing_time_seconds)}
                         </TableCell>
                         <TableCell className="text-right">
-                          {formatDuration(policy.max_wait_time_seconds)}
+                          {formatDurationDisplay(policy.max_wait_time_seconds)}
                         </TableCell>
                         <TableCell>
                           <Badge variant={policy.enabled ? 'default' : 'secondary'}>

@@ -505,7 +505,15 @@ export default function UserDetailPage() {
 
       const payload = buildRateLimitPayload(normalizedRpm, normalizedRph, normalizedRpd);
       await api.setUserRateLimits(userId, payload);
-      applyRateLimits(data);
+      let normalizedRateLimits: UserRateLimits | null = null;
+      try {
+        const updated = await api.getUserRateLimits(userId);
+        normalizedRateLimits = normalizeRateLimits(updated);
+      } catch (err: unknown) {
+        console.error('Failed to reload rate limits after update:', err);
+        normalizedRateLimits = data;
+      }
+      applyRateLimits(normalizedRateLimits);
       toastSuccess('Rate limits updated', 'User rate limits have been saved.');
     } catch (err: unknown) {
       console.error('Failed to update rate limits:', err);

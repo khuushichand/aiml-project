@@ -29,6 +29,10 @@ type FormatNumberOptions = {
   precision?: number;
 };
 
+type FormatDurationOptions = {
+  fallback?: string;
+};
+
 export const formatBytes = (
   value?: number | null,
   { fallback = '-', precision = 1 }: FormatNumberOptions = {}
@@ -42,6 +46,17 @@ export const formatBytes = (
     idx += 1;
   }
   return `${size.toFixed(precision)} ${units[idx]}`;
+};
+
+export const formatDuration = (
+  value?: number | null,
+  { fallback = '-' }: FormatDurationOptions = {}
+): string => {
+  if (value === null || value === undefined || !Number.isFinite(value) || value < 0) return fallback;
+  const totalSeconds = Math.floor(value);
+  const minutes = Math.floor(totalSeconds / 60);
+  const seconds = totalSeconds % 60;
+  return `${minutes}m ${seconds}s`;
 };
 
 export const formatLatency = (

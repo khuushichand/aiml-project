@@ -272,11 +272,12 @@ Each section highlights installation, configuration, and a smoke test.
       enabled: true
       device: "auto"             # resolves to cuda
       model: "jordand/echo-tts-base"
-      module_path: "/path/to/echo-tts" # path to your echo-tts checkout
+      module_path: "/path/to/echo-tts" # path to your echo-tts repository clone
       sample_rate: 44100
       cache_size: 8
   ```
 - **Voice cloning**: required. Supply `voice_reference` audio (1–300 s, 44.1 kHz). Requests without a voice reference return HTTP 422.
+- **Reference**: [Echo-TTS Repository](https://github.com/jordandare/echo-tts).
 
 ### Higgs Audio V2
 - **Install**: `pip install -e ".[TTS_higgs]"` and install the upstream repo (`git clone https://github.com/boson-ai/higgs-audio && pip install -e .`).

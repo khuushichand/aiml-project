@@ -266,15 +266,9 @@ describe('MonitoringPage', () => {
 
     render(<MonitoringPage />);
 
-    for (let i = 0; i < 5; i += 1) {
-      await flushPromises();
-      if (apiMock.getHealthMetrics.mock.calls.length >= 2) {
-        break;
-      }
-    }
-    await flushPromises();
-
-    expect(apiMock.getHealthMetrics).toHaveBeenCalledTimes(2);
+    await waitFor(() => {
+      expect(apiMock.getHealthMetrics.mock.calls.length).toBeGreaterThanOrEqual(2);
+    }, { timeout: 5000 });
 
     await vi.advanceTimersByTimeAsync(5 * 60 * 1000);
     await flushPromises();

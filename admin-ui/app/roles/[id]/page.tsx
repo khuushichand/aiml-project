@@ -122,10 +122,9 @@ const mergeRateLimitsFromResponse = (
   }
 
   if (typeof burstMultiplier === 'number' || burstMultiplier === null) {
-    const burstPerMinute = limitPerMin && burstMultiplier
-      ? limitPerMin * burstMultiplier
-      : burstMultiplier === null
-        ? null
+    const burstPerMinute =
+      limitPerMin != null && burstMultiplier != null
+        ? limitPerMin * burstMultiplier
         : null;
 
     if (options.normalizedRph !== null) {

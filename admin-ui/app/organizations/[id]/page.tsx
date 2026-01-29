@@ -286,7 +286,6 @@ export default function OrganizationDetailPage() {
     const threshold = parseInt(editWatchlistThreshold, 10);
     if (Number.isNaN(threshold) || threshold < 1) {
       setError('Threshold must be at least 1');
-      setWatchlistSaving(false);
       return;
     }
     try {

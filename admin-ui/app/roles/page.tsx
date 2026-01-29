@@ -343,6 +343,13 @@ export default function RolesPage() {
                                         ? 'Deleting role'
                                         : 'Delete role'
                                   }
+                                  aria-label={
+                                    role.is_system
+                                      ? 'Cannot delete system roles'
+                                      : isDeleting
+                                        ? 'Deleting role'
+                                        : 'Delete role'
+                                  }
                                 >
                                   {isDeleting ? (
                                     <RefreshCw className="h-4 w-4 text-red-500 animate-spin" />
