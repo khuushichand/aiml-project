@@ -87,6 +87,16 @@ export type PresetConfig = {
 }
 
 /**
+ * Chunking template options for ingest.
+ */
+export type ChunkingTemplateOptions = {
+  /** Name of the selected chunking template */
+  templateName?: string
+  /** Whether to automatically detect and apply templates based on content */
+  autoApply?: boolean
+}
+
+/**
  * Badge state for tab indicators.
  */
 export type TabBadgeState = {

@@ -486,3 +486,336 @@ export async function getPromptStudioStatus(params?: { warn_seconds?: number }) 
     method: "GET"
   })
 }
+
+// --- Extended Project Operations ---
+
+export async function archiveProject(projectId: number) {
+  return await apiSend<StandardResponse<Project>>({
+    path: toAllowedPath(
+      `/api/v1/prompt-studio/projects/${encodeURIComponent(projectId)}`
+    ),
+    method: "PUT",
+    body: { status: "archived" }
+  })
+}
+
+export async function unarchiveProject(projectId: number) {
+  return await apiSend<StandardResponse<Project>>({
+    path: toAllowedPath(
+      `/api/v1/prompt-studio/projects/${encodeURIComponent(projectId)}`
+    ),
+    method: "PUT",
+    body: { status: "active" }
+  })
+}
+
+export async function deleteProject(projectId: number, permanent?: boolean) {
+  const query = buildQuery({ permanent })
+  return await apiSend<{ message: string }>({
+    path: appendPathQuery(
+      toAllowedPath(
+        `/api/v1/prompt-studio/projects/${encodeURIComponent(projectId)}`
+      ),
+      query
+    ),
+    method: "DELETE"
+  })
+}
+
+export type ProjectStats = {
+  prompt_count: number
+  test_case_count: number
+  evaluation_count: number
+  optimization_count?: number
+}
+
+export async function getProjectStats(projectId: number) {
+  // This uses getProject which already includes counts
+  return await getProject(projectId)
+}
+
+// --- Extended Test Case Operations ---
+
+export async function deleteTestCase(testCaseId: number, permanent?: boolean) {
+  const query = buildQuery({ permanent })
+  return await apiSend<{ message: string }>({
+    path: appendPathQuery(
+      toAllowedPath(
+        `/api/v1/prompt-studio/test-cases/${encodeURIComponent(testCaseId)}`
+      ),
+      query
+    ),
+    method: "DELETE"
+  })
+}
+
+export async function bulkDeleteTestCases(testCaseIds: number[]) {
+  return await apiSend<{ message: string; deleted_count: number }>({
+    path: "/api/v1/prompt-studio/test-cases/bulk-delete",
+    method: "POST",
+    body: { test_case_ids: testCaseIds }
+  })
+}
+
+export type TestCaseExportFormat = "json" | "csv"
+
+export async function exportTestCases(
+  projectId: number,
+  format: TestCaseExportFormat = "json"
+) {
+  const query = buildQuery({ format })
+  return await apiSend<TestCase[] | string>({
+    path: appendPathQuery(
+      toAllowedPath(
+        `/api/v1/prompt-studio/test-cases/export/${encodeURIComponent(projectId)}`
+      ),
+      query
+    ),
+    method: "GET"
+  })
+}
+
+export type TestCaseImportPayload = {
+  project_id: number
+  format: TestCaseExportFormat
+  data: string | TestCaseCreatePayload[]
+  signature_id?: number | null
+}
+
+export async function importTestCases(payload: TestCaseImportPayload) {
+  return await apiSend<StandardResponse<TestCase[]>>({
+    path: "/api/v1/prompt-studio/test-cases/import",
+    method: "POST",
+    body: payload
+  })
+}
+
+export type GenerateTestCasesPayload = {
+  project_id: number
+  prompt_id?: number
+  count?: number
+  seed_examples?: Array<{ inputs: Record<string, any>; expected_outputs?: Record<string, any> }>
+  provider?: string
+  model?: string
+  signature_id?: number | null
+}
+
+export async function generateTestCases(payload: GenerateTestCasesPayload) {
+  return await apiSend<StandardResponse<TestCase[]>>({
+    path: "/api/v1/prompt-studio/test-cases/generate",
+    method: "POST",
+    body: payload
+  })
+}
+
+export type RunTestCasesPayload = {
+  prompt_id: number
+  test_case_ids: number[]
+  config?: EvaluationConfig
+}
+
+export type TestRunResult = {
+  test_case_id: number
+  output: string
+  passed?: boolean
+  execution_time?: number
+  error?: string | null
+}
+
+export async function runTestCases(payload: RunTestCasesPayload) {
+  return await apiSend<StandardResponse<TestRunResult[]>>({
+    path: "/api/v1/prompt-studio/test-cases/run",
+    method: "POST",
+    body: payload
+  })
+}
+
+// --- Optimization Operations ---
+
+export type OptimizationStrategy =
+  | "iterative"
+  | "mipro"
+  | "bootstrap"
+  | "hyperparameter"
+  | "genetic"
+  | "beam_search"
+  | "simulated_annealing"
+  | "random_search"
+  | "hill_climbing"
+  | "mcts"
+
+export type OptimizationStatus =
+  | "pending"
+  | "running"
+  | "completed"
+  | "failed"
+  | "cancelled"
+
+export type OptimizationConfig = {
+  strategy: OptimizationStrategy
+  max_iterations?: number
+  population_size?: number
+  beam_width?: number
+  temperature?: number
+  learning_rate?: number
+  early_stopping_rounds?: number
+  metric?: string
+  minimize?: boolean
+  custom_params?: Record<string, any>
+}
+
+export type Optimization = {
+  id: number
+  uuid?: string
+  project_id: number
+  prompt_id: number
+  name?: string | null
+  description?: string | null
+  status: OptimizationStatus
+  config: OptimizationConfig
+  model_config?: EvaluationConfig
+  test_case_ids?: number[]
+  best_prompt_id?: number | null
+  best_score?: number | null
+  current_iteration?: number
+  total_iterations?: number
+  error_message?: string | null
+  cancel_reason?: string | null
+  created_at?: string
+  started_at?: string | null
+  completed_at?: string | null
+}
+
+export type OptimizationIteration = {
+  iteration: number
+  prompt_id: number
+  score: number
+  metrics?: Record<string, any>
+  changes?: string
+  timestamp?: string
+}
+
+export type OptimizationCreatePayload = {
+  project_id: number
+  prompt_id: number
+  name?: string | null
+  description?: string | null
+  config: OptimizationConfig
+  model_config?: EvaluationConfig
+  test_case_ids?: number[]
+}
+
+export type OptimizationListResponse = {
+  optimizations: Optimization[]
+  total: number
+  limit: number
+  offset: number
+}
+
+export async function listOptimizations(params: {
+  project_id: number
+  prompt_id?: number
+  status?: OptimizationStatus
+  limit?: number
+  offset?: number
+}) {
+  const query = buildQuery({
+    project_id: params.project_id,
+    prompt_id: params.prompt_id,
+    status: params.status,
+    limit: params.limit ?? 50,
+    offset: params.offset ?? 0
+  })
+  return await apiSend<OptimizationListResponse>({
+    path: appendPathQuery("/api/v1/prompt-studio/optimizations", query),
+    method: "GET"
+  })
+}
+
+export async function createOptimization(payload: OptimizationCreatePayload) {
+  return await apiSend<StandardResponse<Optimization>>({
+    path: "/api/v1/prompt-studio/optimizations",
+    method: "POST",
+    body: payload
+  })
+}
+
+export async function getOptimization(optimizationId: number) {
+  return await apiSend<StandardResponse<Optimization>>({
+    path: toAllowedPath(
+      `/api/v1/prompt-studio/optimizations/${encodeURIComponent(optimizationId)}`
+    ),
+    method: "GET"
+  })
+}
+
+export async function cancelOptimization(optimizationId: number, reason?: string) {
+  return await apiSend<StandardResponse<Optimization>>({
+    path: toAllowedPath(
+      `/api/v1/prompt-studio/optimizations/${encodeURIComponent(optimizationId)}/cancel`
+    ),
+    method: "POST",
+    body: reason ? { reason } : undefined
+  })
+}
+
+export async function deleteOptimization(optimizationId: number) {
+  return await apiSend<{ message: string }>({
+    path: toAllowedPath(
+      `/api/v1/prompt-studio/optimizations/${encodeURIComponent(optimizationId)}`
+    ),
+    method: "DELETE"
+  })
+}
+
+export async function getOptimizationIterations(optimizationId: number) {
+  return await apiSend<StandardResponse<OptimizationIteration[]>>({
+    path: toAllowedPath(
+      `/api/v1/prompt-studio/optimizations/${encodeURIComponent(optimizationId)}/iterations`
+    ),
+    method: "GET"
+  })
+}
+
+export type StrategyInfo = {
+  name: OptimizationStrategy
+  display_name: string
+  description: string
+  supported_params: string[]
+  default_params: Record<string, any>
+  requires_test_cases: boolean
+  supports_early_stopping: boolean
+}
+
+export async function getOptimizationStrategies() {
+  return await apiSend<StandardResponse<StrategyInfo[]>>({
+    path: "/api/v1/prompt-studio/optimizations/strategies",
+    method: "GET"
+  })
+}
+
+export type CompareStrategiesPayload = {
+  project_id: number
+  prompt_id: number
+  strategies: OptimizationStrategy[]
+  test_case_ids: number[]
+  iterations_per_strategy?: number
+  model_config?: EvaluationConfig
+}
+
+export type StrategyComparisonResult = {
+  strategy: OptimizationStrategy
+  best_score: number
+  avg_score: number
+  iterations_completed: number
+  best_prompt_id?: number
+  execution_time_seconds: number
+}
+
+export async function compareStrategies(payload: CompareStrategiesPayload) {
+  return await apiSend<StandardResponse<StrategyComparisonResult[]>>({
+    path: "/api/v1/prompt-studio/optimizations/compare",
+    method: "POST",
+    body: payload
+  })
+}

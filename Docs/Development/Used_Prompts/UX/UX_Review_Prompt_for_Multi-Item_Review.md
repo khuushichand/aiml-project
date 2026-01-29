@@ -161,8 +161,8 @@ Enhanced UX Review Prompt for Multi-Item Review Playground
  5. Accessibility (WCAG 2.1 AA)
 
  **Deliverables**:
- - Top 5 quick wins (high impact, low effort)
- - Top 3 critical issues
+ - Top 7 quick wins (high impact, low effort)
+ - Top 10 critical issues
  - Specific recommendations with current state → proposed solution format
 
  **Hospital context**: Address interruption recovery, glanceability (<2s), 12-hour shift fatigue tolerance, and shared workstation privacy.

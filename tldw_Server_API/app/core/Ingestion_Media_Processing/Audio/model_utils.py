@@ -42,6 +42,10 @@ def normalize_model_and_variant(
                 if v in ALLOWED_PARAKEET_VARIANTS:
                     variant_out = v
                 # else: keep existing variant
+        elif base_lower in ("qwen3", "qwen3_asr", "qwen3asr"):
+            # Normalize all qwen3-asr variants to canonical form
+            model_out = "qwen3-asr"
+            # qwen3-asr does not have variants; ignore variant_override
         else:
             # For non-Parakeet hyphenated names, collapse to base model to match selector logic
             model_out = base if sep else s

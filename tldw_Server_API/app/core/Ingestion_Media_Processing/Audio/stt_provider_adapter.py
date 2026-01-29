@@ -479,14 +479,27 @@ class Qwen3ASRAdapter(SttProviderAdapter):
         super().__init__(SttProviderName.QWEN3_ASR)
 
     def get_capabilities(self) -> SttProviderCapabilities:
-        # Qwen3-ASR supports batch transcription; streaming requires vLLM (P1)
+        # Qwen3-ASR supports batch transcription; streaming is available via vLLM HTTP
         # Word timestamps via forced aligner are supported when configured
+        # Check if vLLM streaming is configured
+        try:
+            stt_cfg = get_stt_config() or {}
+            vllm_url = str(stt_cfg.get("qwen3_asr_vllm_base_url", "")).strip()
+            backend = str(stt_cfg.get("qwen3_asr_backend", "")).lower()
+            streaming_available = bool(vllm_url and backend == "vllm")
+        except Exception:
+            streaming_available = False
+
+        notes = "Qwen3-ASR: 30 languages, word timestamps via ForcedAligner"
+        if streaming_available:
+            notes += "; streaming via vLLM HTTP"
+
         return SttProviderCapabilities(
             name=self.name,
             supports_batch=True,
-            supports_streaming=False,  # Streaming requires vLLM backend
+            supports_streaming=streaming_available,
             supports_diarization=False,
-            notes="Qwen3-ASR: 30 languages, word timestamps via ForcedAligner",
+            notes=notes,
         )
 
     def transcribe_batch(

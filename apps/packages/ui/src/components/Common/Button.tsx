@@ -24,6 +24,7 @@ type ButtonProps = {
   type?: "button" | "submit" | "reset"
   ariaLabel?: string
   title?: string
+  "data-testid"?: string
 }
 
 const variantStyles: Record<ButtonVariant, string> = {
@@ -74,7 +75,8 @@ export const Button = React.forwardRef<HTMLButtonElement, ButtonProps>(
       className,
       type = "button",
       ariaLabel,
-      title
+      title,
+      "data-testid": dataTestId
     },
     ref
   ) => {
@@ -98,6 +100,7 @@ export const Button = React.forwardRef<HTMLButtonElement, ButtonProps>(
         aria-label={ariaLabel}
         aria-busy={loading}
         title={title ?? ariaLabel}
+        data-testid={dataTestId}
       >
         {loading && <Loader2 className="h-4 w-4 animate-spin" />}
         {children}

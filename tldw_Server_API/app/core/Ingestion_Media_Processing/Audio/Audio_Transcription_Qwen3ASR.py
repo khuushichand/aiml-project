@@ -121,6 +121,7 @@ def _resolve_settings() -> Dict[str, Any]:
         # Backend selection
         "backend": _as_str(stt_cfg.get("qwen3_asr_backend"), "transformers"),
         "vllm_gpu_memory_utilization": _as_float(stt_cfg.get("qwen3_asr_vllm_gpu_memory_utilization"), 0.7),
+        "vllm_base_url": _as_str(stt_cfg.get("qwen3_asr_vllm_base_url"), ""),
     }
     return settings
 
@@ -511,6 +512,106 @@ def _normalize_artifact(
     return artifact
 
 
+def _transcribe_vllm_http(
+    audio_path: Path,
+    settings: Dict[str, Any],
+    language: Optional[str],
+    cancel_check: Optional[Callable[[], bool]],
+) -> Dict[str, Any]:
+    """
+    Transcribe audio via external vLLM server using OpenAI-compatible API.
+
+    Args:
+        audio_path: Resolved path to audio file
+        settings: Qwen3-ASR settings dict with vllm_base_url
+        language: Language hint (optional)
+        cancel_check: Cancellation callback
+
+    Returns:
+        Normalized transcription artifact
+    """
+    try:
+        import httpx
+    except ImportError as exc:
+        raise BadRequestError(
+            "httpx is required for vLLM HTTP transcription. Install with: pip install httpx"
+        ) from exc
+
+    base_url = str(settings["vllm_base_url"]).rstrip("/")
+    if not base_url:
+        raise BadRequestError(
+            "vLLM base URL not configured. Set [STT-Settings].qwen3_asr_vllm_base_url in config."
+        )
+
+    url = f"{base_url}/v1/audio/transcriptions"
+
+    _check_cancel(cancel_check, label="vllm http request")
+
+    # Get audio duration for metadata
+    try:
+        audio_np, sample_rate, duration_seconds = _load_audio(
+            audio_path,
+            target_sample_rate=int(settings.get("sample_rate") or 16000),
+        )
+    except Exception as exc:
+        logger.warning(f"Could not read audio for duration metadata: {exc}")
+        duration_seconds = 0.0
+
+    # Build multipart form data and send request
+    try:
+        with open(audio_path, "rb") as f:
+            # Determine content type based on file extension
+            ext = audio_path.suffix.lower()
+            content_types = {
+                ".wav": "audio/wav",
+                ".mp3": "audio/mpeg",
+                ".flac": "audio/flac",
+                ".ogg": "audio/ogg",
+                ".m4a": "audio/mp4",
+            }
+            content_type = content_types.get(ext, "audio/wav")
+
+            files = {"file": (audio_path.name, f, content_type)}
+            data: Dict[str, Any] = {"model": "qwen3-asr"}
+            if language:
+                data["language"] = language
+
+            # Use sync httpx client with generous timeout for large files
+            with httpx.Client(timeout=300.0) as client:
+                response = client.post(url, files=files, data=data)
+                response.raise_for_status()
+                result = response.json()
+
+    except httpx.HTTPStatusError as exc:
+        raise BadRequestError(
+            f"vLLM server returned error: {exc.response.status_code} - {exc.response.text}"
+        ) from exc
+    except httpx.RequestError as exc:
+        raise BadRequestError(
+            f"Failed to connect to vLLM server at {base_url}: {exc}"
+        ) from exc
+    except Exception as exc:
+        raise BadRequestError(f"vLLM HTTP transcription failed: {exc}") from exc
+
+    # Extract result fields with sensible defaults
+    text = str(result.get("text", "")).strip()
+    detected_language = result.get("language")
+    result_duration = result.get("duration")
+    if result_duration is not None:
+        try:
+            duration_seconds = float(result_duration)
+        except (ValueError, TypeError):
+            pass
+
+    return _normalize_artifact(
+        text=text,
+        duration_seconds=duration_seconds,
+        language_hint=language,
+        detected_language=detected_language,
+        model_path=f"vllm:{base_url}",
+    )
+
+
 def is_qwen3_asr_available() -> bool:
     """Check if Qwen3-ASR is available for use."""
     settings = _resolve_settings()
@@ -552,14 +653,20 @@ def get_qwen3_asr_capabilities() -> Dict[str, Any]:
     available = is_qwen3_asr_available()
     aligner_available = is_qwen3_asr_aligner_available()
 
+    # Streaming is available when vLLM backend is configured with a base URL
+    backend = str(settings.get("backend", "")).lower()
+    vllm_url = str(settings.get("vllm_base_url", "")).strip()
+    streaming_available = bool(backend == "vllm" and vllm_url)
+
     return {
         "available": available,
         "enabled": settings["enabled"],
         "model_path": settings["model_path"],
         "device": settings["device"],
         "word_timestamps": aligner_available,
-        "streaming": False,  # Streaming requires vLLM, not yet implemented
+        "streaming": streaming_available,
         "backend": settings["backend"],
+        "vllm_base_url": vllm_url if streaming_available else None,
     }
 
 
@@ -606,6 +713,19 @@ def transcribe_with_qwen3_asr(
 
     resolved_path = _resolve_audio_path(audio_path, base_dir)
 
+    # Route to vLLM HTTP backend when configured
+    backend = str(settings.get("backend", "")).lower()
+    vllm_base_url = str(settings.get("vllm_base_url", "")).strip()
+    if backend == "vllm" and vllm_base_url:
+        logger.info(f"Qwen3-ASR: using vLLM HTTP backend at {vllm_base_url}")
+        return _transcribe_vllm_http(
+            resolved_path,
+            settings,
+            language,
+            cancel_check,
+        )
+
+    # Use local transformers backend
     _check_cancel(cancel_check, label="audio loading")
     audio_np, sample_rate, duration_seconds = _load_audio(
         resolved_path,

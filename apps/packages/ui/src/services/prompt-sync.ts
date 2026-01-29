@@ -568,7 +568,7 @@ export async function getPromptsByProject(projectId: number): Promise<LocalPromp
 export async function getAvailableProjects(): Promise<Project[]> {
   try {
     const response = await listProjects({ per_page: 100 })
-    return (response as any)?.data || []
+    return (response as any)?.data?.data || []
   } catch {
     return []
   }

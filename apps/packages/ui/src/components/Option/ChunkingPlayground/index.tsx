@@ -21,7 +21,7 @@ import {
   message
 } from "antd"
 import type { UploadProps } from "antd"
-import { UploadOutlined, ScissorOutlined } from "@ant-design/icons"
+import { UploadOutlined, ScissorOutlined, SaveOutlined, DownloadOutlined } from "@ant-design/icons"
 import { useQuery } from "@tanstack/react-query"
 
 import {
@@ -29,6 +29,7 @@ import {
   chunkFile,
   getChunkingCapabilities,
   listChunkingTemplates,
+  getChunkingTemplate,
   calculateChunkStats,
   DEFAULT_CHUNKING_OPTIONS,
   type Chunk,
@@ -46,6 +47,7 @@ import { MediaSelector } from "./MediaSelector"
 import { CompareView } from "./CompareView"
 import { ChunkingTemplatesPanel } from "./ChunkingTemplatesPanel"
 import { ChunkingCapabilitiesPanel } from "./ChunkingCapabilitiesPanel"
+import { SaveAsTemplateModal } from "./SaveAsTemplateModal"
 import { getLanguageOptions } from "./constants"
 
 const { TextArea } = Input
@@ -140,6 +142,10 @@ export const ChunkingPlayground: React.FC<ChunkingPlaygroundProps> = ({
   const [highlightedChunkIndex, setHighlightedChunkIndex] = useState<
     number | null
   >(null)
+
+  // Save as Template modal state
+  const [saveAsTemplateOpen, setSaveAsTemplateOpen] = useState(false)
+  const [loadingTemplate, setLoadingTemplate] = useState(false)
 
   // Fetch capabilities from server
   const {
@@ -404,6 +410,88 @@ export const ChunkingPlayground: React.FC<ChunkingPlaygroundProps> = ({
     setLlmMaxTokens(null)
   }, [capabilities])
 
+  const loadTemplateSettings = useCallback(async () => {
+    if (!templateName.trim()) {
+      message.warning(
+        t(
+          "settings:chunkingPlayground.loadTemplate.noTemplate",
+          "Please select or enter a template name"
+        )
+      )
+      return
+    }
+
+    setLoadingTemplate(true)
+    try {
+      const template = await getChunkingTemplate(templateName.trim())
+      const config = JSON.parse(template.template_json)
+      const chunking = config.chunking || {}
+
+      // Map template config to form state
+      if (chunking.method) setMethod(String(chunking.method))
+      if (chunking.max_size != null) setMaxSize(Number(chunking.max_size))
+      if (chunking.overlap != null) setOverlap(Number(chunking.overlap))
+      if (chunking.language) setLanguage(String(chunking.language))
+      if (chunking.tokenizer_name_or_path) {
+        setTokenizerName(String(chunking.tokenizer_name_or_path))
+      }
+      if (chunking.adaptive != null) setAdaptive(Boolean(chunking.adaptive))
+      if (chunking.multi_level != null) setMultiLevel(Boolean(chunking.multi_level))
+      if (chunking.code_mode) setCodeMode(chunking.code_mode)
+      if (chunking.semantic_similarity_threshold != null) {
+        setSemanticSimilarityThreshold(Number(chunking.semantic_similarity_threshold))
+      }
+      if (chunking.semantic_overlap_sentences != null) {
+        setSemanticOverlapSentences(Number(chunking.semantic_overlap_sentences))
+      }
+      if (chunking.json_chunkable_data_key) {
+        setJsonChunkableDataKey(String(chunking.json_chunkable_data_key))
+      }
+      if (chunking.enable_frontmatter_parsing != null) {
+        setEnableFrontmatterParsing(Boolean(chunking.enable_frontmatter_parsing))
+      }
+      if (chunking.frontmatter_sentinel_key) {
+        setFrontmatterSentinelKey(String(chunking.frontmatter_sentinel_key))
+      }
+      if (chunking.custom_chapter_pattern) {
+        setCustomChapterPattern(String(chunking.custom_chapter_pattern))
+      }
+      if (chunking.summarization_detail != null) {
+        setSummarizationDetail(Number(chunking.summarization_detail))
+      }
+      if (chunking.proposition_engine) {
+        setPropositionEngine(String(chunking.proposition_engine))
+      }
+      if (chunking.proposition_aggressiveness != null) {
+        setPropositionAggressiveness(Number(chunking.proposition_aggressiveness))
+      }
+      if (chunking.proposition_min_proposition_length != null) {
+        setPropositionMinLength(Number(chunking.proposition_min_proposition_length))
+      }
+      if (chunking.proposition_prompt_profile) {
+        setPropositionPromptProfile(String(chunking.proposition_prompt_profile))
+      }
+      if (chunking.llm_options_for_internal_steps) {
+        const llmOpts = chunking.llm_options_for_internal_steps
+        if (llmOpts.temperature != null) setLlmTemperature(Number(llmOpts.temperature))
+        if (llmOpts.system_prompt_for_step) setLlmSystemPrompt(String(llmOpts.system_prompt_for_step))
+        if (llmOpts.max_tokens_per_step != null) setLlmMaxTokens(Number(llmOpts.max_tokens_per_step))
+      }
+
+      message.success(
+        t(
+          "settings:chunkingPlayground.loadTemplate.success",
+          "Template settings loaded"
+        )
+      )
+    } catch (err) {
+      const errorMsg = err instanceof Error ? err.message : "Failed to load template"
+      message.error(errorMsg)
+    } finally {
+      setLoadingTemplate(false)
+    }
+  }, [templateName, t])
+
   const handleSampleSelect = useCallback((text: string) => {
     setInputText(text)
     setInputFile(null)
@@ -651,6 +739,17 @@ export const ChunkingPlayground: React.FC<ChunkingPlaygroundProps> = ({
                           }
                           className="flex-1"
                         />
+                        <Button
+                          size="small"
+                          icon={<DownloadOutlined />}
+                          onClick={loadTemplateSettings}
+                          loading={loadingTemplate}
+                          disabled={!templateName.trim()}>
+                          {t(
+                            "settings:chunkingPlayground.advanced.loadSettings",
+                            "Load"
+                          )}
+                        </Button>
                         <Button
                           size="small"
                           onClick={() => refetchTemplates()}
@@ -990,12 +1089,23 @@ export const ChunkingPlayground: React.FC<ChunkingPlaygroundProps> = ({
 
           <Divider className="my-2" />
 
-          <Button size="small" onClick={resetToDefaults}>
-            {t(
-              "settings:chunkingPlayground.advanced.resetDefaults",
-              "Reset to defaults"
-            )}
-          </Button>
+          <Space wrap>
+            <Button size="small" onClick={resetToDefaults}>
+              {t(
+                "settings:chunkingPlayground.advanced.resetDefaults",
+                "Reset to defaults"
+              )}
+            </Button>
+            <Button
+              size="small"
+              icon={<SaveOutlined />}
+              onClick={() => setSaveAsTemplateOpen(true)}>
+              {t(
+                "settings:chunkingPlayground.saveAsTemplate.button",
+                "Save as Template"
+              )}
+            </Button>
+          </Space>
         </Form>
       </Card>
     )
@@ -1196,6 +1306,12 @@ export const ChunkingPlayground: React.FC<ChunkingPlaygroundProps> = ({
             )
           }
         ]}
+      />
+
+      <SaveAsTemplateModal
+        open={saveAsTemplateOpen}
+        onClose={() => setSaveAsTemplateOpen(false)}
+        chunkingOptions={buildChunkingOptions()}
       />
     </div>
   )

@@ -35,6 +35,7 @@ def test_resolve_settings_defaults(monkeypatch):
     assert settings["aligner_enabled"] is False
     assert settings["aligner_path"] == "./models/qwen3_asr/aligner"
     assert settings["backend"] == "transformers"
+    assert settings["vllm_base_url"] == ""
 
 
 @pytest.mark.unit
@@ -56,6 +57,7 @@ def test_resolve_settings_from_config(monkeypatch):
             "qwen3_asr_aligner_path": "/custom/aligner",
             "qwen3_asr_backend": "vllm",
             "qwen3_asr_vllm_gpu_memory_utilization": 0.8,
+            "qwen3_asr_vllm_base_url": "http://localhost:8000",
         }
 
     monkeypatch.setattr(qwen3, "get_stt_config", fake_get_stt_config)
@@ -74,6 +76,7 @@ def test_resolve_settings_from_config(monkeypatch):
     assert settings["aligner_path"] == "/custom/aligner"
     assert settings["backend"] == "vllm"
     assert settings["vllm_gpu_memory_utilization"] == 0.8
+    assert settings["vllm_base_url"] == "http://localhost:8000"
 
 
 @pytest.mark.unit
@@ -429,3 +432,186 @@ def test_resolve_audio_path_outside_base_dir(tmp_path):
         qwen3._resolve_audio_path(str(outside_file), base_dir)
 
     assert "rejected" in str(exc_info.value).lower()
+
+
+@pytest.mark.unit
+def test_transcribe_vllm_http_missing_url(monkeypatch, tmp_path):
+    """Test vLLM HTTP transcription fails when base_url is empty."""
+    qwen3 = _import_module()
+
+    from tldw_Server_API.app.core.exceptions import BadRequestError
+    from pathlib import Path
+
+    audio_file = tmp_path / "test.wav"
+    audio_file.write_bytes(b"\x00" * 100)
+
+    settings = {
+        "vllm_base_url": "",
+        "sample_rate": 16000,
+    }
+
+    with pytest.raises(BadRequestError) as exc_info:
+        qwen3._transcribe_vllm_http(audio_file, settings, None, None)
+
+    assert "vllm base url not configured" in str(exc_info.value).lower()
+
+
+@pytest.mark.unit
+def test_transcribe_vllm_http_success(monkeypatch, tmp_path):
+    """Test vLLM HTTP transcription with mocked httpx response."""
+    qwen3 = _import_module()
+
+    # Create a mock audio file
+    audio_file = tmp_path / "test.wav"
+    audio_file.write_bytes(b"\x00" * 100)
+
+    settings = {
+        "vllm_base_url": "http://localhost:8000",
+        "sample_rate": 16000,
+    }
+
+    # Mock httpx.Client
+    class MockResponse:
+        def __init__(self):
+            self.status_code = 200
+
+        def raise_for_status(self):
+            pass
+
+        def json(self):
+            return {
+                "text": "Hello world",
+                "language": "en",
+                "duration": 2.5,
+            }
+
+    class MockClient:
+        def __init__(self, **kwargs):
+            pass
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            pass
+
+        def post(self, url, files=None, data=None):
+            return MockResponse()
+
+    # Mock httpx
+    mock_httpx = types.ModuleType("httpx")
+    mock_httpx.Client = MockClient
+    mock_httpx.HTTPStatusError = Exception
+    mock_httpx.RequestError = Exception
+
+    monkeypatch.setattr(qwen3, "httpx", mock_httpx, raising=False)
+
+    # Mock _load_audio to avoid actual file reading
+    def fake_load_audio(path, *, target_sample_rate):
+        import numpy as np
+
+        return np.zeros(16000, dtype="float32"), 16000, 1.0
+
+    monkeypatch.setattr(qwen3, "_load_audio", fake_load_audio)
+
+    # Import httpx into the module namespace for the test
+    import sys
+    sys.modules["httpx"] = mock_httpx
+
+    try:
+        result = qwen3._transcribe_vllm_http(audio_file, settings, "en", None)
+
+        assert result["text"] == "Hello world"
+        assert result["language"] == "en"
+        assert result["metadata"]["model"] == "vllm:http://localhost:8000"
+        assert result["usage"]["duration_ms"] == 2500
+    finally:
+        if "httpx" in sys.modules and sys.modules["httpx"] is mock_httpx:
+            del sys.modules["httpx"]
+
+
+@pytest.mark.unit
+def test_transcribe_routes_to_vllm(monkeypatch, tmp_path):
+    """Test that transcribe_with_qwen3_asr routes to vLLM when configured."""
+    qwen3 = _import_module()
+
+    audio_file = tmp_path / "test.wav"
+    audio_file.write_bytes(b"\x00" * 100)
+
+    # Track if _transcribe_vllm_http was called
+    vllm_called = {"value": False}
+
+    def fake_transcribe_vllm_http(path, settings, language, cancel_check):
+        vllm_called["value"] = True
+        return {
+            "text": "vllm result",
+            "language": "en",
+            "segments": [],
+            "diarization": {"enabled": False, "speakers": None},
+            "usage": {"duration_ms": 1000, "tokens": None},
+            "metadata": {"provider": "qwen3-asr", "model": "vllm:http://localhost:8000", "source": "vllm"},
+        }
+
+    monkeypatch.setattr(qwen3, "_transcribe_vllm_http", fake_transcribe_vllm_http)
+
+    def fake_get_stt_config():
+        return {
+            "qwen3_asr_enabled": True,
+            "qwen3_asr_backend": "vllm",
+            "qwen3_asr_vllm_base_url": "http://localhost:8000",
+        }
+
+    monkeypatch.setattr(qwen3, "get_stt_config", fake_get_stt_config)
+
+    result = qwen3.transcribe_with_qwen3_asr(str(audio_file), base_dir=tmp_path)
+
+    assert vllm_called["value"] is True
+    assert result["text"] == "vllm result"
+
+
+@pytest.mark.unit
+def test_get_capabilities_streaming_disabled_by_default(monkeypatch, tmp_path):
+    """Test capabilities show streaming=False when vLLM not configured."""
+    qwen3 = _import_module()
+
+    model_path = tmp_path / "model"
+    model_path.mkdir()
+
+    def fake_get_stt_config():
+        return {
+            "qwen3_asr_enabled": True,
+            "qwen3_asr_model_path": str(model_path),
+            "qwen3_asr_backend": "transformers",
+        }
+
+    monkeypatch.setattr(qwen3, "get_stt_config", fake_get_stt_config)
+
+    caps = qwen3.get_qwen3_asr_capabilities()
+
+    assert caps["streaming"] is False
+    assert caps["vllm_base_url"] is None
+
+
+@pytest.mark.unit
+def test_get_capabilities_streaming_enabled_with_vllm(monkeypatch, tmp_path):
+    """Test capabilities show streaming=True when vLLM is configured."""
+    qwen3 = _import_module()
+
+    model_path = tmp_path / "model"
+    model_path.mkdir()
+
+    def fake_get_stt_config():
+        return {
+            "qwen3_asr_enabled": True,
+            "qwen3_asr_model_path": str(model_path),
+            "qwen3_asr_backend": "vllm",
+            "qwen3_asr_vllm_base_url": "http://localhost:8000",
+        }
+
+    monkeypatch.setattr(qwen3, "get_stt_config", fake_get_stt_config)
+
+    caps = qwen3.get_qwen3_asr_capabilities()
+
+    assert caps["streaming"] is True
+    assert caps["vllm_base_url"] == "http://localhost:8000"
+    assert caps["backend"] == "vllm"

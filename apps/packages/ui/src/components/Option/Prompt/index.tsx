@@ -12,7 +12,7 @@ import {
   Select,
   Alert
 } from "antd"
-import { Computer, Zap, Star, StarOff, UploadCloud, Download, Trash2, Pen, Undo2, AlertTriangle, Layers } from "lucide-react"
+import { Computer, Zap, Star, StarOff, UploadCloud, Download, Trash2, Pen, Undo2, AlertTriangle, Layers, Cloud } from "lucide-react"
 import { PromptActionsMenu } from "./PromptActionsMenu"
 import { PromptDrawer } from "./PromptDrawer"
 import { SyncStatusBadge } from "./SyncStatusBadge"
@@ -48,19 +48,21 @@ import {
   pullFromStudio,
   unlinkPrompt as unlinkPromptFromServer
 } from "@/services/prompt-sync"
+import {
+  hasPromptStudio,
+  listProjects,
+  listPrompts as listStudioPrompts,
+  type Project,
+  type Prompt as StudioPrompt
+} from "@/services/prompt-studio"
 
-type SegmentType = "custom" | "copilot" | "trash"
+type SegmentType = "custom" | "copilot" | "studio" | "trash"
 
-const VALID_SEGMENTS: SegmentType[] = ["custom", "copilot", "trash"]
+const VALID_SEGMENTS: SegmentType[] = ["custom", "copilot", "studio", "trash"]
 
 const getSegmentFromParam = (param: string | null): SegmentType => {
   if (param && VALID_SEGMENTS.includes(param as SegmentType)) {
     return param as SegmentType
-  }
-  // Handle legacy "studio" tab - redirect to custom for now
-  // (Prompt Studio features are accessed via sync actions)
-  if (param === "studio") {
-    return "custom"
   }
   return "custom"
 }
@@ -99,6 +101,76 @@ export const PromptBody = () => {
 
   // Track if we've processed the initial prompt deep-link
   const deepLinkProcessedRef = useRef(false)
+
+  // Handle ?project= filter for showing prompts from a specific project
+  const projectFilter = searchParams.get("project")
+
+  const [searchText, setSearchText] = useState("")
+  const [typeFilter, setTypeFilter] = useState<"all" | "system" | "quick">(
+    "all"
+  )
+  const [tagFilter, setTagFilter] = useState<string[]>([])
+  const fileInputRef = useRef<HTMLInputElement | null>(null)
+  const [importMode, setImportMode] = useState<"merge" | "replace">("merge")
+  const [selectedRowKeys, setSelectedRowKeys] = useState<React.Key[]>([])
+  const [insertPrompt, setInsertPrompt] = useState<{
+    id: string
+    systemText?: string
+    userText?: string
+  } | null>(null)
+  const confirmDanger = useConfirmDanger()
+
+  // Sync state
+  const [projectSelectorOpen, setProjectSelectorOpen] = useState(false)
+  const [promptToSync, setPromptToSync] = useState<string | null>(null)
+
+  const [openCopilotEdit, setOpenCopilotEdit] = useState(false)
+  const [editCopilotId, setEditCopilotId] = useState("")
+  const [editCopilotForm] = Form.useForm()
+
+  const { setSelectedQuickPrompt, setSelectedSystemPrompt } = useMessageOption()
+
+  const { data, status } = useQuery({
+    queryKey: ["fetchAllPrompts"],
+    queryFn: getAllPrompts
+  })
+
+  const { data: copilotData, status: copilotStatus } = useQuery({
+    queryKey: ["fetchCopilotPrompts"],
+    queryFn: getAllCopilotPrompts,
+    enabled: isOnline
+  })
+
+  const { data: trashData, status: trashStatus } = useQuery({
+    queryKey: ["fetchDeletedPrompts"],
+    queryFn: getDeletedPrompts
+  })
+
+  // Prompt Studio capability check
+  const { data: hasStudio } = useQuery({
+    queryKey: ["prompt-studio", "capability"],
+    queryFn: hasPromptStudio,
+    enabled: isOnline
+  })
+
+  // Prompt Studio projects
+  const { data: studioProjectsResponse, status: studioProjectsStatus } = useQuery({
+    queryKey: ["prompt-studio", "projects"],
+    queryFn: () => listProjects({ per_page: 100 }),
+    enabled: isOnline && hasStudio === true
+  })
+  const studioProjects: Project[] = (studioProjectsResponse as any)?.data?.data ?? []
+
+  // State for selected project in Studio tab
+  const [studioSelectedProject, setStudioSelectedProject] = useState<number | null>(null)
+
+  // Prompt Studio prompts for selected project
+  const { data: studioPromptsResponse, status: studioPromptsStatus } = useQuery({
+    queryKey: ["prompt-studio", "prompts", studioSelectedProject],
+    queryFn: () => listStudioPrompts(studioSelectedProject!, { per_page: 100 }),
+    enabled: isOnline && hasStudio === true && studioSelectedProject !== null
+  })
+  const studioPromptsList: StudioPrompt[] = (studioPromptsResponse as any)?.data?.data ?? []
 
   // Handle ?prompt= deep-link for opening a specific prompt
   useEffect(() => {
@@ -150,50 +222,6 @@ export const PromptBody = () => {
     }
   }, [searchParams, data, status, setSearchParams, t])
 
-  // Handle ?project= filter for showing prompts from a specific project
-  const projectFilter = searchParams.get("project")
-
-  const [searchText, setSearchText] = useState("")
-  const [typeFilter, setTypeFilter] = useState<"all" | "system" | "quick">(
-    "all"
-  )
-  const [tagFilter, setTagFilter] = useState<string[]>([])
-  const fileInputRef = useRef<HTMLInputElement | null>(null)
-  const [importMode, setImportMode] = useState<"merge" | "replace">("merge")
-  const [selectedRowKeys, setSelectedRowKeys] = useState<React.Key[]>([])
-  const [insertPrompt, setInsertPrompt] = useState<{
-    id: string
-    systemText?: string
-    userText?: string
-  } | null>(null)
-  const confirmDanger = useConfirmDanger()
-
-  // Sync state
-  const [projectSelectorOpen, setProjectSelectorOpen] = useState(false)
-  const [promptToSync, setPromptToSync] = useState<string | null>(null)
-
-  const [openCopilotEdit, setOpenCopilotEdit] = useState(false)
-  const [editCopilotId, setEditCopilotId] = useState("")
-  const [editCopilotForm] = Form.useForm()
-
-  const { setSelectedQuickPrompt, setSelectedSystemPrompt } = useMessageOption()
-
-  const { data, status } = useQuery({
-    queryKey: ["fetchAllPrompts"],
-    queryFn: getAllPrompts
-  })
-
-  const { data: copilotData, status: copilotStatus } = useQuery({
-    queryKey: ["fetchCopilotPrompts"],
-    queryFn: getAllCopilotPrompts,
-    enabled: isOnline
-  })
-
-  const { data: trashData, status: trashStatus } = useQuery({
-    queryKey: ["fetchDeletedPrompts"],
-    queryFn: getDeletedPrompts
-  })
-
   const promptLoadFailed = status === "error"
   const copilotLoadFailed = isOnline && copilotStatus === "error"
   const loadErrorDescription = [
@@ -231,8 +259,8 @@ export const PromptBody = () => {
   }, [isFireFoxPrivateMode, t])
 
   React.useEffect(() => {
-    // Only redirect from copilot tab when offline (trash is local-only so always available)
-    if (!isOnline && selectedSegment === "copilot") {
+    // Only redirect from copilot/studio tab when offline (trash is local-only so always available)
+    if (!isOnline && (selectedSegment === "copilot" || selectedSegment === "studio")) {
       setSelectedSegment("custom")
     }
   }, [isOnline, selectedSegment])
@@ -427,6 +455,26 @@ export const PromptBody = () => {
     onError: (error) => {
       notification.error({
         message: t("managePrompts.sync.unlinkError", { defaultValue: "Failed to unlink" }),
+        description: error?.message || t("managePrompts.notification.someError")
+      })
+    }
+  })
+
+  // Import a server prompt to local (from Studio tab)
+  const { mutate: importFromStudioMutation, isPending: isImporting } = useMutation({
+    mutationFn: async ({ serverId }: { serverId: number }) => {
+      return await pullFromStudio(serverId)
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["fetchAllPrompts"] })
+      notification.success({
+        message: t("managePrompts.studio.importSuccess", { defaultValue: "Prompt imported" }),
+        description: t("managePrompts.studio.importSuccessDesc", { defaultValue: "The prompt has been saved to your local prompts." })
+      })
+    },
+    onError: (error) => {
+      notification.error({
+        message: t("managePrompts.studio.importError", { defaultValue: "Failed to import" }),
         description: error?.message || t("managePrompts.notification.someError")
       })
     }
@@ -1538,6 +1586,291 @@ export const PromptBody = () => {
     )
   }
 
+  // Helper to check if a studio prompt is already linked locally
+  const getLinkedLocalPrompt = (studioPromptId: number): any => {
+    if (!Array.isArray(data)) return null
+    return data.find((p: any) => p.serverId === studioPromptId)
+  }
+
+  function studioPrompts() {
+    if (!isOnline) {
+      return (
+        <ConnectFeatureBanner
+          title={t("settings:managePrompts.studio.connectTitle", {
+            defaultValue: "Connect to use Prompt Studio"
+          })}
+          description={t("settings:managePrompts.studio.connectDescription", {
+            defaultValue:
+              "To browse server-side prompts, connect to your tldw server first."
+          })}
+          examples={[
+            t("settings:managePrompts.studio.connectExample1", {
+              defaultValue:
+                "Open Settings → tldw server to add your server URL."
+            }),
+            t("settings:managePrompts.studio.connectExample2", {
+              defaultValue:
+                "Once connected, you can browse and import prompts from Prompt Studio projects."
+            })
+          ]}
+        />
+      )
+    }
+
+    if (hasStudio === false) {
+      return (
+        <FeatureEmptyState
+          title={t("managePrompts.studio.unavailableTitle", {
+            defaultValue: "Prompt Studio not available"
+          })}
+          description={t("managePrompts.studio.unavailableDescription", {
+            defaultValue:
+              "Your server doesn't have Prompt Studio enabled, or you don't have permission to access it."
+          })}
+          examples={[
+            t("managePrompts.studio.unavailableExample1", {
+              defaultValue:
+                "Contact your server administrator to enable Prompt Studio."
+            }),
+            t("managePrompts.studio.unavailableExample2", {
+              defaultValue:
+                "You can still create and manage prompts locally in the Custom tab."
+            })
+          ]}
+        />
+      )
+    }
+
+    return (
+      <div data-testid="prompts-studio">
+        {/* Project selector */}
+        <div className="mb-6">
+          <label className="block text-sm font-medium text-text mb-2">
+            {t("managePrompts.studio.selectProject", { defaultValue: "Select a project" })}
+          </label>
+          <Select
+            placeholder={t("managePrompts.studio.selectProjectPlaceholder", { defaultValue: "Choose a Prompt Studio project..." })}
+            value={studioSelectedProject}
+            onChange={(v) => setStudioSelectedProject(v)}
+            loading={studioProjectsStatus === "pending"}
+            style={{ width: 320 }}
+            data-testid="studio-project-selector"
+            options={(studioProjects || []).map((p: Project) => ({
+              label: (
+                <span className="flex items-center gap-2">
+                  <span>{p.name}</span>
+                  {p.prompt_count !== undefined && (
+                    <span className="text-text-muted text-xs">
+                      ({p.prompt_count} {p.prompt_count === 1 ? "prompt" : "prompts"})
+                    </span>
+                  )}
+                </span>
+              ),
+              value: p.id
+            }))}
+            allowClear
+            showSearch
+            optionFilterProp="label"
+          />
+          <p className="text-xs text-text-muted mt-1">
+            {t("managePrompts.studio.selectProjectHelp", {
+              defaultValue: "Browse prompts from your Prompt Studio projects and import them locally."
+            })}
+          </p>
+        </div>
+
+        {/* No project selected state */}
+        {studioSelectedProject === null && (
+          <FeatureEmptyState
+            title={t("managePrompts.studio.noProjectSelected", {
+              defaultValue: "Select a project to browse prompts"
+            })}
+            description={t("managePrompts.studio.noProjectSelectedDesc", {
+              defaultValue:
+                "Choose a Prompt Studio project from the dropdown above to see its prompts."
+            })}
+            examples={[
+              t("managePrompts.studio.noProjectSelectedExample1", {
+                defaultValue:
+                  "Each project contains related prompts organized by your team."
+              }),
+              t("managePrompts.studio.noProjectSelectedExample2", {
+                defaultValue:
+                  "You can import any prompt to your local collection for offline use."
+              })
+            ]}
+          />
+        )}
+
+        {/* Loading state */}
+        {studioSelectedProject !== null && studioPromptsStatus === "pending" && (
+          <Skeleton paragraph={{ rows: 8 }} />
+        )}
+
+        {/* Empty project state */}
+        {studioSelectedProject !== null &&
+          studioPromptsStatus === "success" &&
+          studioPromptsList.length === 0 && (
+            <FeatureEmptyState
+              title={t("managePrompts.studio.emptyProject", {
+                defaultValue: "No prompts in this project"
+              })}
+              description={t("managePrompts.studio.emptyProjectDesc", {
+                defaultValue:
+                  "This project doesn't have any prompts yet. Create prompts in Prompt Studio or choose a different project."
+              })}
+              examples={[]}
+            />
+          )}
+
+        {/* Prompts table */}
+        {studioSelectedProject !== null &&
+          studioPromptsStatus === "success" &&
+          studioPromptsList.length > 0 && (
+            <Table
+              data-testid="studio-prompts-table"
+              columns={[
+                {
+                  title: t("managePrompts.columns.title"),
+                  dataIndex: "name",
+                  key: "name",
+                  render: (name: string, record: StudioPrompt) => (
+                    <div className="flex max-w-64 flex-col">
+                      <span className="line-clamp-1 font-medium">{name}</span>
+                      {record.version_number > 1 && (
+                        <span className="text-xs text-text-muted">
+                          v{record.version_number}
+                        </span>
+                      )}
+                    </div>
+                  )
+                },
+                {
+                  title: t("managePrompts.columns.prompt"),
+                  key: "content",
+                  render: (_: any, record: StudioPrompt) => {
+                    const hasSystem = !!record.system_prompt?.trim()
+                    const hasUser = !!record.user_prompt?.trim()
+                    return (
+                      <div className="flex max-w-[26rem] flex-col gap-1">
+                        {hasSystem && (
+                          <div className="flex items-start gap-2">
+                            <Tag color="volcano">
+                              {t("managePrompts.form.systemPrompt.shortLabel", {
+                                defaultValue: "System"
+                              })}
+                            </Tag>
+                            <span className="line-clamp-2">{record.system_prompt}</span>
+                          </div>
+                        )}
+                        {hasUser && (
+                          <div className="flex items-start gap-2">
+                            <Tag color="blue">
+                              {t("managePrompts.form.userPrompt.shortLabel", {
+                                defaultValue: "User"
+                              })}
+                            </Tag>
+                            <span className="line-clamp-2">{record.user_prompt}</span>
+                          </div>
+                        )}
+                        {!hasSystem && !hasUser && (
+                          <span className="text-text-muted text-sm italic">
+                            {t("managePrompts.studio.noContent", { defaultValue: "No content" })}
+                          </span>
+                        )}
+                      </div>
+                    )
+                  }
+                },
+                {
+                  title: t("managePrompts.columns.status", { defaultValue: "Status" }),
+                  key: "status",
+                  width: 140,
+                  render: (_: any, record: StudioPrompt) => {
+                    const linkedPrompt = getLinkedLocalPrompt(record.id)
+                    if (linkedPrompt) {
+                      return (
+                        <SyncStatusBadge
+                          syncStatus={linkedPrompt.syncStatus || "synced"}
+                          sourceSystem="studio"
+                          serverId={record.id}
+                          lastSyncedAt={linkedPrompt.lastSyncedAt}
+                        />
+                      )
+                    }
+                    return (
+                      <Tag color="default">
+                        {t("managePrompts.studio.notImported", { defaultValue: "Not imported" })}
+                      </Tag>
+                    )
+                  }
+                },
+                {
+                  title: t("managePrompts.columns.actions"),
+                  width: 160,
+                  render: (_: any, record: StudioPrompt) => {
+                    const linkedPrompt = getLinkedLocalPrompt(record.id)
+                    return (
+                      <div className="flex items-center gap-2">
+                        {linkedPrompt ? (
+                          <>
+                            <Tooltip title={t("managePrompts.studio.viewLocal", { defaultValue: "View in Custom" })}>
+                              <button
+                                onClick={() => {
+                                  setSelectedSegment("custom")
+                                  // Use timeout to allow segment change to complete
+                                  setTimeout(() => {
+                                    openEditDrawer(linkedPrompt)
+                                  }, 100)
+                                }}
+                                className="inline-flex items-center gap-1 px-2 py-1 text-sm rounded border border-primary/30 text-primary hover:bg-primary/10"
+                                data-testid={`studio-view-local-${record.id}`}
+                              >
+                                <Pen className="size-3" />
+                                {t("managePrompts.studio.edit", { defaultValue: "Edit" })}
+                              </button>
+                            </Tooltip>
+                            <Tooltip title={t("managePrompts.studio.pullUpdates", { defaultValue: "Pull latest from server" })}>
+                              <button
+                                onClick={() => pullFromStudioMutation({ serverId: record.id, localId: linkedPrompt.id })}
+                                disabled={isPulling}
+                                className="text-text-muted hover:text-primary disabled:opacity-50"
+                                data-testid={`studio-pull-${record.id}`}
+                              >
+                                <Download className="size-4" />
+                              </button>
+                            </Tooltip>
+                          </>
+                        ) : (
+                          <Tooltip title={t("managePrompts.studio.importToLocal", { defaultValue: "Import to local prompts" })}>
+                            <button
+                              onClick={() => {
+                                if (guardPrivateMode()) return
+                                importFromStudioMutation({ serverId: record.id })
+                              }}
+                              disabled={isImporting || isFireFoxPrivateMode}
+                              className="inline-flex items-center gap-1 px-2 py-1 text-sm rounded border border-primary/30 text-primary hover:bg-primary/10 disabled:opacity-50"
+                              data-testid={`studio-import-${record.id}`}
+                            >
+                              <Download className="size-3" />
+                              {t("managePrompts.studio.import", { defaultValue: "Import" })}
+                            </button>
+                          </Tooltip>
+                        )}
+                      </div>
+                    )
+                  }
+                }
+              ]}
+              bordered
+              dataSource={studioPromptsList}
+              rowKey={(record) => record.id}
+            />
+          )}
+      </div>
+    )
+  }
+
   return (
     <div>
       {/* Screen reader status announcements */}
@@ -1603,6 +1936,20 @@ export const PromptBody = () => {
             },
             {
               label: (
+                <Tooltip title={t("managePrompts.segmented.studioTooltip", {
+                  defaultValue: "Browse and import prompts from Prompt Studio projects on the server"
+                })}>
+                  <span className="flex items-center gap-1">
+                    <Cloud className="size-3" />
+                    {t("managePrompts.segmented.studio", { defaultValue: "Studio" })}
+                  </span>
+                </Tooltip>
+              ),
+              value: "studio",
+              disabled: !isOnline || hasStudio === false
+            },
+            {
+              label: (
                 <span className="flex items-center gap-1">
                   <Trash2 className="size-3" />
                   {t("managePrompts.segmented.trash", { defaultValue: "Trash" })}
@@ -1619,7 +1966,7 @@ export const PromptBody = () => {
           data-testid="prompts-segmented"
           value={selectedSegment}
           onChange={(value) => {
-            setSelectedSegment(value as "custom" | "copilot" | "trash")
+            setSelectedSegment(value as SegmentType)
           }}
         />
         <p className="text-xs text-text-muted ">
@@ -1633,6 +1980,11 @@ export const PromptBody = () => {
                 defaultValue:
                   "View and tweak predefined Copilot prompts provided by your server."
               })
+            : selectedSegment === "studio"
+            ? t("managePrompts.segmented.helpStudio", {
+                defaultValue:
+                  "Browse server-side prompts from Prompt Studio and import them locally."
+              })
             : t("managePrompts.segmented.helpTrash", {
                 defaultValue:
                   "Restore or permanently delete prompts. Items auto-delete after 30 days."
@@ -1641,6 +1993,7 @@ export const PromptBody = () => {
       </div>
       {selectedSegment === "custom" && customPrompts()}
       {selectedSegment === "copilot" && copilotPrompts()}
+      {selectedSegment === "studio" && studioPrompts()}
       {selectedSegment === "trash" && trashPrompts()}
 
       <PromptDrawer

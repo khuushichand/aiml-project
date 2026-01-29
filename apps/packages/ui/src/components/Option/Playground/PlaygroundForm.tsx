@@ -50,6 +50,7 @@ import { formatPinnedResults } from "@/utils/rag-format"
 import { useStorage } from "@plasmohq/storage/hook"
 import { useTabMentions } from "~/hooks/useTabMentions"
 import { useFocusShortcuts } from "~/hooks/keyboard"
+import { isMac } from "@/hooks/useKeyboardShortcuts"
 import { useDraftPersistence } from "@/hooks/useDraftPersistence"
 import { useSelectedCharacter } from "@/hooks/useSelectedCharacter"
 import { useVoiceChatSettings } from "@/hooks/useVoiceChatSettings"
@@ -89,6 +90,9 @@ import { useUiModeStore } from "@/store/ui-mode"
 import { useStoreChatModelSettings } from "@/store/model"
 import { TokenProgressBar } from "./TokenProgressBar"
 import { AttachmentsSummary } from "./AttachmentsSummary"
+import { VoiceChatIndicator } from "./VoiceChatIndicator"
+import { VoiceModeSelector } from "./VoiceModeSelector"
+import { PlaygroundTour, usePlaygroundTour } from "./PlaygroundTour"
 import {
   ParameterPresets,
   SystemPromptTemplatesButton,
@@ -309,6 +313,7 @@ export const PlaygroundForm = ({ droppedFiles }: Props) => {
   const [showQueuedBanner, setShowQueuedBanner] = React.useState(true)
   const [documentGeneratorOpen, setDocumentGeneratorOpen] =
     React.useState(false)
+  const [voiceModeSelectorOpen, setVoiceModeSelectorOpen] = React.useState(false)
   const [promptInsertOpen, setPromptInsertOpen] = React.useState(false)
   const [promptInsertChoice, setPromptInsertChoice] =
     React.useState<PromptInsertItem | null>(null)
@@ -351,6 +356,7 @@ export const PlaygroundForm = ({ droppedFiles }: Props) => {
   const serverSaveInFlightRef = React.useRef(false)
   const uiMode = useUiModeStore((state) => state.mode)
   const isProMode = uiMode === "pro"
+  const { runTour, completeTour } = usePlaygroundTour()
   const [contextToolsOpen, setContextToolsOpen] = useStorage(
     "playgroundKnowledgeSearchOpen",
     false
@@ -442,6 +448,19 @@ export const PlaygroundForm = ({ droppedFiles }: Props) => {
       setCompareMode(false)
     }
   }, [compareFeatureEnabled, compareMode, setCompareMode])
+
+  // Auto-select first favorite model on initial load when no model is selected
+  React.useEffect(() => {
+    if (selectedModel || !composerModels?.length || !favoriteModels?.length) return
+
+    // Find first favorite model that exists in available models
+    const firstFavorite = (composerModels as any[]).find(m =>
+      favoriteModels.includes(String(m.model))
+    )
+    if (firstFavorite) {
+      setSelectedModel(firstFavorite.model)
+    }
+  }, [composerModels, selectedModel, favoriteModels, setSelectedModel])
 
   const compareModeActive = compareFeatureEnabled && compareMode
 
@@ -642,13 +661,28 @@ export const PlaygroundForm = ({ droppedFiles }: Props) => {
       return aLabel.localeCompare(bLabel)
     }
 
+    // Find first favorite for "(Recommended)" tag
+    const firstFavoriteModel = favoriteModels?.length
+      ? models.find(m => favoriteModels.includes(String(m.model)))?.model
+      : null
+
     const buildItem = (model: any) => {
       const providerRaw = toProviderKey(model.provider)
       const modelLabel = model.nickname || model.model
       const isFavorite = favoriteModelSet.has(String(model.model))
+      const isRecommended = firstFavoriteModel && String(model.model) === String(firstFavoriteModel)
       const favoriteTitle = isFavorite
         ? t("playground:composer.favoriteRemove", "Remove from favorites")
         : t("playground:composer.favoriteAdd", "Add to favorites")
+
+      // Build capability badges (max 2)
+      const capabilities = model.details?.capabilities || model.capabilities || []
+      const contextLength = model.context_length ?? model.contextLength ?? model.details?.context_length
+      const capabilityBadges: string[] = []
+      if (capabilities.includes("vision") || model.supportsVision) capabilityBadges.push("Vision")
+      if (capabilities.includes("fast") || model.fast) capabilityBadges.push("Fast")
+      if (typeof contextLength === "number" && contextLength > 100000) capabilityBadges.push("Long context")
+      if (capabilities.includes("tools") || model.supportsTools) capabilityBadges.push("Tools")
 
       return {
         key: model.model,
@@ -656,6 +690,16 @@ export const PlaygroundForm = ({ droppedFiles }: Props) => {
           <div className="flex items-center gap-2 text-sm">
             <ProviderIcons provider={providerRaw} className="h-3 w-3 text-text-subtle" />
             <span className="truncate flex-1">{modelLabel}</span>
+            {isRecommended && (
+              <span className="rounded-full bg-blue-100 dark:bg-blue-900/30 px-1.5 py-0.5 text-[10px] text-blue-600 dark:text-blue-400">
+                {t("playground:composer.recommended", "Recommended")}
+              </span>
+            )}
+            {capabilityBadges.slice(0, 2).map(cap => (
+              <span key={cap} className="rounded bg-surface2 px-1 py-0.5 text-[9px] text-text-muted">
+                {cap}
+              </span>
+            ))}
             <button
               type="button"
               className="rounded p-0.5 text-text-subtle transition hover:bg-surface2"
@@ -738,6 +782,7 @@ export const PlaygroundForm = ({ droppedFiles }: Props) => {
     }))
   }, [
     composerModels,
+    favoriteModels,
     favoriteModelSet,
     filteredModels,
     modelSearchQuery,
@@ -1291,6 +1336,7 @@ export const PlaygroundForm = ({ droppedFiles }: Props) => {
               type="button"
               title={apiModelLabel}
               aria-label={apiModelLabel}
+              data-testid="model-selector"
               className="inline-flex min-w-0 items-center gap-1 rounded-full border border-border bg-surface px-2 h-9 text-[10px] cursor-pointer hover:bg-surface-hover transition-colors"
             >
               <ProviderIcons
@@ -1359,6 +1405,17 @@ export const PlaygroundForm = ({ droppedFiles }: Props) => {
     window.addEventListener('tldw:focus-composer', handler)
     return () => window.removeEventListener('tldw:focus-composer', handler)
   }, [textAreaFocus])
+
+  // Allow other components (e.g., empty state) to set the composer message
+  React.useEffect(() => {
+    const handler = (event: CustomEvent<{ message: string }>) => {
+      if (event.detail?.message) {
+        form.setFieldValue("message", event.detail.message)
+      }
+    }
+    window.addEventListener('tldw:set-composer-message', handler as EventListener)
+    return () => window.removeEventListener('tldw:set-composer-message', handler as EventListener)
+  }, [form])
 
   const buildDiscussMediaHint = (payload: {
     mediaId?: string
@@ -2917,6 +2974,28 @@ export const PlaygroundForm = ({ droppedFiles }: Props) => {
     }
   }, [t, voiceChat.state])
 
+  // Update window title when voice chat is active
+  React.useEffect(() => {
+    if (!voiceChatEnabled || voiceChat.state === "idle") return
+
+    const originalTitle = document.title
+    const emoji = {
+      connecting: "🔌",
+      listening: "🎤",
+      thinking: "💭",
+      speaking: "🔊",
+      error: "⚠️"
+    }[voiceChat.state] || ""
+
+    if (emoji) {
+      document.title = `${emoji} ${voiceChatStatusLabel} - Chat`
+    }
+
+    return () => {
+      document.title = originalTitle
+    }
+  }, [voiceChatEnabled, voiceChat.state, voiceChatStatusLabel])
+
   const handleVoiceChatToggle = React.useCallback(() => {
     if (!voiceChatAvailable) {
       notificationApi.error({
@@ -3190,7 +3269,7 @@ export const PlaygroundForm = ({ droppedFiles }: Props) => {
       </div>
       <div className="flex flex-col gap-1">
         <span className="text-[11px] text-text-muted">
-          {t("playground:voiceChat.ttsModeLabel", "TTS mode")}
+          {t("playground:voiceChat.ttsModeLabel", "Response audio")}
         </span>
         <Radio.Group
           size="small"
@@ -3208,7 +3287,7 @@ export const PlaygroundForm = ({ droppedFiles }: Props) => {
       </div>
       <div className="flex items-center justify-between gap-2">
         <span className="text-[11px] text-text-muted">
-          {t("playground:voiceChat.autoResume", "Auto resume")}
+          {t("playground:voiceChat.autoResume", "Continue listening after response")}
         </span>
         <Switch
           size="small"
@@ -3218,7 +3297,7 @@ export const PlaygroundForm = ({ droppedFiles }: Props) => {
       </div>
       <div className="flex items-center justify-between gap-2">
         <span className="text-[11px] text-text-muted">
-          {t("playground:voiceChat.bargeIn", "Barge-in")}
+          {t("playground:voiceChat.bargeIn", "Interrupt while speaking")}
         </span>
         <Switch
           size="small"
@@ -3235,234 +3314,204 @@ export const PlaygroundForm = ({ droppedFiles }: Props) => {
     }
   }, [contextToolsOpen, reloadTabs])
 
+  // State for collapsible advanced section in tools popover
+  const [advancedToolsExpanded, setAdvancedToolsExpanded] = React.useState(isProMode)
+
   const moreToolsContent = React.useMemo(
     () => (
-      <div className="flex w-64 flex-col gap-3">
-        <button
-          type="button"
-          onClick={handleToggleContextTools}
-          aria-pressed={contextToolsOpen}
-          title={
-            contextToolsOpen
-              ? (t(
-                  "playground:composer.contextKnowledgeClose",
-                  "Close Search & Context"
-                ) as string)
-              : (t(
-                  "playground:composer.contextKnowledge",
-                  "Search & Context"
-                ) as string)
-          }
-          className={`flex w-full items-center justify-between rounded-md px-2 py-1 text-sm transition ${
-            contextToolsOpen
-              ? "bg-surface2 text-accent"
-              : "text-text hover:bg-surface2"
-          }`}
-        >
-          <span>
-            {contextToolsOpen
-              ? t(
-                  "playground:composer.contextKnowledgeClose",
-                  "Close Search & Context"
-                )
-              : t(
-                  "playground:composer.contextKnowledge",
-                  "Search & Context"
-                )}
-          </span>
-          <Search className="h-4 w-4" />
-        </button>
-        <div className="flex items-center justify-between">
-          <span className="text-sm text-text">
-            {webSearch
-              ? t("playground:actions.webSearchOn")
-              : t("playground:actions.webSearchOff")}
-          </span>
-          <Switch
-            size="small"
-            checked={webSearch}
-            onChange={(value) => setWebSearch(value)}
-            checkedChildren={t("form.webSearch.on")}
-            unCheckedChildren={t("form.webSearch.off")}
-          />
-        </div>
-        <div className="panel-divider my-1" />
+      <div className="flex w-72 flex-col gap-2 p-1">
+        {/* SEARCH & CONTEXT Section */}
         <div className="flex flex-col gap-2">
-          <div className="text-xs font-semibold text-text-muted">
-            {t("playground:voiceChat.settingsTitle", "Voice chat settings")}
-          </div>
-          <Tooltip
+          <span className="text-[10px] font-semibold uppercase text-text-muted tracking-wider px-2">
+            {t("playground:tools.searchContext", "Search & Context")}
+          </span>
+          <button
+            type="button"
+            onClick={handleToggleContextTools}
+            aria-pressed={contextToolsOpen}
             title={
-              voiceChatAvailable
-                ? voiceChatStatusLabel
-                : t("playground:voiceChat.unavailableTitle", "Voice chat unavailable")
+              contextToolsOpen
+                ? (t(
+                    "playground:composer.contextKnowledgeClose",
+                    "Close Search & Context"
+                  ) as string)
+                : (t(
+                    "playground:composer.contextKnowledge",
+                    "Knowledge Search"
+                  ) as string)
             }
-          >
-            <button
-              type="button"
-              onClick={handleVoiceChatToggle}
-              disabled={!voiceChatAvailable || isSending}
-              className={`flex w-full items-center justify-between rounded-md px-2 py-1 text-sm transition disabled:cursor-not-allowed disabled:opacity-50 ${
-                voiceChat.state === "error"
-                  ? "text-red-600"
-                  : voiceChatEnabled && voiceChat.state !== "idle"
-                    ? "bg-surface2 text-primaryStrong"
-                    : "text-text hover:bg-surface2"
-              }`}
-            >
-              <span>{voiceChatStatusLabel}</span>
-              <Headphones className="h-4 w-4" />
-            </button>
-          </Tooltip>
-          <div
-            className={`flex flex-col gap-2 text-xs ${
-              !voiceChatAvailable ? "pointer-events-none opacity-50" : ""
+            className={`flex w-full items-center justify-between rounded-md px-2 py-1.5 text-sm transition ${
+              contextToolsOpen
+                ? "bg-surface2 text-accent"
+                : "text-text hover:bg-surface2"
             }`}
           >
-            {voiceChatSettingsFields}
+            <span>
+              {t("playground:composer.contextKnowledge", "Knowledge Search")}
+            </span>
+            <Search className="h-4 w-4" />
+          </button>
+          <div className="flex items-center justify-between px-2">
+            <span className="text-sm text-text">
+              {t("playground:actions.webSearchOff", "Web search")}
+            </span>
+            <Switch
+              size="small"
+              checked={webSearch}
+              onChange={(value) => setWebSearch(value)}
+            />
           </div>
         </div>
-        {imageProviderControl}
-        <div className="panel-divider my-1" />
-        <div className="text-xs font-semibold text-text-muted">
-          {t("playground:composer.toolChoiceLabel", "Tool choice")}
-        </div>
-        <Tooltip
-          title={
-            !hasMcp
-              ? t(
-                  "playground:composer.mcpToolsUnavailable",
-                  "MCP tools unavailable"
-                )
-              : mcpHealthState === "unhealthy"
-                ? t("playground:composer.mcpToolsUnhealthy", "MCP tools are offline")
-                : mcpToolsLoading
-                  ? t("playground:composer.mcpToolsLoading", "Loading tools...")
-                  : mcpTools.length === 0
-                    ? t("playground:composer.mcpToolsEmpty", "No MCP tools available")
-                    : ""
-          }
-          open={
-            !hasMcp ||
-            mcpHealthState === "unhealthy" ||
-            mcpToolsLoading ||
-            mcpTools.length === 0
-              ? undefined
-              : false
-          }
-        >
-          <Radio.Group
-            size="small"
-            value={toolChoice}
-            onChange={(e) => setToolChoice(e.target.value as typeof toolChoice)}
-            className="flex flex-wrap gap-2"
-            aria-label={t("playground:composer.toolChoiceLabel", "Tool choice")}
-            disabled={
-              !hasMcp ||
-              mcpHealthState === "unhealthy" ||
-              mcpToolsLoading ||
-              mcpTools.length === 0
-            }
+
+        <div className="border-t border-border my-1" />
+
+        {/* ATTACHMENTS Section */}
+        <div className="flex flex-col gap-2">
+          <span className="text-[10px] font-semibold uppercase text-text-muted tracking-wider px-2">
+            {t("playground:tools.attachments", "Attachments")}
+          </span>
+          <button
+            type="button"
+            onClick={handleImageUpload}
+            disabled={chatMode === "rag"}
+            title={t("playground:actions.upload", "Attach image") as string}
+            className="flex w-full items-center justify-between rounded-md px-2 py-1.5 text-sm text-text transition hover:bg-surface2 disabled:cursor-not-allowed disabled:opacity-40 disabled:text-text-muted"
           >
-            <Radio.Button value="auto">
-              {t("playground:composer.toolChoiceAuto", "Auto")}
-            </Radio.Button>
-            <Radio.Button value="required">
-              {t("playground:composer.toolChoiceRequired", "Required")}
-            </Radio.Button>
-            <Radio.Button value="none">
-              {t("playground:composer.toolChoiceNone", "None")}
-            </Radio.Button>
-          </Radio.Group>
-        </Tooltip>
-        <div className="text-xs font-semibold text-text-muted">
-          {t("playground:composer.mcpToolsLabel", "MCP tools")}
+            <span>{t("playground:actions.attachImage", "Attach image")}</span>
+            <ImageIcon className="h-4 w-4" />
+          </button>
+          <button
+            type="button"
+            onClick={handleDocumentUpload}
+            title={t("tooltip.uploadDocuments") as string}
+            className="flex w-full items-center justify-between rounded-md px-2 py-1.5 text-sm text-text transition hover:bg-surface2"
+          >
+            <span>{t("playground:actions.attachDocument", "Attach document")}</span>
+            <PaperclipIcon className="h-4 w-4" />
+          </button>
         </div>
-        {mcpToolsLoading ? (
-          <div className="text-xs text-text-muted">
-            {t("playground:composer.mcpToolsLoading", "Loading tools...")}
-          </div>
-        ) : mcpTools.length === 0 ? (
-          <div className="text-xs text-text-muted">
-            {!hasMcp
-              ? t(
-                  "playground:composer.mcpToolsUnavailable",
-                  "MCP tools unavailable"
-                )
-              : mcpHealthState === "unhealthy"
-                ? t("playground:composer.mcpToolsUnhealthy", "MCP tools are offline")
-                : t("playground:composer.mcpToolsEmpty", "No MCP tools available")}
-          </div>
-        ) : (
-          <div className="flex flex-wrap gap-1">
-            {mcpTools.slice(0, 6).map((tool, index) => {
-              const toolFn = (tool as any)?.function
-              const name =
-                (typeof tool?.name === "string" && tool.name) ||
-                (typeof toolFn?.name === "string" && toolFn.name) ||
-                (typeof (tool as any)?.id === "string" && (tool as any).id) ||
-                `tool-${index + 1}`
-              const description =
-                (typeof tool?.description === "string" && tool.description) ||
-                (typeof toolFn?.description === "string" && toolFn.description) ||
-                ""
-              return (
-                <span
-                  key={`${name}-${index}`}
-                  title={description || name}
-                  className="rounded-full border border-border px-2 py-0.5 text-[11px] text-text"
+
+        <div className="border-t border-border my-1" />
+
+        {/* ADVANCED Section (collapsible) */}
+        <button
+          type="button"
+          onClick={() => setAdvancedToolsExpanded(!advancedToolsExpanded)}
+          className="flex items-center justify-between px-2 py-1 text-[10px] font-semibold uppercase text-text-muted tracking-wider hover:text-text transition"
+        >
+          <span>{t("playground:tools.advanced", "Advanced")}</span>
+          <ChevronRight className={`h-3 w-3 transition-transform ${advancedToolsExpanded ? "rotate-90" : ""}`} />
+        </button>
+
+        {advancedToolsExpanded && (
+          <div className="flex flex-col gap-2">
+            {/* Voice Settings */}
+            <div className="flex flex-col gap-2 px-2">
+              <Tooltip
+                title={
+                  voiceChatAvailable
+                    ? voiceChatStatusLabel
+                    : t("playground:voiceChat.unavailableTitle", "Voice chat unavailable")
+                }
+              >
+                <button
+                  type="button"
+                  onClick={handleVoiceChatToggle}
+                  disabled={!voiceChatAvailable || isSending}
+                  className={`flex w-full items-center justify-between rounded-md px-2 py-1.5 text-sm transition disabled:cursor-not-allowed disabled:opacity-50 ${
+                    voiceChat.state === "error"
+                      ? "text-red-600"
+                      : voiceChatEnabled && voiceChat.state !== "idle"
+                        ? "bg-surface2 text-primaryStrong"
+                        : "text-text hover:bg-surface2"
+                  }`}
                 >
-                  {name}
+                  <span>{t("playground:tools.voiceSettings", "Voice settings")}</span>
+                  <Headphones className="h-4 w-4" />
+                </button>
+              </Tooltip>
+              <div
+                className={`flex flex-col gap-2 text-xs ${
+                  !voiceChatAvailable ? "pointer-events-none opacity-50" : ""
+                }`}
+              >
+                {voiceChatSettingsFields}
+              </div>
+            </div>
+
+            {imageProviderControl}
+
+            {/* MCP Tools Summary */}
+            {hasMcp && (
+              <div className="px-2 py-1">
+                <div className="text-xs font-semibold text-text-muted mb-1">
+                  {t("playground:composer.mcpToolsLabel", "MCP tools")}
+                </div>
+                <span className="text-xs text-text-muted">
+                  {mcpToolsLoading
+                    ? t("playground:composer.mcpToolsLoading", "Loading tools...")
+                    : t("playground:tools.mcpSummary", "{{count}} tools available", { count: mcpTools.length })}
                 </span>
-              )
-            })}
-            {mcpTools.length > 6 && (
-              <span className="rounded-full border border-border px-2 py-0.5 text-[11px] text-text-muted">
-                +{mcpTools.length - 6}
-              </span>
+              </div>
             )}
+
+            {/* Tool Choice */}
+            <div className="px-2">
+              <div className="text-xs font-semibold text-text-muted mb-1">
+                {t("playground:composer.toolChoiceLabel", "Tool choice")}
+              </div>
+              <Radio.Group
+                size="small"
+                value={toolChoice}
+                onChange={(e) => setToolChoice(e.target.value as typeof toolChoice)}
+                className="flex flex-wrap gap-1"
+                aria-label={t("playground:composer.toolChoiceLabel", "Tool choice")}
+                disabled={
+                  !hasMcp ||
+                  mcpHealthState === "unhealthy" ||
+                  mcpToolsLoading ||
+                  mcpTools.length === 0
+                }
+              >
+                <Radio.Button value="auto">
+                  {t("playground:composer.toolChoiceAuto", "Auto")}
+                </Radio.Button>
+                <Radio.Button value="required">
+                  {t("playground:composer.toolChoiceRequired", "Required")}
+                </Radio.Button>
+                <Radio.Button value="none">
+                  {t("playground:composer.toolChoiceNone", "None")}
+                </Radio.Button>
+              </Radio.Group>
+            </div>
           </div>
         )}
+
+        <div className="border-t border-border my-1" />
+
+        {/* Footer Actions */}
         <Link
           to="/model-playground"
-          title={t("playground:actions.workspacePlayground", "Multi-model compare") as string}
-          className="flex w-full items-center justify-between rounded-md px-2 py-1 text-sm text-text transition hover:bg-surface2"
+          title={t("playground:actions.workspacePlayground", "Compare models") as string}
+          className="flex w-full items-center justify-between rounded-md px-2 py-1.5 text-sm text-text transition hover:bg-surface2"
         >
-          <span>{t("playground:actions.workspacePlayground", "Multi-model compare")}</span>
+          <span>{t("playground:actions.compareModels", "Compare models")}</span>
           <GitBranch className="h-4 w-4" />
         </Link>
-        <button
-          type="button"
-          onClick={handleImageUpload}
-          disabled={chatMode === "rag"}
-          title={t("playground:actions.upload", "Attach image") as string}
-          className="flex w-full items-center justify-between rounded-md px-2 py-1 text-sm text-text transition hover:bg-surface2 disabled:cursor-not-allowed disabled:opacity-40 disabled:text-text-muted"
-        >
-          <span>{t("playground:actions.upload", "Attach image")}</span>
-          <ImageIcon className="h-4 w-4" />
-        </button>
-        <button
-          type="button"
-          onClick={handleDocumentUpload}
-          title={t("tooltip.uploadDocuments") as string}
-          className="flex w-full items-center justify-between rounded-md px-2 py-1 text-sm text-text transition hover:bg-surface2"
-        >
-          <span>{t("tooltip.uploadDocuments")}</span>
-          <PaperclipIcon className="h-4 w-4" />
-        </button>
         <button
           type="button"
           onClick={handleClearContext}
           disabled={history.length === 0}
           title={t("tooltip.clearContext") as string}
-          className="flex w-full items-center justify-between rounded-md px-2 py-1 text-sm text-text transition hover:bg-surface2 disabled:cursor-not-allowed disabled:opacity-40 disabled:text-text-muted"
+          className="flex w-full items-center justify-between rounded-md px-2 py-1.5 text-sm text-red-600 transition hover:bg-red-50 dark:hover:bg-red-900/20 disabled:cursor-not-allowed disabled:opacity-40 disabled:text-text-muted disabled:hover:bg-transparent"
         >
-          <span>{t("tooltip.clearContext")}</span>
+          <span>{t("playground:actions.clearConversation", "Clear conversation")}</span>
           <EraserIcon className="h-4 w-4" />
         </button>
       </div>
     ),
     [
+      advancedToolsExpanded,
       chatMode,
       contextToolsOpen,
       handleClearContext,
@@ -3867,6 +3916,36 @@ export const PlaygroundForm = ({ droppedFiles }: Props) => {
     selectedDocuments.length > 0 ||
     uploadedFiles.length > 0
 
+  const voiceChatButton = voiceChatAvailable ? (
+    <Tooltip
+      title={
+        voiceChatEnabled
+          ? t("playground:voiceChat.toolbarStop", "Stop voice chat")
+          : t("playground:voiceChat.toolbarStart", "Start voice chat")
+      }
+    >
+      <button
+        type="button"
+        onClick={handleVoiceChatToggle}
+        disabled={isSending}
+        aria-label={voiceChatStatusLabel}
+        data-testid="voice-chat-button"
+        className={`flex items-center gap-1.5 rounded-full px-2 py-1.5 text-sm transition ${
+          voiceChat.state === "error"
+            ? "bg-red-100 text-red-600 dark:bg-red-900/30"
+            : voiceChatEnabled && voiceChat.state !== "idle"
+              ? "bg-primary/10 text-primary animate-pulse"
+              : "hover:bg-surface2 text-text-muted"
+        }`}
+      >
+        <Headphones className="h-4 w-4" />
+        {voiceChatEnabled && voiceChat.state !== "idle" && (
+          <span className="text-xs">{voiceChatStatusLabel}</span>
+        )}
+      </button>
+    </Tooltip>
+  ) : null
+
   const toolsButton = (
     <Popover
       trigger="click"
@@ -3879,7 +3958,8 @@ export const PlaygroundForm = ({ droppedFiles }: Props) => {
         shape={isProMode ? "rounded" : "pill"}
         iconOnly={!isProMode}
         ariaLabel={t("playground:composer.moreTools", "More tools") as string}
-        title={t("playground:composer.moreTools", "More tools") as string}>
+        title={t("playground:composer.moreTools", "More tools") as string}
+        data-testid="tools-button">
         {isProMode ? (
           <span>{t("playground:composer.toolsButton", "+Tools")}</span>
         ) : (
@@ -3905,7 +3985,12 @@ export const PlaygroundForm = ({ droppedFiles }: Props) => {
               "playground:composer.connectToSend",
               "Connect to your tldw server to start chatting."
             ) as string)
-          : (t("playground:composer.submitAria", "Send message") as string)
+          : sendWhenEnter
+            ? (t("playground:composer.submitAriaEnter", "Send message (Enter)") as string)
+            : (t(
+                "playground:composer.submitAriaModEnter",
+                isMac ? "Send message (⌘+Enter)" : "Send message (Ctrl+Enter)"
+              ) as string)
       }
       aria-label={
         t("playground:composer.submitAria", "Send message") as string
@@ -4298,7 +4383,7 @@ export const PlaygroundForm = ({ droppedFiles }: Props) => {
                           tabIndex={0}
                           placeholder={
                             isConnectionReady
-                              ? t("form.textarea.placeholder")
+                              ? t("playground:composer.placeholderWithSlash", "Type a message... (/ for commands)")
                               : t(
                                   "playground:composer.connectionPlaceholder",
                                   "Connect to tldw to start chatting."
@@ -4789,6 +4874,7 @@ export const PlaygroundForm = ({ droppedFiles }: Props) => {
                                   </span>
                                 </button>
                               </Tooltip>
+                              {voiceChatButton}
                               {toolsButton}
                               {sendControl}
                             </div>
@@ -4969,6 +5055,7 @@ export const PlaygroundForm = ({ droppedFiles }: Props) => {
                               </span>
                             </TldwButton>
                           </Tooltip>
+                          {voiceChatButton}
                           {toolsButton}
                           {sendControl}
                         </div>
@@ -5167,6 +5254,28 @@ export const PlaygroundForm = ({ droppedFiles }: Props) => {
         seedMessage={documentGeneratorSeed?.message ?? null}
         seedMessageId={documentGeneratorSeed?.messageId ?? null}
       />
+      {voiceChatEnabled && voiceChat.state !== "idle" && (
+        <VoiceChatIndicator
+          state={voiceChat.state}
+          statusLabel={voiceChatStatusLabel}
+          onStop={handleVoiceChatToggle}
+        />
+      )}
+      <VoiceModeSelector
+        open={voiceModeSelectorOpen}
+        onClose={() => setVoiceModeSelectorOpen(false)}
+        onSelectDictation={() => {
+          if (speechUsesServer) {
+            handleServerDictationToggle()
+          } else {
+            handleSpeechToggle()
+          }
+        }}
+        onSelectConversation={handleVoiceChatToggle}
+        dictationAvailable={speechAvailable}
+        conversationAvailable={voiceChatAvailable}
+      />
+      <PlaygroundTour run={runTour} onComplete={completeTour} />
     </div>
   )
 }

@@ -180,7 +180,7 @@ export const useTTS = () => {
 
       if (provider === "browser") {
         const voice = await getVoice()
-        if (isChromiumTarget) {
+        if (isChromiumTarget && typeof chrome !== "undefined" && chrome.tts) {
           chrome.tts.speak(processedUtterance, {
             voiceName: voice,
             rate: playbackSpeed,
@@ -192,7 +192,7 @@ export const useTTS = () => {
               }
             }
           })
-        } else {
+        } else if (typeof window !== "undefined" && window.speechSynthesis) {
           const synthesisUtterance = new SpeechSynthesisUtterance(processedUtterance)
           synthesisUtterance.rate = playbackSpeed
           synthesisUtterance.onstart = () => {
@@ -397,10 +397,12 @@ export const useTTS = () => {
     }
 
     if (
-      isChromiumTarget
+      isChromiumTarget &&
+      typeof chrome !== "undefined" &&
+      chrome.tts
     ) {
       chrome.tts.stop()
-    } else {
+    } else if (typeof window !== "undefined" && window.speechSynthesis) {
       window.speechSynthesis.cancel()
     }
     setIsSpeaking(false)
