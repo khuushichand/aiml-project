@@ -8,7 +8,11 @@ export default defineConfig({
     alias: {
       '@tldw/ui': path.resolve(__dirname, '../packages/ui/src'),
       '@': path.resolve(__dirname, '../packages/ui/src'),
-      '~': path.resolve(__dirname, '../packages/ui/src')
+      '~': path.resolve(__dirname, '../packages/ui/src'),
+      // Ensure testing libraries resolve from tldw-frontend for packages/ui tests
+      '@testing-library/react': path.resolve(__dirname, 'node_modules/@testing-library/react'),
+      '@testing-library/jest-dom': path.resolve(__dirname, 'node_modules/@testing-library/jest-dom'),
+      '@testing-library/user-event': path.resolve(__dirname, 'node_modules/@testing-library/user-event')
     }
   },
   test: {

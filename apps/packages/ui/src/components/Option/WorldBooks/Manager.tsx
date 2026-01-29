@@ -1,5 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
-import { Button, Form, Input, InputNumber, Modal, Skeleton, Switch, Table, Tooltip, Tag, Select, Descriptions, Empty, Popover, Divider } from "antd"
+import { Button, Form, Input, InputNumber, Modal, Skeleton, Switch, Table, Tooltip, Tag, Select, Descriptions, Empty, Popover, Divider, Drawer, Checkbox, Grid } from "antd"
 import React from "react"
 import { useConfirmDanger } from "@/components/Common/confirm-danger"
 import { tldwClient } from "@/services/tldw/TldwApiClient"
@@ -41,24 +41,41 @@ const normalizeKeywords = (value: any): string[] => {
   return []
 }
 
+const buildMatchPreview = (keywordsValue: any, opts: { caseSensitive?: boolean; regexMatch?: boolean; wholeWord?: boolean }) => {
+  const keyword = normalizeKeywords(keywordsValue)[0]
+  if (!keyword) return "Add a keyword to see a preview."
+  if (opts.regexMatch) {
+    return `Regex enabled. Example pattern: /${keyword}/`
+  }
+  const lower = keyword.toLowerCase()
+  const upper = keyword.toUpperCase()
+  const caseExample = opts.caseSensitive ? `'${keyword}' only` : `'${lower}', '${upper}'`
+  const wordExample = opts.wholeWord ? "whole-word matches" : "partial matches"
+  return `Preview: ${caseExample}; ${wordExample}.`
+}
+
 export const WorldBooksManager: React.FC = () => {
   const isOnline = useServerOnline()
   const { t } = useTranslation(["option"])
+  const screens = Grid.useBreakpoint()
   const qc = useQueryClient()
   const notification = useAntdNotification()
   const { showUndoNotification } = useUndoNotification()
   const [open, setOpen] = React.useState(false)
   const [openEdit, setOpenEdit] = React.useState(false)
-  const [openEntries, setOpenEntries] = React.useState<null | { id: number; name: string }>(null)
+  const [openEntries, setOpenEntries] = React.useState<null | { id: number; name: string; entryCount?: number }>(null)
   const [openAttach, setOpenAttach] = React.useState<null | number>(null)
   const [editId, setEditId] = React.useState<number | null>(null)
   const [openImport, setOpenImport] = React.useState(false)
+  const [openMatrix, setOpenMatrix] = React.useState(false)
   const [mergeOnConflict, setMergeOnConflict] = React.useState(false)
   const [importPreview, setImportPreview] = React.useState<{ name?: string; entryCount: number; conflict?: boolean } | null>(null)
   const [importPayload, setImportPayload] = React.useState<any | null>(null)
   const [importError, setImportError] = React.useState<string | null>(null)
   const [importFileName, setImportFileName] = React.useState<string | null>(null)
   const [statsFor, setStatsFor] = React.useState<any | null>(null)
+  const [exportingId, setExportingId] = React.useState<number | null>(null)
+  const [statsLoadingId, setStatsLoadingId] = React.useState<number | null>(null)
   const [createForm] = Form.useForm()
   const [editForm] = Form.useForm()
   const [entryForm] = Form.useForm()
@@ -66,6 +83,9 @@ export const WorldBooksManager: React.FC = () => {
   const confirmDanger = useConfirmDanger()
   const deleteTimersRef = React.useRef<Record<number, any>>({})
   const [pendingDeleteIds, setPendingDeleteIds] = React.useState<number[]>([])
+  const [matrixPending, setMatrixPending] = React.useState<Record<string, boolean>>({})
+  const [matrixBookFilter, setMatrixBookFilter] = React.useState('')
+  const [matrixCharacterFilter, setMatrixCharacterFilter] = React.useState('')
 
   const { data, status } = useQuery({
     queryKey: ['tldw:listWorldBooks'],
@@ -218,6 +238,85 @@ export const WorldBooksManager: React.FC = () => {
     )
   }
 
+  const isAttached = React.useCallback((worldBookId: number, characterId: number) => {
+    const attached = getAttachedCharacters(worldBookId)
+    return attached.some((c: any) => c.id === characterId)
+  }, [getAttachedCharacters])
+
+  const handleMatrixToggle = async (worldBookId: number, characterId: number, next: boolean) => {
+    const key = `${worldBookId}:${characterId}`
+    if (matrixPending[key]) return
+    setMatrixPending((prev) => ({ ...prev, [key]: true }))
+    try {
+      if (next) {
+        await attachWB({ characterId, worldBookId })
+      } else {
+        await detachWB({ characterId, worldBookId })
+      }
+    } finally {
+      setMatrixPending((prev) => {
+        const copy = { ...prev }
+        delete copy[key]
+        return copy
+      })
+    }
+  }
+
+  const filteredBooks = React.useMemo(() => {
+    const q = matrixBookFilter.trim().toLowerCase()
+    if (!q) return data || []
+    return (data || []).filter((b: any) => (b.name || '').toLowerCase().includes(q))
+  }, [data, matrixBookFilter])
+
+  const filteredCharacters = React.useMemo(() => {
+    const q = matrixCharacterFilter.trim().toLowerCase()
+    if (!q) return characters || []
+    return (characters || []).filter((c: any) => (c.name || '').toLowerCase().includes(q))
+  }, [characters, matrixCharacterFilter])
+
+  const handleCloseCreate = async () => {
+    if (createForm.isFieldsTouched()) {
+      const ok = await confirmDanger({
+        title: "Discard changes?",
+        content: "You have unsaved changes. Are you sure you want to close?",
+        okText: "Discard",
+        cancelText: "Keep editing"
+      })
+      if (!ok) return
+    }
+    setOpen(false)
+    createForm.resetFields()
+  }
+
+  const handleCloseEdit = async () => {
+    if (editForm.isFieldsTouched()) {
+      const ok = await confirmDanger({
+        title: "Discard changes?",
+        content: "You have unsaved changes. Are you sure you want to close?",
+        okText: "Discard",
+        cancelText: "Keep editing"
+      })
+      if (!ok) return
+    }
+    setOpenEdit(false)
+    editForm.resetFields()
+    setEditId(null)
+  }
+
+  const handleCloseEntries = async () => {
+    if (entryForm.isFieldsTouched()) {
+      const ok = await confirmDanger({
+        title: "Discard changes?",
+        content: "You have unsaved changes in the entry form. Are you sure you want to close?",
+        okText: "Discard",
+        cancelText: "Keep editing"
+      })
+      if (!ok) return
+    }
+    setOpenEntries(null)
+    entryForm.resetFields()
+  }
+
   React.useEffect(() => {
     return () => {
       Object.values(deleteTimersRef.current).forEach((t) => clearTimeout(t))
@@ -233,46 +332,79 @@ export const WorldBooksManager: React.FC = () => {
     { title: 'Enabled', dataIndex: 'enabled', key: 'enabled', render: (v: boolean) => v ? <Tag color="green">Enabled</Tag> : <Tag>Disabled</Tag> },
     { title: 'Entries', dataIndex: 'entry_count', key: 'entry_count' },
     { title: 'Actions', key: 'actions', render: (_: any, record: any) => (
-      <div className="flex gap-3">
+      <div className="flex gap-2">
         <Tooltip title="Edit">
-          <button className="text-text-muted" onClick={() => { setEditId(record.id); editForm.setFieldsValue(record); setOpenEdit(true) }}>
-            <Pen className="w-4 h-4" />
-          </button>
+          <Button
+            type="text"
+            size="small"
+            aria-label="Edit world book"
+            icon={<Pen className="w-4 h-4" />}
+            onClick={() => { setEditId(record.id); editForm.setFieldsValue(record); setOpenEdit(true) }}
+          />
         </Tooltip>
         <Tooltip title="Manage Entries">
-          <button className="text-text-muted" onClick={() => setOpenEntries({ id: record.id, name: record.name })}>
+          <Button type="text" size="small" onClick={() => setOpenEntries({ id: record.id, name: record.name, entryCount: record.entry_count })}>
             Entries
-          </button>
+          </Button>
         </Tooltip>
         <Tooltip title="Manage Character Links">
-          <button className="text-text-muted" onClick={() => setOpenAttach(record.id)}>
+          <Button type="text" size="small" onClick={() => setOpenAttach(record.id)}>
             Link
-          </button>
+          </Button>
         </Tooltip>
         <Tooltip title="Export JSON">
-          <button className="text-text-muted" onClick={async () => {
-            try {
-              const exp = await tldwClient.exportWorldBook(record.id)
-              const blob = new Blob([JSON.stringify(exp, null, 2)], { type: 'application/json' })
-              const url = URL.createObjectURL(blob)
-              const a = document.createElement('a')
-              a.href = url
-              a.download = `${record.name || 'world-book'}.json`
-              a.click()
-              URL.revokeObjectURL(url)
-            } catch (e: any) {
-              notification.error({ message: 'Export failed', description: e?.message })
-            }
-          }}>Export</button>
+          <Button
+            type="text"
+            size="small"
+            loading={exportingId === record.id}
+            onClick={async () => {
+              setExportingId(record.id)
+              try {
+                const exp = await tldwClient.exportWorldBook(record.id)
+                const blob = new Blob([JSON.stringify(exp, null, 2)], { type: 'application/json' })
+                const url = URL.createObjectURL(blob)
+                const a = document.createElement('a')
+                a.href = url
+                a.download = `${record.name || 'world-book'}.json`
+                a.click()
+                URL.revokeObjectURL(url)
+              } catch (e: any) {
+                notification.error({ message: 'Export failed', description: e?.message })
+              } finally {
+                setExportingId(null)
+              }
+            }}
+          >
+            Export
+          </Button>
         </Tooltip>
         <Tooltip title="Statistics">
-          <button className="text-text-muted" onClick={async () => {
-            try { const s = await tldwClient.worldBookStatistics(record.id); setStatsFor(s) } catch (e: any) { notification.error({ message: 'Stats failed', description: e?.message }) }
-          }}>Stats</button>
+          <Button
+            type="text"
+            size="small"
+            loading={statsLoadingId === record.id}
+            onClick={async () => {
+              setStatsLoadingId(record.id)
+              try {
+                const s = await tldwClient.worldBookStatistics(record.id)
+                setStatsFor(s)
+              } catch (e: any) {
+                notification.error({ message: 'Stats failed', description: e?.message })
+              } finally {
+                setStatsLoadingId(null)
+              }
+            }}
+          >
+            Stats
+          </Button>
         </Tooltip>
         <Tooltip title="Delete">
-          <button
-            className="text-danger"
+          <Button
+            type="text"
+            size="small"
+            danger
+            aria-label="Delete world book"
+            icon={<Trash2 className="w-4 h-4" />}
             disabled={deleting || pendingDeleteIds.includes(record.id)}
             onClick={async () => {
               const entryCount = record.entry_count || 0
@@ -322,9 +454,7 @@ export const WorldBooksManager: React.FC = () => {
                 })
               }
             }}
-          >
-            <Trash2 className="w-4 h-4" />
-          </button>
+          />
         </Tooltip>
       </div>
     )}
@@ -347,13 +477,14 @@ export const WorldBooksManager: React.FC = () => {
   return (
     <div className="space-y-4">
       <div className="flex justify-end gap-2">
+        <Button onClick={() => setOpenMatrix(true)}>Relationship Matrix</Button>
         <Button onClick={() => setOpenImport(true)}>Import</Button>
         <Button type="primary" onClick={() => setOpen(true)}>New World Book</Button>
       </div>
       {status === 'pending' && <Skeleton active paragraph={{ rows: 6 }} />}
       {status === 'success' && <Table rowKey={(r: any) => r.id} dataSource={data} columns={columns as any} />}
 
-      <Modal title="Create World Book" open={open} onCancel={() => setOpen(false)} footer={null}>
+      <Modal title="Create World Book" open={open} onCancel={handleCloseCreate} footer={null}>
         <Form layout="vertical" form={createForm} onFinish={(v) => createWB(v)}>
           <Form.Item name="name" label="Name" rules={[{ required: true }]}><Input /></Form.Item>
           <Form.Item name="description" label="Description"><Input /></Form.Item>
@@ -468,7 +599,7 @@ export const WorldBooksManager: React.FC = () => {
         )}
       </Modal>
 
-      <Modal title="Edit World Book" open={openEdit} onCancel={() => setOpenEdit(false)} footer={null}>
+      <Modal title="Edit World Book" open={openEdit} onCancel={handleCloseEdit} footer={null}>
         <Form layout="vertical" form={editForm} onFinish={(v) => updateWB(v)}>
           <Form.Item name="name" label="Name" rules={[{ required: true }]}><Input /></Form.Item>
           <Form.Item name="description" label="Description"><Input /></Form.Item>
@@ -501,8 +632,100 @@ export const WorldBooksManager: React.FC = () => {
         </Form>
       </Modal>
 
-      <Modal title={`Entries: ${openEntries?.name || ''}`} open={!!openEntries} onCancel={() => setOpenEntries(null)} footer={null} width={720}>
+      <Drawer
+        title={(
+          <div className="space-y-1">
+            <div className="text-xs text-text-muted">World Books &gt; {openEntries?.name || ''} &gt; Entries</div>
+            <div className="font-semibold">Entries: {openEntries?.name || ''}</div>
+          </div>
+        )}
+        placement="right"
+        width={screens.md ? "60vw" : "100%"}
+        open={!!openEntries}
+        onClose={handleCloseEntries}
+        destroyOnClose
+      >
+        {openEntries && (
+          <div className="mb-3 flex flex-wrap items-center gap-2 text-sm">
+            <Tag color="blue">Editing: {openEntries.name}</Tag>
+            <Tag>Entries: {openEntries.entryCount ?? '—'}</Tag>
+            <Tag>Attached: {getAttachedCharacters(openEntries.id).length}</Tag>
+          </div>
+        )}
         <EntryManager worldBookId={openEntries?.id!} form={entryForm} />
+      </Drawer>
+
+      <Modal
+        title="World Book ↔ Character Matrix"
+        open={openMatrix}
+        onCancel={() => setOpenMatrix(false)}
+        footer={null}
+        width="90vw"
+      >
+        <div className="text-sm text-text-muted mb-3">
+          Toggle checkboxes to attach or detach world books from characters.
+        </div>
+        <div className="flex flex-wrap items-center gap-2 mb-3">
+          <Input
+            placeholder="Filter world books…"
+            value={matrixBookFilter}
+            onChange={(e) => setMatrixBookFilter(e.target.value)}
+            allowClear
+            className="max-w-xs"
+          />
+          <Input
+            placeholder="Filter characters…"
+            value={matrixCharacterFilter}
+            onChange={(e) => setMatrixCharacterFilter(e.target.value)}
+            allowClear
+            className="max-w-xs"
+          />
+          <Button
+            size="small"
+            onClick={() => {
+              setMatrixBookFilter('')
+              setMatrixCharacterFilter('')
+            }}
+            disabled={!matrixBookFilter && !matrixCharacterFilter}
+          >
+            Clear filters
+          </Button>
+        </div>
+        {filteredCharacters.length === 0 && (
+          <Empty description="No characters match this filter" />
+        )}
+        <div className="overflow-x-auto border border-border rounded">
+          <Table
+            size="small"
+            pagination={false}
+            scroll={{ x: "max-content" }}
+            rowKey={(r: any) => r.id}
+            dataSource={filteredBooks}
+            columns={[
+              { title: 'World Book', dataIndex: 'name', key: 'name', fixed: 'left', width: 200 },
+              ...(filteredCharacters || []).map((c: any) => ({
+                title: (
+                  <Tooltip title={c.name}>
+                    <span className="truncate max-w-[140px] inline-block">{c.name}</span>
+                  </Tooltip>
+                ),
+                key: `char-${c.id}`,
+                width: 120,
+                render: (_: any, record: any) => {
+                  const checked = isAttached(record.id, c.id)
+                  const pending = !!matrixPending[`${record.id}:${c.id}`]
+                  return (
+                    <Checkbox
+                      checked={checked}
+                      disabled={pending || attachmentsLoading}
+                      onChange={(e) => handleMatrixToggle(record.id, c.id, e.target.checked)}
+                    />
+                  )
+                }
+              }))
+            ] as any}
+          />
+        </div>
       </Modal>
 
       <Modal title="Manage Character Attachments" open={!!openAttach} onCancel={() => setOpenAttach(null)} footer={null}>
@@ -579,6 +802,14 @@ const EntryManager: React.FC<{ worldBookId: number; form: any }> = ({ worldBookI
   const [bulkText, setBulkText] = React.useState('')
   const [bulkAdding, setBulkAdding] = React.useState(false)
   const [selectedRowKeys, setSelectedRowKeys] = React.useState<React.Key[]>([])
+  const addRegexMatch = Form.useWatch('regex_match', form)
+  const addCaseSensitive = Form.useWatch('case_sensitive', form)
+  const addWholeWord = Form.useWatch('whole_word_match', form)
+  const addKeywordsWatch = Form.useWatch('keywords', form)
+  const editRegexMatch = Form.useWatch('regex_match', editForm)
+  const editCaseSensitive = Form.useWatch('case_sensitive', editForm)
+  const editWholeWord = Form.useWatch('whole_word_match', editForm)
+  const editKeywordsWatch = Form.useWatch('keywords', editForm)
 
   const { data, status } = useQuery({
     queryKey: ['tldw:listWorldBookEntries', worldBookId],
@@ -717,22 +948,31 @@ const EntryManager: React.FC<{ worldBookId: number; form: any }> = ({ worldBookI
               { title: 'Actions', key: 'actions', width: 80, render: (_: any, r: any) => (
                 <div className="flex gap-2">
                   <Tooltip title="Edit">
-                    <button className="text-text-muted hover:text-text" onClick={() => openEditModal(r)}>
-                      <Pen className="w-4 h-4" />
-                    </button>
+                    <Button
+                      type="text"
+                      size="small"
+                      aria-label="Edit entry"
+                      icon={<Pen className="w-4 h-4" />}
+                      onClick={() => openEditModal(r)}
+                    />
                   </Tooltip>
                   <Tooltip title="Delete">
-                    <button className="text-danger" onClick={async () => {
-                      const ok = await confirmDanger({
-                        title: 'Delete entry?',
-                        content: `This will remove the entry with keywords: ${(r.keywords || []).join(', ') || '(none)'}`,
-                        okText: 'Delete',
-                        cancelText: 'Cancel'
-                      })
-                      if (ok) deleteEntry(r.entry_id)
-                    }}>
-                      <Trash2 className="w-4 h-4" />
-                    </button>
+                    <Button
+                      type="text"
+                      size="small"
+                      danger
+                      aria-label="Delete entry"
+                      icon={<Trash2 className="w-4 h-4" />}
+                      onClick={async () => {
+                        const ok = await confirmDanger({
+                          title: 'Delete entry?',
+                          content: `This will remove the entry with keywords: ${(r.keywords || []).join(', ') || '(none)'}`,
+                          okText: 'Delete',
+                          cancelText: 'Cancel'
+                        })
+                        if (ok) deleteEntry(r.entry_id)
+                      }}
+                    />
                   </Tooltip>
                 </div>
               ) }
@@ -756,7 +996,19 @@ const EntryManager: React.FC<{ worldBookId: number; form: any }> = ({ worldBookI
       <Modal
         title="Edit Entry"
         open={!!editingEntry}
-        onCancel={() => { setEditingEntry(null); editForm.resetFields() }}
+        onCancel={async () => {
+          if (editForm.isFieldsTouched()) {
+            const ok = await confirmDanger({
+              title: "Discard changes?",
+              content: "You have unsaved changes. Are you sure you want to close?",
+              okText: "Discard",
+              cancelText: "Keep editing"
+            })
+            if (!ok) return
+          }
+          setEditingEntry(null)
+          editForm.resetFields()
+        }}
         footer={null}
       >
         <Form layout="vertical" form={editForm} onFinish={(v) => updateEntry(v)}>
@@ -778,9 +1030,20 @@ const EntryManager: React.FC<{ worldBookId: number; form: any }> = ({ worldBookI
             <p className="text-xs text-text-muted mt-1 mb-2">These options control how keywords are matched in chat messages.</p>
             <div className="mt-2 pl-2 border-l-2 border-border space-y-0">
               <Form.Item name="case_sensitive" label="Case Sensitive" valuePropName="checked"><Switch /></Form.Item>
-              <Form.Item name="regex_match" label="Regex Match" valuePropName="checked"><Switch /></Form.Item>
-              <Form.Item name="whole_word_match" label="Whole Word Match" valuePropName="checked"><Switch /></Form.Item>
+              <Form.Item name="regex_match" label="Regex Match" valuePropName="checked">
+                <Switch onChange={(checked) => { if (checked) editForm.setFieldsValue({ whole_word_match: false }) }} />
+              </Form.Item>
+              {!editRegexMatch && (
+                <Form.Item name="whole_word_match" label="Whole Word Match" valuePropName="checked"><Switch /></Form.Item>
+              )}
             </div>
+            <p className="text-xs text-text-muted mt-2">
+              {buildMatchPreview(editKeywordsWatch, {
+                caseSensitive: editCaseSensitive,
+                regexMatch: editRegexMatch,
+                wholeWord: editWholeWord
+              })}
+            </p>
           </details>
           <Button type="primary" htmlType="submit" loading={updating} className="w-full">Save Changes</Button>
         </Form>
@@ -814,18 +1077,29 @@ const EntryManager: React.FC<{ worldBookId: number; form: any }> = ({ worldBookI
               <InputNumber style={{ width: '100%' }} min={0} max={100} placeholder="Default: 50" />
             </Form.Item>
             <Form.Item name="enabled" label="Enabled" valuePropName="checked"><Switch defaultChecked /></Form.Item>
-            <details className="mb-4">
-              <summary className="cursor-pointer text-sm text-text-muted hover:text-text">Matching Options</summary>
-              <p className="text-xs text-text-muted mt-1 mb-2">These options control how keywords are matched in chat messages.</p>
-              <div className="mt-2 pl-2 border-l-2 border-border space-y-0">
-                <Form.Item name="case_sensitive" label="Case Sensitive" valuePropName="checked"><Switch /></Form.Item>
-                <Form.Item name="regex_match" label="Regex Match" valuePropName="checked"><Switch /></Form.Item>
+          <details className="mb-4">
+            <summary className="cursor-pointer text-sm text-text-muted hover:text-text">Matching Options</summary>
+            <p className="text-xs text-text-muted mt-1 mb-2">These options control how keywords are matched in chat messages.</p>
+            <div className="mt-2 pl-2 border-l-2 border-border space-y-0">
+              <Form.Item name="case_sensitive" label="Case Sensitive" valuePropName="checked"><Switch /></Form.Item>
+              <Form.Item name="regex_match" label="Regex Match" valuePropName="checked">
+                <Switch onChange={(checked) => { if (checked) form.setFieldsValue({ whole_word_match: false }) }} />
+              </Form.Item>
+              {!addRegexMatch && (
                 <Form.Item name="whole_word_match" label="Whole Word Match" valuePropName="checked"><Switch /></Form.Item>
-              </div>
-            </details>
-            <Button type="primary" htmlType="submit" loading={adding} className="w-full">Add Entry</Button>
-          </Form>
-        )}
+              )}
+            </div>
+            <p className="text-xs text-text-muted mt-2">
+              {buildMatchPreview(addKeywordsWatch, {
+                caseSensitive: addCaseSensitive,
+                regexMatch: addRegexMatch,
+                wholeWord: addWholeWord
+              })}
+            </p>
+          </details>
+          <Button type="primary" htmlType="submit" loading={adding} className="w-full">Add Entry</Button>
+        </Form>
+      )}
         {bulkMode && (
           <div className="space-y-2">
             <Input.TextArea

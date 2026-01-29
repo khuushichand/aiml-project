@@ -13,13 +13,14 @@ import {
   Checkbox,
   Segmented,
   Pagination,
-  Upload
+  Upload,
+  Dropdown
 } from "antd"
 import type { InputRef, FormInstance } from "antd"
 import React from "react"
 import { tldwClient, type ServerChatSummary } from "@/services/tldw/TldwApiClient"
 import { fetchChatModels } from "@/services/tldw-server"
-import { History, Pen, Trash2, UserCircle2, MessageCircle, Copy, ChevronDown, ChevronUp, LayoutGrid, List, Keyboard, Download } from "lucide-react"
+import { History, Pen, Trash2, UserCircle2, MessageCircle, Copy, ChevronDown, ChevronUp, LayoutGrid, List, Keyboard, Download, CheckSquare, Square, Tags, X } from "lucide-react"
 import { CharacterPreview } from "./CharacterPreview"
 import { CharacterGalleryCard } from "./CharacterGalleryCard"
 import { CharacterPreviewPopup } from "./CharacterPreviewPopup"
@@ -33,6 +34,7 @@ import { CHARACTER_TEMPLATES, type CharacterTemplate } from "@/data/character-te
 import type { GeneratedCharacter, CharacterField } from "@/services/character-generation"
 import { useStorage } from "@plasmohq/storage/hook"
 import { validateAndCreateImageDataUrl } from "@/utils/image-utils"
+import { exportCharacterToJSON, exportCharacterToPNG, exportCharactersToJSON } from "@/utils/character-export"
 import { useTranslation } from "react-i18next"
 import { useConfirmDanger } from "@/components/Common/confirm-danger"
 import { useNavigate } from "react-router-dom"
@@ -229,6 +231,21 @@ export const CharactersManager: React.FC<CharactersManagerProps> = ({
   const [currentPage, setCurrentPage] = React.useState(1)
   const [importing, setImporting] = React.useState(false)
   const [previewCharacter, setPreviewCharacter] = React.useState<any | null>(null)
+
+  // Inline editing state (M1)
+  const [inlineEdit, setInlineEdit] = React.useState<{
+    id: string
+    field: 'name' | 'description'
+    value: string
+    originalValue: string
+  } | null>(null)
+  const inlineEditInputRef = React.useRef<InputRef>(null)
+
+  // Bulk operations state (M5)
+  const [selectedCharacterIds, setSelectedCharacterIds] = React.useState<Set<string>>(new Set())
+  const [bulkTagModalOpen, setBulkTagModalOpen] = React.useState(false)
+  const [bulkTagsToAdd, setBulkTagsToAdd] = React.useState<string[]>([])
+  const [bulkOperationLoading, setBulkOperationLoading] = React.useState(false)
 
   // Character generation state
   const {
@@ -759,13 +776,41 @@ export const CharactersManager: React.FC<CharactersManagerProps> = ({
     return data.slice(start, start + DEFAULT_PAGE_SIZE)
   }, [data, currentPage])
 
-  const allTags = React.useMemo(() => {
-    const set = new Set<string>()
+  // Tag usage data with counts for M3 improvements
+  const tagUsageData = React.useMemo(() => {
+    const counts: Record<string, number> = {}
     ;(data || []).forEach((c: any) =>
-      (c?.tags || []).forEach((tag: string) => set.add(tag))
+      (c?.tags || []).forEach((tag: string) => {
+        counts[tag] = (counts[tag] || 0) + 1
+      })
     )
-    return Array.from(set.values())
+    // Convert to array and sort by count descending
+    return Object.entries(counts)
+      .map(([tag, count]) => ({ tag, count }))
+      .sort((a, b) => b.count - a.count)
   }, [data])
+
+  const allTags = React.useMemo(() => {
+    return tagUsageData.map(({ tag }) => tag)
+  }, [tagUsageData])
+
+  // Popular tags (top 5 most used)
+  const popularTags = React.useMemo(() => {
+    return tagUsageData.slice(0, 5)
+  }, [tagUsageData])
+
+  // Tag options with usage counts for Select dropdown
+  const tagOptionsWithCounts = React.useMemo(() => {
+    return tagUsageData.map(({ tag, count }) => ({
+      label: (
+        <span className="flex items-center justify-between w-full">
+          <span>{tag}</span>
+          <span className="text-xs text-text-subtle ml-2">({count})</span>
+        </span>
+      ),
+      value: tag
+    }))
+  }, [tagUsageData])
 
   const tagFilterOptions = React.useMemo(
     () =>
@@ -932,6 +977,274 @@ export const CharactersManager: React.FC<CharactersManagerProps> = ({
       })
   })
 
+  // Inline edit mutation (M1)
+  const { mutate: inlineUpdateCharacter, isPending: inlineUpdating } = useMutation({
+    mutationFn: async ({ id, field, value, version }: { id: string; field: 'name' | 'description'; value: string; version?: number }) => {
+      return await tldwClient.updateCharacter(id, { [field]: value }, version)
+    },
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["tldw:listCharacters"] })
+      setInlineEdit(null)
+    },
+    onError: (e: any) => {
+      notification.error({
+        message: t("settings:manageCharacters.notification.error", { defaultValue: "Error" }),
+        description: e?.message || t("settings:manageCharacters.notification.someError", { defaultValue: "Something went wrong" })
+      })
+    }
+  })
+
+  // Inline edit handlers (M1)
+  const startInlineEdit = React.useCallback((record: any, field: 'name' | 'description') => {
+    const id = String(record.id || record.slug || record.name)
+    const value = record[field] || ''
+    setInlineEdit({ id, field, value, originalValue: value })
+    setTimeout(() => inlineEditInputRef.current?.focus(), 0)
+  }, [])
+
+  const saveInlineEdit = React.useCallback(() => {
+    if (!inlineEdit) return
+    const trimmedValue = inlineEdit.value.trim()
+
+    // Validate name field
+    if (inlineEdit.field === 'name' && !trimmedValue) {
+      notification.warning({
+        message: t("settings:manageCharacters.form.name.required", { defaultValue: "Please enter a name" })
+      })
+      return
+    }
+
+    // Skip if unchanged
+    if (trimmedValue === inlineEdit.originalValue) {
+      setInlineEdit(null)
+      return
+    }
+
+    // Find the record to get version
+    const record = (data || []).find((c: any) =>
+      String(c.id || c.slug || c.name) === inlineEdit.id
+    )
+
+    inlineUpdateCharacter({
+      id: inlineEdit.id,
+      field: inlineEdit.field,
+      value: trimmedValue,
+      version: record?.version
+    })
+  }, [inlineEdit, inlineUpdateCharacter, data, notification, t])
+
+  const cancelInlineEdit = React.useCallback(() => {
+    setInlineEdit(null)
+  }, [])
+
+  // Bulk selection helpers (M5)
+  const toggleCharacterSelection = React.useCallback((id: string) => {
+    setSelectedCharacterIds((prev) => {
+      const next = new Set(prev)
+      if (next.has(id)) {
+        next.delete(id)
+      } else {
+        next.add(id)
+      }
+      return next
+    })
+  }, [])
+
+  const selectAllOnPage = React.useCallback(() => {
+    if (!Array.isArray(data)) return
+    const pageStart = (currentPage - 1) * DEFAULT_PAGE_SIZE
+    const pageEnd = pageStart + DEFAULT_PAGE_SIZE
+    const pageIds = data.slice(pageStart, pageEnd).map((c: any) => String(c.id || c.slug || c.name))
+    setSelectedCharacterIds((prev) => new Set([...prev, ...pageIds]))
+  }, [data, currentPage])
+
+  const clearSelection = React.useCallback(() => {
+    setSelectedCharacterIds(new Set())
+  }, [])
+
+  const selectedCount = selectedCharacterIds.size
+  const hasSelection = selectedCount > 0
+
+  // Check if all items on current page are selected
+  const allOnPageSelected = React.useMemo(() => {
+    if (!Array.isArray(data) || data.length === 0) return false
+    const pageStart = (currentPage - 1) * DEFAULT_PAGE_SIZE
+    const pageEnd = pageStart + DEFAULT_PAGE_SIZE
+    const pageIds = data.slice(pageStart, pageEnd).map((c: any) => String(c.id || c.slug || c.name))
+    return pageIds.length > 0 && pageIds.every((id) => selectedCharacterIds.has(id))
+  }, [data, currentPage, selectedCharacterIds])
+
+  const someOnPageSelected = React.useMemo(() => {
+    if (!Array.isArray(data) || data.length === 0) return false
+    const pageStart = (currentPage - 1) * DEFAULT_PAGE_SIZE
+    const pageEnd = pageStart + DEFAULT_PAGE_SIZE
+    const pageIds = data.slice(pageStart, pageEnd).map((c: any) => String(c.id || c.slug || c.name))
+    const selectedOnPage = pageIds.filter((id) => selectedCharacterIds.has(id)).length
+    return selectedOnPage > 0 && selectedOnPage < pageIds.length
+  }, [data, currentPage, selectedCharacterIds])
+
+  // Clear selection when filters change
+  React.useEffect(() => {
+    setSelectedCharacterIds(new Set())
+  }, [debouncedSearchTerm, filterTags, matchAllTags])
+
+  // Bulk delete handler
+  const handleBulkDelete = React.useCallback(async () => {
+    if (selectedCharacterIds.size === 0) return
+
+    const selectedChars = (data || []).filter((c: any) =>
+      selectedCharacterIds.has(String(c.id || c.slug || c.name))
+    )
+
+    const ok = await confirmDanger({
+      title: t("settings:manageCharacters.bulk.deleteTitle", {
+        defaultValue: "Delete {{count}} characters?",
+        count: selectedChars.length
+      }),
+      content: t("settings:manageCharacters.bulk.deleteContent", {
+        defaultValue: "This will delete {{count}} characters. This action cannot be undone.",
+        count: selectedChars.length
+      }),
+      okText: t("common:delete", { defaultValue: "Delete" }),
+      cancelText: t("common:cancel", { defaultValue: "Cancel" })
+    })
+
+    if (!ok) return
+
+    setBulkOperationLoading(true)
+    let successCount = 0
+    let failCount = 0
+
+    for (const char of selectedChars) {
+      try {
+        await tldwClient.deleteCharacter(String(char.id || char.slug || char.name))
+        successCount++
+      } catch {
+        failCount++
+      }
+    }
+
+    setBulkOperationLoading(false)
+    setSelectedCharacterIds(new Set())
+    qc.invalidateQueries({ queryKey: ["tldw:listCharacters"] })
+
+    if (failCount === 0) {
+      notification.success({
+        message: t("settings:manageCharacters.bulk.deleteSuccess", {
+          defaultValue: "Deleted {{count}} characters",
+          count: successCount
+        })
+      })
+    } else {
+      notification.warning({
+        message: t("settings:manageCharacters.bulk.deletePartial", {
+          defaultValue: "Deleted {{success}} characters, {{fail}} failed",
+          success: successCount,
+          fail: failCount
+        })
+      })
+    }
+  }, [selectedCharacterIds, data, confirmDanger, t, notification, qc])
+
+  // Bulk export handler
+  const handleBulkExport = React.useCallback(async () => {
+    if (selectedCharacterIds.size === 0) return
+
+    setBulkOperationLoading(true)
+    const selectedChars = (data || []).filter((c: any) =>
+      selectedCharacterIds.has(String(c.id || c.slug || c.name))
+    )
+
+    const exportedCharacters: any[] = []
+    let failCount = 0
+
+    for (const char of selectedChars) {
+      try {
+        const exported = await tldwClient.exportCharacter(
+          String(char.id || char.slug || char.name),
+          { format: 'v3' }
+        )
+        exportedCharacters.push(exported)
+      } catch {
+        failCount++
+      }
+    }
+
+    if (exportedCharacters.length > 0) {
+      // Use the new export utility
+      exportCharactersToJSON(exportedCharacters)
+    }
+
+    setBulkOperationLoading(false)
+
+    if (failCount === 0) {
+      notification.success({
+        message: t("settings:manageCharacters.bulk.exportSuccess", {
+          defaultValue: "Exported {{count}} characters",
+          count: exportedCharacters.length
+        })
+      })
+    } else {
+      notification.warning({
+        message: t("settings:manageCharacters.bulk.exportPartial", {
+          defaultValue: "Exported {{success}} characters, {{fail}} failed",
+          success: exportedCharacters.length,
+          fail: failCount
+        })
+      })
+    }
+  }, [selectedCharacterIds, data, notification, t])
+
+  // Bulk add tags handler
+  const handleBulkAddTags = React.useCallback(async () => {
+    if (selectedCharacterIds.size === 0 || bulkTagsToAdd.length === 0) return
+
+    setBulkOperationLoading(true)
+    const selectedChars = (data || []).filter((c: any) =>
+      selectedCharacterIds.has(String(c.id || c.slug || c.name))
+    )
+
+    let successCount = 0
+    let failCount = 0
+
+    for (const char of selectedChars) {
+      try {
+        const existingTags: string[] = Array.isArray(char.tags) ? char.tags : []
+        const newTags = [...new Set([...existingTags, ...bulkTagsToAdd])]
+        await tldwClient.updateCharacter(
+          String(char.id || char.slug || char.name),
+          { tags: newTags },
+          char.version
+        )
+        successCount++
+      } catch {
+        failCount++
+      }
+    }
+
+    setBulkOperationLoading(false)
+    setBulkTagModalOpen(false)
+    setBulkTagsToAdd([])
+    qc.invalidateQueries({ queryKey: ["tldw:listCharacters"] })
+
+    if (failCount === 0) {
+      notification.success({
+        message: t("settings:manageCharacters.bulk.tagSuccess", {
+          defaultValue: "Added tags to {{count}} characters",
+          count: successCount
+        })
+      })
+    } else {
+      notification.warning({
+        message: t("settings:manageCharacters.bulk.tagPartial", {
+          defaultValue: "Added tags to {{success}} characters, {{fail}} failed",
+          success: successCount,
+          fail: failCount
+        })
+      })
+    }
+  }, [selectedCharacterIds, data, bulkTagsToAdd, notification, t, qc])
+
   // State for undo delete functionality
   const [pendingDelete, setPendingDelete] = React.useState<{
     character: any
@@ -986,22 +1299,25 @@ export const CharactersManager: React.FC<CharactersManagerProps> = ({
   })
 
   const [exporting, setExporting] = React.useState<string | null>(null)
-  const handleExport = React.useCallback(async (record: any) => {
+  const handleExport = React.useCallback(async (record: any, format: 'json' | 'png' = 'json') => {
     const id = record.id || record.slug || record.name
     const name = record.name || record.title || record.slug || "character"
     try {
       setExporting(id)
       const data = await tldwClient.exportCharacter(id, { format: 'v3' })
-      // Create downloadable file
-      const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' })
-      const url = URL.createObjectURL(blob)
-      const link = document.createElement('a')
-      link.href = url
-      link.download = `${name.replace(/[^a-z0-9]/gi, '_')}_character.json`
-      document.body.appendChild(link)
-      link.click()
-      document.body.removeChild(link)
-      URL.revokeObjectURL(url)
+
+      if (format === 'png') {
+        // Export as PNG with embedded metadata
+        await exportCharacterToPNG(data, {
+          avatarUrl: record.avatar_url,
+          avatarBase64: record.image_base64,
+          filename: `${name.replace(/[^a-z0-9]/gi, '_')}_character.png`
+        })
+      } else {
+        // Export as JSON
+        exportCharacterToJSON(data, `${name.replace(/[^a-z0-9]/gi, '_')}_character.json`)
+      }
+
       notification.success({
         message: t("settings:manageCharacters.notification.exported", {
           defaultValue: "Character exported"
@@ -1449,31 +1765,129 @@ export const CharactersManager: React.FC<CharactersManagerProps> = ({
           </div>
         )}
       {status === "success" && Array.isArray(data) && data.length > 0 && viewMode === 'table' && (
-        <div className="overflow-x-auto">
-          <Table
-            rowKey={(r: any) => r.id || r.slug || r.name}
-            dataSource={data}
-            pagination={{
-              current: currentPage,
-              pageSize: DEFAULT_PAGE_SIZE,
-              onChange: (page) => setCurrentPage(page)
-            }}
-            onChange={(_pagination, _filters, sorter) => {
-              // Handle sort state for persistence
-              if (!Array.isArray(sorter)) {
-                setSortColumn(sorter.columnKey as string || null)
-                setSortOrder(sorter.order || null)
-              }
-            }}
-            columns={[
-            {
-              title: (
-                <span className="sr-only">
-                  {t("settings:manageCharacters.columns.avatar", {
-                    defaultValue: "Avatar"
+        <div className="space-y-3">
+          {/* Bulk Actions Toolbar (M5) */}
+          {hasSelection && (
+            <div className="flex items-center gap-3 p-2 bg-surface rounded-lg border border-border">
+              <div className="flex items-center gap-2">
+                <CheckSquare className="w-4 h-4 text-primary" />
+                <span className="text-sm font-medium">
+                  {t("settings:manageCharacters.bulk.selected", {
+                    defaultValue: "{{count}} selected",
+                    count: selectedCount
                   })}
                 </span>
-              ),
+              </div>
+              <div className="flex items-center gap-2 ml-auto">
+                <Tooltip title={t("settings:manageCharacters.bulk.addTags", { defaultValue: "Add tags" })}>
+                  <Button
+                    size="small"
+                    icon={<Tags className="w-4 h-4" />}
+                    onClick={() => setBulkTagModalOpen(true)}
+                    loading={bulkOperationLoading}>
+                    {t("settings:manageCharacters.bulk.addTags", { defaultValue: "Add tags" })}
+                  </Button>
+                </Tooltip>
+                <Tooltip title={t("settings:manageCharacters.bulk.export", { defaultValue: "Export" })}>
+                  <Button
+                    size="small"
+                    icon={<Download className="w-4 h-4" />}
+                    onClick={handleBulkExport}
+                    loading={bulkOperationLoading}>
+                    {t("settings:manageCharacters.bulk.export", { defaultValue: "Export" })}
+                  </Button>
+                </Tooltip>
+                <Tooltip title={t("settings:manageCharacters.bulk.delete", { defaultValue: "Delete" })}>
+                  <Button
+                    size="small"
+                    danger
+                    icon={<Trash2 className="w-4 h-4" />}
+                    onClick={handleBulkDelete}
+                    loading={bulkOperationLoading}>
+                    {t("settings:manageCharacters.bulk.delete", { defaultValue: "Delete" })}
+                  </Button>
+                </Tooltip>
+                <Tooltip title={t("settings:manageCharacters.bulk.clearSelection", { defaultValue: "Clear selection" })}>
+                  <Button
+                    size="small"
+                    type="text"
+                    icon={<X className="w-4 h-4" />}
+                    onClick={clearSelection}
+                    aria-label={t("settings:manageCharacters.bulk.clearSelection", { defaultValue: "Clear selection" })}
+                  />
+                </Tooltip>
+              </div>
+            </div>
+          )}
+          <div className="overflow-x-auto">
+            <Table
+              rowKey={(r: any) => r.id || r.slug || r.name}
+              dataSource={data}
+              pagination={{
+                current: currentPage,
+                pageSize: DEFAULT_PAGE_SIZE,
+                onChange: (page) => setCurrentPage(page)
+              }}
+              onChange={(_pagination, _filters, sorter) => {
+                // Handle sort state for persistence
+                if (!Array.isArray(sorter)) {
+                  setSortColumn(sorter.columnKey as string || null)
+                  setSortOrder(sorter.order || null)
+                }
+              }}
+              columns={[
+              {
+                // Bulk selection checkbox column (M5)
+                title: (
+                  <Checkbox
+                    checked={allOnPageSelected}
+                    indeterminate={someOnPageSelected}
+                    onChange={(e) => {
+                      if (e.target.checked) {
+                        selectAllOnPage()
+                      } else {
+                        // Deselect all on current page
+                        if (!Array.isArray(data)) return
+                        const pageStart = (currentPage - 1) * DEFAULT_PAGE_SIZE
+                        const pageEnd = pageStart + DEFAULT_PAGE_SIZE
+                        const pageIds = data.slice(pageStart, pageEnd).map((c: any) => String(c.id || c.slug || c.name))
+                        setSelectedCharacterIds((prev) => {
+                          const next = new Set(prev)
+                          pageIds.forEach((id) => next.delete(id))
+                          return next
+                        })
+                      }
+                    }}
+                    aria-label={t("settings:manageCharacters.bulk.selectAll", { defaultValue: "Select all on page" })}
+                  />
+                ),
+                key: "selection",
+                width: 48,
+                render: (_: any, record: any) => {
+                  const recordId = String(record.id || record.slug || record.name)
+                  return (
+                    <Checkbox
+                      checked={selectedCharacterIds.has(recordId)}
+                      onChange={(e) => {
+                        e.stopPropagation()
+                        toggleCharacterSelection(recordId)
+                      }}
+                      aria-label={t("settings:manageCharacters.bulk.selectOne", {
+                        defaultValue: "Select {{name}}",
+                        name: record.name || recordId
+                      })}
+                    />
+                  )
+                }
+              },
+              {
+                title: (
+                  <span className="sr-only">
+                    {t("settings:manageCharacters.columns.avatar", {
+                      defaultValue: "Avatar"
+                    })}
+                  </span>
+                ),
               key: "avatar",
               width: 48,
               render: (_: any, record: any) =>
@@ -1506,11 +1920,44 @@ export const CharactersManager: React.FC<CharactersManagerProps> = ({
               sortDirections: ["ascend", "descend"] as const,
               sortOrder: sortColumn === "name" ? sortOrder : undefined,
               defaultSortOrder: sortColumn === "name" ? sortOrder ?? undefined : undefined,
-              render: (v: string) => (
-                <span className="line-clamp-1" title={v || undefined}>
-                  {truncateText(v, MAX_NAME_LENGTH)}
-                </span>
-              )
+              render: (v: string, record: any) => {
+                const recordId = String(record.id || record.slug || record.name)
+                const isEditing = inlineEdit?.id === recordId && inlineEdit?.field === 'name'
+
+                if (isEditing) {
+                  return (
+                    <Input
+                      ref={inlineEditInputRef}
+                      size="small"
+                      value={inlineEdit.value}
+                      onChange={(e) => setInlineEdit({ ...inlineEdit, value: e.target.value })}
+                      onKeyDown={(e) => {
+                        if (e.key === 'Enter') {
+                          e.preventDefault()
+                          saveInlineEdit()
+                        } else if (e.key === 'Escape') {
+                          cancelInlineEdit()
+                        }
+                      }}
+                      onBlur={saveInlineEdit}
+                      disabled={inlineUpdating}
+                      className="max-w-[200px]"
+                    />
+                  )
+                }
+
+                return (
+                  <Tooltip title={t("settings:manageCharacters.table.doubleClickEdit", { defaultValue: "Double-click to edit" })}>
+                    <span
+                      className="line-clamp-1 cursor-text hover:bg-surface-hover rounded px-1 -mx-1"
+                      title={v || undefined}
+                      onDoubleClick={() => startInlineEdit(record, 'name')}
+                    >
+                      {truncateText(v, MAX_NAME_LENGTH)}
+                    </span>
+                  </Tooltip>
+                )
+              }
             },
             {
               title: t("settings:manageCharacters.columns.description", {
@@ -1518,19 +1965,52 @@ export const CharactersManager: React.FC<CharactersManagerProps> = ({
               }),
               dataIndex: "description",
               key: "description",
-              render: (v: string) => (
-                    <span className="line-clamp-1" title={v || undefined}>
+              render: (v: string, record: any) => {
+                const recordId = String(record.id || record.slug || record.name)
+                const isEditing = inlineEdit?.id === recordId && inlineEdit?.field === 'description'
+
+                if (isEditing) {
+                  return (
+                    <Input
+                      ref={inlineEditInputRef}
+                      size="small"
+                      value={inlineEdit.value}
+                      onChange={(e) => setInlineEdit({ ...inlineEdit, value: e.target.value })}
+                      onKeyDown={(e) => {
+                        if (e.key === 'Enter') {
+                          e.preventDefault()
+                          saveInlineEdit()
+                        } else if (e.key === 'Escape') {
+                          cancelInlineEdit()
+                        }
+                      }}
+                      onBlur={saveInlineEdit}
+                      disabled={inlineUpdating}
+                      className="max-w-[250px]"
+                    />
+                  )
+                }
+
+                return (
+                  <Tooltip title={t("settings:manageCharacters.table.doubleClickEdit", { defaultValue: "Double-click to edit" })}>
+                    <span
+                      className="line-clamp-1 cursor-text hover:bg-surface-hover rounded px-1 -mx-1"
+                      title={v || undefined}
+                      onDoubleClick={() => startInlineEdit(record, 'description')}
+                    >
                       {v ? (
                         truncateText(v, MAX_DESCRIPTION_LENGTH)
                       ) : (
-                    <span className="text-text-subtle">
-                      {t("settings:manageCharacters.table.noDescription", {
-                        defaultValue: "—"
-                      })}
+                        <span className="text-text-subtle">
+                          {t("settings:manageCharacters.table.noDescription", {
+                            defaultValue: "—"
+                          })}
+                        </span>
+                      )}
                     </span>
-                  )}
-                </span>
-              )
+                  </Tooltip>
+                )
+              }
             },
             {
               title: t("settings:manageCharacters.tags.label", {
@@ -1815,23 +2295,39 @@ export const CharactersManager: React.FC<CharactersManagerProps> = ({
                         </span>
                       </button>
                     </Tooltip>
-                    <Tooltip
-                      title={exportLabel}>
-                      <button
-                        type="button"
-                        className="inline-flex items-center gap-1 rounded-md border border-transparent px-2 py-1 text-text-muted transition hover:border-border hover:bg-surface2 focus:outline-none focus:ring-2 focus:ring-focus focus:ring-offset-1 focus:ring-offset-bg disabled:cursor-not-allowed disabled:opacity-60"
-                        aria-label={t("settings:manageCharacters.aria.export", {
-                          defaultValue: "Export character {{name}}",
-                          name
-                        })}
-                        disabled={exporting === (record.id || record.slug || record.name)}
-                        onClick={() => handleExport(record)}>
-                        <Download className="w-4 h-4" />
-                        <span className="hidden sm:inline text-xs font-medium">
-                          {exportLabel}
-                        </span>
-                      </button>
-                    </Tooltip>
+                    <Dropdown
+                      menu={{
+                        items: [
+                          {
+                            key: 'json',
+                            label: t("settings:manageCharacters.export.json", { defaultValue: "Export as JSON" }),
+                            onClick: () => handleExport(record, 'json')
+                          },
+                          {
+                            key: 'png',
+                            label: t("settings:manageCharacters.export.png", { defaultValue: "Export as PNG (with metadata)" }),
+                            onClick: () => handleExport(record, 'png')
+                          }
+                        ]
+                      }}
+                      trigger={['click']}
+                      disabled={exporting === (record.id || record.slug || record.name)}>
+                      <Tooltip title={exportLabel}>
+                        <button
+                          type="button"
+                          className="inline-flex items-center gap-1 rounded-md border border-transparent px-2 py-1 text-text-muted transition hover:border-border hover:bg-surface2 focus:outline-none focus:ring-2 focus:ring-focus focus:ring-offset-1 focus:ring-offset-bg disabled:cursor-not-allowed disabled:opacity-60"
+                          aria-label={t("settings:manageCharacters.aria.export", {
+                            defaultValue: "Export character {{name}}",
+                            name
+                          })}
+                          disabled={exporting === (record.id || record.slug || record.name)}>
+                          <Download className="w-4 h-4" />
+                          <span className="hidden sm:inline text-xs font-medium">
+                            {exportLabel}
+                          </span>
+                        </button>
+                      </Tooltip>
+                    </Dropdown>
                     <Tooltip
                       title={deleteLabel}>
                       <button
@@ -1875,6 +2371,7 @@ export const CharactersManager: React.FC<CharactersManagerProps> = ({
             }
           ]}
           />
+          </div>
         </div>
       )}
 
@@ -1931,9 +2428,9 @@ export const CharactersManager: React.FC<CharactersManagerProps> = ({
             setPreviewCharacter(null)
           }
         }}
-        onExport={async () => {
+        onExport={async (format?: 'json' | 'png') => {
           if (previewCharacter) {
-            await handleExport(previewCharacter)
+            await handleExport(previewCharacter, format || 'json')
           }
         }}
         onDelete={async () => {
@@ -2558,17 +3055,58 @@ export const CharactersManager: React.FC<CharactersManagerProps> = ({
               defaultValue:
                 "Use tags to group characters by use case (e.g., 'writing', 'teaching')."
             })}>
-            <Select
-              mode="tags"
-              allowClear
-              placeholder={t(
-                "settings:manageCharacters.tags.placeholder",
-                {
-                  defaultValue: "Add tags"
-                }
+            <div className="space-y-2">
+              {/* Popular tags suggestion chips (M3) */}
+              {popularTags.length > 0 && (
+                <div className="flex flex-wrap gap-1">
+                  <span className="text-xs text-text-subtle mr-1">
+                    {t("settings:manageCharacters.tags.popular", { defaultValue: "Popular:" })}
+                  </span>
+                  {popularTags.map(({ tag, count }) => {
+                    const currentTags = createForm.getFieldValue('tags') || []
+                    const isSelected = currentTags.includes(tag)
+                    return (
+                      <button
+                        key={tag}
+                        type="button"
+                        className={`inline-flex items-center gap-1 px-2 py-0.5 text-xs rounded-full border transition-colors ${
+                          isSelected
+                            ? 'bg-primary/10 border-primary text-primary'
+                            : 'bg-surface border-border text-text-muted hover:border-primary/50 hover:text-primary'
+                        }`}
+                        onClick={() => {
+                          const current = createForm.getFieldValue('tags') || []
+                          if (isSelected) {
+                            createForm.setFieldValue('tags', current.filter((t: string) => t !== tag))
+                          } else {
+                            createForm.setFieldValue('tags', [...current, tag])
+                          }
+                          setCreateFormDirty(true)
+                        }}>
+                        {tag}
+                        <span className="text-text-subtle">({count})</span>
+                      </button>
+                    )
+                  })}
+                </div>
               )}
-              options={allTags.map((tag) => ({ label: tag, value: tag }))}
-            />
+              <Form.Item name="tags" noStyle>
+                <Select
+                  mode="tags"
+                  allowClear
+                  placeholder={t(
+                    "settings:manageCharacters.tags.placeholder",
+                    {
+                      defaultValue: "Add tags"
+                    }
+                  )}
+                  options={tagOptionsWithCounts}
+                  filterOption={(input, option) =>
+                    option?.value?.toString().toLowerCase().includes(input.toLowerCase()) ?? false
+                  }
+                />
+              </Form.Item>
+            </div>
           </Form.Item>
           <Form.Item
             noStyle
@@ -3082,17 +3620,58 @@ export const CharactersManager: React.FC<CharactersManagerProps> = ({
               defaultValue:
                 "Use tags to group characters by use case (e.g., 'writing', 'teaching')."
             })}>
-            <Select
-              mode="tags"
-              allowClear
-              placeholder={t(
-                "settings:manageCharacters.tags.placeholder",
-                {
-                  defaultValue: "Add tags"
-                }
+            <div className="space-y-2">
+              {/* Popular tags suggestion chips (M3) */}
+              {popularTags.length > 0 && (
+                <div className="flex flex-wrap gap-1">
+                  <span className="text-xs text-text-subtle mr-1">
+                    {t("settings:manageCharacters.tags.popular", { defaultValue: "Popular:" })}
+                  </span>
+                  {popularTags.map(({ tag, count }) => {
+                    const currentTags = editForm.getFieldValue('tags') || []
+                    const isSelected = currentTags.includes(tag)
+                    return (
+                      <button
+                        key={tag}
+                        type="button"
+                        className={`inline-flex items-center gap-1 px-2 py-0.5 text-xs rounded-full border transition-colors ${
+                          isSelected
+                            ? 'bg-primary/10 border-primary text-primary'
+                            : 'bg-surface border-border text-text-muted hover:border-primary/50 hover:text-primary'
+                        }`}
+                        onClick={() => {
+                          const current = editForm.getFieldValue('tags') || []
+                          if (isSelected) {
+                            editForm.setFieldValue('tags', current.filter((t: string) => t !== tag))
+                          } else {
+                            editForm.setFieldValue('tags', [...current, tag])
+                          }
+                          setEditFormDirty(true)
+                        }}>
+                        {tag}
+                        <span className="text-text-subtle">({count})</span>
+                      </button>
+                    )
+                  })}
+                </div>
               )}
-              options={allTags.map((tag) => ({ label: tag, value: tag }))}
-            />
+              <Form.Item name="tags" noStyle>
+                <Select
+                  mode="tags"
+                  allowClear
+                  placeholder={t(
+                    "settings:manageCharacters.tags.placeholder",
+                    {
+                      defaultValue: "Add tags"
+                    }
+                  )}
+                  options={tagOptionsWithCounts}
+                  filterOption={(input, option) =>
+                    option?.value?.toString().toLowerCase().includes(input.toLowerCase()) ?? false
+                  }
+                />
+              </Form.Item>
+            </div>
           </Form.Item>
           <Form.Item
             noStyle
@@ -3349,6 +3928,76 @@ export const CharactersManager: React.FC<CharactersManagerProps> = ({
           setGenerationPreviewField(null)
         }}
       />
+
+      {/* Bulk Add Tags Modal (M5) */}
+      <Modal
+        title={t("settings:manageCharacters.bulk.addTagsTitle", {
+          defaultValue: "Add tags to {{count}} characters",
+          count: selectedCount
+        })}
+        open={bulkTagModalOpen}
+        onCancel={() => {
+          setBulkTagModalOpen(false)
+          setBulkTagsToAdd([])
+        }}
+        onOk={handleBulkAddTags}
+        okText={t("settings:manageCharacters.bulk.addTagsConfirm", { defaultValue: "Add tags" })}
+        cancelText={t("common:cancel", { defaultValue: "Cancel" })}
+        confirmLoading={bulkOperationLoading}
+        okButtonProps={{ disabled: bulkTagsToAdd.length === 0 }}>
+        <div className="space-y-4">
+          <p className="text-sm text-text-muted">
+            {t("settings:manageCharacters.bulk.addTagsDescription", {
+              defaultValue: "Select tags to add to all selected characters. Existing tags will be preserved."
+            })}
+          </p>
+          {/* Popular tags suggestion chips */}
+          {popularTags.length > 0 && (
+            <div className="flex flex-wrap gap-1">
+              <span className="text-xs text-text-subtle mr-1">
+                {t("settings:manageCharacters.tags.popular", { defaultValue: "Popular:" })}
+              </span>
+              {popularTags.map(({ tag, count }) => {
+                const isSelected = bulkTagsToAdd.includes(tag)
+                return (
+                  <button
+                    key={tag}
+                    type="button"
+                    className={`inline-flex items-center gap-1 px-2 py-0.5 text-xs rounded-full border transition-colors ${
+                      isSelected
+                        ? 'bg-primary/10 border-primary text-primary'
+                        : 'bg-surface border-border text-text-muted hover:border-primary/50 hover:text-primary'
+                    }`}
+                    onClick={() => {
+                      if (isSelected) {
+                        setBulkTagsToAdd(bulkTagsToAdd.filter((t) => t !== tag))
+                      } else {
+                        setBulkTagsToAdd([...bulkTagsToAdd, tag])
+                      }
+                    }}>
+                    {tag}
+                    <span className="text-text-subtle">({count})</span>
+                  </button>
+                )
+              })}
+            </div>
+          )}
+          <Select
+            mode="tags"
+            allowClear
+            className="w-full"
+            placeholder={t("settings:manageCharacters.bulk.selectTags", {
+              defaultValue: "Select or type tags to add"
+            })}
+            value={bulkTagsToAdd}
+            onChange={(values) => setBulkTagsToAdd(values)}
+            options={tagOptionsWithCounts}
+            filterOption={(input, option) =>
+              option?.value?.toString().toLowerCase().includes(input.toLowerCase()) ?? false
+            }
+          />
+        </div>
+      </Modal>
     </div>
   )
 }

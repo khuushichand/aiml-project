@@ -1,4 +1,4 @@
-import { Modal, Button, Tooltip } from "antd"
+import { Modal, Button, Tooltip, Dropdown } from "antd"
 import { MessageCircle, Pen, Copy, History, Trash2, Download } from "lucide-react"
 import { useTranslation } from "react-i18next"
 import { CharacterPreview } from "./CharacterPreview"
@@ -21,7 +21,7 @@ interface CharacterPreviewPopupProps {
   onChat: () => void
   onEdit: () => void
   onDuplicate: () => void
-  onExport: () => void
+  onExport: (format?: 'json' | 'png') => void
   onDelete: () => void
   onViewConversations: () => void
   deleting?: boolean
@@ -72,6 +72,19 @@ export function CharacterPreviewPopup({
       defaultValue: "View conversations"
     }
   )
+
+  const exportMenuItems = [
+    {
+      key: 'json',
+      label: t("settings:manageCharacters.export.json", { defaultValue: "Export as JSON" }),
+      onClick: () => onExport('json')
+    },
+    {
+      key: 'png',
+      label: t("settings:manageCharacters.export.png", { defaultValue: "Export as PNG (with metadata)" }),
+      onClick: () => onExport('png')
+    }
+  ]
 
   return (
     <Modal
@@ -132,19 +145,23 @@ export function CharacterPreviewPopup({
             </Button>
           </Tooltip>
 
-          <Tooltip title={exportLabel}>
-            <Button
-              icon={<Download className="w-4 h-4" />}
-              onClick={onExport}
-              loading={exporting}
-              aria-label={t("settings:manageCharacters.aria.export", {
-                defaultValue: "Export character {{name}}",
-                name: displayName
-              })}
-            >
-              {exportLabel}
-            </Button>
-          </Tooltip>
+          <Dropdown
+            menu={{ items: exportMenuItems }}
+            trigger={['click']}
+            disabled={exporting}>
+            <Tooltip title={exportLabel}>
+              <Button
+                icon={<Download className="w-4 h-4" />}
+                loading={exporting}
+                aria-label={t("settings:manageCharacters.aria.export", {
+                  defaultValue: "Export character {{name}}",
+                  name: displayName
+                })}
+              >
+                {exportLabel}
+              </Button>
+            </Tooltip>
+          </Dropdown>
 
           <Tooltip title={viewConversationsLabel}>
             <Button

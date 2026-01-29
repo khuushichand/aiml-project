@@ -219,13 +219,7 @@ export const HEADER_SHORTCUT_GROUPS: HeaderShortcutGroup[] = [
         labelKey: "option:header.dataTables",
         labelDefault: "Data Tables"
       },
-      {
-        id: "prompt-studio",
-        to: "/prompt-studio",
-        icon: NotebookPen,
-        labelKey: "option:header.modePromptStudio",
-        labelDefault: "Prompt Studio"
-      },
+      // Prompt Studio is now unified with Prompts (/prompts)
       {
         id: "audiobook-studio",
         to: "/audiobook-studio",

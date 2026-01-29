@@ -12,14 +12,14 @@ import {
   Select,
   Alert
 } from "antd"
-import { Computer, Zap, Star, UploadCloud, Download, Trash2, Pen, Undo2, AlertTriangle, Layers } from "lucide-react"
+import { Computer, Zap, Star, StarOff, UploadCloud, Download, Trash2, Pen, Undo2, AlertTriangle, Layers } from "lucide-react"
 import { PromptActionsMenu } from "./PromptActionsMenu"
 import { PromptDrawer } from "./PromptDrawer"
 import { SyncStatusBadge } from "./SyncStatusBadge"
 import { ProjectSelector } from "./ProjectSelector"
-import React, { useMemo, useRef, useState } from "react"
+import React, { useMemo, useRef, useState, useEffect } from "react"
 import { useTranslation } from "react-i18next"
-import { useNavigate } from "react-router-dom"
+import { useNavigate, useSearchParams } from "react-router-dom"
 import {
   deletePromptById,
   getAllPrompts,
@@ -49,8 +49,25 @@ import {
   unlinkPrompt as unlinkPromptFromServer
 } from "@/services/prompt-sync"
 
+type SegmentType = "custom" | "copilot" | "trash"
+
+const VALID_SEGMENTS: SegmentType[] = ["custom", "copilot", "trash"]
+
+const getSegmentFromParam = (param: string | null): SegmentType => {
+  if (param && VALID_SEGMENTS.includes(param as SegmentType)) {
+    return param as SegmentType
+  }
+  // Handle legacy "studio" tab - redirect to custom for now
+  // (Prompt Studio features are accessed via sync actions)
+  if (param === "studio") {
+    return "custom"
+  }
+  return "custom"
+}
+
 export const PromptBody = () => {
   const queryClient = useQueryClient()
+  const [searchParams, setSearchParams] = useSearchParams()
   const [drawerOpen, setDrawerOpen] = useState(false)
   const [drawerMode, setDrawerMode] = useState<"create" | "edit">("create")
   const [editId, setEditId] = useState("")
@@ -58,9 +75,84 @@ export const PromptBody = () => {
   const { t } = useTranslation(["settings", "common", "option"])
   const navigate = useNavigate()
   const isOnline = useServerOnline()
-  const [selectedSegment, setSelectedSegment] = useState<"custom" | "copilot" | "trash">(
-    "custom"
-  )
+
+  // Get initial segment from URL param
+  const initialSegment = getSegmentFromParam(searchParams.get("tab"))
+  const [selectedSegment, setSelectedSegment] = useState<SegmentType>(initialSegment)
+
+  // Sync URL params with selected segment
+  useEffect(() => {
+    const currentTab = searchParams.get("tab")
+    const expectedTab = selectedSegment === "custom" ? null : selectedSegment
+
+    if (currentTab !== expectedTab) {
+      if (expectedTab) {
+        setSearchParams({ tab: expectedTab }, { replace: true })
+      } else {
+        // Remove tab param when on default (custom) tab
+        const newParams = new URLSearchParams(searchParams)
+        newParams.delete("tab")
+        setSearchParams(newParams, { replace: true })
+      }
+    }
+  }, [selectedSegment, searchParams, setSearchParams])
+
+  // Track if we've processed the initial prompt deep-link
+  const deepLinkProcessedRef = useRef(false)
+
+  // Handle ?prompt= deep-link for opening a specific prompt
+  useEffect(() => {
+    const promptId = searchParams.get("prompt")
+    if (!promptId || deepLinkProcessedRef.current) return
+    if (status !== "success" || !Array.isArray(data)) return
+
+    // Find the prompt in the data
+    const promptRecord = data.find((p: any) => p.id === promptId)
+    if (promptRecord) {
+      deepLinkProcessedRef.current = true
+      // Remove the prompt param from URL to avoid re-opening on navigation
+      const newParams = new URLSearchParams(searchParams)
+      newParams.delete("prompt")
+      setSearchParams(newParams, { replace: true })
+      // Open the edit drawer for this prompt
+      setEditId(promptRecord.id)
+      setDrawerMode("edit")
+      setDrawerInitialValues({
+        name: promptRecord?.name || promptRecord?.title,
+        author: promptRecord?.author,
+        details: promptRecord?.details,
+        system_prompt: promptRecord?.system_prompt || (promptRecord?.is_system ? promptRecord?.content : undefined),
+        user_prompt: promptRecord?.user_prompt || (!promptRecord?.is_system ? promptRecord?.content : undefined),
+        keywords: promptRecord?.keywords ?? promptRecord?.tags ?? [],
+        serverId: promptRecord?.serverId,
+        syncStatus: promptRecord?.syncStatus,
+        sourceSystem: promptRecord?.sourceSystem,
+        studioProjectId: promptRecord?.studioProjectId,
+        lastSyncedAt: promptRecord?.lastSyncedAt,
+        fewShotExamples: promptRecord?.fewShotExamples,
+        modulesConfig: promptRecord?.modulesConfig,
+        changeDescription: promptRecord?.changeDescription,
+        versionNumber: promptRecord?.versionNumber
+      })
+      setDrawerOpen(true)
+    } else {
+      // Prompt not found - show notification
+      deepLinkProcessedRef.current = true
+      const newParams = new URLSearchParams(searchParams)
+      newParams.delete("prompt")
+      setSearchParams(newParams, { replace: true })
+      notification.warning({
+        message: t("managePrompts.notification.promptNotFound", { defaultValue: "Prompt not found" }),
+        description: t("managePrompts.notification.promptNotFoundDesc", {
+          defaultValue: "The requested prompt could not be found. It may have been deleted."
+        })
+      })
+    }
+  }, [searchParams, data, status, setSearchParams, t])
+
+  // Handle ?project= filter for showing prompts from a specific project
+  const projectFilter = searchParams.get("project")
+
   const [searchText, setSearchText] = useState("")
   const [typeFilter, setTypeFilter] = useState<"all" | "system" | "quick">(
     "all"
@@ -282,6 +374,64 @@ export const PromptBody = () => {
     }
   })
 
+  // Sync mutations
+  const { mutate: pushToStudioMutation, isPending: isPushing } = useMutation({
+    mutationFn: async ({ localId, projectId }: { localId: string; projectId: number }) => {
+      return await pushToStudio(localId, projectId)
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["fetchAllPrompts"] })
+      setProjectSelectorOpen(false)
+      setPromptToSync(null)
+      notification.success({
+        message: t("managePrompts.sync.pushSuccess", { defaultValue: "Pushed to server" }),
+        description: t("managePrompts.sync.pushSuccessDesc", { defaultValue: "Prompt has been synced to Prompt Studio." })
+      })
+    },
+    onError: (error) => {
+      notification.error({
+        message: t("managePrompts.sync.pushError", { defaultValue: "Failed to push" }),
+        description: error?.message || t("managePrompts.notification.someError")
+      })
+    }
+  })
+
+  const { mutate: pullFromStudioMutation, isPending: isPulling } = useMutation({
+    mutationFn: async ({ serverId, localId }: { serverId: number; localId?: string }) => {
+      return await pullFromStudio(serverId, localId)
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["fetchAllPrompts"] })
+      notification.success({
+        message: t("managePrompts.sync.pullSuccess", { defaultValue: "Pulled from server" }),
+        description: t("managePrompts.sync.pullSuccessDesc", { defaultValue: "Prompt has been updated from Prompt Studio." })
+      })
+    },
+    onError: (error) => {
+      notification.error({
+        message: t("managePrompts.sync.pullError", { defaultValue: "Failed to pull" }),
+        description: error?.message || t("managePrompts.notification.someError")
+      })
+    }
+  })
+
+  const { mutate: unlinkPromptMutation } = useMutation({
+    mutationFn: unlinkPromptFromServer,
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["fetchAllPrompts"] })
+      notification.success({
+        message: t("managePrompts.sync.unlinkSuccess", { defaultValue: "Unlinked from server" }),
+        description: t("managePrompts.sync.unlinkSuccessDesc", { defaultValue: "Prompt is now local-only." })
+      })
+    },
+    onError: (error) => {
+      notification.error({
+        message: t("managePrompts.sync.unlinkError", { defaultValue: "Failed to unlink" }),
+        description: error?.message || t("managePrompts.notification.someError")
+      })
+    }
+  })
+
   const { mutate: bulkDeletePrompts, isPending: isBulkDeleting } = useMutation({
     mutationFn: async (ids: string[]) => {
       for (const id of ids) {
@@ -413,6 +563,13 @@ export const PromptBody = () => {
 
   const filteredData = useMemo(() => {
     let items = (data || []) as any[]
+    // Filter by linked project if ?project= query param is present
+    if (projectFilter) {
+      const projectId = parseInt(projectFilter, 10)
+      if (!isNaN(projectId)) {
+        items = items.filter((p) => p.studioProjectId === projectId)
+      }
+    }
     if (typeFilter !== "all") {
       items = items.filter((p) => {
         const promptType = getPromptType(p)
@@ -453,7 +610,7 @@ export const PromptBody = () => {
         (b.createdAt || 0) - (a.createdAt || 0)
     )
     return items
-  }, [data, typeFilter, tagFilter, searchText, getPromptKeywords, getPromptType])
+  }, [data, projectFilter, typeFilter, tagFilter, searchText, getPromptKeywords, getPromptType])
 
   React.useEffect(() => {
     // Only clear selection for items that are no longer visible
@@ -641,7 +798,18 @@ export const PromptBody = () => {
       details: record?.details,
       system_prompt: systemText,
       user_prompt: userText,
-      keywords: getPromptKeywords(record)
+      keywords: getPromptKeywords(record),
+      // Sync fields for progressive disclosure
+      serverId: record?.serverId,
+      syncStatus: record?.syncStatus,
+      sourceSystem: record?.sourceSystem,
+      studioProjectId: record?.studioProjectId,
+      lastSyncedAt: record?.lastSyncedAt,
+      // Advanced fields
+      fewShotExamples: record?.fewShotExamples,
+      modulesConfig: record?.modulesConfig,
+      changeDescription: record?.changeDescription,
+      versionNumber: record?.versionNumber
     })
     setDrawerOpen(true)
   }
@@ -655,9 +823,40 @@ export const PromptBody = () => {
     }
   }
 
+  // Clear project filter
+  const clearProjectFilter = () => {
+    const newParams = new URLSearchParams(searchParams)
+    newParams.delete("project")
+    setSearchParams(newParams, { replace: true })
+  }
+
   function customPrompts() {
     return (
       <div data-testid="prompts-custom">
+        {/* Project filter banner - shown when filtering by project */}
+        {projectFilter && (
+          <Alert
+            type="info"
+            showIcon
+            className="mb-4"
+            message={t("managePrompts.projectFilter.active", {
+              defaultValue: "Filtering by project"
+            })}
+            description={t("managePrompts.projectFilter.description", {
+              defaultValue: "Showing prompts linked to Project #{{projectId}}. Clear the filter to see all prompts.",
+              projectId: projectFilter
+            })}
+            action={
+              <button
+                onClick={clearProjectFilter}
+                className="text-sm text-primary hover:underline"
+                data-testid="prompts-clear-project-filter"
+              >
+                {t("managePrompts.projectFilter.clear", { defaultValue: "Show all prompts" })}
+              </button>
+            }
+          />
+        )}
         <div className="mb-6 space-y-3">
           {/* Bulk action bar - shown when rows are selected */}
           {selectedRowKeys.length > 0 && (
@@ -847,11 +1046,17 @@ export const PromptBody = () => {
                         favorite: !record?.favorite
                       })
                     }
-                    className="text-warn"
+                    className={record?.favorite ? "text-warn" : "text-text-muted hover:text-warn"}
                     title={record?.favorite ? t("managePrompts.unfavorite", { defaultValue: "Unfavorite" }) : t("managePrompts.favorite", { defaultValue: "Favorite" })}
+                    aria-label={record?.favorite ? t("managePrompts.unfavorite", { defaultValue: "Unfavorite" }) : t("managePrompts.favorite", { defaultValue: "Favorite" })}
+                    aria-pressed={!!record?.favorite}
                     data-testid={`prompt-favorite-${record.id}`}
                   >
-                    <Star className={`size-4 ${record?.favorite ? '' : 'opacity-30'}`} />
+                    {record?.favorite ? (
+                      <Star className="size-4 fill-current" />
+                    ) : (
+                      <Star className="size-4" />
+                    )}
                   </button>
                 )
               },
@@ -934,29 +1139,61 @@ export const PromptBody = () => {
                   const promptType = getPromptType(record)
                   const hasSystem = promptType === "system" || promptType === "mixed"
                   const hasQuick = promptType === "quick" || promptType === "mixed"
+                  const typeDescription = hasSystem && hasQuick
+                    ? t("managePrompts.type.mixed", { defaultValue: "System and quick prompt" })
+                    : hasSystem
+                    ? t("managePrompts.type.system", { defaultValue: "System prompt" })
+                    : t("managePrompts.type.quick", { defaultValue: "Quick prompt" })
                   return (
-                    <div className="flex items-center gap-1">
+                    <div
+                      className="flex items-center gap-1"
+                      role="group"
+                      aria-label={t("managePrompts.type.ariaLabel", { defaultValue: "Prompt type: {{type}}", type: typeDescription })}
+                    >
                       <Tooltip title={systemPromptLabel}>
-                        <Computer
-                          className={`size-4 ${hasSystem ? "text-orange-500" : "opacity-20"}`}
-                        />
+                        <span>
+                          <Computer
+                            className={`size-4 ${hasSystem ? "text-orange-500" : "text-text-muted/30"}`}
+                            aria-hidden="true"
+                          />
+                        </span>
                       </Tooltip>
                       <Tooltip title={quickPromptLabel}>
-                        <Zap
-                          className={`size-4 ${hasQuick ? "text-blue-500" : "opacity-20"}`}
-                        />
+                        <span>
+                          <Zap
+                            className={`size-4 ${hasQuick ? "text-blue-500" : "text-text-muted/30"}`}
+                            aria-hidden="true"
+                          />
+                        </span>
                       </Tooltip>
                     </div>
                   )
                 }
               },
+              // Sync status column (only show when online)
+              ...(isOnline ? [{
+                title: t("managePrompts.columns.sync", { defaultValue: "Sync" }),
+                key: "syncStatus",
+                width: 100,
+                render: (_: any, record: any) => (
+                  <SyncStatusBadge
+                    syncStatus={record.syncStatus || "local"}
+                    sourceSystem={record.sourceSystem || "workspace"}
+                    serverId={record.serverId}
+                    lastSyncedAt={record.lastSyncedAt}
+                    compact
+                  />
+                )
+              }] : []),
               {
                 title: t("managePrompts.columns.actions"),
-                width: 120,
+                width: 140,
                 render: (_, record) => (
                   <PromptActionsMenu
                     promptId={record.id}
                     disabled={isFireFoxPrivateMode}
+                    syncStatus={record.syncStatus}
+                    serverId={record.serverId}
                     onEdit={() => openEditDrawer(record)}
                     onDuplicate={() => {
                       savePromptMutation({
@@ -1008,6 +1245,17 @@ export const PromptBody = () => {
                       if (!ok) return
                       deletePrompt(record.id)
                     }}
+                    // Sync actions (only when online)
+                    onPushToServer={isOnline ? () => {
+                      setPromptToSync(record.id)
+                      setProjectSelectorOpen(true)
+                    } : undefined}
+                    onPullFromServer={isOnline && record.serverId ? () => {
+                      pullFromStudioMutation({ serverId: record.serverId, localId: record.id })
+                    } : undefined}
+                    onUnlink={isOnline && record.serverId ? () => {
+                      unlinkPromptMutation(record.id)
+                    } : undefined}
                   />
                 )
               }
@@ -1017,7 +1265,17 @@ export const PromptBody = () => {
             rowKey={(record) => record.id}
             onRow={(record) =>
               ({
-                "data-testid": `prompt-row-${record.id}`
+                "data-testid": `prompt-row-${record.id}`,
+                tabIndex: 0,
+                role: "row",
+                onKeyDown: (e: React.KeyboardEvent) => {
+                  if (e.key === "Enter" || e.key === " ") {
+                    e.preventDefault()
+                    openEditDrawer(record)
+                  }
+                },
+                onDoubleClick: () => openEditDrawer(record),
+                className: "cursor-pointer focus:outline-none focus:ring-2 focus:ring-inset focus:ring-primary"
               } as React.HTMLAttributes<HTMLTableRowElement>)
             }
             rowSelection={{
@@ -1282,6 +1540,15 @@ export const PromptBody = () => {
 
   return (
     <div>
+      {/* Screen reader status announcements */}
+      <div
+        role="status"
+        aria-live="polite"
+        aria-atomic="true"
+        className="sr-only"
+        id="prompts-status-announcer"
+      />
+
       {/* Firefox Private Mode Warning */}
       {isFireFoxPrivateMode && (
         <Alert
@@ -1527,6 +1794,21 @@ export const PromptBody = () => {
           )}
         </div>
       </Modal>
+
+      {/* Project Selector for Push to Server */}
+      <ProjectSelector
+        open={projectSelectorOpen}
+        onClose={() => {
+          setProjectSelectorOpen(false)
+          setPromptToSync(null)
+        }}
+        onSelect={(projectId) => {
+          if (promptToSync) {
+            pushToStudioMutation({ localId: promptToSync, projectId })
+          }
+        }}
+        loading={isPushing}
+      />
     </div>
   )
 }

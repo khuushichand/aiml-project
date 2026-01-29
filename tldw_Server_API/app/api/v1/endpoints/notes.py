@@ -1301,7 +1301,15 @@ async def restore_note(
         # Fetch keywords for the note
         keywords = db.get_keywords_for_note(note_id)
         keyword_responses = [
-            KeywordResponse(id=str(kw['id']), keyword=kw['keyword'])
+            KeywordResponse(
+                id=kw['id'],
+                keyword=kw['keyword'],
+                created_at=kw['created_at'],
+                last_modified=kw['last_modified'],
+                version=kw['version'],
+                client_id=kw['client_id'],
+                deleted=kw.get('deleted', False),
+            )
             for kw in keywords
         ] if keywords else []
 

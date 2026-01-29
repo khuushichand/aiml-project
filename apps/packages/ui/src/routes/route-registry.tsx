@@ -36,6 +36,7 @@ import { ALL_TARGETS, type PlatformTarget } from "@/config/platform"
 import OptionLayout from "~/components/Layouts/Layout"
 import { OnboardingWizard } from "@/components/Option/Onboarding/OnboardingWizard"
 import { createSettingsRoute } from "./settings-route"
+import { Navigate } from "react-router-dom"
 
 // Eagerly loaded routes for instant navigation on frequently visited pages
 import OptionIndex from "./option-index"
@@ -142,7 +143,8 @@ const OptionImageGenerationSettings = createSettingsRoute(
   () => import("~/components/Option/Settings/ImageGenerationSettings"),
   "ImageGenerationSettings"
 )
-const OptionPromptStudio = lazy(() => import("./option-prompt-studio"))
+// Note: OptionPromptStudio has been unified with OptionPromptsWorkspace (/prompts)
+// The /prompt-studio route now redirects to /prompts?tab=studio
 const OptionSettingsPromptStudio = createSettingsRoute(
   () => import("~/components/Option/Settings/prompt-studio"),
   "PromptStudioSettings"
@@ -555,7 +557,8 @@ export const ROUTE_DEFINITIONS: RouteDefinition[] = [
   { kind: "options", path: "/dictionaries", element: <OptionDictionariesWorkspace /> },
   { kind: "options", path: "/characters", element: <OptionCharactersWorkspace /> },
   { kind: "options", path: "/prompts", element: <OptionPromptsWorkspace /> },
-  { kind: "options", path: "/prompt-studio", element: <OptionPromptStudio /> },
+  // Legacy route - redirect to unified Prompts page
+  { kind: "options", path: "/prompt-studio", element: <Navigate to="/prompts?tab=studio" replace /> },
   { kind: "options", path: "/tts", element: <OptionTts /> },
   { kind: "options", path: "/stt", element: <OptionStt /> },
   { kind: "options", path: "/speech", element: <OptionSpeech /> },
