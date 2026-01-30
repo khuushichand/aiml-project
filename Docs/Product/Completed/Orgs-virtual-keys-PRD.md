@@ -125,7 +125,7 @@ On each request to configured LLM endpoints (defaults: `/api/v1/chat/completions
      Compare against configured budgets (tokens and/or USD). If any limit would be exceeded (>=), reject with 402 and clear message.
 
 Notes:
-- We use logging data as source of truth for spend/token usage; `llm_usage_daily` support was removed, so monthly sums should be derived directly from `llm_usage_log` with rolling 30-day windows in the future.
+- We use logging data as source of truth for spend/token usage; `llm_usage_daily` support was removed, so monthly sums are derived directly from `llm_usage_log` with a rolling 30-day UTC window.
 - Budgets are soft state. A request that tips over a limit will be allowed once (the tipping request), and subsequent requests will be blocked. Month limits use a rolling 30-day window.
 - Error codes: 403 for disallowed endpoint/provider/model; 402 for budget exceeded.
  - **Stable contract**: the 402 response payload shape (`error`, `message`, `details`) is stable.
@@ -193,3 +193,13 @@ Notes:
 
 - v1 implementation complete. Follow-ups:
   - Explore org/team RBAC propagation strategies in v2.
+
+## v2 Follow-up (Org/Team Scoped RBAC)
+
+- Scope mode defaults to `require_active`: all clients should have an active org/team scope (including a default "no_org" org/team when needed).
+- Active scope derives from JWT claims or default membership; no request headers for scope switching.
+- Scoped permissions allow all non-admin capabilities; admin-level permissions are denied by `ORG_RBAC_SCOPED_PERMISSION_DENYLIST`.
+- MCP permissions and `tools.execute:*` remain eligible for scoped grants.
+- Team permissions apply when an active org is set (teams in the active org) even if no active team is specified.
+- Default-Base auto-membership remains (org membership enrolls users in Default-Base).
+- Admin virtual key listing supports filters/search on name, status, org/team, and created_at.

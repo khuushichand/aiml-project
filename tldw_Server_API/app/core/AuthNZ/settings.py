@@ -377,6 +377,31 @@ class Settings(BaseSettings):
         default=False,
         description="If true, permission checks log warnings instead of 403 (deployment opt-in)"
     )
+    ORG_RBAC_PROPAGATION_ENABLED: bool = Field(
+        default=False,
+        description="Enable org/team role-to-permission propagation for scoped RBAC"
+    )
+    ORG_RBAC_SCOPE_MODE: Literal["union", "active_only", "require_active"] = Field(
+        default="require_active",
+        description="Scoped permission mode: union, active_only, or require_active"
+    )
+    ORG_RBAC_SCOPED_PERMISSION_DENYLIST: Annotated[list[str], NoDecode] = Field(
+        default_factory=lambda: [
+            "system.",
+            "users.",
+            "api.",
+            "security.",
+            "billing.",
+            "monitoring.",
+            "maintenance.",
+            "admin.",
+            "workflows.admin",
+            "embeddings.admin",
+            "flashcards.admin",
+            "claims.admin",
+        ],
+        description="Permission prefixes/names that cannot be granted via org/team roles"
+    )
     USAGE_LOG_ENABLED: bool = Field(
         default=False,
         description="If true, record lightweight per-request usage into usage_log"
@@ -841,6 +866,18 @@ class Settings(BaseSettings):
             return [str(x).strip() for x in v if str(x).strip()]
         return []
 
+    @field_validator("ORG_RBAC_SCOPE_MODE", mode="before")
+    @classmethod
+    def normalize_org_rbac_scope_mode(cls, v):
+        if isinstance(v, str):
+            return v.strip().lower()
+        return v
+
+    @field_validator("ORG_RBAC_SCOPED_PERMISSION_DENYLIST", mode="before")
+    @classmethod
+    def parse_org_rbac_scoped_permission_denylist(cls, v):
+        return _split_csv(v)
+
     @field_validator("BYOK_ENABLED", mode="before")
     @classmethod
     def parse_byok_enabled(cls, v):
@@ -1036,6 +1073,13 @@ def _load_overrides_from_config() -> dict:
         maybe_set("SECURITY_ALERT_BACKOFF_SECONDS", "security_alert_backoff_seconds", lambda v: int(v))
         maybe_set("AUTH_TRUST_X_FORWARDED_FOR", "auth_trust_x_forwarded_for", _bool_from_str)
         maybe_set("AUTH_TRUSTED_PROXY_IPS", "auth_trusted_proxy_ips", _split_csv)
+        maybe_set("ORG_RBAC_PROPAGATION_ENABLED", "org_rbac_propagation_enabled", _bool_from_str)
+        maybe_set("ORG_RBAC_SCOPE_MODE", "org_rbac_scope_mode", lambda v: v.strip().lower())
+        maybe_set(
+            "ORG_RBAC_SCOPED_PERMISSION_DENYLIST",
+            "org_rbac_scoped_permission_denylist",
+            _split_csv,
+        )
 
         # If DATABASE_URL is not provided via env or explicit key, synthesize from db_type fields
         if os.getenv("DATABASE_URL") is None and "DATABASE_URL" not in overrides:

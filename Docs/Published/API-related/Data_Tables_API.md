@@ -53,7 +53,7 @@ Request:
     {"name": "Price", "type": "currency"},
     {"name": "License", "type": "text"}
   ],
-  "model": "gpt-4o-mini",
+  "model": "gpt-4o",
   "max_rows": 200
 }
 ```

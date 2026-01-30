@@ -43,11 +43,12 @@ Note: This README follows the project-wide template to help contributors quickly
   - `password_service.PasswordService` handles Argon2id hashing and strength validation.
   - `api_key_manager` and `virtual_keys` provide API/Virtual key issuance, rotation, validation, and budgets.
   - `rate_limiter.RateLimiter` enforces token-bucket limits and lockouts; `quotas` records usage.
-  - `orgs_teams`, `rbac`, `permissions` provide RBAC resolution and checks.
+  - `orgs_teams`, `rbac`, `permissions`, `org_rbac` provide RBAC resolution and checks.
 - Data Models & DB (SQLite migrations in `migrations.py`; Postgres extras in `pg_migrations_extra.py`):
   - Core tables: `users`, `sessions`, `api_keys`, `api_key_audit_log`, `token_blacklist`, `password_history`.
   - Registration/reset: `registration_codes`, `password_reset_tokens`.
   - RBAC: `roles`, `permissions`, `role_permissions`, `user_roles`, `user_permissions`.
+  - Scoped RBAC: `org_role_permissions`, `team_role_permissions`.
   - Organizations/Teams: `organizations`, `org_members`, `teams`, `team_members`.
   - Usage & budgets: `rate_limits`, `usage_log`, `usage_daily`, `llm_usage_log`, `llm_usage_daily`.
   - Virtual key extensions on `api_keys` and Postgres `tool_catalogs` tables (via `pg_migrations_extra.py`).
@@ -55,6 +56,7 @@ Note: This README follows the project-wide template to help contributors quickly
   - `AUTH_MODE`, `DATABASE_URL`, `JWT_SECRET_KEY`/`JWT_PRIVATE_KEY`, `ACCESS_TOKEN_EXPIRE_MINUTES`, `REFRESH_TOKEN_EXPIRE_DAYS`.
   - `PASSWORD_MIN_LENGTH`, Argon2 cost knobs; `REDIS_URL`; `RATE_LIMIT_*`, `MAX_LOGIN_ATTEMPTS`, `LOCKOUT_DURATION_MINUTES`.
   - `ENABLE_REGISTRATION`, `REQUIRE_REGISTRATION_CODE`, `VIRTUAL_KEYS_ENABLED`, `LLM_BUDGET_ENFORCE`, `LLM_BUDGET_ENDPOINTS`.
+  - `ORG_RBAC_PROPAGATION_ENABLED`, `ORG_RBAC_SCOPE_MODE`, `ORG_RBAC_SCOPED_PERMISSION_DENYLIST`.
   - `SESSION_COOKIE_SECURE`, `CSRF_BIND_TO_USER`, `SERVICE_ACCOUNT_RATE_LIMIT`, `SINGLE_USER_API_KEY`.
   - `SERVICE_TOKEN_ALLOWED_IPS` (optional allowlist for service tokens; empty means loopback-only).
   - `BYOK_ENABLED`, `BYOK_ALLOWED_PROVIDERS`, `BYOK_ENCRYPTION_KEY`, `BYOK_SECONDARY_ENCRYPTION_KEY`.

@@ -18,7 +18,7 @@ curl -X POST "http://localhost:8000/api/v1/chat/completions" \
   -H "Content-Type: application/json" \
   -H "X-API-KEY: $API_KEY" \
   -d '{
-    "model": "openai/gpt-4o-mini",
+    "model": "openai/gpt-4o",
     "messages": [{"role":"user","content":"Save this conversation."}],
     "save_to_db": true
   }'
@@ -208,7 +208,7 @@ def test_chat_completion_with_all_features(app):
     headers = {"X-API-KEY": "test-key"}
     payload = {
         "messages": [{"role": "user", "content": "Hello"}],
-        "model": "openai/gpt-4o-mini",
+        "model": "openai/gpt-4o",
         "stream": True
     }
     resp = client.post("/api/v1/chat/completions", json=payload, headers=headers)

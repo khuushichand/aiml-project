@@ -362,7 +362,7 @@ Send an `insights` object inside the initial `{ "type": "config" }` message to e
   "insights": {
     "enabled": true,
     "provider": "openai",
-    "model": "gpt-4o-mini",
+    "model": "gpt-4o",
     "summary_interval_seconds": 90,
     "context_window_segments": 6,
     "live_updates": true,

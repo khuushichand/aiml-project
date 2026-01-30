@@ -198,7 +198,7 @@ evaluation = {
     "description": "Evaluates code generation quality",
     "eval_type": "model_graded",
     "eval_spec": {
-        "evaluator_model": "gpt-4",
+        "evaluator_model": "gpt-4o",
         "metrics": ["correctness", "efficiency", "readability"],
         "threshold": 0.8,
         "custom_prompt": """
@@ -257,7 +257,7 @@ openai_eval = {
     "eval_type": "model_graded",
     "eval_spec": {
         # Copy eval spec from OpenAI format
-        "evaluator_model": "gpt-4",
+        "evaluator_model": "gpt-4o",
         "metrics": ["accuracy"],
         "threshold": 0.8
     },
@@ -277,7 +277,7 @@ def convert_vendor_eval(vendor_data):
         "name": vendor_data["test_name"],
         "eval_type": determine_eval_type(vendor_data),
         "eval_spec": {
-            "evaluator_model": vendor_data.get("model", "gpt-3.5-turbo"),
+            "evaluator_model": vendor_data.get("model", "gpt-4o"),
             "metrics": vendor_data.get("metrics", ["accuracy"]),
             "threshold": vendor_data.get("pass_threshold", 0.7)
         },
@@ -293,7 +293,7 @@ def convert_vendor_eval(vendor_data):
 ```python
 # Start evaluation run
 run_request = {
-    "target_model": "gpt-3.5-turbo",
+    "target_model": "gpt-4o",
     "config": {
         "temperature": 0.0,
         "max_workers": 4,
@@ -411,7 +411,7 @@ for sample in results['results']['sample_results'][:5]:
 ### 2. Evaluation Configuration
 - **Appropriate metrics**: Choose metrics that align with your goals
 - **Reasonable thresholds**: Set pass/fail criteria based on requirements
-- **Model selection**: Use capable evaluator models (GPT-4 for complex evals)
+- **Model selection**: Use capable evaluator models (GPT-4o for complex evals)
 - **Temperature settings**: Use 0.0 for consistency, 0.1-0.3 for variation
 
 ### 3. Performance Optimization
@@ -445,7 +445,7 @@ eval_config = {
     "eval_type": "model_graded",
     "eval_spec": {
         "sub_type": "summarization",
-        "evaluator_model": "gpt-4",
+        "evaluator_model": "gpt-4o",
         "metrics": ["fluency", "consistency", "relevance", "coherence"],
         "threshold": 0.75
     },
@@ -473,7 +473,7 @@ print(f"Created evaluation: {eval_id}")
 
 # 2. Run evaluation
 run_config = {
-    "target_model": "gpt-3.5-turbo",  # Model being evaluated
+    "target_model": "gpt-4o",  # Model being evaluated
     "config": {
         "temperature": 0.0,
         "max_workers": 2,
@@ -515,7 +515,7 @@ if status == "completed":
 
 ### Batch Evaluation with Multiple Models
 ```python
-models_to_test = ["gpt-3.5-turbo", "gpt-4", "claude-2"]
+models_to_test = ["gpt-4o", "gpt-4o-mini", "anthropic/claude-opus-4-20250514"]
 results_comparison = {}
 
 for model in models_to_test:

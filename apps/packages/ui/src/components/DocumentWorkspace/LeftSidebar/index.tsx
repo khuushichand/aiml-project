@@ -1,0 +1,5 @@
+export { DocumentInfoTab } from "./DocumentInfoTab"
+export { TableOfContentsTab } from "./TableOfContentsTab"
+export { QuickInsightsTab } from "./QuickInsightsTab"
+export { ReferencesTab } from "./ReferencesTab"
+export { FiguresTab } from "./FiguresTab"

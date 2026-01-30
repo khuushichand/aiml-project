@@ -492,20 +492,18 @@ export async function getPromptStudioStatus(params?: { warn_seconds?: number }) 
 export async function archiveProject(projectId: number) {
   return await apiSend<StandardResponse<Project>>({
     path: toAllowedPath(
-      `/api/v1/prompt-studio/projects/${encodeURIComponent(projectId)}`
+      `/api/v1/prompt-studio/projects/archive/${encodeURIComponent(projectId)}`
     ),
-    method: "PUT",
-    body: { status: "archived" }
+    method: "POST"
   })
 }
 
 export async function unarchiveProject(projectId: number) {
   return await apiSend<StandardResponse<Project>>({
     path: toAllowedPath(
-      `/api/v1/prompt-studio/projects/${encodeURIComponent(projectId)}`
+      `/api/v1/prompt-studio/projects/unarchive/${encodeURIComponent(projectId)}`
     ),
-    method: "PUT",
-    body: { status: "active" }
+    method: "POST"
   })
 }
 
@@ -514,7 +512,7 @@ export async function deleteProject(projectId: number, permanent?: boolean) {
   return await apiSend<{ message: string }>({
     path: appendPathQuery(
       toAllowedPath(
-        `/api/v1/prompt-studio/projects/${encodeURIComponent(projectId)}`
+        `/api/v1/prompt-studio/projects/delete/${encodeURIComponent(projectId)}`
       ),
       query
     ),
@@ -541,7 +539,7 @@ export async function deleteTestCase(testCaseId: number, permanent?: boolean) {
   return await apiSend<{ message: string }>({
     path: appendPathQuery(
       toAllowedPath(
-        `/api/v1/prompt-studio/test-cases/${encodeURIComponent(testCaseId)}`
+        `/api/v1/prompt-studio/test-cases/delete/${encodeURIComponent(testCaseId)}`
       ),
       query
     ),
@@ -549,29 +547,24 @@ export async function deleteTestCase(testCaseId: number, permanent?: boolean) {
   })
 }
 
-export async function bulkDeleteTestCases(testCaseIds: number[]) {
-  return await apiSend<{ message: string; deleted_count: number }>({
-    path: "/api/v1/prompt-studio/test-cases/bulk-delete",
-    method: "POST",
-    body: { test_case_ids: testCaseIds }
-  })
-}
-
 export type TestCaseExportFormat = "json" | "csv"
+
+export type ExportTestCasesPayload = {
+  format: TestCaseExportFormat
+  include_golden_only?: boolean
+  tag_filter?: string[]
+}
 
 export async function exportTestCases(
   projectId: number,
-  format: TestCaseExportFormat = "json"
+  payload: ExportTestCasesPayload
 ) {
-  const query = buildQuery({ format })
   return await apiSend<TestCase[] | string>({
-    path: appendPathQuery(
-      toAllowedPath(
-        `/api/v1/prompt-studio/test-cases/export/${encodeURIComponent(projectId)}`
-      ),
-      query
+    path: toAllowedPath(
+      `/api/v1/prompt-studio/test-cases/export/${encodeURIComponent(projectId)}`
     ),
-    method: "GET"
+    method: "POST",
+    body: payload
   })
 }
 

@@ -937,7 +937,7 @@ openai_model = gpt-4
 
 # Anthropic
 anthropic_api_key = sk-ant-...
-anthropic_model = claude-sonnet-4.5
+anthropic_model = claude-opus-4-20250514
 
 # Google
 google_api_key = ...

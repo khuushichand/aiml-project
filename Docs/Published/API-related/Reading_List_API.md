@@ -137,7 +137,7 @@ Request:
 ```
 {
   "provider": "openai",
-  "model": "gpt-4o-mini",
+  "model": "gpt-4o",
   "prompt": "Summarize for a product brief."
 }
 ```
@@ -148,7 +148,7 @@ Response:
   "item_id": 123,
   "summary": "Short summary text...",
   "provider": "openai",
-  "model": "gpt-4o-mini",
+  "model": "gpt-4o",
   "citations": [
     {
       "item_id": 123,

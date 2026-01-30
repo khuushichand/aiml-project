@@ -1,6 +1,4 @@
 import pytest
-from contextlib import asynccontextmanager
-from types import SimpleNamespace
 
 
 pytestmark = pytest.mark.unit
@@ -43,11 +41,11 @@ def test_httpx_adapter_request_passes_through(monkeypatch):
 
     calls = {}
 
-    def fake_httpx_request_io(**kwargs):
+    def fake_fetch_httpx_response(**kwargs):
         calls["kwargs"] = kwargs
         return DummySyncResponse()
 
-    monkeypatch.setattr(hc, "_httpx_request_io", fake_httpx_request_io)
+    monkeypatch.setattr(hc, "_fetch_httpx_response", fake_fetch_httpx_response)
 
     adapter = hc.HttpxAdapter()
     resp = adapter.request(method="GET", url="http://example.com", headers={"x": "y"}, client=object())
@@ -64,11 +62,11 @@ async def test_httpx_adapter_arequest_passes_through(monkeypatch):
 
     calls = {}
 
-    async def fake_httpx_arequest_io(**kwargs):
+    async def fake_afetch_httpx(**kwargs):
         calls["kwargs"] = kwargs
         return DummyAsyncResponse()
 
-    monkeypatch.setattr(hc, "_httpx_arequest_io", fake_httpx_arequest_io)
+    monkeypatch.setattr(hc, "_afetch_httpx", fake_afetch_httpx)
 
     adapter = hc.HttpxAdapter()
     resp = await adapter.arequest(method="POST", url="http://example.com", json={"k": "v"}, client=object())
@@ -83,16 +81,11 @@ async def test_httpx_adapter_arequest_passes_through(monkeypatch):
 async def test_httpx_adapter_stream_bytes_passes_through(monkeypatch):
     from tldw_Server_API.app.core import http_client as hc
 
-    @asynccontextmanager
-    async def fake_httpx_stream_io(**_kwargs):
-        async def iter_bytes():
-            yield b"one"
-            yield b"two"
+    async def fake_stream_bytes_httpx(**_kwargs):
+        yield b"one"
+        yield b"two"
 
-        resp = SimpleNamespace(status_code=200, request=SimpleNamespace(url="http://example.com"))
-        yield resp, iter_bytes()
-
-    monkeypatch.setattr(hc, "_httpx_stream_io", fake_httpx_stream_io)
+    monkeypatch.setattr(hc, "_astream_bytes_httpx", fake_stream_bytes_httpx)
 
     adapter = hc.HttpxAdapter()
     chunks = [chunk async for chunk in adapter.stream_bytes(method="GET", url="http://example.com", client=object())]
@@ -104,15 +97,10 @@ async def test_httpx_adapter_stream_bytes_passes_through(monkeypatch):
 async def test_httpx_adapter_stream_sse_passes_through(monkeypatch):
     from tldw_Server_API.app.core import http_client as hc
 
-    @asynccontextmanager
-    async def fake_httpx_stream_io(**_kwargs):
-        async def iter_bytes():
-            yield b"data: hello\n\n"
+    async def fake_stream_sse_httpx(**_kwargs):
+        yield hc.SSEEvent(event="message", data="hello")
 
-        resp = SimpleNamespace(status_code=200, request=SimpleNamespace(url="http://example.com"))
-        yield resp, iter_bytes()
-
-    monkeypatch.setattr(hc, "_httpx_stream_io", fake_httpx_stream_io)
+    monkeypatch.setattr(hc, "_astream_sse_httpx", fake_stream_sse_httpx)
 
     adapter = hc.HttpxAdapter()
     events = [ev async for ev in adapter.stream_sse(url="http://example.com/stream", client=object())]
@@ -135,11 +123,11 @@ async def test_aiohttp_adapter_arequest_passes_through(monkeypatch):
 
     calls = {}
 
-    async def fake_aiohttp_request_io(**kwargs):
+    async def fake_afetch_aiohttp(**kwargs):
         calls["kwargs"] = kwargs
         return DummyAsyncResponse()
 
-    monkeypatch.setattr(hc, "_aiohttp_request_io", fake_aiohttp_request_io)
+    monkeypatch.setattr(hc, "_afetch_aiohttp", fake_afetch_aiohttp)
 
     adapter = hc.AiohttpAdapter()
     resp = await adapter.arequest(method="GET", url="http://example.com", client=object())
@@ -152,15 +140,10 @@ async def test_aiohttp_adapter_arequest_passes_through(monkeypatch):
 async def test_aiohttp_adapter_stream_bytes_passes_through(monkeypatch):
     from tldw_Server_API.app.core import http_client as hc
 
-    @asynccontextmanager
-    async def fake_aiohttp_stream_io(**_kwargs):
-        async def iter_bytes():
-            yield b"alpha"
+    async def fake_stream_bytes_aiohttp(**_kwargs):
+        yield b"alpha"
 
-        resp = SimpleNamespace(status=200, url="http://example.com")
-        yield resp, iter_bytes()
-
-    monkeypatch.setattr(hc, "_aiohttp_stream_io", fake_aiohttp_stream_io)
+    monkeypatch.setattr(hc, "_astream_bytes_aiohttp", fake_stream_bytes_aiohttp)
 
     adapter = hc.AiohttpAdapter()
     chunks = [chunk async for chunk in adapter.stream_bytes(method="GET", url="http://example.com", client=object())]
@@ -172,15 +155,10 @@ async def test_aiohttp_adapter_stream_bytes_passes_through(monkeypatch):
 async def test_aiohttp_adapter_stream_sse_passes_through(monkeypatch):
     from tldw_Server_API.app.core import http_client as hc
 
-    @asynccontextmanager
-    async def fake_aiohttp_stream_io(**_kwargs):
-        async def iter_bytes():
-            yield b"data: world\n\n"
+    async def fake_stream_sse_aiohttp(**_kwargs):
+        yield hc.SSEEvent(event="message", data="world")
 
-        resp = SimpleNamespace(status=200, url="http://example.com")
-        yield resp, iter_bytes()
-
-    monkeypatch.setattr(hc, "_aiohttp_stream_io", fake_aiohttp_stream_io)
+    monkeypatch.setattr(hc, "_astream_sse_aiohttp", fake_stream_sse_aiohttp)
 
     adapter = hc.AiohttpAdapter()
     events = [ev async for ev in adapter.stream_sse(url="http://example.com/stream", client=object())]

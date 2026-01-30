@@ -74,7 +74,7 @@
       "display_name": "OpenAI",
       "type": "commercial",
       "is_configured": true,
-      "models": ["gpt-4o", "gpt-4o-mini"],
+      "models": ["gpt-4o"],
       "models_info": [
         {
           "name": "gpt-4o",
@@ -126,7 +126,6 @@
 ```json
 [
   "openai/gpt-4o",
-  "openai/gpt-4o-mini",
   "anthropic/claude-opus-4.1",
   "image/stable_diffusion_cpp"
 ]

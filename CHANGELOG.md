@@ -22,8 +22,13 @@ and this project adheres to Some kind of Versioning
 ### Added
 - Soft delete support for notes/character cards
 - Qwen3-STT
+- 
 
 ### Changed
+- Implemented httpx/aiohttp transport adapters with centralized policy enforcement in http_client.
+- Added httpx client caching and shutdown cleanup to align with aiohttp lifecycle handling.
+- Formalized streaming behavior with first‑byte/idle timeouts and mid‑stream retry support.
+- Expanded http_client tests for adapters, cache reuse, and streaming timeout coverage.
 
 ### Removed
 

@@ -27,7 +27,7 @@ Variables
 - endpoint: HTTP endpoint label (defaults to `/api/v1/chat/completions`).
 - method: HTTP method label (defaults to `POST`).
 - provider: LLM provider label (e.g., `openai`).
-- model: LLM model label (e.g., `gpt-4o-mini`).
+- model: LLM model label (e.g., `gpt-4o`).
 
 For the TTS dashboard, additional variables include:
 - endpoint: HTTP endpoint label (defaults to `/api/v1/audio/speech`).

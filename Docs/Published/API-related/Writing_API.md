@@ -120,7 +120,7 @@ Request:
 ```
 {
   "provider": "openai",
-  "model": "gpt-4o-mini",
+  "model": "gpt-4o",
   "text": "Hello world",
   "options": {"include_strings": true}
 }
@@ -133,7 +133,7 @@ Response:
   "strings": ["Hello", " world"],
   "meta": {
     "provider": "openai",
-    "model": "gpt-4o-mini",
+    "model": "gpt-4o",
     "tokenizer": "o200k_base",
     "input_chars": 11,
     "token_count": 2,

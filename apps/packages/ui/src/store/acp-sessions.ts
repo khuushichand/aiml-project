@@ -1,0 +1,515 @@
+/**
+ * ACP Sessions Zustand Store
+ * Manages state for ACP (Agent Client Protocol) sessions
+ */
+
+import { createWithEqualityFn } from "zustand/traditional"
+import { createJSONStorage, persist, type StateStorage } from "zustand/middleware"
+import type {
+  ACPSession,
+  ACPSessionState,
+  ACPUpdate,
+  ACPPendingPermission,
+  ACPPermissionTier,
+  ACPAgentType,
+  ACPMCPServerConfig,
+} from "@/services/acp/types"
+import { SESSION_CONFIG } from "@/services/acp/constants"
+
+// -----------------------------------------------------------------------------
+// Storage Configuration
+// -----------------------------------------------------------------------------
+
+const STORAGE_KEY = "tldw-acp-sessions"
+
+const generateId = (): string => {
+  if (typeof crypto !== "undefined" && typeof crypto.randomUUID === "function") {
+    return crypto.randomUUID()
+  }
+  return Math.random().toString(36).slice(2)
+}
+
+const createMemoryStorage = (): StateStorage => ({
+  getItem: () => null,
+  setItem: () => {},
+  removeItem: () => {},
+})
+
+const DATE_FIELDS = new Set(["createdAt", "updatedAt", "requestedAt", "timestamp"])
+
+/**
+ * Generate a session name from the working directory.
+ * Format: "ProjectName (HH:MM)"
+ */
+const generateSessionName = (cwd: string): string => {
+  // Extract project name from cwd
+  const parts = cwd.replace(/\/$/, "").split("/")
+  const projectName = parts[parts.length - 1] || "Session"
+
+  // Add time stamp
+  const now = new Date()
+  const hours = now.getHours().toString().padStart(2, "0")
+  const minutes = now.getMinutes().toString().padStart(2, "0")
+
+  return `${projectName} (${hours}:${minutes})`
+}
+
+const dateReviver = (key: string, value: unknown): unknown => {
+  if (DATE_FIELDS.has(key) && typeof value === "string") {
+    const date = new Date(value)
+    return isNaN(date.getTime()) ? value : date
+  }
+  return value
+}
+
+const createACPStorage = (): StateStorage => {
+  if (typeof window === "undefined") {
+    return createMemoryStorage()
+  }
+
+  return {
+    getItem: (name: string): string | null => {
+      const value = localStorage.getItem(name)
+      if (!value) return null
+      try {
+        const parsed = JSON.parse(value, dateReviver)
+        return JSON.stringify(parsed)
+      } catch {
+        return value
+      }
+    },
+    setItem: (name: string, value: string): void => {
+      localStorage.setItem(name, value)
+    },
+    removeItem: (name: string): void => {
+      localStorage.removeItem(name)
+    },
+  }
+}
+
+// -----------------------------------------------------------------------------
+// State Types
+// -----------------------------------------------------------------------------
+
+interface SessionsState {
+  /** All known sessions */
+  sessions: Record<string, ACPSession>
+  /** Currently active session ID */
+  activeSessionId: string | null
+  /** Session creation in progress */
+  isCreating: boolean
+  /** Global error message */
+  globalError: string | null
+}
+
+export interface CreateSessionOptions {
+  cwd: string
+  name?: string
+  agentType?: ACPAgentType
+  tags?: string[]
+  mcpServers?: ACPMCPServerConfig[]
+}
+
+interface SessionsActions {
+  /** Create a new session entry (before WebSocket connects) */
+  createSession: (options: CreateSessionOptions) => string
+  /** Update session state */
+  updateSessionState: (sessionId: string, state: ACPSessionState) => void
+  /** Update session name */
+  updateSessionName: (sessionId: string, name: string) => void
+  /** Update session tags */
+  updateSessionTags: (sessionId: string, tags: string[]) => void
+  /** Set session capabilities */
+  setSessionCapabilities: (sessionId: string, capabilities: Record<string, unknown>) => void
+  /** Add an update to a session */
+  addUpdate: (sessionId: string, update: Omit<ACPUpdate, "timestamp">) => void
+  /** Add a pending permission */
+  addPendingPermission: (sessionId: string, permission: ACPPendingPermission) => void
+  /** Remove a pending permission */
+  removePendingPermission: (sessionId: string, requestId: string) => void
+  /** Clear all pending permissions for a session */
+  clearPendingPermissions: (sessionId: string) => void
+  /** Set the active session */
+  setActiveSession: (sessionId: string | null) => void
+  /** Close and remove a session */
+  closeSession: (sessionId: string) => void
+  /** Clear updates for a session */
+  clearSessionUpdates: (sessionId: string) => void
+  /** Set creating state */
+  setIsCreating: (isCreating: boolean) => void
+  /** Set global error */
+  setGlobalError: (error: string | null) => void
+  /** Get a session by ID */
+  getSession: (sessionId: string) => ACPSession | undefined
+  /** Get all sessions as array */
+  getSessions: () => ACPSession[]
+  /** Clean up expired sessions */
+  cleanupExpiredSessions: () => void
+  /** Reset all state */
+  reset: () => void
+}
+
+export type ACPSessionsStore = SessionsState & SessionsActions
+
+// -----------------------------------------------------------------------------
+// Initial State
+// -----------------------------------------------------------------------------
+
+const initialState: SessionsState = {
+  sessions: {},
+  activeSessionId: null,
+  isCreating: false,
+  globalError: null,
+}
+
+// -----------------------------------------------------------------------------
+// Store
+// -----------------------------------------------------------------------------
+
+interface PersistedState {
+  sessions: Record<string, ACPSession>
+  activeSessionId: string | null
+}
+
+export const useACPSessionsStore = createWithEqualityFn<ACPSessionsStore>()(
+  persist<ACPSessionsStore, [], [], PersistedState>(
+    (set, get) => ({
+      ...initialState,
+
+      createSession: (options: CreateSessionOptions) => {
+        const id = generateId()
+        const now = new Date()
+
+        // Generate name from cwd if not provided
+        const generatedName = options.name || generateSessionName(options.cwd)
+
+        const session: ACPSession = {
+          id,
+          cwd: options.cwd,
+          name: generatedName,
+          agentType: options.agentType,
+          tags: options.tags,
+          mcpServers: options.mcpServers,
+          state: "disconnected",
+          capabilities: undefined,
+          updates: [],
+          pendingPermissions: [],
+          createdAt: now,
+          updatedAt: now,
+        }
+
+        set((state) => ({
+          sessions: { ...state.sessions, [id]: session },
+          activeSessionId: id,
+        }))
+
+        return id
+      },
+
+      updateSessionState: (sessionId: string, sessionState: ACPSessionState) => {
+        set((state) => {
+          const session = state.sessions[sessionId]
+          if (!session) return state
+
+          return {
+            sessions: {
+              ...state.sessions,
+              [sessionId]: {
+                ...session,
+                state: sessionState,
+                updatedAt: new Date(),
+              },
+            },
+          }
+        })
+      },
+
+      updateSessionName: (sessionId: string, name: string) => {
+        set((state) => {
+          const session = state.sessions[sessionId]
+          if (!session) return state
+
+          return {
+            sessions: {
+              ...state.sessions,
+              [sessionId]: {
+                ...session,
+                name,
+                updatedAt: new Date(),
+              },
+            },
+          }
+        })
+      },
+
+      updateSessionTags: (sessionId: string, tags: string[]) => {
+        set((state) => {
+          const session = state.sessions[sessionId]
+          if (!session) return state
+
+          return {
+            sessions: {
+              ...state.sessions,
+              [sessionId]: {
+                ...session,
+                tags,
+                updatedAt: new Date(),
+              },
+            },
+          }
+        })
+      },
+
+      setSessionCapabilities: (sessionId: string, capabilities: Record<string, unknown>) => {
+        set((state) => {
+          const session = state.sessions[sessionId]
+          if (!session) return state
+
+          return {
+            sessions: {
+              ...state.sessions,
+              [sessionId]: {
+                ...session,
+                capabilities,
+                updatedAt: new Date(),
+              },
+            },
+          }
+        })
+      },
+
+      addUpdate: (sessionId: string, update: Omit<ACPUpdate, "timestamp">) => {
+        set((state) => {
+          const session = state.sessions[sessionId]
+          if (!session) return state
+
+          const newUpdate: ACPUpdate = {
+            ...update,
+            timestamp: new Date(),
+          }
+
+          // Limit updates in memory
+          let updates = [...session.updates, newUpdate]
+          if (updates.length > SESSION_CONFIG.MAX_UPDATES_PER_SESSION) {
+            updates = updates.slice(-SESSION_CONFIG.MAX_UPDATES_PER_SESSION)
+          }
+
+          return {
+            sessions: {
+              ...state.sessions,
+              [sessionId]: {
+                ...session,
+                updates,
+                updatedAt: new Date(),
+              },
+            },
+          }
+        })
+      },
+
+      addPendingPermission: (sessionId: string, permission: ACPPendingPermission) => {
+        set((state) => {
+          const session = state.sessions[sessionId]
+          if (!session) return state
+
+          return {
+            sessions: {
+              ...state.sessions,
+              [sessionId]: {
+                ...session,
+                pendingPermissions: [...session.pendingPermissions, permission],
+                state: "waiting_permission",
+                updatedAt: new Date(),
+              },
+            },
+          }
+        })
+      },
+
+      removePendingPermission: (sessionId: string, requestId: string) => {
+        set((state) => {
+          const session = state.sessions[sessionId]
+          if (!session) return state
+
+          const pendingPermissions = session.pendingPermissions.filter(
+            (p) => p.request_id !== requestId
+          )
+
+          return {
+            sessions: {
+              ...state.sessions,
+              [sessionId]: {
+                ...session,
+                pendingPermissions,
+                // If no more pending permissions, go back to running
+                state: pendingPermissions.length === 0 ? "running" : "waiting_permission",
+                updatedAt: new Date(),
+              },
+            },
+          }
+        })
+      },
+
+      clearPendingPermissions: (sessionId: string) => {
+        set((state) => {
+          const session = state.sessions[sessionId]
+          if (!session) return state
+
+          return {
+            sessions: {
+              ...state.sessions,
+              [sessionId]: {
+                ...session,
+                pendingPermissions: [],
+                updatedAt: new Date(),
+              },
+            },
+          }
+        })
+      },
+
+      setActiveSession: (sessionId: string | null) => {
+        set({ activeSessionId: sessionId })
+      },
+
+      closeSession: (sessionId: string) => {
+        set((state) => {
+          const { [sessionId]: removed, ...rest } = state.sessions
+          return {
+            sessions: rest,
+            activeSessionId:
+              state.activeSessionId === sessionId ? null : state.activeSessionId,
+          }
+        })
+      },
+
+      clearSessionUpdates: (sessionId: string) => {
+        set((state) => {
+          const session = state.sessions[sessionId]
+          if (!session) return state
+
+          return {
+            sessions: {
+              ...state.sessions,
+              [sessionId]: {
+                ...session,
+                updates: [],
+                updatedAt: new Date(),
+              },
+            },
+          }
+        })
+      },
+
+      setIsCreating: (isCreating: boolean) => {
+        set({ isCreating })
+      },
+
+      setGlobalError: (error: string | null) => {
+        set({ globalError: error })
+      },
+
+      getSession: (sessionId: string) => {
+        return get().sessions[sessionId]
+      },
+
+      getSessions: () => {
+        const sessions = get().sessions
+        return Object.values(sessions).sort(
+          (a, b) => b.updatedAt.getTime() - a.updatedAt.getTime()
+        )
+      },
+
+      cleanupExpiredSessions: () => {
+        const now = Date.now()
+        set((state) => {
+          const sessions: Record<string, ACPSession> = {}
+          let activeSessionId = state.activeSessionId
+
+          for (const [id, session] of Object.entries(state.sessions)) {
+            const age = now - session.updatedAt.getTime()
+            if (age < SESSION_CONFIG.SESSION_EXPIRY_MS) {
+              sessions[id] = session
+            } else {
+              // Session expired
+              if (activeSessionId === id) {
+                activeSessionId = null
+              }
+            }
+          }
+
+          return { sessions, activeSessionId }
+        })
+      },
+
+      reset: () => {
+        set(initialState)
+      },
+    }),
+    {
+      name: STORAGE_KEY,
+      storage: createJSONStorage(() => createACPStorage()),
+      partialize: (state): PersistedState => ({
+        // Only persist session metadata, not transient state like updates
+        sessions: Object.fromEntries(
+          Object.entries(state.sessions).map(([id, session]) => [
+            id,
+            {
+              ...session,
+              // Don't persist updates (they can be large)
+              updates: [],
+              // Don't persist pending permissions (they expire)
+              pendingPermissions: [],
+              // Reset state to disconnected (connection needs re-establishment)
+              state: "disconnected" as const,
+            },
+          ])
+        ),
+        activeSessionId: state.activeSessionId,
+      }),
+      onRehydrateStorage: () => (state) => {
+        if (state) {
+          // Convert date strings back to Date objects
+          const sessions: Record<string, ACPSession> = {}
+          for (const [id, session] of Object.entries(state.sessions)) {
+            sessions[id] = {
+              ...session,
+              createdAt:
+                typeof session.createdAt === "string"
+                  ? new Date(session.createdAt)
+                  : session.createdAt,
+              updatedAt:
+                typeof session.updatedAt === "string"
+                  ? new Date(session.updatedAt)
+                  : session.updatedAt,
+              updates: session.updates.map((u) => ({
+                ...u,
+                timestamp:
+                  typeof u.timestamp === "string" ? new Date(u.timestamp) : u.timestamp,
+              })),
+              pendingPermissions: session.pendingPermissions.map((p) => ({
+                ...p,
+                requestedAt:
+                  typeof p.requestedAt === "string"
+                    ? new Date(p.requestedAt)
+                    : p.requestedAt,
+              })),
+            }
+          }
+          state.sessions = sessions
+
+          // Cleanup expired sessions on load
+          setTimeout(() => {
+            useACPSessionsStore.getState().cleanupExpiredSessions()
+          }, 0)
+        }
+      },
+    }
+  )
+)
+
+// Expose for debugging
+if (typeof window !== "undefined") {
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  ;(window as any).__tldw_useACPSessionsStore = useACPSessionsStore
+}

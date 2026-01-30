@@ -10,7 +10,7 @@
  */
 import { test, expect, skipIfServerUnavailable, assertNoCriticalErrors } from "../utils/fixtures"
 import { MediaPage } from "../utils/page-objects"
-import { seedAuth, TEST_CONFIG, generateTestId, waitForConnection } from "../utils/helpers"
+import { seedAuth, generateTestId, waitForConnection } from "../utils/helpers"
 import * as path from "path"
 import * as fs from "fs"
 
@@ -107,7 +107,7 @@ test.describe("Media Ingestion Workflow", () => {
           await fileInput.setInputFiles(testFilePath)
 
           // Look for progress indicator
-          const progress = authedPage.locator(
+          const _progress = authedPage.locator(
             ".ant-progress, [data-testid='upload-progress'], .progress-bar, .uploading"
           )
 
@@ -146,7 +146,7 @@ test.describe("Media Ingestion Workflow", () => {
           await authedPage.waitForTimeout(2000)
 
           // Check for error indication
-          const errorMessage = authedPage.locator(
+          const _errorMessage = authedPage.locator(
             ".ant-message-error, .error-message, [data-testid='upload-error']"
           )
           // Error handling behavior depends on implementation
@@ -171,7 +171,7 @@ test.describe("Media Ingestion Workflow", () => {
       await mediaPage.waitForReady()
 
       // Look for URL input
-      const urlInput = authedPage.locator(
+      const _urlInput = authedPage.locator(
         "input[placeholder*='url' i], input[placeholder*='URL'], [data-testid='url-input']"
       )
 
@@ -204,7 +204,7 @@ test.describe("Media Ingestion Workflow", () => {
           await submitBtn.first().click()
 
           // Look for validation error
-          const validationError = authedPage.locator(
+          const _validationError = authedPage.locator(
             ".ant-form-item-explain-error, .error-message, [data-testid='url-error']"
           )
 
@@ -244,7 +244,7 @@ test.describe("Media Ingestion Workflow", () => {
           await submitBtn.first().click()
 
           // Look for processing indicator
-          const processing = authedPage.locator(
+          const _processing = authedPage.locator(
             ".processing, [data-status='processing'], .ant-spin"
           )
 
@@ -302,7 +302,7 @@ test.describe("Media Ingestion Workflow", () => {
           await editBtn.click()
 
           // Look for edit form
-          const editForm = authedPage.locator(
+          const _editForm = authedPage.locator(
             "form, [data-testid='edit-form'], .edit-modal"
           )
 
@@ -378,7 +378,7 @@ test.describe("Media Ingestion Workflow", () => {
       await mediaPage.gotoReview()
 
       // Verify review page loaded
-      const reviewContainer = authedPage.locator(
+      const _reviewContainer = authedPage.locator(
         "[data-testid='review-container'], .review-page, .content-review"
       )
 
@@ -395,7 +395,7 @@ test.describe("Media Ingestion Workflow", () => {
       await mediaPage.gotoReview()
 
       // Get draft items
-      const drafts = await mediaPage.getDraftItems()
+      const _drafts = await mediaPage.getDraftItems()
 
       // Page should load whether or not there are drafts
       await authedPage.waitForLoadState("networkidle", { timeout: 20000 }).catch(() => {})
@@ -482,7 +482,7 @@ test.describe("Media Ingestion Workflow", () => {
       await authedPage.waitForLoadState("networkidle", { timeout: 20000 }).catch(() => {})
 
       // Look for trash content
-      const trashContainer = authedPage.locator(
+      const _trashContainer = authedPage.locator(
         "[data-testid='trash-container'], .trash-page, .deleted-items"
       )
 

@@ -8,7 +8,7 @@ Implements:
 - Egress policy enforcement for original URL, redirects, and proxies
 - Retry policy with decorrelated jitter and Retry-After handling
 - JSON helpers with content-type validation and max_bytes guard
-- Streaming helpers: bytes and SSE, with no auto-retry after first byte
+- Streaming helpers: bytes and SSE, with retry handling for SSE disconnects
 - Download helpers with atomic rename and optional checksum/length validation
 - Structured logging and metrics hooks; optional trace header injection
 """
@@ -488,32 +488,22 @@ class HttpxAdapter:
         retry: Optional["RetryPolicy"] = None,
         cert_pinning: Optional[Dict[str, set[str]]] = None,
     ) -> "httpx.Response":
-        need_close = False
-        sc = client
-        if sc is None:
-            sc = _get_httpx_client(proxies=proxies)
-            need_close = False
-        try:
-            # Adapters do not follow redirects; policy layer handles allow_redirects.
-            return _httpx_request_io(
-                client=sc,
-                method=method,
-                url=url,
-                headers=headers,
-                cookies=cookies,
-                params=params,
-                json=json,
-                data=data,
-                files=files,
-                timeout=timeout,
-                follow_redirects=False,
-            )
-        finally:
-            if need_close:
-                try:
-                    sc.close()
-                except Exception:
-                    pass
+        return _fetch_httpx_response(
+            method=method,
+            url=url,
+            client=client,
+            headers=headers,
+            cookies=cookies,
+            params=params,
+            json=json,
+            data=data,
+            files=files,
+            timeout=timeout,
+            allow_redirects=allow_redirects,
+            proxies=proxies,
+            retry=retry,
+            cert_pinning=cert_pinning,
+        )
 
     async def arequest(
         self,
@@ -534,33 +524,23 @@ class HttpxAdapter:
         cert_pinning: Optional[Dict[str, set[str]]] = None,
         verify: Optional[Union[bool, str, ssl.SSLContext]] = None,
     ) -> "httpx.Response":
-        need_close = False
-        ac = client
-        if ac is None:
-            ac = _get_httpx_async_client(proxies=proxies, verify=verify)
-            need_close = False
-        try:
-            # Adapters do not follow redirects; policy layer handles allow_redirects.
-            return await _httpx_arequest_io(
-                client=ac,
-                method=method,
-                url=url,
-                headers=headers,
-                cookies=cookies,
-                params=params,
-                json=json,
-                data=data,
-                files=files,
-                timeout=timeout,
-                follow_redirects=False,
-                verify=verify,
-            )
-        finally:
-            if need_close:
-                try:
-                    await ac.aclose()
-                except Exception:
-                    pass
+        return await _afetch_httpx(
+            method=method,
+            url=url,
+            client=client,
+            headers=headers,
+            cookies=cookies,
+            params=params,
+            json=json,
+            data=data,
+            files=files,
+            timeout=timeout,
+            allow_redirects=allow_redirects,
+            proxies=proxies,
+            retry=retry,
+            cert_pinning=cert_pinning,
+            verify=verify,
+        )
 
     async def stream_bytes(
         self,
@@ -578,32 +558,21 @@ class HttpxAdapter:
         chunk_size: int = 65536,
         cert_pinning: Optional[Dict[str, set[str]]] = None,
     ) -> AsyncIterator[bytes]:
-        need_close = False
-        ac = client
-        if ac is None:
-            ac = _get_httpx_async_client(proxies=proxies)
-            need_close = False
-        try:
-            async with _httpx_stream_io(
-                client=ac,
-                method=method,
-                url=url,
-                headers=headers,
-                params=params,
-                json=json,
-                data=data,
-                files=files,
-                timeout=timeout,
-                chunk_size=chunk_size,
-            ) as (_resp, byte_iter):
-                async for chunk in byte_iter:
-                    yield chunk
-        finally:
-            if need_close:
-                try:
-                    await ac.aclose()
-                except Exception:
-                    pass
+        async for chunk in _astream_bytes_httpx(
+            method=method,
+            url=url,
+            client=client,
+            headers=headers,
+            params=params,
+            json=json,
+            data=data,
+            files=files,
+            timeout=timeout,
+            proxies=proxies,
+            chunk_size=chunk_size,
+            cert_pinning=cert_pinning,
+        ):
+            yield chunk
 
     async def stream_sse(
         self,
@@ -620,34 +589,20 @@ class HttpxAdapter:
         retry: Optional["RetryPolicy"] = None,
         cert_pinning: Optional[Dict[str, set[str]]] = None,
     ) -> AsyncIterator["SSEEvent"]:
-        hdrs = {"Accept": "text/event-stream"}
-        if headers:
-            hdrs.update(headers)
-        need_close = False
-        ac = client
-        if ac is None:
-            ac = _get_httpx_async_client(proxies=proxies)
-            need_close = False
-        try:
-            async with _httpx_stream_io(
-                client=ac,
-                method=method,
-                url=url,
-                headers=hdrs,
-                params=params,
-                json=json,
-                data=data,
-                timeout=timeout,
-                chunk_size=None,
-            ) as (_resp, byte_iter):
-                async for event in _iter_sse_events_from_bytes(byte_iter):
-                    yield event
-        finally:
-            if need_close:
-                try:
-                    await ac.aclose()
-                except Exception:
-                    pass
+        async for event in _astream_sse_httpx(
+            url=url,
+            method=method,
+            client=client,
+            headers=headers,
+            params=params,
+            json=json,
+            data=data,
+            timeout=timeout,
+            proxies=proxies,
+            retry=retry,
+            cert_pinning=cert_pinning,
+        ):
+            yield event
 
 
 class AiohttpAdapter:
@@ -675,13 +630,10 @@ class AiohttpAdapter:
         cert_pinning: Optional[Dict[str, set[str]]] = None,
         verify: Optional[Union[bool, str, ssl.SSLContext]] = None,
     ) -> AsyncResponseLike:
-        session = client or _get_aiohttp_session()
-        ssl_override = _aiohttp_ssl_from_verify(verify)
-        # Adapters do not follow redirects; policy layer handles allow_redirects.
-        return await _aiohttp_request_io(
-            session=session,
+        return await _afetch_aiohttp(
             method=method,
             url=url,
+            client=client,
             headers=headers,
             cookies=cookies,
             params=params,
@@ -689,8 +641,11 @@ class AiohttpAdapter:
             data=data,
             files=files,
             timeout=timeout,
+            allow_redirects=allow_redirects,
             proxies=proxies,
-            ssl_override=ssl_override,
+            retry=retry,
+            cert_pinning=cert_pinning,
+            verify=verify,
         )
 
     async def stream_bytes(
@@ -709,11 +664,10 @@ class AiohttpAdapter:
         chunk_size: int = 65536,
         cert_pinning: Optional[Dict[str, set[str]]] = None,
     ) -> AsyncIterator[bytes]:
-        session = client or _get_aiohttp_session()
-        async with _aiohttp_stream_io(
-            session=session,
+        async for chunk in _astream_bytes_aiohttp(
             method=method,
             url=url,
+            client=client,
             headers=headers,
             params=params,
             json=json,
@@ -721,13 +675,10 @@ class AiohttpAdapter:
             files=files,
             timeout=timeout,
             proxies=proxies,
-            ssl_override=None,
             chunk_size=chunk_size,
-        ) as (_resp, byte_iter):
-            async for chunk in byte_iter:
-                if not chunk:
-                    continue
-                yield chunk
+            cert_pinning=cert_pinning,
+        ):
+            yield chunk
 
     async def stream_sse(
         self,
@@ -744,25 +695,20 @@ class AiohttpAdapter:
         retry: Optional["RetryPolicy"] = None,
         cert_pinning: Optional[Dict[str, set[str]]] = None,
     ) -> AsyncIterator["SSEEvent"]:
-        hdrs = {"Accept": "text/event-stream"}
-        if headers:
-            hdrs.update(headers)
-        session = client or _get_aiohttp_session()
-        async with _aiohttp_stream_io(
-            session=session,
-            method=method,
+        async for event in _astream_sse_aiohttp(
             url=url,
-            headers=hdrs,
+            method=method,
+            client=client,
+            headers=headers,
             params=params,
             json=json,
             data=data,
             timeout=timeout,
             proxies=proxies,
-            ssl_override=None,
-            chunk_size=None,
-        ) as (_resp, byte_iter):
-            async for event in _iter_sse_events_from_bytes(byte_iter):
-                yield event
+            retry=retry,
+            cert_pinning=cert_pinning,
+        ):
+            yield event
 
 
 _HTTPX_ADAPTER = HttpxAdapter()
@@ -1178,8 +1124,23 @@ def _normalize_httpx_cache_value(value: Any) -> Any:
     return str(value)
 
 
-def _httpx_cache_key(proxies: Optional[Any], verify: Optional[Any]) -> Tuple[Any, Any]:
-    return (_normalize_httpx_cache_value(proxies), _normalize_httpx_cache_value(verify))
+def _httpx_cache_key(
+    proxies: Optional[Any],
+    verify: Optional[Any],
+    *,
+    factory: Optional[Any] = None,
+) -> Tuple[Any, Any, Any]:
+    factory_key: Any = factory
+    if factory is not None:
+        try:
+            hash(factory)
+        except Exception:
+            factory_key = id(factory)
+    return (
+        _normalize_httpx_cache_value(proxies),
+        _normalize_httpx_cache_value(verify),
+        factory_key,
+    )
 
 
 def _get_httpx_async_client(
@@ -1190,7 +1151,7 @@ def _get_httpx_async_client(
     if httpx is None:  # pragma: no cover
         raise RuntimeError("httpx is not available")
     loop = asyncio.get_running_loop()
-    key = (id(loop), _httpx_cache_key(proxies, verify))
+    key = (id(loop), _httpx_cache_key(proxies, verify, factory=create_async_client))
     with _HTTPX_CLIENT_LOCK:
         client = _HTTPX_ASYNC_CLIENT_CACHE.get(key)
         if client is not None and not getattr(client, "is_closed", False):
@@ -1207,7 +1168,7 @@ def _get_httpx_client(
 ) -> "httpx.Client":
     if httpx is None:  # pragma: no cover
         raise RuntimeError("httpx is not available")
-    key = _httpx_cache_key(proxies, verify)
+    key = _httpx_cache_key(proxies, verify, factory=create_client)
     with _HTTPX_CLIENT_LOCK:
         client = _HTTPX_CLIENT_CACHE.get(key)
         if client is not None and not getattr(client, "is_closed", False):
@@ -1960,6 +1921,54 @@ async def _iter_sse_events_from_bytes(byte_iter: AsyncIterator[bytes]) -> AsyncI
             event = _parse_sse_event(raw)
             if event is not None:
                 yield event
+
+
+def _stream_timeout_values(timeout: Optional[Any]) -> Tuple[float, float]:
+    first_byte_timeout = DEFAULT_CONNECT_TIMEOUT
+    idle_timeout = DEFAULT_READ_TIMEOUT
+    if timeout is None:
+        return first_byte_timeout, idle_timeout
+    if isinstance(timeout, (int, float)):
+        idle_timeout = float(timeout)
+        return first_byte_timeout, idle_timeout
+    connect = getattr(timeout, "connect", None)
+    if connect is None:
+        connect = getattr(timeout, "sock_connect", None)
+    read = getattr(timeout, "read", None)
+    if read is None:
+        read = getattr(timeout, "sock_read", None)
+    if connect is not None:
+        try:
+            first_byte_timeout = float(connect)
+        except Exception:
+            pass
+    if read is not None:
+        try:
+            idle_timeout = float(read)
+        except Exception:
+            pass
+    return first_byte_timeout, idle_timeout
+
+
+async def _iter_bytes_with_timeouts(
+    byte_iter: AsyncIterator[bytes],
+    timeout: Optional[Any],
+) -> AsyncIterator[bytes]:
+    first_timeout, idle_timeout = _stream_timeout_values(timeout)
+    first_timeout = max(0.001, float(first_timeout))
+    idle_timeout = max(0.001, float(idle_timeout))
+    first = True
+    while True:
+        timeout_s = first_timeout if first else idle_timeout
+        try:
+            chunk = await asyncio.wait_for(byte_iter.__anext__(), timeout=timeout_s)
+        except StopAsyncIteration:
+            return
+        except asyncio.TimeoutError as exc:
+            phase = "first_byte" if first else "idle"
+            raise NetworkError(f"StreamTimeout:{phase}") from exc
+        first = False
+        yield chunk
 
 
 # --------------------------------------------------------------------------------------
@@ -3277,7 +3286,8 @@ async def _astream_bytes_httpx(
             chunk_size=chunk_size,
         ) as (resp, byte_iter):
             resp.raise_for_status()
-            async for chunk in byte_iter:
+            timed_iter = _iter_bytes_with_timeouts(byte_iter, timeout)
+            async for chunk in timed_iter:
                 yield chunk
             # per-request structured log on successful completion
             _log_outbound_request(
@@ -3313,6 +3323,17 @@ async def _astream_bytes_httpx(
             exception_class=e.__class__.__name__,
         )
         raise NetworkError(e.__class__.__name__) from e
+    except NetworkError as e:
+        _log_outbound_request(
+            method=method,
+            url=url,
+            status_code=0,
+            start_time=t0,
+            attempt=1,
+            last_retry_delay_s=0.0,
+            exception_class=e.__class__.__name__,
+        )
+        raise
     finally:
         if need_close:
             try:
@@ -3379,7 +3400,8 @@ async def _astream_bytes_aiohttp(
             if resp.status >= 400:
                 await resp.read()
                 raise NetworkError(f"HTTP {resp.status}")
-            async for chunk in byte_iter:
+            timed_iter = _iter_bytes_with_timeouts(byte_iter, timeout)
+            async for chunk in timed_iter:
                 if not chunk:
                     continue
                 yield chunk
@@ -3392,6 +3414,17 @@ async def _astream_bytes_aiohttp(
                 last_retry_delay_s=0.0,
             )
     except asyncio.CancelledError:
+        raise
+    except NetworkError as e:
+        _log_outbound_request(
+            method=method,
+            url=url,
+            status_code=0,
+            start_time=t0,
+            attempt=1,
+            last_retry_delay_s=0.0,
+            exception_class=e.__class__.__name__,
+        )
         raise
     except Exception as e:
         _log_outbound_request(
@@ -3535,7 +3568,8 @@ async def _astream_sse_httpx(
                             break  # exit redirect loop to outer attempt
 
                         # Successful response; iterate SSE bytes and yield events
-                        async for event in _iter_sse_events_from_bytes(byte_iter):
+                        timed_iter = _iter_bytes_with_timeouts(byte_iter, timeout)
+                        async for event in _iter_sse_events_from_bytes(timed_iter):
                             yield event
                         # per-request structured log on successful end of stream
                         _log_outbound_request(
@@ -3666,7 +3700,8 @@ async def _astream_sse_aiohttp(
                         sleep_s = delay
                         break
 
-                    async for event in _iter_sse_events_from_bytes(byte_iter):
+                    timed_iter = _iter_bytes_with_timeouts(byte_iter, timeout)
+                    async for event in _iter_sse_events_from_bytes(timed_iter):
                         yield event
                     _log_outbound_request(
                         method=method,

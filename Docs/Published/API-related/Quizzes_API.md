@@ -167,7 +167,7 @@ Request:
   "question_types": ["multiple_choice", "true_false"],
   "difficulty": "mixed",
   "focus_topics": ["retrieval", "reranking"],
-  "model": "gpt-4o-mini",
+  "model": "gpt-4o",
   "workspace_tag": "workspace:research"
 }
 ```

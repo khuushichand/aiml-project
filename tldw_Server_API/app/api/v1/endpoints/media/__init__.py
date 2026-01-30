@@ -93,6 +93,24 @@ from tldw_Server_API.app.api.v1.endpoints.media import (
     transcription_models as transcription_models_endpoint,  # noqa: E402
 )
 from tldw_Server_API.app.api.v1.endpoints.media import file as file_endpoint  # noqa: E402
+from tldw_Server_API.app.api.v1.endpoints.media import (
+    document_outline as document_outline_endpoint,  # noqa: E402
+)
+from tldw_Server_API.app.api.v1.endpoints.media import (
+    document_insights as document_insights_endpoint,  # noqa: E402
+)
+from tldw_Server_API.app.api.v1.endpoints.media import (
+    document_references as document_references_endpoint,  # noqa: E402
+)
+from tldw_Server_API.app.api.v1.endpoints.media import (
+    document_figures as document_figures_endpoint,  # noqa: E402
+)
+from tldw_Server_API.app.api.v1.endpoints.media import (
+    document_annotations as document_annotations_endpoint,  # noqa: E402
+)
+from tldw_Server_API.app.api.v1.endpoints.media import (
+    reading_progress as reading_progress_endpoint,  # noqa: E402
+)
 
 
 router = APIRouter()
@@ -116,6 +134,12 @@ for _router in (
     process_mediawiki_endpoint.router,
     reprocess_endpoint.router,
     transcription_models_endpoint.router,
+    document_outline_endpoint.router,
+    document_insights_endpoint.router,
+    document_references_endpoint.router,
+    document_figures_endpoint.router,
+    document_annotations_endpoint.router,
+    reading_progress_endpoint.router,
 ):
     for route in _router.routes:
         router.routes.append(route)

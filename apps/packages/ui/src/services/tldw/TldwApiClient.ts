@@ -1173,6 +1173,494 @@ export class TldwApiClient {
     })
   }
 
+  async getMediaDetails(
+    mediaId: string | number,
+    options?: {
+      include_content?: boolean
+      include_versions?: boolean
+      include_version_content?: boolean
+      signal?: AbortSignal
+    }
+  ): Promise<any> {
+    const id = encodeURIComponent(String(mediaId))
+    const query = this.buildQuery({
+      include_content: options?.include_content ?? true,
+      include_versions: options?.include_versions ?? false,
+      include_version_content: options?.include_version_content ?? false
+    })
+    return await bgRequest<any>({
+      path: `/api/v1/media/${id}${query}`,
+      method: "GET",
+      abortSignal: options?.signal
+    })
+  }
+
+  async getDocumentOutline(
+    mediaId: string | number,
+    options?: { signal?: AbortSignal }
+  ): Promise<{
+    media_id: number
+    has_outline: boolean
+    entries: Array<{ level: number; title: string; page: number }>
+    total_pages: number
+  }> {
+    const id = encodeURIComponent(String(mediaId))
+    return await bgRequest<{
+      media_id: number
+      has_outline: boolean
+      entries: Array<{ level: number; title: string; page: number }>
+      total_pages: number
+    }>({
+      path: `/api/v1/media/${id}/outline`,
+      method: "GET",
+      abortSignal: options?.signal
+    })
+  }
+
+  async generateDocumentInsights(
+    mediaId: string | number,
+    options?: {
+      categories?: string[]
+      model?: string
+      max_content_length?: number
+      force?: boolean
+      signal?: AbortSignal
+    }
+  ): Promise<{
+    media_id: number
+    insights: Array<{
+      category: string
+      title: string
+      content: string
+      confidence?: number
+    }>
+    model_used: string
+    cached: boolean
+  }> {
+    const id = encodeURIComponent(String(mediaId))
+    const body: Record<string, unknown> = {}
+    if (options?.categories) body.categories = options.categories
+    if (options?.model) body.model = options.model
+    if (options?.max_content_length) body.max_content_length = options.max_content_length
+    if (options?.force) body.force = options.force
+
+    return await bgRequest<{
+      media_id: number
+      insights: Array<{
+        category: string
+        title: string
+        content: string
+        confidence?: number
+      }>
+      model_used: string
+      cached: boolean
+    }>({
+      path: `/api/v1/media/${id}/insights`,
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body,
+      abortSignal: options?.signal
+    })
+  }
+
+  async getDocumentFigures(
+    mediaId: string | number,
+    options?: {
+      minSize?: number
+      signal?: AbortSignal
+    }
+  ): Promise<{
+    media_id: number
+    has_figures: boolean
+    figures: Array<{
+      id: string
+      page: number
+      width: number
+      height: number
+      format: string
+      data_url?: string
+      caption?: string
+    }>
+    total_count: number
+  }> {
+    const id = encodeURIComponent(String(mediaId))
+    const minSize = options?.minSize ?? 50
+    return await bgRequest<{
+      media_id: number
+      has_figures: boolean
+      figures: Array<{
+        id: string
+        page: number
+        width: number
+        height: number
+        format: string
+        data_url?: string
+        caption?: string
+      }>
+      total_count: number
+    }>({
+      path: `/api/v1/media/${id}/figures?min_size=${minSize}`,
+      method: "GET",
+      abortSignal: options?.signal
+    })
+  }
+
+  async getDocumentReferences(
+    mediaId: string | number,
+    options?: {
+      enrich?: boolean
+      signal?: AbortSignal
+    }
+  ): Promise<{
+    media_id: number
+    has_references: boolean
+    references: Array<{
+      raw_text: string
+      title?: string
+      authors?: string
+      year?: number
+      venue?: string
+      doi?: string
+      arxiv_id?: string
+      url?: string
+      citation_count?: number
+      semantic_scholar_id?: string
+      open_access_pdf?: string
+    }>
+    enrichment_source?: string
+  }> {
+    const id = encodeURIComponent(String(mediaId))
+    const enrich = options?.enrich !== false
+    return await bgRequest<{
+      media_id: number
+      has_references: boolean
+      references: Array<{
+        raw_text: string
+        title?: string
+        authors?: string
+        year?: number
+        venue?: string
+        doi?: string
+        arxiv_id?: string
+        url?: string
+        citation_count?: number
+        semantic_scholar_id?: string
+        open_access_pdf?: string
+      }>
+      enrichment_source?: string
+    }>({
+      path: `/api/v1/media/${id}/references?enrich=${enrich}`,
+      method: "GET",
+      abortSignal: options?.signal
+    })
+  }
+
+  // Translation Methods
+  async translate(
+    text: string,
+    targetLanguage: string = "English",
+    options?: { model?: string; provider?: string }
+  ): Promise<{
+    translated_text: string
+    target_language: string
+    model_used: string
+    detected_source_language?: string
+  }> {
+    return await bgRequest<{
+      translated_text: string
+      target_language: string
+      model_used: string
+      detected_source_language?: string
+    }>({
+      path: "/api/v1/translate",
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: {
+        text,
+        target_language: targetLanguage,
+        ...(options?.model && { model: options.model }),
+        ...(options?.provider && { provider: options.provider })
+      }
+    })
+  }
+
+  // Document Annotations Methods
+  async listAnnotations(
+    mediaId: string | number,
+    options?: { signal?: AbortSignal }
+  ): Promise<{
+    media_id: number
+    annotations: Array<{
+      id: string
+      media_id: number
+      location: string
+      text: string
+      color: "yellow" | "green" | "blue" | "pink"
+      note?: string
+      annotation_type: "highlight" | "page_note"
+      created_at: string
+      updated_at: string
+    }>
+    total_count: number
+  }> {
+    const id = encodeURIComponent(String(mediaId))
+    return await bgRequest<{
+      media_id: number
+      annotations: Array<{
+        id: string
+        media_id: number
+        location: string
+        text: string
+        color: "yellow" | "green" | "blue" | "pink"
+        note?: string
+        annotation_type: "highlight" | "page_note"
+        created_at: string
+        updated_at: string
+      }>
+      total_count: number
+    }>({
+      path: `/api/v1/media/${id}/annotations`,
+      method: "GET",
+      abortSignal: options?.signal
+    })
+  }
+
+  async createAnnotation(
+    mediaId: string | number,
+    annotation: {
+      location: string
+      text: string
+      color?: "yellow" | "green" | "blue" | "pink"
+      note?: string
+      annotation_type?: "highlight" | "page_note"
+    },
+    options?: { signal?: AbortSignal }
+  ): Promise<{
+    id: string
+    media_id: number
+    location: string
+    text: string
+    color: "yellow" | "green" | "blue" | "pink"
+    note?: string
+    annotation_type: "highlight" | "page_note"
+    created_at: string
+    updated_at: string
+  }> {
+    const id = encodeURIComponent(String(mediaId))
+    return await bgRequest<{
+      id: string
+      media_id: number
+      location: string
+      text: string
+      color: "yellow" | "green" | "blue" | "pink"
+      note?: string
+      annotation_type: "highlight" | "page_note"
+      created_at: string
+      updated_at: string
+    }>({
+      path: `/api/v1/media/${id}/annotations`,
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: annotation,
+      abortSignal: options?.signal
+    })
+  }
+
+  async updateAnnotation(
+    mediaId: string | number,
+    annotationId: string,
+    updates: {
+      text?: string
+      color?: "yellow" | "green" | "blue" | "pink"
+      note?: string
+    },
+    options?: { signal?: AbortSignal }
+  ): Promise<{
+    id: string
+    media_id: number
+    location: string
+    text: string
+    color: "yellow" | "green" | "blue" | "pink"
+    note?: string
+    annotation_type: "highlight" | "page_note"
+    created_at: string
+    updated_at: string
+  }> {
+    const id = encodeURIComponent(String(mediaId))
+    const annId = encodeURIComponent(annotationId)
+    return await bgRequest<{
+      id: string
+      media_id: number
+      location: string
+      text: string
+      color: "yellow" | "green" | "blue" | "pink"
+      note?: string
+      annotation_type: "highlight" | "page_note"
+      created_at: string
+      updated_at: string
+    }>({
+      path: `/api/v1/media/${id}/annotations/${annId}`,
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: updates,
+      abortSignal: options?.signal
+    })
+  }
+
+  async deleteAnnotation(
+    mediaId: string | number,
+    annotationId: string,
+    options?: { signal?: AbortSignal }
+  ): Promise<void> {
+    const id = encodeURIComponent(String(mediaId))
+    const annId = encodeURIComponent(annotationId)
+    await bgRequest<void>({
+      path: `/api/v1/media/${id}/annotations/${annId}`,
+      method: "DELETE",
+      abortSignal: options?.signal
+    })
+  }
+
+  async syncAnnotations(
+    mediaId: string | number,
+    annotations: Array<{
+      location: string
+      text: string
+      color?: "yellow" | "green" | "blue" | "pink"
+      note?: string
+      annotation_type?: "highlight" | "page_note"
+    }>,
+    clientIds?: string[],
+    options?: { signal?: AbortSignal }
+  ): Promise<{
+    media_id: number
+    synced_count: number
+    annotations: Array<{
+      id: string
+      media_id: number
+      location: string
+      text: string
+      color: "yellow" | "green" | "blue" | "pink"
+      note?: string
+      annotation_type: "highlight" | "page_note"
+      created_at: string
+      updated_at: string
+    }>
+    id_mapping?: Record<string, string>
+  }> {
+    const id = encodeURIComponent(String(mediaId))
+    return await bgRequest<{
+      media_id: number
+      synced_count: number
+      annotations: Array<{
+        id: string
+        media_id: number
+        location: string
+        text: string
+        color: "yellow" | "green" | "blue" | "pink"
+        note?: string
+        annotation_type: "highlight" | "page_note"
+        created_at: string
+        updated_at: string
+      }>
+      id_mapping?: Record<string, string>
+    }>({
+      path: `/api/v1/media/${id}/annotations/sync`,
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: {
+        annotations,
+        ...(clientIds && { client_ids: clientIds })
+      },
+      abortSignal: options?.signal
+    })
+  }
+
+  // Reading Progress Methods
+  async getReadingProgress(
+    mediaId: string | number,
+    options?: { signal?: AbortSignal }
+  ): Promise<{
+    media_id: number
+    has_progress?: boolean
+    current_page?: number
+    total_pages?: number
+    zoom_level?: number
+    view_mode?: "single" | "continuous" | "thumbnails"
+    percent_complete?: number
+    cfi?: string
+    last_read_at?: string
+  }> {
+    const id = encodeURIComponent(String(mediaId))
+    return await bgRequest<{
+      media_id: number
+      has_progress?: boolean
+      current_page?: number
+      total_pages?: number
+      zoom_level?: number
+      view_mode?: "single" | "continuous" | "thumbnails"
+      percent_complete?: number
+      cfi?: string
+      last_read_at?: string
+    }>({
+      path: `/api/v1/media/${id}/progress`,
+      method: "GET",
+      abortSignal: options?.signal
+    })
+  }
+
+  async updateReadingProgress(
+    mediaId: string | number,
+    progress: {
+      current_page: number
+      total_pages: number
+      zoom_level?: number
+      view_mode?: "single" | "continuous" | "thumbnails"
+      cfi?: string
+      percentage?: number
+    },
+    options?: { signal?: AbortSignal }
+  ): Promise<{
+    media_id: number
+    current_page: number
+    total_pages: number
+    zoom_level: number
+    view_mode: "single" | "continuous" | "thumbnails"
+    percent_complete: number
+    cfi?: string
+    last_read_at: string
+  }> {
+    const id = encodeURIComponent(String(mediaId))
+    return await bgRequest<{
+      media_id: number
+      current_page: number
+      total_pages: number
+      zoom_level: number
+      view_mode: "single" | "continuous" | "thumbnails"
+      percent_complete: number
+      cfi?: string
+      last_read_at: string
+    }>({
+      path: `/api/v1/media/${id}/progress`,
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: progress,
+      abortSignal: options?.signal
+    })
+  }
+
+  async deleteReadingProgress(
+    mediaId: string | number,
+    options?: { signal?: AbortSignal }
+  ): Promise<void> {
+    const id = encodeURIComponent(String(mediaId))
+    await bgRequest<void>({
+      path: `/api/v1/media/${id}/progress`,
+      method: "DELETE",
+      abortSignal: options?.signal
+    })
+  }
+
   // Notes Methods
   async createNote(content: string, metadata?: any): Promise<any> {
     return await bgRequest<any>({ path: '/api/v1/notes/', method: 'POST', headers: { 'Content-Type': 'application/json' }, body: { content, ...metadata } })

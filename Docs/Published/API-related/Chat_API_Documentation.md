@@ -50,7 +50,7 @@ Slash commands:
 Follows OpenAI-style chat payload with extensions.
 
 Key fields:
-- `model` (string): Target model. May be prefixed as `provider/model` (e.g., `anthropic/claude-sonnet-4.5`).
+- `model` (string): Target model. May be prefixed as `provider/model` (e.g., `anthropic/claude-opus-4-20250514`).
 - `messages` (array): Conversation turns. Supports roles `system`, `user`, `assistant`, `tool`.
   - User message `content` may be a string or a list of parts: text and base64 data URI `image_url`
     using `data:image/...;base64,...` only (HTTP/HTTPS image URLs are not accepted).
@@ -77,7 +77,7 @@ curl -s -X POST http://127.0.0.1:8000/api/v1/chat/completions \
   -H "Content-Type: application/json" \
   -H "X-API-KEY: $API_KEY" \
   -d '{
-    "model": "openai/gpt-4o-mini",
+    "model": "openai/gpt-4o",
     "messages": [{"role":"user","content":"Hello!"}]
   }'
 ```
@@ -88,7 +88,7 @@ curl -N -X POST http://127.0.0.1:8000/api/v1/chat/completions \
   -H "Content-Type: application/json" \
   -H "X-API-KEY: $API_KEY" \
   -d '{
-    "model": "anthropic/claude-sonnet-4.5",
+    "model": "anthropic/claude-opus-4-20250514",
     "messages": [{"role":"user","content":"Stream this response."}],
     "stream": true
   }'
@@ -100,7 +100,7 @@ curl -s -X POST http://127.0.0.1:8000/api/v1/chat/completions \
   -H "Content-Type: application/json" \
   -H "X-API-KEY: $API_KEY" \
   -d '{
-    "model": "openai/gpt-4o-mini",
+    "model": "openai/gpt-4o",
     "response_format": {"type": "json_object"},
     "messages": [
       {"role":"system","content":"Return valid JSON only."},
@@ -115,7 +115,7 @@ curl -s -X POST http://127.0.0.1:8000/api/v1/chat/completions \
   -H "Content-Type: application/json" \
   -H "X-API-KEY: $API_KEY" \
   -d '{
-    "model": "openai/gpt-4o-mini",
+    "model": "openai/gpt-4o",
     "messages": [
       {"role": "user", "content": "What\'s the weather in Paris?"}
     ],

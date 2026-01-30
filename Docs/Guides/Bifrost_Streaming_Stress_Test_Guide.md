@@ -60,7 +60,7 @@ From repo root:
 make load-chat-stream \
   BASE_URL=$BASE_URL \
   API_KEY=$SINGLE_USER_API_KEY \
-  CHAT_MODEL=gpt-4o-mini \
+  CHAT_MODEL=gpt-4o \
   LOAD_CONCURRENCY=50 \
   LOAD_STREAMS_PER_CLIENT=1 \
   LOAD_PROMPT_BYTES=256
@@ -103,7 +103,7 @@ From repo root:
 make scenario-a-short-http1 \
   BASE_URL=$BASE_URL \
   API_KEY=$SINGLE_USER_API_KEY \
-  CHAT_MODEL=gpt-4o-mini
+  CHAT_MODEL=gpt-4o
 ```
 
 Defaults:
@@ -138,7 +138,7 @@ Run the same sweep with HTTP/2:
 make scenario-a-short-http2 \
   BASE_URL=$BASE_URL \
   API_KEY=$SINGLE_USER_API_KEY \
-  CHAT_MODEL=gpt-4o-mini
+  CHAT_MODEL=gpt-4o
 ```
 
 This allows a direct comparison between HTTP/1.1 and HTTP/2 tail latency at the same concurrency and prompt sizes.
@@ -155,7 +155,7 @@ HTTP/1.1 sweep:
 make scenario-a-long-http1 \
   BASE_URL=$BASE_URL \
   API_KEY=$SINGLE_USER_API_KEY \
-  CHAT_MODEL=gpt-4o-mini
+  CHAT_MODEL=gpt-4o
 ```
 
 HTTP/2 sweep:
@@ -164,7 +164,7 @@ HTTP/2 sweep:
 make scenario-a-long-http2 \
   BASE_URL=$BASE_URL \
   API_KEY=$SINGLE_USER_API_KEY \
-  CHAT_MODEL=gpt-4o-mini
+  CHAT_MODEL=gpt-4o
 ```
 
 You can adjust prompt size:
@@ -173,7 +173,7 @@ You can adjust prompt size:
 make scenario-a-long-http2 \
   BASE_URL=$BASE_URL \
   API_KEY=$SINGLE_USER_API_KEY \
-  CHAT_MODEL=gpt-4o-mini \
+  CHAT_MODEL=gpt-4o \
   SCENARIO_A_LONG_PROMPT_BYTES=2048
 ```
 
@@ -191,7 +191,7 @@ Example: HTTP/2 with custom steps and larger prompts:
 python Helper_Scripts/load_tests/chat_streaming_sweep.py \
   --base-url "$BASE_URL" \
   --api-key "$SINGLE_USER_API_KEY" \
-  --model gpt-4o-mini \
+  --model gpt-4o \
   --concurrency-steps 50 150 300 600 \
   --streams-per-client 2 \
   --prompt-bytes 1024 \
@@ -208,7 +208,7 @@ mkdir -p .benchmarks
 python Helper_Scripts/load_tests/chat_streaming_sweep.py \
   --base-url "$BASE_URL" \
   --api-key "$SINGLE_USER_API_KEY" \
-  --model gpt-4o-mini \
+  --model gpt-4o \
   --concurrency-steps 50 100 200 400 800 \
   --streams-per-client 2 \
   --prompt-bytes 256 \

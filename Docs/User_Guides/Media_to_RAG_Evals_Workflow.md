@@ -191,7 +191,7 @@ curl -X POST http://127.0.0.1:8000/api/v1/evaluations/ \
               {"strategy": ["flashrank", "cross_encoder"], "top_k": [10]}
             ],
             "rag": {
-              "model": ["gpt-4o-mini"],
+              "model": ["gpt-4o"],
               "max_tokens": [300]
             },
             "aggregation_weights": {"rag_overall": 1.0, "retrieval_diversity": 0.1}
@@ -230,7 +230,7 @@ curl -X POST http://127.0.0.1:8000/api/v1/evaluations/rag/pipeline/presets \
           "chunking": {"include_siblings": true},
           "retriever": {"search_mode": "hybrid", "hybrid_alpha": 0.7, "top_k": 12},
           "reranker": {"strategy": "cross_encoder", "top_k": 10},
-          "rag": {"model": "gpt-4o-mini", "max_tokens": 300}
+          "rag": {"model": "gpt-4o", "max_tokens": 300}
         }
       }'
 ```

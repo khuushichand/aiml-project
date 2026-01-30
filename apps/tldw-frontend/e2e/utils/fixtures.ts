@@ -1,11 +1,10 @@
 /**
  * Extended Playwright test fixtures for workflow tests
  */
-import { test as base, expect, type Page, type BrowserContext } from "@playwright/test"
+import { test as base, expect, type Page } from "@playwright/test"
 import {
   seedAuth,
   TEST_CONFIG,
-  waitForConnection,
   isBenign,
   fetchWithApiKey
 } from "./helpers"

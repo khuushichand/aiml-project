@@ -1,4 +1,7 @@
 import "../styles/globals.css"
+// react-pdf text/annotation layer styles for Document Workspace
+import "react-pdf/dist/esm/Page/AnnotationLayer.css"
+import "react-pdf/dist/esm/Page/TextLayer.css"
 import "@web/extension/shims/runtime-bootstrap"
 // Use web-specific i18n that works with SSR/static generation
 import "@web/lib/i18n-web"
