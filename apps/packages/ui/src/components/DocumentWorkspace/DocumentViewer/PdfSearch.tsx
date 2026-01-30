@@ -2,11 +2,10 @@ import React, { useRef, useEffect, useCallback } from "react"
 import { useTranslation } from "react-i18next"
 import { Input, Button, Spin } from "antd"
 import { X, ChevronUp, ChevronDown } from "lucide-react"
-import type { PDFDocumentProxy } from "pdfjs-dist"
-import { usePdfSearch } from "@/hooks/document-workspace/usePdfSearch"
+import { usePdfSearch, type PdfDocumentProxy } from "@/hooks/document-workspace/usePdfSearch"
 
 interface PdfSearchProps {
-  pdfDocumentRef: React.RefObject<PDFDocumentProxy | null>
+  pdfDocumentRef: React.RefObject<PdfDocumentProxy | null>
 }
 
 /**

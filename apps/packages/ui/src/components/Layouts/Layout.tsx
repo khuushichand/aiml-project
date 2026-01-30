@@ -44,12 +44,27 @@ const CommandPalette = lazy(() =>
   }))
 )
 
-const KeyboardShortcutsModal = lazy(() =>
-  import("@/components/Common/KeyboardShortcutsModal").then((m) => ({
-    default: m.KeyboardShortcutsModal
+const PageHelpModal = lazy(() =>
+  import("@/components/Common/PageHelpModal").then((m) => ({
+    default: m.PageHelpModal
   }))
 )
+
+const TutorialRunner = lazy(() =>
+  import("@/components/Common/TutorialRunner").then((m) => ({
+    default: m.TutorialRunner
+  }))
+)
+
+const TutorialPrompt = lazy(() =>
+  import("@/components/Common/TutorialPrompt").then((m) => ({
+    default: m.TutorialPrompt
+  }))
+)
+
 import { useConfirmDanger } from "@/components/Common/confirm-danger"
+import { useHelpModal } from "@/store/tutorials"
+import { isMac } from "@/hooks/keyboard/useKeyboardShortcuts"
 import { DemoModeProvider, useDemoMode } from "@/context/demo-mode"
 
 type OptionLayoutProps = {
@@ -141,6 +156,37 @@ const OptionLayoutInner: React.FC<OptionLayoutProps> = ({
   useChatShortcuts(clearChat, true)
   useSidebarShortcuts(toggleSidebar, true)
   useQuickChatShortcuts(toggleQuickChat, true)
+
+  // Help modal (tutorials + shortcuts)
+  const { toggle: toggleHelpModal } = useHelpModal()
+
+  // ? key to open help modal
+  React.useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      // Don't trigger if user is typing in an input
+      const target = e.target as HTMLElement
+      const isInputField =
+        target.tagName === "INPUT" ||
+        target.tagName === "TEXTAREA" ||
+        target.isContentEditable
+
+      // ? key (with or without shift, since ? requires shift on most keyboards)
+      if (e.key === "?" && !isInputField) {
+        e.preventDefault()
+        toggleHelpModal()
+      }
+
+      // Also support the legacy Ctrl/Cmd + Shift + ? shortcut
+      const modPressed = isMac ? e.metaKey : e.ctrlKey
+      if (e.key === "?" && e.shiftKey && modPressed && !isInputField) {
+        e.preventDefault()
+        toggleHelpModal()
+      }
+    }
+
+    document.addEventListener("keydown", handleKeyDown)
+    return () => document.removeEventListener("keydown", handleKeyDown)
+  }, [toggleHelpModal])
 
   React.useEffect(() => {
     if (!shortcutLoading) return
@@ -349,10 +395,24 @@ const OptionLayoutInner: React.FC<OptionLayoutProps> = ({
           </Suspense>
         )}
 
-        {/* Keyboard Shortcuts Help Modal - triggered by ? */}
+        {/* Page Help Modal (Tutorials + Shortcuts) - triggered by ? */}
         {!hideHeader && (
           <Suspense fallback={null}>
-            <KeyboardShortcutsModal />
+            <PageHelpModal />
+          </Suspense>
+        )}
+
+        {/* Tutorial Runner - executes active tutorials */}
+        {!hideHeader && (
+          <Suspense fallback={null}>
+            <TutorialRunner />
+          </Suspense>
+        )}
+
+        {/* Tutorial Prompt - shows first-visit notification */}
+        {!hideHeader && (
+          <Suspense fallback={null}>
+            <TutorialPrompt />
           </Suspense>
         )}
 

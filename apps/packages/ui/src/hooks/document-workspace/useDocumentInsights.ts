@@ -14,6 +14,22 @@ export type InsightCategory =
   | "future_work"
   | "summary"
 
+const INSIGHT_CATEGORIES: InsightCategory[] = [
+  "research_gap",
+  "research_question",
+  "motivation",
+  "methods",
+  "key_findings",
+  "limitations",
+  "future_work",
+  "summary"
+]
+
+const normalizeInsightCategory = (value: string): InsightCategory =>
+  INSIGHT_CATEGORIES.includes(value as InsightCategory)
+    ? (value as InsightCategory)
+    : "summary"
+
 /**
  * A single insight extracted from the document.
  */
@@ -59,7 +75,14 @@ export function useDocumentInsights(mediaId: number | null) {
     queryFn: async (): Promise<DocumentInsightsResponse | null> => {
       if (mediaId === null) return null
       // This will return cached insights or generate new ones
-      return await tldwClient.generateDocumentInsights(mediaId)
+      const response = await tldwClient.generateDocumentInsights(mediaId)
+      return {
+        ...response,
+        insights: response.insights.map((insight) => ({
+          ...insight,
+          category: normalizeInsightCategory(insight.category)
+        }))
+      }
     },
     // Insights are generated on-demand, so we don't auto-fetch
     enabled: false,
@@ -88,7 +111,14 @@ export function useGenerateInsightsMutation() {
       mediaId: number
       options?: GenerateInsightsOptions
     }): Promise<DocumentInsightsResponse> => {
-      return await tldwClient.generateDocumentInsights(mediaId, options)
+      const response = await tldwClient.generateDocumentInsights(mediaId, options)
+      return {
+        ...response,
+        insights: response.insights.map((insight) => ({
+          ...insight,
+          category: normalizeInsightCategory(insight.category)
+        }))
+      }
     },
     onSuccess: (data, variables) => {
       // Update the cache with the generated insights

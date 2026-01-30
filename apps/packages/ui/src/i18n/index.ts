@@ -18,7 +18,8 @@ const NAMESPACES = [
     "dataTables",
     "collections",
     "evaluations",
-    "audiobook"
+    "audiobook",
+    "tutorials"
 ] as const
 
 type Namespace = typeof NAMESPACES[number]

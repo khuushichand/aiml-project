@@ -1869,7 +1869,7 @@ export class TldwApiClient {
       "/api/v1/characters/{id}/export",
       "/api/v1/characters/{id}/export/"
     ])
-    const path = this.fillPathParams(template, cid) + qp
+    const path = appendPathQuery(this.fillPathParams(template, cid), qp)
     return await bgRequest<any>({
       path,
       method: 'GET'
@@ -1907,7 +1907,14 @@ export class TldwApiClient {
 
   async restoreCharacter(id: string | number, expectedVersion: number): Promise<any> {
     const cid = String(id)
-    const path = `/api/v1/characters/${cid}/restore?expected_version=${expectedVersion}`
+    const template = await this.resolveApiPath("characters.restore", [
+      "/api/v1/characters/{id}/restore",
+      "/api/v1/characters/{id}/restore/"
+    ])
+    const path = appendPathQuery(
+      this.fillPathParams(template, cid),
+      `?expected_version=${expectedVersion}`
+    )
     const res = await bgRequest<any>({ path, method: 'POST' })
     this.characterCache.delete(cid)
     return res

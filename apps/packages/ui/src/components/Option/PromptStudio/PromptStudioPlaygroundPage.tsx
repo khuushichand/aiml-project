@@ -64,8 +64,10 @@ const { Title, Paragraph, Text } = Typography
 const parseJson = (value: string | undefined, fallback: any = {}) => {
   if (!value || value.trim() === '') return fallback
   const result = validateJson(value)
-  if (result.success) return result.data
-  throw new Error(formatJsonError(result.error))
+  if ("error" in result) {
+    throw new Error(formatJsonError(result.error))
+  }
+  return result.data
 }
 
 type PromptFormFields = {

@@ -129,8 +129,32 @@ type Prompt = {
   keywords?: string[]
   createdBy?: string
   createdAt: number
+  updatedAt?: number
   tags?: string[]
   favorite?: boolean
+  deletedAt?: number | null
+  // ─── Server Sync Fields (Prompt Studio integration) ───
+  serverId?: number | null
+  studioProjectId?: number | null
+  studioPromptId?: number | null
+  syncStatus?: "local" | "synced" | "pending" | "conflict"
+  sourceSystem?: "workspace" | "studio" | "copilot"
+  lastSyncedAt?: number | null
+  serverUpdatedAt?: string | null
+  fewShotExamples?: Array<{
+    inputs: Record<string, any>
+    outputs: Record<string, any>
+    explanation?: string | null
+  }> | null
+  modulesConfig?: Array<{
+    type: string
+    enabled?: boolean
+    config?: Record<string, any> | null
+  }> | null
+  versionNumber?: number | null
+  changeDescription?: string | null
+  parentVersionId?: string | null
+  serverParentVersionId?: number | null
 }
 
 type MessageHistory = Message[]

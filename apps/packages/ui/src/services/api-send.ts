@@ -25,20 +25,34 @@ export interface ApiSendResponse<T = any> {
 export async function apiSend<T = any, P extends PathOrUrl = PathOrUrl, M extends AllowedMethodFor<P> = AllowedMethodFor<P>>(
   payload: ApiSendPayload<P, M>
 ): Promise<ApiSendResponse<T>> {
+  console.log('[API_SEND_DEBUG] apiSend called', {
+    path: payload.path,
+    method: payload.method,
+    noAuth: payload.noAuth,
+    hasRuntimeSendMessage: !!browser?.runtime?.sendMessage,
+    hasRuntimeId: !!browser?.runtime?.id
+  })
+
   try {
     // In web mode the wxt/browser shim provides sendMessage but no runtime.id.
     // Only use extension messaging when a real runtime is present.
     if (browser?.runtime?.sendMessage && browser?.runtime?.id) {
+      console.log('[API_SEND_DEBUG] using extension messaging')
       const resp = await browser.runtime.sendMessage({ type: 'tldw:request', payload })
+      console.log('[API_SEND_DEBUG] extension message response', { hasResp: !!resp, ok: resp?.ok, status: resp?.status })
       if (resp) {
         return resp as ApiSendResponse<T>
       }
     }
-  } catch {
+  } catch (err) {
+    console.log('[API_SEND_DEBUG] extension message error', { error: String(err) })
     // fall through to direct request
   }
+  console.log('[API_SEND_DEBUG] falling back to direct request')
   const storage = createSafeStorage()
+  const config = await storage.get('tldwConfig').catch(() => null)
+  console.log('[API_SEND_DEBUG] direct request config', { hasConfig: !!config, serverUrl: config?.serverUrl })
   return await tldwRequest(payload, {
-    getConfig: () => storage.get('tldwConfig').catch(() => null)
+    getConfig: () => Promise.resolve(config)
   })
 }

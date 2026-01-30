@@ -201,19 +201,19 @@ export function createJsonFieldValidator(fieldName: string = 'JSON', required: b
     }
 
     const result = validateJson(value)
-    if (result.success) {
-      return Promise.resolve()
+    if ("error" in result) {
+      const { error } = result
+      let errorText = error.message
+      if (error.line && error.column) {
+        errorText = `Line ${error.line}, Column ${error.column}: ${error.message}`
+      } else if (error.line) {
+        errorText = `Line ${error.line}: ${error.message}`
+      }
+
+      return Promise.reject(new Error(errorText))
     }
 
-    const { error } = result
-    let errorText = error.message
-    if (error.line && error.column) {
-      errorText = `Line ${error.line}, Column ${error.column}: ${error.message}`
-    } else if (error.line) {
-      errorText = `Line ${error.line}: ${error.message}`
-    }
-
-    return Promise.reject(new Error(errorText))
+    return Promise.resolve()
   }
 }
 

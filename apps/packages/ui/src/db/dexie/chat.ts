@@ -6,6 +6,7 @@ import {
   MessageHistory,
   Prompt,
   Prompts,
+  PromptSyncStatus,
   CompareState,
   SessionFiles,
   UploadedFile,
@@ -524,7 +525,7 @@ export class PageAssistDatabase {
       .first();
   }
 
-  async getPromptsBySyncStatus(status: string): Promise<Prompts> {
+  async getPromptsBySyncStatus(status: PromptSyncStatus): Promise<Prompts> {
     return await db.prompts
       .where('syncStatus')
       .equals(status)
@@ -553,7 +554,7 @@ export class PageAssistDatabase {
   }
 
   async updatePromptSyncStatus(id: string, updates: {
-    syncStatus?: string;
+    syncStatus?: PromptSyncStatus;
     serverId?: number | null;
     studioProjectId?: number | null;
     studioPromptId?: number | null;

@@ -1,6 +1,6 @@
 import React, { useCallback, useState, useRef, useEffect } from "react"
 import { Document, pdfjs } from "react-pdf"
-import type { PDFDocumentProxy } from "pdfjs-dist"
+import type { DocumentProps } from "react-pdf"
 import { Spin, Alert } from "antd"
 import { PdfPage } from "./PdfPage"
 import { TextSelectionPopover } from "../TextSelectionPopover"
@@ -41,8 +41,10 @@ interface PdfDocumentProps {
   onLoadSuccess: (numPages: number) => void
   onLoadError: (error: Error) => void
   onPageChange: (page: number) => void
-  pdfDocumentRef?: React.MutableRefObject<PDFDocumentProxy | null>
+  pdfDocumentRef?: React.MutableRefObject<PdfDocumentProxy | null>
 }
+
+type PdfDocumentProxy = Parameters<NonNullable<DocumentProps["onLoadSuccess"]>>[0]
 
 export const PdfDocument: React.FC<PdfDocumentProps> = ({
   url,
@@ -64,8 +66,8 @@ export const PdfDocument: React.FC<PdfDocumentProps> = ({
   // Text selection for popover actions
   const { selection, clearSelection } = useTextSelection(containerRef)
 
-  const handleDocumentLoadSuccess = useCallback(
-    (pdf: { numPages: number } & PDFDocumentProxy) => {
+  const handleDocumentLoadSuccess = useCallback<NonNullable<DocumentProps["onLoadSuccess"]>>(
+    (pdf) => {
       setNumPages(pdf.numPages)
       setLoading(false)
       setError(null)

@@ -1,5 +1,5 @@
 import { useState, useCallback, useEffect, useRef } from "react"
-import type { PDFDocumentProxy } from "pdfjs-dist"
+import type { DocumentProps } from "react-pdf"
 import { useDocumentWorkspaceStore } from "@/store/document-workspace"
 
 export interface SearchResult {
@@ -13,6 +13,10 @@ interface TextItem {
   str: string
   transform: number[]
 }
+
+export type PdfDocumentProxy = Parameters<
+  NonNullable<DocumentProps["onLoadSuccess"]>
+>[0]
 
 interface SearchIndex {
   pageTexts: Map<number, string>
@@ -28,7 +32,9 @@ interface SearchIndex {
  * - Navigating between results
  * - Highlighting matching text spans
  */
-export function usePdfSearch(pdfDocumentRef: React.RefObject<PDFDocumentProxy | null>) {
+export function usePdfSearch(
+  pdfDocumentRef: React.RefObject<PdfDocumentProxy | null>
+) {
   const [searchIndex, setSearchIndex] = useState<SearchIndex | null>(null)
   const [isIndexing, setIsIndexing] = useState(false)
   const [debouncedQuery, setDebouncedQuery] = useState("")
@@ -63,12 +69,19 @@ export function usePdfSearch(pdfDocumentRef: React.RefObject<PDFDocumentProxy | 
         const page = await pdfDocument.getPage(pageNum)
         const textContent = await page.getTextContent()
 
-        const items: TextItem[] = textContent.items
-          .filter((item): item is TextItem & { str: string } => "str" in item)
-          .map((item) => ({
-            str: item.str,
-            transform: item.transform as number[]
-          }))
+        const rawItems = textContent.items as Array<{
+          str?: string
+          transform?: number[]
+        }>
+        const items: TextItem[] = []
+        rawItems.forEach((item) => {
+          if (typeof item.str === "string") {
+            items.push({
+              str: item.str,
+              transform: Array.isArray(item.transform) ? item.transform : []
+            })
+          }
+        })
 
         pageItems.set(pageNum, items)
         pageTexts.set(pageNum, items.map((item) => item.str).join(" "))

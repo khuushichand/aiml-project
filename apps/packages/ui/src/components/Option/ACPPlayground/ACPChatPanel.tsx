@@ -139,7 +139,7 @@ export const ACPChatPanel: React.FC = () => {
             )}
           </div>
 
-          {!isConnected && state !== "connecting" && (
+          {!isConnected && (
             <div className="mt-2 flex items-center gap-1 text-xs text-warning">
               <AlertCircle className="h-3 w-3" />
               {t("playground:acp.notConnected", "Not connected to session")}

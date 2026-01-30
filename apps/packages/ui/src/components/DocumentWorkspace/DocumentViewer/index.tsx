@@ -2,7 +2,7 @@ import React, { useCallback, useEffect, useRef } from "react"
 import { useTranslation } from "react-i18next"
 import { Empty, Spin } from "antd"
 import { FileText, AlertCircle } from "lucide-react"
-import type { PDFDocumentProxy } from "pdfjs-dist"
+import type { PdfDocumentProxy } from "@/hooks/document-workspace/usePdfSearch"
 import { useDocumentWorkspaceStore } from "@/store/document-workspace"
 import { ViewerToolbar } from "./ViewerToolbar"
 import { PdfDocument } from "./PdfViewer/PdfDocument"
@@ -16,7 +16,7 @@ interface DocumentViewerProps {
 
 export const DocumentViewer: React.FC<DocumentViewerProps> = ({ className }) => {
   const { t } = useTranslation(["option", "common"])
-  const pdfDocumentRef = useRef<PDFDocumentProxy | null>(null)
+  const pdfDocumentRef = useRef<PdfDocumentProxy | null>(null)
 
   const activeDocumentId = useDocumentWorkspaceStore((s) => s.activeDocumentId)
   const activeDocumentType = useDocumentWorkspaceStore(

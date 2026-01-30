@@ -550,9 +550,25 @@ export default defineBackground({
       }
     }
 
-    const runTldwRequest = async (payload: any) =>
-      tldwRequest(payload, {
-        getConfig: () => storage.get<any>('tldwConfig'),
+    const runTldwRequest = async (payload: any) => {
+      // DEBUG: Log incoming request
+      console.log('[BG_DEBUG] runTldwRequest called', {
+        path: payload?.path,
+        method: payload?.method,
+        noAuth: payload?.noAuth
+      })
+
+      const config = await storage.get<any>('tldwConfig')
+      console.log('[BG_DEBUG] tldwConfig from storage', {
+        hasConfig: !!config,
+        serverUrl: config?.serverUrl,
+        authMode: config?.authMode,
+        hasApiKey: !!config?.apiKey,
+        apiKeyPrefix: config?.apiKey?.substring?.(0, 10)
+      })
+
+      return tldwRequest(payload, {
+        getConfig: () => Promise.resolve(config),
         refreshAuth: async () => {
           if (!refreshInFlight) {
             refreshInFlight = (async () => {
@@ -570,13 +586,22 @@ export default defineBackground({
           }
         }
       })
+    }
 
     const handleTldwRequest = async (payload: any) => {
+      console.log('[BG_DEBUG] handleTldwRequest received', { path: payload?.path, method: payload?.method })
       const path = payload?.path
       if (isChatEndpoint(String(path || ""))) {
         return enqueueChatRequest(() => runTldwRequest(payload))
       }
-      return runTldwRequest(payload)
+      try {
+        const result = await runTldwRequest(payload)
+        console.log('[BG_DEBUG] handleTldwRequest result', { path: payload?.path, ok: result?.ok, status: result?.status })
+        return result
+      } catch (error) {
+        console.log('[BG_DEBUG] handleTldwRequest error', { path: payload?.path, error: String(error) })
+        throw error
+      }
     }
 
     const handleRuntimeMessage = async (message: any, sender: any) => {

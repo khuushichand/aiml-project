@@ -365,8 +365,9 @@ export async function linkPrompts(
  * Unlink a local prompt from server (keep local copy).
  */
 export async function unlinkPrompt(localId: string): Promise<SyncResult> {
+  let local: LocalPrompt | undefined
   try {
-    const local = await db.prompts.get(localId)
+    local = await db.prompts.get(localId)
     if (!local) {
       return {
         success: false,
