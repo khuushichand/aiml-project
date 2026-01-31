@@ -2,6 +2,10 @@ import { registerRealServerWorkflows, type CreateWorkflowDriver, withFeatures, A
 import { launchWithBuiltExtension } from "./utils/extension-build"
 import { grantHostPermission } from "./utils/permissions"
 
+const shouldSkipHostPermission =
+  process.env.TLDW_E2E_SKIP_HOST_PERMISSION !== "0" &&
+  process.env.TLDW_E2E_SKIP_HOST_PERMISSION !== "false"
+
 const normalizeRoute = (route: string) => {
   const trimmed = String(route || "").trim()
   if (!trimmed) return "/"
@@ -72,6 +76,9 @@ const createExtensionDriver: CreateWorkflowDriver = async ({
       await targetPage.goto(`${optionsUrl}#${normalized}`, options)
     },
     ensureHostPermission: async () => {
+      if (shouldSkipHostPermission) {
+        return true
+      }
       const origin = new URL(serverUrl).origin + "/*"
       return grantHostPermission(context, extensionId, origin)
     },

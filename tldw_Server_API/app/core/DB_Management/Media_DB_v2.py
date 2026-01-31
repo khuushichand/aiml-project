@@ -9023,6 +9023,17 @@ class MediaDatabase:
         fts_condition_params: List[Any] = []
         postgres_tsquery: Optional[str] = None
 
+        def _is_sqlite_fts_query_error(err: sqlite3.OperationalError) -> bool:
+            if self.backend_type != BackendType.SQLITE or fts_condition_index is None:
+                return False
+            msg = str(err).lower()
+            return (
+                "unable to use function match" in msg
+                or "no such column" in msg
+                or "fts5: syntax error" in msg
+                or ("malformed" in msg and "match" in msg)
+            )
+
         # Basic filters
         if not include_deleted:
             conditions.append("m.deleted = 0")
@@ -9321,11 +9332,7 @@ class MediaDatabase:
                     total_matches = total_matches_row[0] if total_matches_row else 0
                 logging.info(f"Search query '{search_query}' found {total_matches} total matches")
             except sqlite3.OperationalError as e:
-                if (
-                    self.backend_type == BackendType.SQLITE
-                    and "unable to use function MATCH in the requested context" in str(e)
-                    and fts_condition_index is not None
-                ):
+                if _is_sqlite_fts_query_error(e):
                     logging.warning(f"FTS MATCH error, falling back to LIKE-only search: {e}")
                     fallback_conditions = [
                         condition
@@ -9392,11 +9399,7 @@ class MediaDatabase:
                     results_list = [dict(row) for row in results_cursor.fetchall()]
                 except sqlite3.OperationalError as e:
                     # Handle specific FTS MATCH errors in results query
-                    if (
-                        self.backend_type == BackendType.SQLITE
-                        and "unable to use function MATCH in the requested context" in str(e)
-                        and fts_condition_index is not None
-                    ):
+                    if _is_sqlite_fts_query_error(e):
                         logging.warning(f"FTS MATCH error in results query, falling back to LIKE-only search: {e}")
                         fallback_conditions = [
                             condition

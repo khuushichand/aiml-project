@@ -1,29 +1,49 @@
+"""Workflow constants.
+
+This module provides backward-compatible exports for workflow constants.
+"""
+
 from __future__ import annotations
 
-MAP_SUBSTEP_TYPES = {
+from typing import Set
+
+# Parallelizable step types for use in map operations.
+# This is the source of truth - the registry's parallelizable flag is derived from this.
+# When adding new adapters to the registry with parallelizable=True, also add them here.
+MAP_SUBSTEP_TYPES: Set[str] = {
+    # Core adapters
     "prompt",
     "log",
     "delay",
+    "llm",
+    "translate",
+    "embed",
     "rag_search",
     "media_ingest",
     "mcp_tool",
     "webhook",
+    "notify",
     "kanban",
     "notes",
     "prompts",
     "chunking",
     "web_search",
+    "rss_fetch",
+    "atom_fetch",
     "collections",
     "evaluations",
     "claims_extract",
     "character_chat",
     "moderation",
+    "policy_check",
     "image_gen",
     "summarize",
     "query_expand",
     "citations",
     "ocr",
     "pdf_extract",
+    "diff_change_detector",
+    "tts",
     # Tier 1: Research Automation (parallelizable)
     "query_rewrite",
     "hyde_generate",
@@ -53,6 +73,7 @@ MAP_SUBSTEP_TYPES = {
     "github_create_issue",
     # Tier 6: Agentic Support (parallelizable)
     "llm_critique",
+    "llm_compare",
     "context_build",
     # Phase 2: Group A - Individual Utility (parallelizable)
     "document_merge",
@@ -65,7 +86,6 @@ MAP_SUBSTEP_TYPES = {
     "topic_model",
     "token_count",
     "context_window_check",
-    "llm_compare",
     "image_describe",
     "report_generate",
     "newsletter_generate",
@@ -93,27 +113,30 @@ MAP_SUBSTEP_TYPES = {
     "reference_parse",
     "bibtex_generate",
     "literature_review",
-    # Note: "email_send" is intentionally NOT included - side effects should be sequential
-    # Note: "screenshot_capture" is intentionally NOT included - resource intensive
-    # Note: "schedule_workflow" is intentionally NOT included - scheduling should be controlled
-    # Note: "audio_mix" is intentionally NOT included - resource intensive
-    # Note: "video_concat" is intentionally NOT included - resource intensive
-    # Note: "video_convert" is intentionally NOT included - resource intensive
-    # Note: "subtitle_generate" is intentionally NOT included - uses STT, resource intensive
-    # Note: "subtitle_burn" is intentionally NOT included - resource intensive
-    # Note: "arxiv_download" is intentionally NOT included - network I/O should be controlled
-    # Note: "chatbooks" is intentionally NOT included - not parallelizable
-    # Note: "sandbox_exec" is intentionally NOT included - code execution should be sequential for safety
-    # Note: "rerank" is intentionally NOT included - reranking needs full document context for relative scoring
-    # Note: "voice_intent" is intentionally NOT included - may use LLM, should be sequential
-    # Note: "audio_diarize" is intentionally NOT included - resource intensive
-    # Note: "document_table_extract" is intentionally NOT included - resource intensive
-    # Note: "search_aggregate" is intentionally NOT included - aggregates results, should be sequential
-    # Note: "workflow_call" is intentionally NOT included - sub-workflow execution should be controlled
-    # Note: "parallel" is intentionally NOT included - nesting parallel would be complex
-    # Note: "cache_result" is intentionally NOT included - cache operations should be sequential
-    # Note: "retry" is intentionally NOT included - retry wrapper is control flow
-    # Note: "checkpoint" is intentionally NOT included - state saving should be sequential
-    # Note: "batch" is intentionally NOT included - batching is control flow
-    # Note: "llm_with_tools" is intentionally NOT included - tool execution should be controlled
+    # Note: The following are intentionally NOT included:
+    # - email_send: side effects should be sequential
+    # - screenshot_capture: resource intensive
+    # - schedule_workflow: scheduling should be controlled
+    # - audio_mix: resource intensive
+    # - video_concat: resource intensive
+    # - video_convert: resource intensive
+    # - subtitle_generate: uses STT, resource intensive
+    # - subtitle_burn: resource intensive
+    # - arxiv_download: network I/O should be controlled
+    # - chatbooks: not parallelizable
+    # - sandbox_exec: code execution should be sequential for safety
+    # - rerank: reranking needs full document context for relative scoring
+    # - voice_intent: may use LLM, should be sequential
+    # - audio_diarize: resource intensive
+    # - document_table_extract: resource intensive
+    # - search_aggregate: aggregates results, should be sequential
+    # - workflow_call: sub-workflow execution should be controlled
+    # - parallel: nesting parallel would be complex
+    # - cache_result: cache operations should be sequential
+    # - retry: retry wrapper is control flow
+    # - checkpoint: state saving should be sequential
+    # - batch: batching is control flow
+    # - llm_with_tools: tool execution should be controlled
+    # - process_media: resource intensive
+    # - stt_transcribe: resource intensive
 }

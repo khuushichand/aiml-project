@@ -35,10 +35,22 @@ function makeTempProfileDirs() {
   return { homeDir, userDataDir }
 }
 
+const projectRoot = path.resolve(__dirname, '..', '..', '..')
+
 export async function launchWithBuiltExtension(
   { seedConfig, allowOffline, seedLocalStorage }: LaunchOptions = {}
 ) {
-  const extensionPath = path.resolve('build/chrome-mv3')
+  const candidates = [
+    path.resolve(projectRoot, 'build/chrome-mv3'),
+    path.resolve(projectRoot, '.output/chrome-mv3')
+  ]
+  const extensionPath = candidates.find((p) => fs.existsSync(p))
+  if (!extensionPath) {
+    throw new Error(
+      `No built extension found. Tried: ${candidates.join(', ')}. ` +
+      `Run "npm run build:chrome" from apps/extension.`
+    )
+  }
   const { homeDir, userDataDir } = makeTempProfileDirs()
   const context = await chromium.launchPersistentContext(userDataDir, {
     headless: !!process.env.CI,
@@ -121,6 +133,67 @@ export async function launchWithBuiltExtension(
     ])
   }
   await waitForTargets()
+
+  // Seed storage via service worker before any extension pages load.
+  // This avoids a race where the options UI checks connection before storage is ready.
+  const sw = context.serviceWorkers()[0]
+  if (sw) {
+    if (seedConfig) {
+      await sw.evaluate(({ cfg, allowOfflineFlag }) => {
+        return new Promise<void>((resolve) => {
+          const setLocal = (data: Record<string, any>, done?: () => void) => {
+            try {
+              chrome.storage.local.set(data, () => done?.())
+            } catch {
+              done?.()
+            }
+          }
+          const setSync = (data: Record<string, any>, done?: () => void) => {
+            try {
+              chrome.storage.sync.set(data, () => done?.())
+            } catch {
+              done?.()
+            }
+          }
+          chrome.storage.local.clear(() => {
+            chrome.storage.sync.clear(() => {
+              let pending = 0
+              const done = () => {
+                pending -= 1
+                if (pending <= 0) resolve()
+              }
+              if (allowOfflineFlag) {
+                pending += 1
+                setLocal({ __tldw_allow_offline: true }, done)
+              }
+              pending += 1
+              setSync(cfg, done)
+              pending += 1
+              setLocal(cfg, done)
+              pending += 1
+              setSync({ __e2eSeeded: true }, done)
+              pending += 1
+              setLocal({ __e2eSeeded: true }, done)
+            })
+          })
+        })
+      }, { cfg: seedConfig, allowOfflineFlag: allowOffline || false })
+    } else {
+      await sw.evaluate(() => {
+        return new Promise<void>((resolve) => {
+          chrome.storage.local.clear(() => {
+            chrome.storage.sync.clear(() => {
+              chrome.storage.local.set({ __e2eSeeded: true }, () => {
+                chrome.storage.sync.set({ __e2eSeeded: true }, () => {
+                  resolve()
+                })
+              })
+            })
+          })
+        })
+      })
+    }
+  }
 
   // Seed localStorage for tutorials and other non-extension storage
   if (seedLocalStorage) {

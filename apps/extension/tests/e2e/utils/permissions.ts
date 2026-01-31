@@ -48,4 +48,3 @@ export async function grantHostPermission(context: BrowserContext, extensionId: 
   await page.close()
   return false
 }
-
