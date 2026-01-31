@@ -781,7 +781,7 @@ export const PromptBody = () => {
       setSelectedSystemPrompt(insertPrompt.id)
       setSelectedQuickPrompt(undefined)
       setInsertPrompt(null)
-      navigate("/")
+      navigate("/chat")
       return
     }
     if (choice === "both") {
@@ -791,7 +791,7 @@ export const PromptBody = () => {
         setSelectedQuickPrompt(insertPrompt.userText)
       }
       setInsertPrompt(null)
-      navigate("/")
+      navigate("/chat")
       return
     }
     const quickContent = insertPrompt.userText ?? insertPrompt.systemText
@@ -799,7 +799,7 @@ export const PromptBody = () => {
       setSelectedQuickPrompt(quickContent)
       setSelectedSystemPrompt(undefined)
       setInsertPrompt(null)
-      navigate("/")
+      navigate("/chat")
     }
   }
 
@@ -1256,7 +1256,7 @@ export const PromptBody = () => {
                       if (quickContent) {
                         setSelectedQuickPrompt(quickContent)
                         setSelectedSystemPrompt(undefined)
-                        navigate("/")
+                        navigate("/chat")
                       }
                     }}
                     onDelete={async () => {
