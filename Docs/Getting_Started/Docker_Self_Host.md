@@ -50,7 +50,7 @@ The server is now running on port 8000.
 The default `docker-compose.yml` starts:
 
 | Service | Purpose | Port |
-|---------|---------|------|
+| ------- | ------- | ---- |
 | `app` | tldw_server API | 8000 |
 | `postgres` | Database (optional, SQLite by default) | 5432 |
 | `redis` | Caching (optional) | 6379 |
@@ -137,7 +137,7 @@ docker compose -f Dockerfiles/docker-compose.yml \
 ```
 
 Edit `Dockerfiles/Caddyfile`:
-```
+```caddyfile
 yourdomain.com {
     reverse_proxy app:8000
 }
@@ -250,7 +250,7 @@ make monitoring-up
 ## Troubleshooting
 
 | Issue | Solution |
-|-------|----------|
+| ----- | -------- |
 | Port 8000 in use | Change port: `ports: ["8001:8000"]` in override |
 | Container won't start | Check logs: `docker compose logs app` |
 | Database connection failed | Ensure postgres is healthy: `docker compose ps` |
@@ -261,7 +261,7 @@ make monitoring-up
 ## Docker Compose Files Reference
 
 | File | Purpose |
-|------|---------|
+| ---- | ------- |
 | `docker-compose.yml` | Base stack (app + postgres + redis) |
 | `docker-compose.override.yml` | Local overrides (auto-loaded) |
 | `docker-compose.proxy.yml` | Caddy reverse proxy |

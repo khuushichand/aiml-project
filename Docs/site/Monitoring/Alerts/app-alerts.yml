@@ -32,7 +32,7 @@ groups:
             datasourceUid: prometheus
             model:
               editorMode: code
-              expr: sum(rate(http_requests_total[5m]))
+              expr: clamp_min(sum(rate(http_requests_total[5m])), 1e-9)
               instant: false
               interval: ""
               legendFormat: "all"
