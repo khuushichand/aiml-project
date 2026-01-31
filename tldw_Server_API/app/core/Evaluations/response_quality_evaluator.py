@@ -99,7 +99,7 @@ class ResponseQualityEvaluator:
 
         return results
 
-    async def _evaluate_relevance(self, prompt: str, response: str, api_name: str, api_key: Optional[str], model: Optional[str]) -> tuple:
+    async def _evaluate_relevance(self, prompt: str, response: str, api_name: str, api_key: Optional[str], model: Optional[str] = None) -> tuple:
         """Evaluate how relevant the response is to the prompt"""
         evaluation_prompt = f"""
         Evaluate how relevant and appropriate the following response is to the given prompt.
@@ -148,7 +148,7 @@ class ResponseQualityEvaluator:
                 "explanation": f"Evaluation failed: {str(e)}"
             })
 
-    async def _evaluate_completeness(self, prompt: str, response: str, api_name: str, api_key: Optional[str], model: Optional[str]) -> tuple:
+    async def _evaluate_completeness(self, prompt: str, response: str, api_name: str, api_key: Optional[str], model: Optional[str] = None) -> tuple:
         """Evaluate if the response is complete"""
         evaluation_prompt = f"""
         Evaluate the completeness of the following response to the given prompt.
@@ -197,7 +197,7 @@ class ResponseQualityEvaluator:
                 "explanation": f"Evaluation failed: {str(e)}"
             })
 
-    async def _evaluate_clarity(self, response: str, api_name: str, api_key: Optional[str], model: Optional[str]) -> tuple:
+    async def _evaluate_clarity(self, response: str, api_name: str, api_key: Optional[str], model: Optional[str] = None) -> tuple:
         """Evaluate clarity and coherence of the response"""
         evaluation_prompt = f"""
         Evaluate the clarity, coherence, and readability of the following response.
@@ -244,7 +244,7 @@ class ResponseQualityEvaluator:
                 "explanation": f"Evaluation failed: {str(e)}"
             })
 
-    async def _evaluate_accuracy(self, prompt: str, response: str, api_name: str, api_key: Optional[str], model: Optional[str]) -> tuple:
+    async def _evaluate_accuracy(self, prompt: str, response: str, api_name: str, api_key: Optional[str], model: Optional[str] = None) -> tuple:
         """Evaluate factual accuracy of the response"""
         evaluation_prompt = f"""
         Evaluate the factual accuracy and correctness of the following response.
@@ -293,7 +293,7 @@ class ResponseQualityEvaluator:
                 "explanation": f"Evaluation failed: {str(e)}"
             })
 
-    async def _check_format_compliance(self, response: str, expected_format: str, api_name: str, api_key: Optional[str], model: Optional[str]) -> tuple:
+    async def _check_format_compliance(self, response: str, expected_format: str, api_name: str, api_key: Optional[str], model: Optional[str] = None) -> tuple:
         """Check if response matches expected format"""
         evaluation_prompt = f"""
         Check if the following response matches the expected format.
@@ -353,7 +353,7 @@ class ResponseQualityEvaluator:
         criterion_desc: str,
         api_name: str,
         api_key: Optional[str],
-        model: Optional[str],
+        model: Optional[str] = None,
     ) -> tuple:
         """Evaluate a custom criterion"""
         evaluation_prompt = f"""

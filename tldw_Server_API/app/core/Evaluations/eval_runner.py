@@ -163,6 +163,17 @@ class EvaluationRunner:
             elif not model_override:
                 model_override = str(evaluator_model)
 
+        # Allow model strings like "provider:model" or "provider/model" to override provider
+        if isinstance(model_override, str) and model_override:
+            for sep in (":", "/"):
+                if sep in model_override:
+                    prefix, rest = model_override.split(sep, 1)
+                    normalized_provider = normalize_provider(prefix)
+                    if normalized_provider and rest:
+                        api_name = normalized_provider
+                        model_override = rest
+                    break
+
         return api_name, model_override, api_key
 
     @property
