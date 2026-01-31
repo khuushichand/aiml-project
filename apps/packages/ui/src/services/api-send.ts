@@ -25,12 +25,21 @@ export interface ApiSendResponse<T = any> {
 export async function apiSend<T = any, P extends PathOrUrl = PathOrUrl, M extends AllowedMethodFor<P> = AllowedMethodFor<P>>(
   payload: ApiSendPayload<P, M>
 ): Promise<ApiSendResponse<T>> {
+  // More detailed diagnostics for extension messaging
+  const chromeGlobal = (globalThis as any).chrome
   console.log('[API_SEND_DEBUG] apiSend called', {
     path: payload.path,
     method: payload.method,
     noAuth: payload.noAuth,
     hasRuntimeSendMessage: !!browser?.runtime?.sendMessage,
-    hasRuntimeId: !!browser?.runtime?.id
+    hasRuntimeId: !!browser?.runtime?.id,
+    runtimeId: browser?.runtime?.id,
+    // Compare browser vs chrome
+    browserType: typeof browser,
+    chromeType: typeof chromeGlobal,
+    sameSendMessage: browser?.runtime?.sendMessage === chromeGlobal?.runtime?.sendMessage,
+    sameRuntime: browser?.runtime === chromeGlobal?.runtime,
+    chromeRuntimeId: chromeGlobal?.runtime?.id
   })
 
   try {
@@ -38,11 +47,29 @@ export async function apiSend<T = any, P extends PathOrUrl = PathOrUrl, M extend
     // Only use extension messaging when a real runtime is present.
     if (browser?.runtime?.sendMessage && browser?.runtime?.id) {
       console.log('[API_SEND_DEBUG] using extension messaging')
-      const resp = await browser.runtime.sendMessage({ type: 'tldw:request', payload })
-      console.log('[API_SEND_DEBUG] extension message response', { hasResp: !!resp, ok: resp?.ok, status: resp?.status })
+
+      // Add timeout to extension messaging - if it doesn't respond quickly, fall back to direct request
+      // Must be less than CONNECTION_TIMEOUT_MS (20s) so health checks can fall back to direct fetch
+      // Increased from 5s to 10s to reduce premature fallbacks during slow operations
+      const extensionTimeout = 10000 // 10 second timeout for extension messaging
+      const extensionPromise = browser.runtime.sendMessage({ type: 'tldw:request', payload })
+      const timeoutPromise = new Promise<null>((resolve) => {
+        setTimeout(() => resolve(null), extensionTimeout)
+      })
+
+      const resp = await Promise.race([extensionPromise, timeoutPromise])
+      console.log('[API_SEND_DEBUG] extension message response', {
+        hasResp: !!resp,
+        ok: resp?.ok,
+        status: resp?.status,
+        wasTimeout: resp === null
+      })
+
       if (resp) {
         return resp as ApiSendResponse<T>
       }
+      // If resp is null (timeout), fall through to direct request
+      console.log('[API_SEND_DEBUG] extension messaging timed out, falling back to direct request')
     }
   } catch (err) {
     console.log('[API_SEND_DEBUG] extension message error', { error: String(err) })
@@ -50,9 +77,13 @@ export async function apiSend<T = any, P extends PathOrUrl = PathOrUrl, M extend
   }
   console.log('[API_SEND_DEBUG] falling back to direct request')
   const storage = createSafeStorage()
-  const config = await storage.get('tldwConfig').catch(() => null)
-  console.log('[API_SEND_DEBUG] direct request config', { hasConfig: !!config, serverUrl: config?.serverUrl })
   return await tldwRequest(payload, {
-    getConfig: () => Promise.resolve(config)
+    // IMPORTANT: getConfig must fetch fresh config each time it's called
+    // (not pre-fetch once), because the config may change or not be seeded yet.
+    getConfig: async () => {
+      const config = await storage.get('tldwConfig').catch(() => null)
+      console.log('[API_SEND_DEBUG] direct request config', { hasConfig: !!config, serverUrl: config?.serverUrl })
+      return config
+    }
   })
 }

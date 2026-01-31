@@ -122,6 +122,7 @@ const warmModels = async (
 
 export default defineBackground({
   main() {
+    console.log('[BG_STARTUP] Background script main() starting', { timestamp: Date.now() })
     const storage = createSafeStorage()
     let isCopilotRunning: boolean = false
     let actionIconClick: string = "webui"
@@ -558,17 +559,21 @@ export default defineBackground({
         noAuth: payload?.noAuth
       })
 
-      const config = await storage.get<any>('tldwConfig')
-      console.log('[BG_DEBUG] tldwConfig from storage', {
-        hasConfig: !!config,
-        serverUrl: config?.serverUrl,
-        authMode: config?.authMode,
-        hasApiKey: !!config?.apiKey,
-        apiKeyPrefix: config?.apiKey?.substring?.(0, 10)
-      })
-
       return tldwRequest(payload, {
-        getConfig: () => Promise.resolve(config),
+        // IMPORTANT: getConfig must fetch fresh config each time it's called
+        // (not pre-fetch once), because the config may not be seeded yet when
+        // runTldwRequest is first invoked, but may be available on retry.
+        getConfig: async () => {
+          const config = await storage.get<any>('tldwConfig')
+          console.log('[BG_DEBUG] tldwConfig from storage', {
+            hasConfig: !!config,
+            serverUrl: config?.serverUrl,
+            authMode: config?.authMode,
+            hasApiKey: !!config?.apiKey,
+            apiKeyPrefix: config?.apiKey?.substring?.(0, 10)
+          })
+          return config
+        },
         refreshAuth: async () => {
           if (!refreshInFlight) {
             refreshInFlight = (async () => {
@@ -605,6 +610,10 @@ export default defineBackground({
     }
 
     const handleRuntimeMessage = async (message: any, sender: any) => {
+      // Simple ping for E2E tests - verifies message handler is working
+      if (message.type === "tldw:ping") {
+        return { ok: true, pong: true, timestamp: Date.now() }
+      }
       if (message.type === "tldw:diagnostics") {
         return { ok: true, data: buildBackgroundDiagnostics() }
       }
@@ -984,10 +993,55 @@ export default defineBackground({
       return undefined
     }
 
+    console.log('[BG_STARTUP] Registering message listener')
+    const chromeGlobal = (globalThis as any).chrome
+    console.log('[BG_STARTUP] browser.runtime:', {
+      hasSendMessage: !!browser?.runtime?.sendMessage,
+      hasOnMessage: !!browser?.runtime?.onMessage,
+      hasOnMessageAddListener: !!browser?.runtime?.onMessage?.addListener,
+      browserType: typeof browser,
+      chromeType: typeof chromeGlobal,
+      sameSendMessage: browser?.runtime?.sendMessage === chromeGlobal?.runtime?.sendMessage,
+      sameOnMessage: browser?.runtime?.onMessage === chromeGlobal?.runtime?.onMessage
+    })
+
+    // Also add a direct chrome listener as backup
+    if (chromeGlobal?.runtime?.onMessage?.addListener) {
+      chromeGlobal.runtime.onMessage.addListener((message: any, sender: any, sendResponse: any) => {
+        console.log('[BG_MSG_CHROME] Received via chrome.runtime:', { type: message?.type })
+        if (message?.type === 'tldw:ping') {
+          sendResponse({ ok: true, pong: true, timestamp: Date.now(), source: 'chrome-listener' })
+          return true
+        }
+        return false
+      })
+      console.log('[BG_STARTUP] Also added chrome.runtime.onMessage listener')
+    }
+
+    // Log raw listener registration
+    console.log('[BG_STARTUP] About to add browser.runtime.onMessage listener', {
+      onMessage: !!browser.runtime.onMessage,
+      addListener: typeof browser.runtime.onMessage?.addListener
+    })
+
     browser.runtime.onMessage.addListener((message, sender, sendResponse) => {
+      // Log EVERY message that arrives, even malformed ones
+      console.log('[BG_MSG_RAW] Raw message received!', {
+        messageType: typeof message,
+        messageKeys: message ? Object.keys(message) : [],
+        type: message?.type,
+        hasPayload: !!message?.payload,
+        senderUrl: sender?.url,
+        senderId: sender?.id
+      })
+      console.log('[BG_MSG] Received message', { type: message?.type, hasPayload: !!message?.payload })
       void handleRuntimeMessage(message, sender)
-        .then((response) => sendResponse(response))
+        .then((response) => {
+          console.log('[BG_MSG] Sending response', { type: message?.type, ok: response?.ok })
+          sendResponse(response)
+        })
         .catch((error) => {
+          console.log('[BG_MSG] Handler error', { type: message?.type, error: String(error) })
           logBackgroundError("runtime message", error)
           sendResponse({
             ok: false,
@@ -997,6 +1051,7 @@ export default defineBackground({
         })
       return true
     })
+    console.log('[BG_STARTUP] Message listener registered')
 
     browser.runtime.onConnect.addListener((port) => {
       if (port.name === "pgCopilot") {

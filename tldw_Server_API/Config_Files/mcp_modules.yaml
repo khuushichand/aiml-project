@@ -26,6 +26,33 @@ modules:
     department: demo
     settings: {}
 
+  - id: quizzes
+    class: tldw_Server_API.app.core.MCP_unified.modules.implementations.quizzes_module:QuizzesModule
+    enabled: true
+    name: Quizzes
+    version: "1.0.0"
+    department: learning
+    max_concurrent: 10
+    settings: {}
+
+  - id: flashcards
+    class: tldw_Server_API.app.core.MCP_unified.modules.implementations.flashcards_module:FlashcardsModule
+    enabled: true
+    name: Flashcards
+    version: "1.0.0"
+    department: learning
+    max_concurrent: 10
+    settings: {}
+
+  - id: slides
+    class: tldw_Server_API.app.core.MCP_unified.modules.implementations.slides_module:SlidesModule
+    enabled: true
+    name: Slides
+    version: "1.0.0"
+    department: presentations
+    max_concurrent: 8
+    settings: {}
+
 # Notes
 # - Only modules under tldw_Server_API.app.core.MCP_unified.modules.implementations are allowed.
 # - You can also specify modules via env: MCP_MODULES="media=tldw_Server_API.app.core.MCP_unified.modules.implementations.media_module:MediaModule"

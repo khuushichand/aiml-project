@@ -264,7 +264,7 @@ export const PromptBody = () => {
     if (hasSystem) return "system"
     if (hasUser) return "quick"
     return prompt?.is_system ? "system" : "quick"
-  }, [getPromptTexts])
+  }, []) // getPromptTexts has stable identity (empty deps), safe to omit
 
   const normalizePromptPayload = React.useCallback((values: any) => {
     const keywords = values?.keywords ?? values?.tags ?? []

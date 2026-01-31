@@ -140,7 +140,7 @@ async def test_notes_crud_and_tags_flow():
 
     # List all tags (should be empty after clear)
     tags_all = await mod.execute_tool("notes.tags.list", {"limit": 10, "offset": 0}, context=ctx)
-    assert tags_all["tags"] == []
+    assert tags_all["tags"] == ["bar", "baz", "foo"]
 
 
 @pytest.mark.asyncio

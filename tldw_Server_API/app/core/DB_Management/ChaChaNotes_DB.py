@@ -8863,6 +8863,18 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
         """Searches notes_fts (title and content) with optional pagination."""
         # FTS5 requires wrapping terms with special characters in double quotes
         # to be treated as a literal phrase.
+
+        # Debug: Log FTS table state to help diagnose E2E test failures
+        try:
+            fts_count = self.execute_query("SELECT COUNT(*) as cnt FROM notes_fts").fetchone()
+            notes_count = self.execute_query("SELECT COUNT(*) as cnt FROM notes WHERE deleted = 0").fetchone()
+            logger.debug(
+                f"search_notes: term='{search_term[:50] if search_term else ''}' notes_fts_count={fts_count['cnt'] if fts_count else 0} "
+                f"notes_count={notes_count['cnt'] if notes_count else 0}"
+            )
+        except Exception as diag_err:
+            logger.debug(f"search_notes diagnostic query failed: {diag_err}")
+
         if self.backend_type == BackendType.POSTGRESQL:
             tsquery = FTSQueryTranslator.normalize_query(search_term, 'postgresql')
             if not tsquery:

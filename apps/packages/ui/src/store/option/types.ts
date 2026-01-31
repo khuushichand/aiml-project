@@ -3,6 +3,7 @@ import type { UploadedFile } from "@/db/dexie/types"
 import type { ConversationState } from "@/services/tldw/TldwApiClient"
 import type { RagPinnedResult } from "@/utils/rag-format"
 import type { ToolCall, ToolCallResult } from "@/types/tool-calls"
+import type { DiscoSkillComment } from "@/types/disco-skills"
 
 // Knowledge type is now server-side only; this is a placeholder for legacy compatibility
 export type Knowledge = {
@@ -69,6 +70,8 @@ export type Message = {
   // Tool/function calls (optional)
   toolCalls?: ToolCall[]
   toolResults?: ToolCallResult[]
+  // Disco skills annotation (optional)
+  discoSkillComment?: DiscoSkillComment
 }
 
 export type ChatHistory = {

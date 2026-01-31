@@ -91,6 +91,14 @@ export const updateMessage = async (
   await db.updateMessage(history_id, message_id, content)
 }
 
+export const updateMessageDiscoSkillComment = async (
+  message_id: string,
+  discoSkillComment: Message["discoSkillComment"] | null
+) => {
+  const db = new PageAssistDatabase()
+  await db.updateMessageDiscoSkillComment(message_id, discoSkillComment)
+}
+
 export const saveMessage = async ({
   id,
   content,
@@ -99,6 +107,7 @@ export const saveMessage = async ({
   role,
   images,
   source,
+  discoSkillComment,
   generationInfo,
   message_type,
   clusterId,
@@ -120,6 +129,7 @@ export const saveMessage = async ({
   source?: any[]
   time?: number
   message_type?: string
+  discoSkillComment?: Message["discoSkillComment"]
   clusterId?: string
   modelId?: string
   generationInfo?: any
@@ -155,7 +165,8 @@ export const saveMessage = async ({
     modelName,
     modelImage,
     parent_message_id: parent_message_id ?? null,
-    documents
+    documents,
+    discoSkillComment
   }
   const db = new PageAssistDatabase()
   await db.addMessage(message)
@@ -258,7 +269,8 @@ export const formatToMessage = (messages: MessageHistory): MessageType[] => {
       modelImage: message?.modelImage,
       createdAt: message?.createdAt,
       id: message.id,
-      documents: message?.documents
+      documents: message?.documents,
+      discoSkillComment: message?.discoSkillComment
     }
     if (shouldGroupVariants(message)) {
       const parentId = message.parent_message_id || ""
@@ -657,13 +669,13 @@ export const importChatHistory = async (
     messages: MessageHistory
   }[]
 ) => {
+  // Use bulk operations to reduce storage quota pressure (especially for Firefox fallback)
+  const histories = data.map(d => d.history)
+  const allMessages = data.flatMap(d => d.messages)
+
+  // Dexie path: use bulk operations via importChatHistoryV2
   const db = new PageAssistDatabase()
-  for (const { history, messages } of data) {
-    await db.addChatHistory(history)
-    for (const message of messages) {
-      await db.addMessage(message)
-    }
-  }
+  await db.importChatHistoryV2(data, { mergeData: true })
 }
 
 export const exportPrompts = async () => {
@@ -711,10 +723,9 @@ export const importModelsV2 = async (
 }
 
 export const importPrompts = async (prompts: Prompts) => {
+  // Use bulk operations to reduce storage quota pressure
   const db = new PageAssistDatabase()
-  for (const prompt of prompts) {
-    await db.addPrompt(prompt)
-  }
+  await db.importPromptsV2(prompts, { mergeData: true })
 }
 
 export const importOAIConfigs = async (configs: any[]) => {

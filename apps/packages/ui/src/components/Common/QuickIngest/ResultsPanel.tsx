@@ -231,7 +231,10 @@ export const ResultsPanel: React.FC<ResultsPanelProps> = ({
             </div>
           </div>
           {resultSummary && !running && (
-        <div className="mt-2 rounded-md border border-border bg-surface2 px-3 py-2 text-xs text-text">
+        <div
+          className="mt-2 rounded-md border border-border bg-surface2 px-3 py-2 text-xs text-text"
+          data-testid="quick-ingest-complete"
+        >
           <div className="font-medium">
             {resultSummary.failCount === 0
               ? t(

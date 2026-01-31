@@ -296,6 +296,7 @@ export const DocumentChat: React.FC = () => {
                   serverChatId={serverChatId}
                   serverMessageId={message.serverMessageId}
                   messageId={message.id}
+                  discoSkillComment={message.discoSkillComment}
                   conversationInstanceId={`doc-${activeDocumentId}`}
                   hideCopy={false}
                   hideEditAndRegenerate={false}

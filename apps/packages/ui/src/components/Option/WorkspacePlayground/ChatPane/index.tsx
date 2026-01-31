@@ -242,6 +242,7 @@ export const ChatPane: React.FC = () => {
                     serverChatId={serverChatId}
                     serverMessageId={msg.serverMessageId}
                     messageId={msg.id}
+                    discoSkillComment={msg.discoSkillComment}
                     createdAt={msg.createdAt}
                     variants={msg.variants}
                     activeVariantIndex={msg.activeVariantIndex}

@@ -59,13 +59,13 @@ markdown_extensions:
 
 extra:
   generator: false
-  version: v0.1.0
+  version: v0.1.19
   social:
     - icon: fontawesome/brands/github
       link: https://github.com/rmusser01/tldw_server
       name: GitHub
 copyright: |
-  © 2024 tldw_Server - v0.1.0 - <a href="https://github.com/rmusser01/tldw_server">GitHub</a>
+  © 2024-2025 tldw_Server - v0.1.19 - <a href="https://github.com/rmusser01/tldw_server">GitHub</a>
 
 nav:
   - Home: index.md
@@ -80,125 +80,200 @@ nav:
       - Debugging: Workflows_Debugging.md
   - API:
       - Overview: API-related/index.md
-      - API Design: API-related/API_Design.md
-      - API Notes: API-related/API_Notes.md
-      - Endpoints Feature Map: API-related/Endpoints_Feature_Map.md
-      - API README: API-related/API_README.md
-      - API Tag Index: API-related/API_Tags_Index.md
-      - Admin RBAC API: Admin_RBAC_API.md
-      - Audio Transcription API: API-related/Audio_Transcription_API.md
-      - Audio Jobs API: API-related/Audio_Jobs_API.md
-      - AuthNZ API Guide: API-related/AuthNZ-API-Guide.md
-      - Notes API: API-related/Notes_API_Documentation.md
-      - Notes Graph API: API-related/Notes_Graph_API.md
-      - Reading List API: API-related/Reading_List_API.md
-      - Items API: API-related/Items_API.md
-      - Collections Feeds API: API-related/Collections_Feeds_API.md
-      - Quizzes API: API-related/Quizzes_API.md
-      - Writing API: API-related/Writing_API.md
-      - Data Tables API: API-related/Data_Tables_API.md
-      - File Artifacts API: API-related/File_Artifacts_API.md
-      - Storage API: API-related/Storage_API_Documentation.md
-      - Sync API: API-related/Sync_API.md
-      - Chat API Documentation: API-related/Chat_API_Documentation.md
-      - Chat Module Integration: API-related/Chat_Module_Integration_Guide.md
-      - Chatbook API: API-related/Chatbook_API_Documentation.md
-      - Chatbook Features API: API-related/Chatbook_Features_API_Documentation.md
-      - Chunking Templates API: API-related/Chunking_Templates_API_Documentation.md
-      - Chunking API: API-related/Chunking_API_Documentation.md
-      - Embeddings API: API-related/Embeddings_API_Documentation.md
-      - Embeddings Module: API-related/Embeddings_Module_Documentation.md
-      - Embeddings API Guide: API-related/Embeddings-API-Guide.md
-      - Evaluations API Reference: API-related/Evaluations_API_Reference.md
-      - Evaluations API (Unified): API-related/Evaluations_API_Unified_Reference.md
-      - OCR API: API-related/OCR_API_Documentation.md
-      - Legacy:
+      - Design & Reference:
+          - API Design: API-related/API_Design.md
+          - API Notes: API-related/API_Notes.md
+          - API README: API-related/API_README.md
+          - API Tag Index: API-related/API_Tags_Index.md
           - Old API Map: API-related/Old_API_Map.md
-          - Evaluations API (tldw legacy): API-related/tldw_Evaluations_API_Reference.md
-      - Prompt Studio API: API-related/Prompt_Studio_API.md
-      - Providers API: API-related/Providers_API_Documentation.md
-      - RAG API: API-related/RAG_API_Documentation.md
-      - RAG API Guide: API-related/RAG-API-Guide.md
-      - Feedback API: API-related/Feedback_API.md
-      - Slides API: API/Slides.md
-      - Voice Assistant API: API/Voice_Assistant.md
-      - Orgs & Billing API: API-related/Orgs_Billing_API.md
-      - Transcript Segmentation API: API-related/Transcript_Segmentation_API.md
-      - User Registration API: API-related/User_Registration_API_Documentation.md
-      - Watchlists API: API-related/Watchlists_API.md
+      - Core APIs:
+          - Chat API: API-related/Chat_API_Documentation.md
+          - Chat Module Integration: API-related/Chat_Module_Integration_Guide.md
+          - RAG API: API-related/RAG_API_Documentation.md
+          - RAG API Guide: API-related/RAG-API-Guide.md
+          - Embeddings API: API-related/Embeddings_API_Documentation.md
+          - Embeddings Module: API-related/Embeddings_Module_Documentation.md
+          - Embeddings API Guide: API-related/Embeddings-API-Guide.md
+      - Audio & Speech:
+          - Audio Transcription API: API-related/Audio_Transcription_API.md
+          - Audio Jobs API: API-related/Audio_Jobs_API.md
+          - TTS API: API-related/TTS_API.md
+      - Character Chat:
+          - Character Chat API: API-related/CHARACTER_CHAT_API_DOCUMENTATION.md
+          - Character Sessions API: API-related/Character_Chat_Sessions_API.md
+          - Character Messages API: API-related/Character_Messages_API.md
+      - Content & Storage:
+          - Chatbook API: API-related/Chatbook_API_Documentation.md
+          - Chatbook Features API: API-related/Chatbook_Features_API_Documentation.md
+          - Notes Graph API: API-related/Notes_Graph_API.md
+          - Items API: API-related/Items_API.md
+          - Reading List API: API-related/Reading_List_API.md
+          - Collections Feeds API: API-related/Collections_Feeds_API.md
+          - Storage API: API-related/Storage_API_Documentation.md
+          - File Artifacts API: API-related/File_Artifacts_API.md
+          - Sync API: API-related/Sync_API.md
+      - Processing:
+          - Chunking Templates API: API-related/Chunking_Templates_API_Documentation.md
+          - OCR API: API-related/OCR_API_Documentation.md
+          - Transcript Segmentation API: API-related/Transcript_Segmentation_API.md
+          - Email Processing API: API-related/Email_Processing_API.md
+          - Media Ingest Jobs API: API-related/Media_Ingest_Jobs_API.md
+      - Evaluations:
+          - Evaluations API Reference: API-related/Evaluations_API_Reference.md
+          - Evaluations API (Unified): API-related/Evaluations_API_Unified_Reference.md
+          - Evaluations API (Legacy): API-related/tldw_Evaluations_API_Reference.md
+      - Admin & Auth:
+          - Admin RBAC API: Admin_RBAC_API.md
+          - Admin Orgs & Teams: API-related/Admin_Orgs_Teams.md
+          - AuthNZ API Guide: API-related/AuthNZ-API-Guide.md
+          - User Registration API: API-related/User_Registration_API_Documentation.md
+          - Audit Configuration: API-related/Audit_Configuration.md
+          - Audit Export: API-related/Audit_Export.md
+          - Virtual Keys: API-related/Virtual_Keys.md
+      - Tools & Extensions:
+          - Prompt Studio API: API-related/Prompt_Studio_API.md
+          - Providers API: API-related/Providers_API_Documentation.md
+          - Anthropic Messages API: API-related/Anthropic_Messages_API.md
+          - Sandbox API: API-related/Sandbox_API.md
+          - Tools API: API-related/Tools_API_Documentation.md
+          - Vector Stores API: API-related/Vector_Stores_Admin_and_Query.md
+          - Quizzes API: API-related/Quizzes_API.md
+          - Writing API: API-related/Writing_API.md
+          - Data Tables API: API-related/Data_Tables_API.md
+          - Feedback API: API-related/Feedback_API.md
+          - Slides API: API/Slides.md
+          - Voice Assistant API: API/Voice_Assistant.md
   - Code:
       - Overview: Code_Documentation/index.md
-      - Chat Developer Guide: Code_Documentation/Chat_Developer_Guide.md
-      - Chatbook Developer Guide: Code_Documentation/Chatbook_Developer_Guide.md
-      - Chunking Templates Developer Guide: Code_Documentation/Chunking_Templates_Developer_Guide.md
-      - Chunking Module: Code_Documentation/Chunking-Module.md
-      - Code Map: Code_Documentation/Code_Map.md
-      - Database Overview: Code_Documentation/Database.md
+      - Architecture:
+          - Code Map: Code_Documentation/Code_Map.md
+          - Database Overview: Code_Documentation/Database.md
+          - Database Backends: Code_Documentation/Database-Backends.md
+          - Services Module: Code_Documentation/Services_Module.md
       - Databases:
           - ChaChaNotes DB: Code_Documentation/Databases/ChaChaNotes_DB.md
           - Media DB v2: Code_Documentation/Databases/Media_DB_v2.md
-      - Embeddings Documentation: Code_Documentation/Embeddings-Documentation.md
-      - Evaluations Developer Guide: Code_Documentation/Evaluations_Developer_Guide.md
-      - Ingestion: Code_Documentation/Ingestion_Media_Processing.md
-      - Ingestion Pipeline - Audio: Code_Documentation/Ingestion_Pipeline_Audio.md
-      - Ingestion Pipeline - Documents: Code_Documentation/Ingestion_Pipeline_Documents.md
-      - Ingestion Pipeline - Ebooks: Code_Documentation/Ingestion_Pipeline_Ebooks.md
-      - Ingestion Pipeline - MediaWiki: Code_Documentation/Ingestion_Pipeline_MediaWiki.md
-      - Ingestion Pipeline - PDF: Code_Documentation/Ingestion_Pipeline_PDF.md
-      - Ingestion Pipeline - Video: Code_Documentation/Ingestion_Pipeline_Video.md
-      - Pieces: Code_Documentation/Pieces.md
-      - Proposition Chunking and Evals: Code_Documentation/Proposition_Chunking_and_Evals.md
-      - Claims API and Schema: Code_Documentation/Claims_API_and_Schema.md
-      - Answer-Time Claims Engine: Code_Documentation/Answer_Time_Claims_Engine.md
-      - Documentation Site Guide: Code_Documentation/Docs_Site_Guide.md
+      - Chat & Characters:
+          - Chat Developer Guide: Code_Documentation/Chat_Developer_Guide.md
+          - Character Chat: Code_Documentation/Character_Chat.md
+          - Chatbook Developer Guide: Code_Documentation/Chatbook_Developer_Guide.md
+      - RAG & Embeddings:
+          - RAG Developer Guide: Code_Documentation/RAG-Developer-Guide.md
+          - RAG Functional Pipeline: Code_Documentation/RAG-Functional-Pipeline-Guide.md
+          - Embeddings Documentation: Code_Documentation/Embeddings-Documentation.md
+          - Embeddings Developer Guide: Code_Documentation/Embeddings-Developer-Guide.md
+      - Content Processing:
+          - Chunking Module: Code_Documentation/Chunking-Module.md
+          - Chunking Templates: Code_Documentation/Chunking_Templates_Developer_Guide.md
+          - Pieces: Code_Documentation/Pieces.md
+          - Proposition Chunking and Evals: Code_Documentation/Proposition_Chunking_and_Evals.md
+      - Ingestion Pipelines:
+          - Media Processing: Code_Documentation/Ingestion_Media_Processing.md
+          - Audio Pipeline: Code_Documentation/Ingestion_Pipeline_Audio.md
+          - Documents Pipeline: Code_Documentation/Ingestion_Pipeline_Documents.md
+          - Ebooks Pipeline: Code_Documentation/Ingestion_Pipeline_Ebooks.md
+          - MediaWiki Pipeline: Code_Documentation/Ingestion_Pipeline_MediaWiki.md
+          - PDF Pipeline: Code_Documentation/Ingestion_Pipeline_PDF.md
+          - Video Pipeline: Code_Documentation/Ingestion_Pipeline_Video.md
+      - Claims & Evaluations:
+          - Claims API and Schema: Code_Documentation/Claims_API_and_Schema.md
+          - Claims Extraction: Code_Documentation/Claims_Extraction.md
+          - Answer-Time Claims Engine: Code_Documentation/Answer_Time_Claims_Engine.md
+          - Evaluations Developer Guide: Code_Documentation/Evaluations_Developer_Guide.md
+          - Evaluations Index: Code_Documentation/Evaluations/index.md
+      - Jobs & Background Processing:
+          - Jobs Module: Code_Documentation/Jobs_Module.md
+          - Jobs Manager: Code_Documentation/Jobs_Manager.md
+          - Jobs Admin Examples: Code_Documentation/Jobs_Admin_Examples.md
+      - AI & Models:
+          - Local LLM: Code_Documentation/Local_LLM.md
+          - VLM Backends: Code_Documentation/VLM_Backends.md
+          - Moderation Guardrails: Code_Documentation/Moderation-Guardrails.md
+      - Auth & Security:
+          - AuthNZ Developer Guide: Code_Documentation/AuthNZ-Developer-Guide.md
+      - Workflows:
+          - Workflows Module: Code_Documentation/Workflows_Module.md
+      - WebUI & Setup:
+          - Setup UI Developer Guide: Code_Documentation/Setup_UI_Developer_Guide.md
+          - Tutorial System Developer Guide: Code_Documentation/Tutorial_System_Developer_Guide.md
+      - Testing & Misc:
+          - STT Testing Documentation: Code_Documentation/STT_TESTING_DOCUMENTATION.md
+          - Email Archive Formats (WIP): Code_Documentation/Email_Archive_Formats_WIP.md
+          - Documentation Site Guide: Code_Documentation/Docs_Site_Guide.md
+      - Code Guides:
+          - AuthNZ Code Guide: Code_Documentation/Guides/AuthNZ_Code_Guide.md
+          - Audit Module Code Guide: Code_Documentation/Guides/Audit_Module_Code_Guide.md
+          - Character Chat Code Guide: Code_Documentation/Guides/Character_Chat_Code_Guide.md
+          - Chatbooks Code Guide: Code_Documentation/Guides/Chatbooks_Code_Guide.md
+          - Chunking Code Guide: Code_Documentation/Guides/Chunking_Code_Guide.md
+          - Evaluations Code Guide: Code_Documentation/Guides/Evaluations_Code_Guide.md
       - DB Backends - Placeholders & FTS: Development/DB-Backends-Query-FTS-Guidelines.md
   - Deployment:
       - Overview: Deployment/index.md
       - First-Time Production Setup: Deployment/First_Time_Production_Setup.md
       - Long-Term Admin Guide: Deployment/Long_Term_Admin_Guide.md
-      - PostgreSQL Content Mode: Deployment/Postgres_Content_Mode.md
       - PostgreSQL Migration Guide: Deployment/Postgres_Migration_Guide.md
-      - PostgreSQL Backups: Deployment/Postgres_Backups.md
       - Embeddings Deployment Guide: Deployment/Embeddings-Deployment-Guide.md
       - Reverse Proxy Examples: Deployment/Reverse_Proxy_Examples.md
-      - Proxy Overlays (Compose): Deployment/Proxy_Overlays.md
+      - Sidecar Workers: Deployment/Sidecar_Workers.md
+      - OpenAI Compat Strict Mode: Deployment/OpenAI_Compat_Strict_Mode.md
+      - Operations:
+          - JWT Rotation Runbook: Deployment/Operations/JWT_Rotation_Runbook.md
+          - MCP Rate Limits Tuning: Deployment/Operations/MCP_Rate_Limits_Tuning.md
+      - FTS:
+          - PostgreSQL Synonyms: Deployment/FTS/pg-synonyms.md
   - Environment Variables: Env_Vars.md
   - Evaluations:
       - Overview: Evaluations/index.md
-      - Smoke Test Checklist: Evaluations/Smoke_Test_Checklist.md
-      - Unified Evaluations Readiness: Evaluations/Unified_Evaluations_Readiness.md
   - Monitoring:
       - Overview: Monitoring/index.md
-      - Audio Concurrency & Metrics: Monitoring/Audio_Concurrency_and_Metrics.md
       - Metrics Cheatsheet: Monitoring/Metrics_Cheatsheet.md
+      - Alerts: Monitoring/Alerts/README.md
+      - Exemplars: Monitoring/Exemplars/README.md
   - User Guides:
       - Overview: User_Guides/index.md
-      - Media→Embeddings→RAG→Evals Workflow: User_Guides/Media_to_RAG_Evals_Workflow.md
-      - Web Scraping and Ingestion: User_Guides/Web_Scraping_Ingestion_Guide.md
-      - WebUI - Vector Backends: User_Guides/WebUI_Vector_Backends.md
-      - Usage Module: User_Guides/Usage_Module.md
-      - Authentication Setup: User_Guides/Authentication_Setup.md
-      - BYOK User Guide: User_Guides/BYOK_User_Guide.md
-      - Backups using Litestream: User_Guides/Backups_Using_Litestream.md
-      - Chatbook User Guide: User_Guides/Chatbook_User_Guide.md
-      - Chunking Templates User Guide: User_Guides/Chunking_Templates_User_Guide.md
-      - CLI Reference: User_Guides/CLI_Reference.md
-      - Evaluations Deployment Guide: User_Guides/Evaluations_Deployment_Guide.md
-      - Evaluations End User Guide: User_Guides/Evaluations_End_User_Guide.md
-      - Evaluations Production Deployment: User_Guides/Evaluations_Production_Deployment_Guide.md
-      - Evaluations User Guide: User_Guides/Evaluations_User_Guide.md
-      - Installation & Setup: User_Guides/Installation-Setup-Guide.md
-      - Multi-User Deployment Guide: User_Guides/Multi-User_Deployment_Guide.md
-      - Organizations and Sharing: User_Guides/Organizations_and_Sharing.md
-      - Organization Administration: User_Guides/Organization_Administration.md
-      - Production Hardening Checklist: User_Guides/Production_Hardening_Checklist.md
-      - Prompt Engineering Notes: User_Guides/Prompt_Engineering_Notes.md
-      - RAG Deployment Guide: User_Guides/RAG_Deployment_Guide.md
-      - RAG Production Configuration: User_Guides/RAG_Production_Configuration_Guide.md
-      - Setting up a local LLM: User_Guides/Setting_up_a_local_LLM.md
-      - TTS Getting Started: User_Guides/TTS_Getting_Started.md
-      - Chatterbox TTS Setup: User_Guides/Chatterbox_TTS_Setup.md
-      - User Guide: User_Guides/User_Guide.md
+      - Getting Started:
+          - Installation & Setup: User_Guides/Installation-Setup-Guide.md
+          - Authentication Setup: User_Guides/Authentication_Setup.md
+          - User Guide: User_Guides/User_Guide.md
+          - CLI Reference: User_Guides/CLI_Reference.md
+      - Content & Media:
+          - Media→Embeddings→RAG→Evals Workflow: User_Guides/Media_to_RAG_Evals_Workflow.md
+          - Web Scraping and Ingestion: User_Guides/Web_Scraping_Ingestion_Guide.md
+          - EPUB Reader Guide: User_Guides/EPUB_Reader_Guide.md
+          - Chatbook User Guide: User_Guides/Chatbook_User_Guide.md
+          - Chatbook Tools Getting Started: User_Guides/Chatbook_Tools_Getting_Started.md
+          - Chunking Templates User Guide: User_Guides/Chunking_Templates_User_Guide.md
+          - Templated Chunking HowTo: User_Guides/Templated_Chunking_Incoming_Documents_HowTo.md
+      - RAG & Evaluations:
+          - RAG Deployment Guide: User_Guides/RAG_Deployment_Guide.md
+          - RAG Production Configuration: User_Guides/RAG_Production_Configuration_Guide.md
+          - Evaluations User Guide: User_Guides/Evaluations_User_Guide.md
+          - Evaluations Deployment Guide: User_Guides/Evaluations_Deployment_Guide.md
+          - Evaluations End User Guide: User_Guides/Evaluations_End_User_Guide.md
+          - Evaluations Production Deployment: User_Guides/Evaluations_Production_Deployment_Guide.md
+      - Chat & AI:
+          - Chat Pages: User_Guides/Chat_Pages.md
+          - Setting up a local LLM: User_Guides/Setting_up_a_local_LLM.md
+          - Prompt Engineering Notes: User_Guides/Prompt_Engineering_Notes.md
+          - Context MCP Search: User_Guides/context_mcp_search.md
+      - Audio & TTS:
+          - TTS Getting Started: User_Guides/TTS_Getting_Started.md
+      - Organizations & Admin:
+          - Organizations and Sharing: User_Guides/Organizations_and_Sharing.md
+          - Organization Administration: User_Guides/Organization_Administration.md
+          - Multi-User Deployment Guide: User_Guides/Multi-User_Deployment_Guide.md
+          - Production Hardening Checklist: User_Guides/Production_Hardening_Checklist.md
+          - Usage Module: User_Guides/Usage_Module.md
+      - Keys & Backups:
+          - BYOK User Guide: User_Guides/BYOK_User_Guide.md
+          - Backups using Litestream: User_Guides/Backups_Using_Litestream.md
+      - Examples & Tutorials:
+          - Workflows Examples: User_Guides/Workflows_Examples.md
+          - Project2025 RAG Guide: User_Guides/Project2025-RAG-Guide.md
+          - Kanban Board Guide: User_Guides/Kanban_Board_Guide.md
+          - Setup Supertonic: User_Guides/Setup-Supertonic.md
+          - Setup Supertonic 2: User_Guides/Setup-Supertonic2.md
   - Release Notes: RELEASE_NOTES.md
   - MCP Unified:
       - Overview: MCP/Unified_Overview.md

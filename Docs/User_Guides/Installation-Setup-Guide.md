@@ -1,5 +1,13 @@
 # Installation & Setup Guide
 
+> **Note:** This guide is being replaced by the new Getting Started guides:
+> - [Tire Kicker Guide](../Getting_Started/Tire_Kicker.md) - 5-minute setup
+> - [Local Development Guide](../Getting_Started/Local_Development.md) - building against the API
+> - [Docker Self-Host Guide](../Getting_Started/Docker_Self_Host.md) - running on your server
+> - [Production Guide](../Getting_Started/Production.md) - team deployment
+>
+> The content below remains valid but may not be actively maintained.
+
 This guide helps you install and run tldw_server locally with the Next.js WebUI and API.
 
 ## Prerequisites

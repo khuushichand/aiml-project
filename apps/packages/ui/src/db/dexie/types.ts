@@ -1,4 +1,5 @@
 import { ChatDocuments } from '@/models/ChatTypes';
+import type { DiscoSkillComment } from '@/types/disco-skills';
 
 export type LastUsedModelType = { prompt_id?: string; prompt_content?: string }
 
@@ -67,6 +68,7 @@ export type Message = {
   modelName?: string;
   modelImage?: string;
   documents?: ChatDocuments;
+  discoSkillComment?: DiscoSkillComment;
   // Timeline/branching fields (server-compatible with ChaChaDB)
   parent_message_id?: string | null;   // Parent message for threading/swipes
   depth?: number;                       // Computed depth in conversation tree

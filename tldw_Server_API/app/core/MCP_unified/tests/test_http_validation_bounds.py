@@ -19,6 +19,8 @@ def _setup_env():
     os.environ["AUTH_MODE"] = "single_user"
     os.environ["SINGLE_USER_API_KEY"] = "test-api-key-1234567890"
     os.environ["SINGLE_USER_FIXED_ID"] = "1"
+    os.environ["PROFILE"] = "single_user"
+    os.environ["SINGLE_USER_ALLOWED_IPS"] = ""
     os.environ["MCP_JWT_SECRET"] = "x" * 64
     os.environ["MCP_API_KEY_SALT"] = "s" * 64
     os.environ["MCP_ENABLE_MEDIA_MODULE"] = "false"
@@ -28,6 +30,11 @@ def _setup_env():
         "chats=tldw_Server_API.app.core.MCP_unified.modules.implementations.chats_module:ChatsModule,"
         "characters=tldw_Server_API.app.core.MCP_unified.modules.implementations.characters_module:CharactersModule"
     )
+    try:
+        from tldw_Server_API.app.core.AuthNZ.settings import reset_settings
+        reset_settings()
+    except Exception:
+        pass
 
 
 @pytest.fixture(scope="module")

@@ -1,5 +1,13 @@
 # tldw_server New User Guide
 
+> **Note:** This guide is being replaced by the new Getting Started guides:
+> - [Tire Kicker Guide](Docs/Getting_Started/Tire_Kicker.md) - 5-minute setup
+> - [Local Development Guide](Docs/Getting_Started/Local_Development.md) - building against the API
+> - [Docker Self-Host Guide](Docs/Getting_Started/Docker_Self_Host.md) - running on your server
+> - [Production Guide](Docs/Getting_Started/Production.md) - team deployment
+>
+> The content below remains valid but may not be actively maintained.
+
 This guide walks a brand-new user through the shortest path to a working local deployment, a first media ingestion, and the most useful follow-up resources. It complements `README.md` by focusing on actionable steps rather than full feature listings.
 
 ---

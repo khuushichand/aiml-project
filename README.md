@@ -74,8 +74,7 @@ Good fit for:
 - Running local or hosted LLMs behind a consistent OpenAI-compatible API.
 - Building research workflows with RAG, evaluation, and prompt tooling.
 
-New here? Start with the Quickstart section below.
-One-line version: A monolithic FastAPI server with modular internals and REST endpoints per core module.
+**New here?** Jump to [Quickstart](#quickstart) or try `make quickstart` after cloning.
 
 
 ## Current Status
@@ -169,63 +168,82 @@ See the full [Feature Status Matrix at `Docs/Published/Overview/Feature_Status.m
 
 ## Quickstart
 
-Prefer a guided setup? Use the wizard: [`Docs/Development/Wizard.md`](./Docs/Development/Wizard.md)
+### Fastest Path (One Command)
 
-### Run the API
-
-Prerequisites:
-- Python 3.11+ (3.12/3.13 supported)
-- ffmpeg (for audio/video pipelines)
-
-1) Create environment and install dependencies (via pyproject.toml)
 ```bash
-python3 -m venv .venv
-source .venv/bin/activate  # Windows: .venv\Scripts\activate
-# Core server
-pip install -e .
-
-# Optional extras (choose as needed)
-# pip install -e ".[multiplayer]"   # multi-user/PostgreSQL features
-# pip install -e ".[dev]"           # tests, linters, tooling
-# pip install -e ".[otel]"          # OpenTelemetry metrics/tracing exporters
-
-# Install pyaudio - needed for audio processing
-# Linux
-sudo apt install python3-pyaudio
-
-# macOS
-brew install portaudio
-pip install pyaudio
+git clone https://github.com/rmusser01/tldw_server.git && cd tldw_server
+make quickstart
 ```
-2) Configure authentication and providers
+
+This creates a minimal `.env`, initializes auth, and starts the server. Verify with:
 ```bash
-# Create .env with at least:
+curl http://localhost:8000/health  # No auth needed!
+```
+
+### Manual Setup
+
+Prerequisites: Python 3.11+ and ffmpeg (`brew install ffmpeg` or `apt install ffmpeg`)
+
+1) **Install**
+```bash
+python3 -m venv .venv && source .venv/bin/activate
+pip install -e .
+```
+
+2) **Configure** (minimal .env)
+```bash
 cat > .env << 'EOF'
 AUTH_MODE=single_user
-SINGLE_USER_API_KEY=CHANGE_ME_TO_SECURE_API_KEY
+SINGLE_USER_API_KEY=my-secure-key-at-least-16-chars
 DATABASE_URL=sqlite:///./Databases/users.db
-# MCP Unified secrets (required in production; initializer can generate if missing for quickstart only)
-# MCP_JWT_SECRET=change-me-to-secure-mcp-jwt-secret
-# MCP_API_KEY_SALT=change-me-to-secure-mcp-salt
 EOF
-
-# First-time initialization (validates config, sets up DBs)
-python -m tldw_Server_API.app.core.AuthNZ.initialize
-# This will also auto-generate MCP_JWT_SECRET and MCP_API_KEY_SALT if they are missing,
-# using Python's secrets.token_urlsafe(32) for quickstart-only defaults.
-# These auto-generated values must be replaced and managed securely before production
-# deployment (rotate regularly and store in a secret manager such as Vault or AWS Secrets Manager).
-# Example: set MCP_JWT_SECRET and MCP_API_KEY_SALT to your own values and manage them
-# following secure secret-management practices.
-# Add provider API keys in .env or tldw_Server_API/Config_Files/config.txt
 ```
-3) Run the API
+
+3) **Initialize auth** (use `--non-interactive` to skip prompts)
+```bash
+python -m tldw_Server_API.app.core.AuthNZ.initialize --non-interactive
+```
+
+4) **Start the server**
 ```bash
 python -m uvicorn tldw_Server_API.app.main:app --reload
 ```
+
+5) **Verify it works**
+```bash
+curl http://localhost:8000/health
+# Expected: {"status":"ok",...}
+```
+
 - API docs: http://127.0.0.1:8000/docs
-- Quickstart: http://127.0.0.1:8000/api/v1/config/quickstart
-- Setup UI (if required): http://127.0.0.1:8000/setup
+- Quickstart redirect: http://127.0.0.1:8000/api/v1/config/quickstart
+
+<details>
+<summary>Optional extras and pyaudio setup</summary>
+
+```bash
+# Optional pip extras
+pip install -e ".[multiplayer]"   # multi-user/PostgreSQL features
+pip install -e ".[dev]"           # tests, linters, tooling
+pip install -e ".[otel]"          # OpenTelemetry metrics/tracing
+
+# pyaudio (needed for audio processing)
+# Linux: sudo apt install python3-pyaudio
+# macOS: brew install portaudio && pip install pyaudio
+```
+
+MCP secrets (`MCP_JWT_SECRET`, `MCP_API_KEY_SALT`) are auto-generated for quickstart.
+For production, set these explicitly and rotate regularly.
+</details>
+
+### Next Steps by Goal
+
+| I want to... | Guide |
+|--------------|-------|
+| Try it in 5 minutes with hand-holding | [Tire Kicker Guide](Docs/Getting_Started/Tire_Kicker.md) |
+| Build apps against the API locally | [Local Development Guide](Docs/Getting_Started/Local_Development.md) |
+| Run on my home server with Docker | [Docker Self-Host Guide](Docs/Getting_Started/Docker_Self_Host.md) |
+| Deploy for a team with proper security | [Production Guide](Docs/Getting_Started/Production.md) |
 
 ### Sidecar workers (optional)
 
@@ -272,40 +290,45 @@ Tip: http://127.0.0.1:8000/api/v1/config/quickstart redirects to your configured
 
 ### Docker Compose
 
-Optional path for running the API + services with Docker.
+Quick start with Docker:
 ```bash
-# Run from repo root
+make quickstart-docker
+curl http://localhost:8000/health  # Verify
+```
 
-# Option A) Single-user (SQLite users DB)
+Or manually:
+```bash
+# Single-user mode (simplest)
 docker compose -f Dockerfiles/docker-compose.yml up -d --build
+docker compose -f Dockerfiles/docker-compose.yml exec app \
+  python -m tldw_Server_API.app.core.AuthNZ.initialize --non-interactive
+curl http://localhost:8000/health  # Verify
+```
 
-# Option B) Multi-user (Postgres users DB)
+<details>
+<summary>More Docker options (multi-user, overlays)</summary>
+
+```bash
+# Multi-user (Postgres users DB)
 export AUTH_MODE=multi_user
 export DATABASE_URL=postgresql://tldw_user:TestPassword123!@postgres:5432/tldw_users
-# Optional: route Jobs module to Postgres as well
-export JOBS_DB_URL=postgresql://tldw_user:TestPassword123!@postgres:5432/tldw_users
 docker compose -f Dockerfiles/docker-compose.postgres.yml up -d
 
-# Option C) Dev overlay — enable unified streaming (non-prod)
-# This turns on the SSE/WS unified streams (STREAMS_UNIFIED=1) for pilot endpoints.
-# Keep disabled in production until validated in your environment.
+# Dev overlay — unified streaming (non-prod)
 docker compose -f Dockerfiles/docker-compose.yml -f Dockerfiles/docker-compose.dev.yml up -d --build
 
 # Check status
 docker compose -f Dockerfiles/docker-compose.yml ps
 docker compose -f Dockerfiles/docker-compose.yml logs -f app
 
-# First-time AuthNZ initialization (inside the running app container)
-docker compose -f Dockerfiles/docker-compose.yml exec app \
-  python -m tldw_Server_API.app.core.AuthNZ.initialize
+# Proxy overlays
+#   - Dockerfiles/docker-compose.proxy.yml (Caddy)
+#   - Dockerfiles/docker-compose.proxy-nginx.yml (Nginx)
 
-# Optional: proxy overlays
-#   - Dockerfiles/docker-compose.proxy.yml
-#   - Dockerfiles/docker-compose.proxy-nginx.yml
-
-# Optional: use pgvector + pgbouncer for Postgres
+# pgvector + pgbouncer for Postgres
 docker compose -f Dockerfiles/docker-compose.yml -f Dockerfiles/docker-compose.pg.yml up -d --build
 ```
+</details>
 
 Notes
 - Run compose commands from the repository root. The base compose file at `Dockerfiles/docker-compose.yml` builds with context at the repo root and includes Postgres and Redis services.
@@ -742,9 +765,15 @@ Run locally
 <details>
 <summary>Documentation and resources</summary>
 
+**Getting Started Guides:**
+- [Tire Kicker Guide](Docs/Getting_Started/Tire_Kicker.md) - 5-minute setup with hand-holding
+- [Local Development Guide](Docs/Getting_Started/Local_Development.md) - building against the API
+- [Docker Self-Host Guide](Docs/Getting_Started/Docker_Self_Host.md) - running on your server
+- [Production Guide](Docs/Getting_Started/Production.md) - team deployment with security
+
+**Reference:**
 - `Docs/Documentation.md` - documentation index and developer guide links
 - `Docs/About.md` - project background and philosophy
-- `New-User-Guide.md` - guided walkthrough for first-time setup and usage
 - Module deep dives: `Docs/Development/AuthNZ-Developer-Guide.md`, `Docs/Development/RAG-Developer-Guide.md`, `Docs/MCP/Unified/Developer_Guide.md`
 - API references: `Docs/API-related/RAG-API-Guide.md`, `Docs/API-related/OCR_API_Documentation.md`, `Docs/API-related/Prompt_Studio_API.md`
 - Deployment/Monitoring: `Docs/Published/Deployment/First_Time_Production_Setup.md`, `Docs/Published/Deployment/Reverse_Proxy_Examples.md`, `Docs/Deployment/Monitoring/`
@@ -803,11 +832,18 @@ Some self-hosted OpenAI-compatible servers reject unknown fields (like `top_k`).
 
 ## Troubleshooting
 
-- ffmpeg missing: ensure `ffmpeg -version` works; install via your package manager.
-- Torch/CUDA mismatch: install a CUDA-compatible PyTorch or use CPU wheels.
-- SQLite locks: prefer short-lived transactions and context managers; consider Postgres for concurrency.
-- OpenAI strict mode: enable strict compatibility for local providers that reject unknown fields.
-- Docker: inspect with `docker compose ps` and `docker compose logs -f`.
+| Issue | Solution |
+|-------|----------|
+| `Connection refused` | Server not running - check `uvicorn` or `docker compose ps` |
+| `401 Unauthorized` | API key mismatch - verify `.env` matches your `X-API-KEY` header |
+| `API key too short` | Key must be at least 16 characters |
+| `ffmpeg not found` | Install: `brew install ffmpeg` (macOS) or `apt install ffmpeg` (Linux) |
+| `ModuleNotFoundError` | Activate venv: `source .venv/bin/activate` |
+| Torch/CUDA mismatch | Install CUDA-compatible PyTorch or use CPU wheels |
+| SQLite locks | Use short-lived transactions; consider Postgres for concurrency |
+| Docker issues | Check `docker compose ps` and `docker compose logs -f` |
+
+Quick verify: `curl http://localhost:8000/health` (no auth needed)
 
 ## Contributing & Support
 

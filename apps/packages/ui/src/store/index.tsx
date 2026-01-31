@@ -1,4 +1,5 @@
 import { createWithEqualityFn } from "zustand/traditional"
+import type { DiscoSkillComment } from "@/types/disco-skills"
 
 export type Message = {
   isBot: boolean
@@ -11,6 +12,7 @@ export type Message = {
   serverMessageId?: string
   serverMessageVersion?: number
   createdAt?: number
+  discoSkillComment?: DiscoSkillComment
 }
 
 export type ChatHistory = {

@@ -92,6 +92,8 @@ Installer flags:
 | Higgs Audio V2 | Local PyTorch | `pip install -e ".[TTS_higgs]"` + install `bosonai/higgs-audio` | Yes (3–10 s) | [TTS Setup Guide](https://github.com/rmusser01/tldw_server/blob/main/Docs/STT-TTS/TTS-SETUP-GUIDE.md#higgs-audio-v2-setup) |
 | Dia | Local PyTorch | `pip install torch transformers accelerate nltk spacy` | Yes (dialogue prompts) | [TTS Setup Guide](https://github.com/rmusser01/tldw_server/blob/main/Docs/STT-TTS/TTS-SETUP-GUIDE.md#dia-setup) |
 | IndexTTS2 | Local PyTorch | Download checkpoints to `checkpoints/index_tts2/` | Yes (zero-shot, 12 GB+ VRAM) | [TTS README](https://github.com/rmusser01/tldw_server/blob/main/tldw_Server_API/app/core/TTS/TTS-README.md#indextts2-adapter) |
+| LuxTTS | Local PyTorch | `pip install -e ".[TTS_luxtts]"` + clone repo | Yes (48kHz ZipVoice) | [LuxTTS Setup](https://github.com/rmusser01/tldw_server/blob/main/Docs/STT-TTS/LUXTTS_TTS_SETUP.md) |
+| Qwen3-TTS | Local PyTorch | `pip install -e ".[TTS_qwen3]"` | Yes (CustomVoice, multi-lang) | [TTS README](https://github.com/rmusser01/tldw_server/blob/main/tldw_Server_API/app/core/TTS/TTS-README.md) |
 | Echo-TTS | Local PyTorch | `pip install -e ".[TTS_echo_tts]"` (CUDA only) | **Required** (1–300 s, 44.1 kHz) | [Echo-TTS Setup](#echo-tts-cuda-only) |
 
 > Tip: Keep cloud providers (`openai`, `elevenlabs`) high in `provider_priority` for instant results, and add local fallbacks underneath.

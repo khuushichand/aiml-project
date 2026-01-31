@@ -283,6 +283,16 @@ export class PageAssistDatabase {
     await db.messages.where('id').equals(message_id).modify({ content });
   }
 
+  async updateMessageDiscoSkillComment(
+    message_id: string,
+    discoSkillComment: Message["discoSkillComment"] | null
+  ) {
+    await db.messages
+      .where('id')
+      .equals(message_id)
+      .modify({ discoSkillComment: discoSkillComment ?? null });
+  }
+
   async removeChatHistory(id: string) {
     await db.chatHistories.delete(id);
     await db.compareStates.delete(id);
@@ -609,23 +619,34 @@ export class PageAssistDatabase {
       await this.deleteAllChatHistory();
     }
 
-    for (const item of data) {
-      if (item.history) {
-        await db.chatHistories.put(item.history);
+    // Use transaction for atomic batch operations
+    await db.transaction('rw', [db.chatHistories, db.messages], async () => {
+      // Collect all histories and messages for bulk operations
+      const histories = data.filter(item => item.history).map(item => item.history);
+      const allMessages = data.flatMap(item => item.messages || []);
+
+      // Bulk put histories
+      if (histories.length > 0) {
+        await db.chatHistories.bulkPut(histories);
       }
 
-      if (item.messages) {
-        for (const message of item.messages) {
-          const existingMessage = await db.messages.get(message.id);
-
-          if (existingMessage && !replaceExisting) {
-            continue;
+      // For messages, check existing if not replacing
+      if (allMessages.length > 0) {
+        if (replaceExisting) {
+          await db.messages.bulkPut(allMessages);
+        } else {
+          // Filter out existing messages
+          const existingIds = new Set(
+            (await db.messages.where('id').anyOf(allMessages.map(m => m.id)).toArray())
+              .map(m => m.id)
+          );
+          const newMessages = allMessages.filter(m => !existingIds.has(m.id));
+          if (newMessages.length > 0) {
+            await db.messages.bulkPut(newMessages);
           }
-
-          await db.messages.put(message);
         }
       }
-    }
+    });
   }
 
   async importPromptsV2(data: Prompt[], options: {
@@ -638,24 +659,35 @@ export class PageAssistDatabase {
       await db.prompts.clear();
     }
 
-    for (const prompt of data) {
-      const existingPrompt = await db.prompts.get(prompt.id);
-
-      if (existingPrompt && !replaceExisting) {
-        continue;
-      }
-
+    // Normalize all prompts first
+    const normalizedPrompts = data.map(prompt => {
       const mergedKeywords = prompt.keywords ?? prompt.tags;
-      const normalizedPrompt: Prompt = {
+      return {
         ...prompt,
         title: prompt.title || prompt.name,
         name: prompt.name ?? prompt.title,
         tags: mergedKeywords ?? prompt.tags,
         keywords: mergedKeywords ?? prompt.keywords ?? prompt.tags
-      };
+      } as Prompt;
+    });
 
-      await db.prompts.put(normalizedPrompt);
-    }
+    // Use transaction for atomic batch operations
+    await db.transaction('rw', db.prompts, async () => {
+      if (replaceExisting) {
+        // Bulk put all prompts
+        await db.prompts.bulkPut(normalizedPrompts);
+      } else {
+        // Filter out existing prompts
+        const existingIds = new Set(
+          (await db.prompts.where('id').anyOf(normalizedPrompts.map(p => p.id)).toArray())
+            .map(p => p.id)
+        );
+        const newPrompts = normalizedPrompts.filter(p => !existingIds.has(p.id));
+        if (newPrompts.length > 0) {
+          await db.prompts.bulkPut(newPrompts);
+        }
+      }
+    });
   }
 
   async importSessionFilesV2(data: SessionFiles[], options: {

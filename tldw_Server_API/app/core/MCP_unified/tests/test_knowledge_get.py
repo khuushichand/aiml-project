@@ -4,7 +4,10 @@ import pytest
 from typing import Dict, Any, List
 
 from tldw_Server_API.app.core.MCP_unified.modules.base import BaseModule, ModuleConfig
-from tldw_Server_API.app.core.MCP_unified.modules.registry import get_module_registry
+from tldw_Server_API.app.core.MCP_unified.modules.registry import (
+    get_module_registry,
+    reset_module_registry,
+)
 from tldw_Server_API.app.core.MCP_unified.modules.implementations.knowledge_module import KnowledgeModule
 from tldw_Server_API.app.core.MCP_unified.protocol import RequestContext
 
@@ -114,6 +117,7 @@ class StubPromptsModule(BaseModule):
 
 @pytest.mark.asyncio
 async def test_knowledge_get_for_additional_sources():
+    await reset_module_registry()
     registry = get_module_registry()
     await registry.register_module("chats", StubChatsModule, ModuleConfig(name="chats"))
     await registry.register_module("characters", StubCharactersModule, ModuleConfig(name="characters"))
@@ -137,3 +141,4 @@ async def test_knowledge_get_for_additional_sources():
     out_prompts = await km.execute_tool("knowledge.get", {"source": "prompts", "id": "greeting"}, context=ctx)
     assert out_prompts["meta"]["source"] == "prompts"
     assert out_prompts["content"]["name"] == "greeting"
+    await reset_module_registry()

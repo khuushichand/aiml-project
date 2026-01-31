@@ -1,4 +1,4 @@
-import React, { useEffect } from "react"
+import React, { useEffect, useState, useRef } from "react"
 import { Tag, Image, Tooltip, Collapse, Avatar, Modal, message } from "antd"
 import { LoadingStatus } from "./ActionInfo"
 import { StopCircle as StopCircleIcon } from "lucide-react"
@@ -35,6 +35,16 @@ import { useStoreMessageOption } from "@/store/option"
 import type { MessageVariant } from "@/store/option"
 import { EDIT_MESSAGE_EVENT } from "@/utils/timeline-actions"
 import type { Character } from "@/types/character"
+import { useDiscoSkills } from "@/hooks/useDiscoSkills"
+import { DiscoSkillAnnotation } from "./DiscoSkillAnnotation"
+import type { DiscoSkillComment } from "@/types/disco-skills"
+import {
+  attemptSkillTrigger,
+  buildSkillPrompt,
+  createSkillComment
+} from "@/utils/disco-skill-check"
+import { useStoreMessage } from "@/store"
+import { updateMessageDiscoSkillComment } from "@/db/dexie/helpers"
 
 const Markdown = React.lazy(() => import("../../Common/Markdown"))
 
@@ -127,6 +137,7 @@ type Props = {
   // Tool/function calls (optional)
   toolCalls?: ToolCall[]
   toolResults?: ToolCallResult[]
+  discoSkillComment?: DiscoSkillComment | null
   historyId?: string
   conversationInstanceId: string
   onDeleteMessage?: () => void
@@ -168,6 +179,27 @@ export const PlaygroundMessage = (props: Props) => {
   const [savingKnowledge, setSavingKnowledge] = React.useState<
     "note" | "flashcard" | null
   >(null)
+
+  // Disco Skills state
+  const {
+    enabled: discoSkillsEnabled,
+    stats: discoSkillsStats,
+    triggerProbabilityBase: discoTriggerProbability,
+    persistComments: discoPersistComments
+  } = useDiscoSkills()
+  const setMessages = useStoreMessageOption((state) => state.setMessages)
+  const persistedSkillComment = discoPersistComments
+    ? props.discoSkillComment ?? null
+    : null
+  const [skillComment, setSkillComment] = useState<DiscoSkillComment | null>(
+    persistedSkillComment
+  )
+  const [isGeneratingSkillComment, setIsGeneratingSkillComment] = useState(false)
+  const skillCommentGeneratedRef = useRef(false)
+  const previousMessageRef = useRef<string | null>(null)
+  const previousMessageIdRef = useRef<string | null>(null)
+  const selectedModel = useStoreMessage((state) => state.selectedModel)
+
   const isLastMessage: boolean =
     props.currentMessageIndex === props.totalMessages - 1
   const errorPayload = decodeChatErrorPayload(props.message)
@@ -633,6 +665,160 @@ export const PlaygroundMessage = (props: Props) => {
     ttsClipMeta
   ])
 
+  useEffect(() => {
+    if (!discoPersistComments) return
+    if (persistedSkillComment) {
+      setSkillComment(persistedSkillComment)
+      skillCommentGeneratedRef.current = true
+    }
+  }, [discoPersistComments, persistedSkillComment])
+
+  useEffect(() => {
+    const currentMessageId = props.messageId ?? null
+    const messageIdChanged =
+      previousMessageIdRef.current !== null &&
+      previousMessageIdRef.current !== currentMessageId
+    const messageChanged =
+      previousMessageRef.current !== null &&
+      previousMessageRef.current !== props.message
+    if (messageIdChanged || messageChanged) {
+      skillCommentGeneratedRef.current = false
+      setSkillComment(null)
+      if (discoPersistComments && props.messageId) {
+        setMessages((prev) =>
+          prev.map((msg) =>
+            msg.id === props.messageId
+              ? { ...msg, discoSkillComment: undefined }
+              : msg
+          )
+        )
+        void updateMessageDiscoSkillComment(props.messageId, null).catch(
+          () => null
+        )
+      }
+    }
+    previousMessageRef.current = props.message
+    previousMessageIdRef.current = currentMessageId
+  }, [
+    props.message,
+    props.messageId,
+    props.activeVariantIndex,
+    discoPersistComments,
+    setMessages
+  ])
+
+  // Disco Skills comment generation effect
+  useEffect(() => {
+    // Only trigger for bot messages that are complete
+    if (
+      !discoSkillsEnabled ||
+      !props.isBot ||
+      !isLastMessage ||
+      props.isStreaming ||
+      props.isProcessing ||
+      !props.message?.trim() ||
+      errorPayload ||
+      (discoPersistComments && persistedSkillComment) ||
+      skillCommentGeneratedRef.current ||
+      isGeneratingSkillComment ||
+      skillComment
+    ) {
+      return
+    }
+
+    // Check if a skill should trigger
+    const triggerResult = attemptSkillTrigger(
+      props.message,
+      discoSkillsStats,
+      discoTriggerProbability
+    )
+
+    if (!triggerResult) {
+      skillCommentGeneratedRef.current = true
+      return
+    }
+
+    const { skill, passed } = triggerResult
+
+    // Prevent re-generation
+    skillCommentGeneratedRef.current = true
+    setIsGeneratingSkillComment(true)
+
+    // Generate the skill comment via LLM
+    const generateComment = async () => {
+      try {
+        const model = selectedModel || "gpt-4o-mini"
+        const prompt = buildSkillPrompt(skill, props.message, passed)
+
+        await tldwClient.initialize().catch(() => null)
+        const response = await tldwClient.createChatCompletion({
+          model,
+          messages: [
+            {
+              role: "system",
+              content:
+                "You are a skill voice from Disco Elysium. Stay in character. Be concise (1-3 sentences max). Do not use quotation marks."
+            },
+            { role: "user", content: prompt }
+          ],
+          temperature: 0.9,
+          max_tokens: 150
+        })
+
+        const data = await response.json()
+        const commentText =
+          data?.choices?.[0]?.message?.content?.trim() ||
+          data?.content?.trim() ||
+          ""
+
+        if (commentText) {
+          const comment = createSkillComment(
+            skill,
+            commentText,
+            passed,
+            props.messageId
+          )
+          setSkillComment(comment)
+          if (discoPersistComments && props.messageId) {
+            setMessages((prev) =>
+              prev.map((msg) =>
+                msg.id === props.messageId
+                  ? { ...msg, discoSkillComment: comment }
+                  : msg
+              )
+            )
+            void updateMessageDiscoSkillComment(props.messageId, comment).catch(
+              () => null
+            )
+          }
+        }
+      } catch (err) {
+        console.error("Failed to generate disco skill comment:", err)
+      } finally {
+        setIsGeneratingSkillComment(false)
+      }
+    }
+
+    generateComment()
+  }, [
+    discoSkillsEnabled,
+    discoSkillsStats,
+    discoTriggerProbability,
+    props.isBot,
+    isLastMessage,
+    props.isStreaming,
+    props.isProcessing,
+    props.message,
+    props.messageId,
+    errorPayload,
+    selectedModel,
+    isGeneratingSkillComment,
+    discoPersistComments,
+    persistedSkillComment,
+    skillComment,
+    setMessages
+  ])
+
   const compareLabel = t("playground:composer.compareTag", "Compare")
   const systemLabel = t("playground:systemPrompt", "System prompt")
 
@@ -1026,6 +1212,14 @@ export const PlaygroundMessage = (props: Props) => {
             <ToolCallBlock
               toolCalls={props.toolCalls}
               results={props.toolResults}
+            />
+          )}
+
+          {/* Disco Skills annotation */}
+          {props.isBot && skillComment && (
+            <DiscoSkillAnnotation
+              comment={skillComment}
+              onDismiss={() => setSkillComment(null)}
             />
           )}
 

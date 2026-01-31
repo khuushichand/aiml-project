@@ -21,7 +21,17 @@ const createExtensionDriver: CreateWorkflowDriver = async ({
       apiKey
     },
     quickIngestInspectorIntroDismissed: true,
-    quickIngestOnboardingDismissed: true
+    quickIngestOnboardingDismissed: true,
+    // Skip the "What would you like to do?" landing hub modal
+    // Note: chrome.storage handles serialization automatically - don't JSON.stringify
+    tldw_skip_landing_hub: true,
+    // Dismiss the workflow landing modal (shown on first run)
+    // Note: loadFromStorage in workflows.ts reads directly without JSON.parse
+    "tldw:workflow:landing-config": {
+      showOnFirstRun: true,
+      dismissedAt: Date.now(),
+      completedWorkflows: []
+    }
   }
   const enabledFlags = Object.entries(featureFlags || {})
     .filter(([, value]) => value)
@@ -30,7 +40,21 @@ const createExtensionDriver: CreateWorkflowDriver = async ({
     ? withFeatures(enabledFlags, baseSeed)
     : baseSeed
 
-  const launchResult = await launchWithExtension("", { seedConfig })
+  // Seed localStorage for tutorials and tours that don't use chrome.storage
+  const seedLocalStorage = {
+    // Skip the playground tour ("Choose a Model", etc.)
+    "playground-tour-completed": "true",
+    // Skip all tutorial prompts via zustand persisted state
+    "tldw-tutorials": JSON.stringify({
+      state: {
+        completedTutorials: ["playground", "chat", "notes", "media", "settings"],
+        seenPromptPages: ["/", "/chat", "/notes", "/media", "/settings", "/playground", "/workspace-playground"]
+      },
+      version: 0
+    })
+  }
+
+  const launchResult = await launchWithExtension("", { seedConfig, seedLocalStorage })
   const { context, page, extensionId, optionsUrl, sidepanelUrl, openSidepanel } =
     launchResult
 

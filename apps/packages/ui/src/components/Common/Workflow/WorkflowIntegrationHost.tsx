@@ -61,7 +61,8 @@ export const WorkflowIntegrationHost: React.FC<
     if (!autoShowRequestedRef.current) return
     markLandingSeen()
     autoShowRequestedRef.current = false
-  }, [markLandingSeen, showLanding])
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [showLanding]) // markLandingSeen excluded: it's a stable store action but creates new reference each render
 
   const handleJustChat = useCallback(() => {
     navigate(justChatPath)

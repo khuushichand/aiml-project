@@ -236,7 +236,17 @@ export async function bgRequest<
       }
 
       if (!abortSignal) {
-        const resp = await browser.runtime.sendMessage(payload) as { ok: boolean; error?: string; status?: number; data: T } | undefined
+        // Add timeout to extension messaging - if service worker doesn't respond, fall back to direct request
+        const extensionTimeout = 3000 // 3 second timeout for extension messaging
+        const messagePromiseNoSignal = browser.runtime.sendMessage(payload)
+        const timeoutPromiseNoSignal = new Promise<null>((resolve) =>
+          setTimeout(() => resolve(null), extensionTimeout)
+        )
+        const resp = await Promise.race([messagePromiseNoSignal, timeoutPromiseNoSignal]) as { ok: boolean; error?: string; status?: number; data: T } | undefined | null
+        if (resp === null) {
+          // Extension messaging timed out, fall through to direct request
+          throw new Error('Extension messaging timeout')
+        }
         if (!resp) {
           throw new Error(`Request failed (${method} ${path})`)
         }
@@ -305,24 +315,36 @@ export async function bgRequest<
         { ok: boolean; error?: string; status?: number; data: T } | undefined
       >
 
+      // Add timeout to extension messaging with abort signal support
+      const extensionTimeoutWithSignal = 3000 // 3 second timeout
       const resp = await new Promise<
-        { ok: boolean; error?: string; status?: number; data: T } | undefined
+        { ok: boolean; error?: string; status?: number; data: T } | undefined | null
       >((resolve, reject) => {
         const onAbort = () => {
           reject(new Error('Aborted'))
         }
+        const timeoutId = setTimeout(() => {
+          abortSignal.removeEventListener('abort', onAbort)
+          resolve(null) // timeout - fall through to direct request
+        }, extensionTimeoutWithSignal)
         abortSignal.addEventListener('abort', onAbort, { once: true })
         messagePromise
           .then((r) => {
+            clearTimeout(timeoutId)
             abortSignal.removeEventListener('abort', onAbort)
             resolve(r)
           })
           .catch((e) => {
+            clearTimeout(timeoutId)
             abortSignal.removeEventListener('abort', onAbort)
             reject(e)
           })
       })
 
+      if (resp === null) {
+        // Extension messaging timed out, fall through to direct request
+        throw new Error('Extension messaging timeout')
+      }
       if (!resp) {
         throw new Error(`Request failed (${method} ${path})`)
       }
@@ -468,6 +490,182 @@ const parseStreamError = async (resp: Response): Promise<string> => {
   return resp.statusText
 }
 
+/**
+ * Direct fetch streaming implementation - used as fallback when extension messaging is unavailable or times out
+ */
+async function* bgStreamDirect<
+  P extends AllowedPath = AllowedPath,
+  M extends AllowedMethodFor<P> = AllowedMethodFor<P>
+>(
+  { path, method = 'POST' as UpperLower<M>, headers = {}, body, streamIdleTimeoutMs, abortSignal }: BgStreamInit<P, M>
+): AsyncGenerator<string> {
+  const storage = createSafeStorage()
+  const cfg = await storage.get<any>("tldwConfig").catch(() => null)
+  const isAbsolute = typeof path === "string" && /^https?:/i.test(path)
+  if (!cfg?.serverUrl && !isAbsolute) {
+    throw new Error("tldw server not configured")
+  }
+  const baseUrl = cfg?.serverUrl ? String(cfg.serverUrl).replace(/\/$/, "") : ""
+  const url = isAbsolute
+    ? String(path)
+    : `${baseUrl}${String(path).startsWith("/") ? "" : "/"}${String(path)}`
+  const resolvedHeaders: Record<string, string> = { ...(headers || {}) }
+  for (const k of Object.keys(resolvedHeaders)) {
+    const kl = k.toLowerCase()
+    if (kl === "x-api-key" || kl === "authorization") delete resolvedHeaders[k]
+  }
+
+  if (cfg?.authMode === "single-user") {
+    const key = String(cfg?.apiKey || "").trim()
+    if (!key) {
+      throw new Error(
+        "Add or update your API key in Settings -> tldw server, then try again."
+      )
+    }
+    resolvedHeaders["X-API-KEY"] = key
+  } else if (cfg?.authMode === "multi-user") {
+    const token = String(cfg?.accessToken || "").trim()
+    if (token) {
+      resolvedHeaders["Authorization"] = `Bearer ${token}`
+    } else {
+      throw new Error("Not authenticated. Please login under Settings > tldw.")
+    }
+  }
+  if (cfg?.orgId) {
+    resolvedHeaders["X-TLDW-Org-Id"] = String(cfg.orgId)
+  }
+
+  resolvedHeaders["Accept"] = resolvedHeaders["Accept"] || "text/event-stream"
+  resolvedHeaders["Cache-Control"] =
+    resolvedHeaders["Cache-Control"] || "no-cache"
+  resolvedHeaders["Connection"] =
+    resolvedHeaders["Connection"] || "keep-alive"
+
+  const controller = new AbortController()
+  const idleMs = deriveStreamIdleTimeout(cfg, path as string, Number(streamIdleTimeoutMs))
+  let idleTimer: ReturnType<typeof setTimeout> | null = null
+  let idleError: Error | null = null
+  const resetIdle = () => {
+    if (idleTimer) clearTimeout(idleTimer)
+    idleTimer = setTimeout(() => {
+      idleError = new Error("Stream timeout: no updates received")
+      try {
+        controller.abort()
+      } catch {}
+    }, idleMs)
+  }
+
+  const onAbort = () => {
+    try {
+      controller.abort()
+    } catch {}
+  }
+  if (abortSignal) {
+    if (abortSignal.aborted) onAbort()
+    else abortSignal.addEventListener("abort", onAbort, { once: true })
+  }
+
+  const fetchStream = async (): Promise<Response> => {
+    return await fetch(url, {
+      method,
+      headers: resolvedHeaders,
+      body:
+        body != null
+          ? typeof body === "string"
+            ? body
+            : JSON.stringify(body)
+          : undefined,
+      signal: controller.signal
+    })
+  }
+
+  let resp = await fetchStream()
+  if (resp.status === 401 && cfg?.authMode === "multi-user" && cfg?.refreshToken) {
+    try {
+      const refreshResp = await fetch(`${baseUrl}/api/v1/auth/refresh`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ refresh_token: cfg.refreshToken })
+      })
+      if (refreshResp.ok) {
+        const tokens = await refreshResp.json().catch(() => null)
+        if (tokens?.access_token) {
+          const updated = { ...(cfg || {}), accessToken: tokens.access_token }
+          await storage.set("tldwConfig", updated)
+          resolvedHeaders["Authorization"] = `Bearer ${tokens.access_token}`
+          resp = await fetchStream()
+        }
+      }
+    } catch {
+      // ignore refresh failures and continue with original response
+    }
+  }
+
+  if (!resp.ok) {
+    const msg = await parseStreamError(resp)
+    throw new Error(formatErrorMessage(msg, `HTTP ${resp.status}`))
+  }
+  if (!resp.body) {
+    throw new Error("No response body")
+  }
+
+  const reader = resp.body.getReader()
+  const decoder = new TextDecoder()
+  let buffer = ""
+  resetIdle()
+  try {
+    while (true) {
+      const { done, value } = await reader.read()
+      if (done) break
+      resetIdle()
+      buffer += decoder.decode(value, { stream: true })
+      const lines = buffer.split("\n")
+      buffer = lines.pop() || ""
+      for (const line of lines) {
+        const trimmed = line.trim()
+        if (!trimmed) continue
+        resetIdle()
+        if (trimmed.startsWith("data:")) {
+          const data = trimmed.slice(5).trim()
+          if (data === "[DONE]") {
+            if (idleTimer) clearTimeout(idleTimer)
+            return
+          }
+          yield data
+        } else if (trimmed.startsWith("{") || trimmed.startsWith("[")) {
+          yield trimmed
+        }
+      }
+    }
+    const tail = buffer.trim()
+    if (tail) {
+      if (tail.startsWith("data:")) {
+        const data = tail.slice(5).trim()
+        if (data !== "[DONE]") {
+          yield data
+        }
+      } else if (tail.startsWith("{") || tail.startsWith("[")) {
+        yield tail
+      }
+    }
+  } catch (e: any) {
+    if (idleError) {
+      throw idleError
+    }
+    if (abortSignal?.aborted) {
+      throw new Error("Aborted")
+    }
+    throw e
+  } finally {
+    if (idleTimer) clearTimeout(idleTimer)
+    if (abortSignal) {
+      try {
+        abortSignal.removeEventListener("abort", onAbort)
+      } catch {}
+    }
+  }
+}
+
 export async function* bgStream<
   P extends AllowedPath = AllowedPath,
   M extends AllowedMethodFor<P> = AllowedMethodFor<P>
@@ -476,181 +674,33 @@ export async function* bgStream<
 ): AsyncGenerator<string> {
   const hasRuntimePort = Boolean(browser?.runtime?.connect && browser?.runtime?.id)
   if (!hasRuntimePort) {
-    const storage = createSafeStorage()
-    const cfg = await storage.get<any>("tldwConfig").catch(() => null)
-    const isAbsolute = typeof path === "string" && /^https?:/i.test(path)
-    if (!cfg?.serverUrl && !isAbsolute) {
-      throw new Error("tldw server not configured")
-    }
-    const baseUrl = cfg?.serverUrl ? String(cfg.serverUrl).replace(/\/$/, "") : ""
-    const url = isAbsolute
-      ? String(path)
-      : `${baseUrl}${String(path).startsWith("/") ? "" : "/"}${String(path)}`
-    const resolvedHeaders: Record<string, string> = { ...(headers || {}) }
-    for (const k of Object.keys(resolvedHeaders)) {
-      const kl = k.toLowerCase()
-      if (kl === "x-api-key" || kl === "authorization") delete resolvedHeaders[k]
-    }
-
-    if (cfg?.authMode === "single-user") {
-      const key = String(cfg?.apiKey || "").trim()
-      if (!key) {
-        throw new Error(
-          "Add or update your API key in Settings -> tldw server, then try again."
-        )
-      }
-      resolvedHeaders["X-API-KEY"] = key
-    } else if (cfg?.authMode === "multi-user") {
-      const token = String(cfg?.accessToken || "").trim()
-      if (token) {
-        resolvedHeaders["Authorization"] = `Bearer ${token}`
-      } else {
-        throw new Error("Not authenticated. Please login under Settings > tldw.")
-      }
-    }
-    if (cfg?.orgId) {
-      resolvedHeaders["X-TLDW-Org-Id"] = String(cfg.orgId)
-    }
-
-    resolvedHeaders["Accept"] = resolvedHeaders["Accept"] || "text/event-stream"
-    resolvedHeaders["Cache-Control"] =
-      resolvedHeaders["Cache-Control"] || "no-cache"
-    resolvedHeaders["Connection"] =
-      resolvedHeaders["Connection"] || "keep-alive"
-
-    const controller = new AbortController()
-    const idleMs = deriveStreamIdleTimeout(cfg, path as string, Number(streamIdleTimeoutMs))
-    let idleTimer: ReturnType<typeof setTimeout> | null = null
-    let idleError: Error | null = null
-    const resetIdle = () => {
-      if (idleTimer) clearTimeout(idleTimer)
-      idleTimer = setTimeout(() => {
-        idleError = new Error("Stream timeout: no updates received")
-        try {
-          controller.abort()
-        } catch {}
-      }, idleMs)
-    }
-
-    const onAbort = () => {
-      try {
-        controller.abort()
-      } catch {}
-    }
-    if (abortSignal) {
-      if (abortSignal.aborted) onAbort()
-      else abortSignal.addEventListener("abort", onAbort, { once: true })
-    }
-
-    const fetchStream = async (): Promise<Response> => {
-      return await fetch(url, {
-        method,
-        headers: resolvedHeaders,
-        body:
-          body != null
-            ? typeof body === "string"
-              ? body
-              : JSON.stringify(body)
-            : undefined,
-        signal: controller.signal
-      })
-    }
-
-    let resp = await fetchStream()
-    if (resp.status === 401 && cfg?.authMode === "multi-user" && cfg?.refreshToken) {
-      try {
-        const refreshResp = await fetch(`${baseUrl}/api/v1/auth/refresh`, {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ refresh_token: cfg.refreshToken })
-        })
-        if (refreshResp.ok) {
-          const tokens = await refreshResp.json().catch(() => null)
-          if (tokens?.access_token) {
-            const updated = { ...(cfg || {}), accessToken: tokens.access_token }
-            await storage.set("tldwConfig", updated)
-            resolvedHeaders["Authorization"] = `Bearer ${tokens.access_token}`
-            resp = await fetchStream()
-          }
-        }
-      } catch {
-        // ignore refresh failures and continue with original response
-      }
-    }
-
-    if (!resp.ok) {
-      const msg = await parseStreamError(resp)
-      throw new Error(formatErrorMessage(msg, `HTTP ${resp.status}`))
-    }
-    if (!resp.body) {
-      throw new Error("No response body")
-    }
-
-    const reader = resp.body.getReader()
-    const decoder = new TextDecoder()
-    let buffer = ""
-    resetIdle()
-    try {
-      while (true) {
-        const { done, value } = await reader.read()
-        if (done) break
-        resetIdle()
-        buffer += decoder.decode(value, { stream: true })
-        const lines = buffer.split("\n")
-        buffer = lines.pop() || ""
-        for (const line of lines) {
-          const trimmed = line.trim()
-          if (!trimmed) continue
-          resetIdle()
-          if (trimmed.startsWith("data:")) {
-            const data = trimmed.slice(5).trim()
-            if (data === "[DONE]") {
-              if (idleTimer) clearTimeout(idleTimer)
-              return
-            }
-            yield data
-          } else if (trimmed.startsWith("{") || trimmed.startsWith("[")) {
-            yield trimmed
-          }
-        }
-      }
-      const tail = buffer.trim()
-      if (tail) {
-        if (tail.startsWith("data:")) {
-          const data = tail.slice(5).trim()
-          if (data !== "[DONE]") {
-            yield data
-          }
-        } else if (tail.startsWith("{") || tail.startsWith("[")) {
-          yield tail
-        }
-      }
-    } catch (e: any) {
-      if (idleError) {
-        throw idleError
-      }
-      if (abortSignal?.aborted) {
-        throw new Error("Aborted")
-      }
-      throw e
-    } finally {
-      if (idleTimer) clearTimeout(idleTimer)
-      if (abortSignal) {
-        try {
-          abortSignal.removeEventListener("abort", onAbort)
-        } catch {}
-      }
-    }
+    yield* bgStreamDirect({ path, method, headers, body, streamIdleTimeoutMs, abortSignal })
     return
   }
 
+  // Extension port-based streaming with connection timeout fallback
   const port = browser.runtime.connect({ name: 'tldw:stream' })
-  const encoder = new TextEncoder()
   const queue: string[] = []
   let done = false
   let error: any = null
+  let firstDataReceived = false
+  let connectionTimedOut = false
+
+  // Connection timeout - if no data arrives within 5s, fall back to direct fetch
+  const CONNECTION_TIMEOUT_MS = 5000
+  const connectionTimer = setTimeout(() => {
+    if (!firstDataReceived && !done) {
+      connectionTimedOut = true
+      done = true
+      try { port.disconnect() } catch {}
+    }
+  }, CONNECTION_TIMEOUT_MS)
 
   const onMessage = (msg: any) => {
+    if (!firstDataReceived) {
+      firstDataReceived = true
+      clearTimeout(connectionTimer)
+    }
     if (msg?.event === 'data') {
       queue.push(msg.data as string)
     } else if (msg?.event === 'done') {
@@ -662,6 +712,7 @@ export async function* bgStream<
   }
   port.onMessage.addListener(onMessage)
   const onDisconnect = () => {
+    clearTimeout(connectionTimer)
     if (!done) {
       if (!error) error = new Error('Stream disconnected')
       done = true
@@ -669,6 +720,7 @@ export async function* bgStream<
   }
   port.onDisconnect.addListener(onDisconnect)
   const onAbort = () => {
+    clearTimeout(connectionTimer)
     if (!error) error = new Error('Aborted')
     done = true
     try { port.disconnect() } catch {}
@@ -681,6 +733,7 @@ export async function* bgStream<
     try {
       port.postMessage({ path, method, headers, body, streamIdleTimeoutMs })
     } catch (e) {
+      clearTimeout(connectionTimer)
       if (!error) error = e
       done = true
     }
@@ -694,8 +747,14 @@ export async function* bgStream<
         await new Promise((r) => setTimeout(r, 10))
       }
     }
+    // If connection timed out before receiving any data, fall back to direct fetch
+    if (connectionTimedOut) {
+      yield* bgStreamDirect({ path, method, headers, body, streamIdleTimeoutMs, abortSignal })
+      return
+    }
     if (error) throw error
   } finally {
+    clearTimeout(connectionTimer)
     try { port.onMessage.removeListener(onMessage); } catch {}
     try { port.onDisconnect.removeListener(onDisconnect); } catch {}
     try { port.disconnect(); } catch {}
@@ -722,10 +781,20 @@ export async function bgUpload<T = any, P extends AllowedPath = AllowedPath, M e
   const hasRuntimeMessage = Boolean(browser?.runtime?.sendMessage && browser?.runtime?.id)
   if (hasRuntimeMessage) {
     try {
-      const resp = await browser.runtime.sendMessage({
+      // Add timeout to extension messaging for uploads
+      const uploadTimeout = 5000 // 5 second timeout for upload messaging (longer due to file serialization)
+      const uploadPromise = browser.runtime.sendMessage({
         type: 'tldw:upload',
         payload: { path, method, fields, file, fileFieldName }
-      }) as { ok: boolean; error?: string; status?: number; data: T } | undefined
+      })
+      const uploadTimeoutPromise = new Promise<null>((resolve) =>
+        setTimeout(() => resolve(null), uploadTimeout)
+      )
+      const resp = await Promise.race([uploadPromise, uploadTimeoutPromise]) as { ok: boolean; error?: string; status?: number; data: T } | undefined | null
+      if (resp === null) {
+        // Extension messaging timed out, fall through to direct fetch
+        throw new Error('Extension messaging timeout')
+      }
       if (!resp?.ok) {
         const msg = formatErrorMessage(
           resp?.error,

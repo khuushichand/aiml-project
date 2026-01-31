@@ -5,6 +5,7 @@ import {
 import { getAllModelNicknames } from "./nickname"
 import { ChatDocuments } from "@/models/ChatTypes"
 import { normalizeChatRole } from "@/utils/normalize-chat-role"
+import type { DiscoSkillComment } from "@/types/disco-skills"
 type HistoryInfo = {
   id: string
   title: string
@@ -60,6 +61,7 @@ type Message = {
   modelName?: string
   modelImage?: string
   documents?: ChatDocuments
+  discoSkillComment?: DiscoSkillComment
 }
 function simpleFuzzyMatch(text: string, query: string): boolean {
   if (!text || !query) {
@@ -303,6 +305,21 @@ export class PageAssitDatabase {
     this.db.set({ [history_id]: newChatHistory })
   }
 
+  async updateMessageDiscoSkillComment(
+    history_id: string,
+    message_id: string,
+    discoSkillComment?: DiscoSkillComment | null
+  ) {
+    const chatHistory = await this.getChatHistory(history_id)
+    const newChatHistory = chatHistory.map((message) => {
+      if (message.id === message_id) {
+        message.discoSkillComment = discoSkillComment ?? undefined
+      }
+      return message
+    })
+    this.db.set({ [history_id]: newChatHistory })
+  }
+
   async removeChatHistory(id: string) {
     const chatHistories = await this.getChatHistories()
     const newChatHistories = chatHistories.filter(
@@ -353,8 +370,29 @@ export class PageAssitDatabase {
   }
 
   async bulkAddPrompts(prompts: Prompt[]) {
-    await this.db.set({ prompts: [] })
+    // Single write instead of two (clear then set) to reduce storage quota usage
     await this.db.set({ prompts: prompts })
+  }
+
+  async bulkAddChatHistories(histories: HistoryInfo[]) {
+    const existing = await this.getChatHistories()
+    const newHistories = [...histories, ...existing]
+    await this.db.set({ chatHistories: newHistories })
+  }
+
+  async bulkAddMessages(messages: Message[]) {
+    // Batch by history_id for efficient storage
+    const byHistory = new Map<string, Message[]>()
+    for (const msg of messages) {
+      const list = byHistory.get(msg.history_id) || []
+      list.push(msg)
+      byHistory.set(msg.history_id, list)
+    }
+    // Write all messages for each history in a single operation
+    for (const [historyId, msgs] of byHistory) {
+      const existing = await this.getChatHistory(historyId)
+      await this.db.set({ [historyId]: [...msgs, ...existing] })
+    }
   }
 
   async addPrompt(prompt: Prompt) {
@@ -543,6 +581,19 @@ export const updateMessage = async (
   await db.updateMessage(history_id, message_id, content)
 }
 
+export const updateMessageDiscoSkillComment = async (
+  history_id: string,
+  message_id: string,
+  discoSkillComment?: DiscoSkillComment | null
+) => {
+  const db = new PageAssitDatabase()
+  await db.updateMessageDiscoSkillComment(
+    history_id,
+    message_id,
+    discoSkillComment
+  )
+}
+
 export const saveMessage = async ({
   content,
   history_id,
@@ -550,6 +601,7 @@ export const saveMessage = async ({
   role,
   images,
   source,
+  discoSkillComment,
   generationInfo,
   message_type,
   modelImage,
@@ -567,6 +619,7 @@ export const saveMessage = async ({
   source?: any[]
   time?: number
   message_type?: string
+  discoSkillComment?: DiscoSkillComment
   generationInfo?: any
   reasoning_time_taken?: number
   modelName?: string
@@ -596,7 +649,8 @@ export const saveMessage = async ({
     reasoning_time_taken,
     modelName,
     modelImage,
-    documents
+    documents,
+    discoSkillComment
   }
   const db = new PageAssitDatabase()
   await db.addMessage(message)
@@ -633,7 +687,8 @@ export const formatToMessage = (messages: MessageHistory): MessageType[] => {
       modelImage: message?.modelImage,
       createdAt: message?.createdAt,
       id: message.id,
-      documents: message?.documents
+      documents: message?.documents,
+      discoSkillComment: message?.discoSkillComment
     }
   })
 }
@@ -817,13 +872,13 @@ export const importChatHistory = async (
     messages: MessageHistory
   }[]
 ) => {
+  // Use bulk operations to reduce chrome.storage write quota pressure
   const db = new PageAssitDatabase()
-  for (const { history, messages } of data) {
-    await db.addChatHistory(history)
-    for (const message of messages) {
-      await db.addMessage(message)
-    }
-  }
+  const histories = data.map(d => d.history)
+  const allMessages = data.flatMap(d => d.messages)
+
+  await db.bulkAddChatHistories(histories)
+  await db.bulkAddMessages(allMessages)
 }
 
 export const exportPrompts = async () => {
@@ -832,10 +887,9 @@ export const exportPrompts = async () => {
 }
 
 export const importPrompts = async (prompts: Prompts) => {
+  // Use bulk operations to reduce chrome.storage write quota pressure
   const db = new PageAssitDatabase()
-  for (const prompt of prompts) {
-    await db.addPrompt(prompt)
-  }
+  await db.bulkAddPrompts(prompts)
 }
 
 export const getRecentChatFromCopilot = async () => {

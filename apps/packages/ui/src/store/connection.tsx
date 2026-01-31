@@ -435,12 +435,27 @@ export const useConnectionStore = createWithEqualityFn<ConnectionStore>((set, ge
 
       if (ok) {
         try {
-          const rag = await tldwClient.ragHealth()
-          knowledgeStatus = deriveKnowledgeStatusFromHealth(rag)
+          console.log('[CONN_DEBUG] starting RAG health check')
+          // Add timeout to RAG health check to prevent hanging
+          // Increased from 5s to 15s to avoid false "offline" status when RAG is slow but working
+          const ragPromise = tldwClient.ragHealth()
+          const ragTimeout = new Promise<null>((resolve) =>
+            setTimeout(() => resolve(null), 15000)
+          )
+          const rag = await Promise.race([ragPromise, ragTimeout])
+          console.log('[CONN_DEBUG] RAG health result', { hasResult: !!rag, timedOut: rag === null })
+          if (rag !== null) {
+            knowledgeStatus = deriveKnowledgeStatusFromHealth(rag)
+          } else {
+            knowledgeStatus = "offline"
+            knowledgeError = "rag-timeout"
+          }
           knowledgeLastCheckedAt = Date.now()
-          knowledgeError =
-            knowledgeStatus === "empty" ? "no-index" : null
+          if (knowledgeStatus === "empty") {
+            knowledgeError = "no-index"
+          }
         } catch (e) {
+          console.log('[CONN_DEBUG] RAG health error', { error: String(e) })
           knowledgeStatus = "offline"
           knowledgeLastCheckedAt = Date.now()
           knowledgeError = (e as Error)?.message ?? "unknown-error"
@@ -468,6 +483,13 @@ export const useConnectionStore = createWithEqualityFn<ConnectionStore>((set, ge
         }
       }
 
+      console.log('[CONN_DEBUG] about to set final state', {
+        ok,
+        phase: ok ? 'CONNECTED' : 'ERROR',
+        serverUrl,
+        knowledgeStatus,
+        errorKind
+      })
       set({
         state: {
           ...prev,
@@ -486,6 +508,7 @@ export const useConnectionStore = createWithEqualityFn<ConnectionStore>((set, ge
           checksSinceConfigChange: nextChecksSinceConfigChange
         }
       })
+      console.log('[CONN_DEBUG] state updated, new state:', get().state.phase, get().state.isConnected)
     } catch (error) {
       set({
         state: {
