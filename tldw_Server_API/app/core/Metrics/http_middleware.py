@@ -3,6 +3,7 @@ from typing import Callable
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.requests import Request
 from starlette.responses import Response
+from fastapi.exceptions import RequestValidationError
 
 from tldw_Server_API.app.core.Metrics import get_metrics_registry
 
@@ -20,7 +21,12 @@ class HTTPMetricsMiddleware(BaseHTTPMiddleware):
             response = await call_next(request)
             status_code = response.status_code
             return response
-        except Exception:
+        except Exception as exc:
+            status = getattr(exc, "status_code", None)
+            if isinstance(status, int):
+                status_code = status
+            elif isinstance(exc, RequestValidationError):
+                status_code = 422
             # Exception will propagate after recording metrics
             raise
         finally:

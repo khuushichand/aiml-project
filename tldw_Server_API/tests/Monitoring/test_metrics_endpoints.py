@@ -1,6 +1,7 @@
 import re
 import pytest
 from fastapi import FastAPI
+from fastapi import HTTPException
 from fastapi.responses import PlainTextResponse
 from fastapi.testclient import TestClient
 
@@ -80,3 +81,24 @@ def test_chat_metrics_json_shape_basic(client):
     assert "token_costs" in data
     assert isinstance(data["active_operations"], dict)
     assert isinstance(data["token_costs"], dict)
+
+
+def test_http_metrics_records_http_exception_status():
+    app = FastAPI()
+    reg = get_metrics_registry()
+    reg.reset()
+
+    @app.get("/boom")
+    async def boom():
+        raise HTTPException(status_code=404, detail="not found")
+
+    app.add_middleware(HTTPMetricsMiddleware)
+
+    with TestClient(app) as client:
+        resp = client.get("/boom")
+        assert resp.status_code == 404
+
+    assert reg.get_cumulative_counter(
+        "http_requests_total",
+        {"method": "GET", "endpoint": "/boom", "status": "404"},
+    ) == 1

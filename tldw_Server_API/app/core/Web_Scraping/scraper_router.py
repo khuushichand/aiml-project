@@ -74,13 +74,15 @@ def _match_domain_rule(domain: str, rules: Dict[str, Any]) -> Optional[Tuple[str
 
     # 2) Wildcard (*.example.com)
     best_match: Optional[Tuple[str, Dict[str, Any]]] = None
+    best_suffix_len = -1
     for key, rule in dom_rules.items():
         if key.startswith("*."):
             suffix = key[1:]  # remove leading '*'
             if domain.endswith(suffix):
                 # Pick the longest suffix for specificity
-                if not best_match or len(suffix) > len(best_match[0]):
+                if len(suffix) > best_suffix_len:
                     best_match = (key, rule)
+                    best_suffix_len = len(suffix)
 
     if best_match:
         return best_match

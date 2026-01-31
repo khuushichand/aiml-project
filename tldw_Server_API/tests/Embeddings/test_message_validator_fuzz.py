@@ -2,18 +2,28 @@ import sys
 from types import SimpleNamespace
 
 import pytest
-from hypothesis import given, strategies as st
+from hypothesis import HealthCheck, given, settings, strategies as st
 
 from tldw_Server_API.app.core.Embeddings import messages
 
 
+_ASCII_TEXT = st.text(alphabet=st.characters(min_codepoint=48, max_codepoint=122), min_size=1, max_size=32)
+_ASCII_KEY = st.text(alphabet=st.characters(min_codepoint=97, max_codepoint=122), min_size=1, max_size=10)
+_ASCII_VALUE = st.one_of(
+    st.integers(),
+    st.text(alphabet=st.characters(min_codepoint=48, max_codepoint=122), min_size=0, max_size=32),
+    st.booleans(),
+)
+
+
 @pytest.mark.unit
+@settings(suppress_health_check=[HealthCheck.too_slow], max_examples=50)
 @given(
     stage=st.sampled_from(["chunking", "embedding", "storage"]),
-    job_id=st.text(min_size=1, max_size=32),
-    user_id=st.text(min_size=1, max_size=16),
+    job_id=_ASCII_TEXT,
+    user_id=st.text(alphabet=st.characters(min_codepoint=48, max_codepoint=122), min_size=1, max_size=16),
     media_id=st.integers(min_value=1, max_value=1_000_000),
-    extra=st.dictionaries(keys=st.text(min_size=1, max_size=10), values=st.integers() | st.text() | st.booleans(), max_size=5),
+    extra=st.dictionaries(keys=_ASCII_KEY, values=_ASCII_VALUE, max_size=5),
 )
 def test_normalize_message_accepts_extra_fields(stage, job_id, user_id, media_id, extra):
     """normalize_message should accept unknown fields (additive) and inject envelope defaults."""

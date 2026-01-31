@@ -168,22 +168,19 @@ class UserRateLimiter:
                 else:
                     retry_after = 1
 
-                # Unified audit (non-blocking)
-                try:
-                    log_security_violation(
-                        user_id=user_id,
-                        action="embeddings_rate_limit_exceeded",
-                        metadata={
-                            "current_count": current_count,
-                            "limit": limit,
-                            "burst_limit": burst_limit,
-                            "cost": cost,
-                            "retry_after": retry_after,
-                        },
-                        ip_address=ip_address,
-                    )
-                except Exception:
-                    pass
+                # Unified audit (mandatory)
+                log_security_violation(
+                    user_id=user_id,
+                    action="embeddings_rate_limit_exceeded",
+                    metadata={
+                        "current_count": current_count,
+                        "limit": limit,
+                        "burst_limit": burst_limit,
+                        "cost": cost,
+                        "retry_after": retry_after,
+                    },
+                    ip_address=ip_address,
+                )
 
                 logger.warning(
                     f"Rate limit exceeded for user {user_id}: "

@@ -763,6 +763,43 @@ async def test_batch_length_mismatch_raises(monkeypatch):
 
 
 @pytest.mark.unit
+@pytest.mark.asyncio
+async def test_batch_rate_limit_maps_to_429(monkeypatch):
+    import tldw_Server_API.app.api.v1.endpoints.embeddings_v5_production_enhanced as mod
+    from tldw_Server_API.app.core.Embeddings.request_batching import EmbeddingsRateLimitError
+
+    async def fake_create_embeddings_with_circuit_breaker(
+        texts,
+        provider,
+        model_id,
+        config,
+        metadata=None,
+        dimensions=None,
+    ):
+        _ = (texts, provider, model_id, config, metadata, dimensions)
+        raise EmbeddingsRateLimitError("rate limited", retry_after=3)
+
+    monkeypatch.setattr(
+        mod,
+        "create_embeddings_with_circuit_breaker",
+        fake_create_embeddings_with_circuit_breaker,
+        raising=True,
+    )
+    monkeypatch.setattr(mod.embedding_cache, "get", AsyncMock(return_value=None))
+    monkeypatch.setattr(mod.embedding_cache, "set", AsyncMock())
+
+    with pytest.raises(HTTPException) as exc:
+        await mod.create_embeddings_batch_async(
+            ["a"],
+            provider="huggingface",
+            model_id="sentence-transformers/all-MiniLM-L6-v2",
+        )
+
+    assert exc.value.status_code == 429
+    assert exc.value.headers.get("Retry-After") == "3"
+
+
+@pytest.mark.unit
 def test_resolve_model_and_provider_strips_prefix():
     import tldw_Server_API.app.api.v1.endpoints.embeddings_v5_production_enhanced as mod
 

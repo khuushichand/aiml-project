@@ -66,6 +66,7 @@ async def test_get_audit_service_for_user_uses_raw_non_numeric_id_in_tests(monke
 @pytest.mark.asyncio
 async def test_optional_audit_service_rejects_non_numeric_outside_tests(monkeypatch):
     monkeypatch.setattr(deps, "_is_test_context", lambda: False)
+    monkeypatch.setattr(deps, "_resolve_audit_storage_mode", lambda: "per_user")
 
     async def _fake_get_or_create(_key):
         raise AssertionError("Should not create audit service for invalid non-numeric id")
@@ -106,8 +107,47 @@ async def test_optional_audit_service_accepts_non_numeric_in_tests(monkeypatch):
 
     monkeypatch.setattr(deps, "_get_or_create_audit_service_for_key", _fake_get_or_create)
     monkeypatch.setattr(deps, "_is_test_context", lambda: True)
+    monkeypatch.setattr(deps, "_resolve_audit_storage_mode", lambda: "per_user")
 
     svc = await deps.get_or_create_audit_service_for_user_id_optional("tenant-alpha")
 
     assert svc is sentinel
     assert called["key"] == "tenant-alpha"
+
+
+@pytest.mark.asyncio
+async def test_optional_audit_service_accepts_non_numeric_in_shared_mode(monkeypatch):
+    sentinel = object()
+    called = {}
+
+    async def _fake_default():
+        called["default"] = True
+        return sentinel
+
+    monkeypatch.setattr(deps, "_is_test_context", lambda: False)
+    monkeypatch.setattr(deps, "_resolve_audit_storage_mode", lambda: "shared")
+    monkeypatch.setattr(deps, "get_or_create_default_audit_service", _fake_default)
+
+    svc = await deps.get_or_create_audit_service_for_user_id_optional("tenant-alpha")
+
+    assert svc is sentinel
+    assert called["default"] is True
+
+
+@pytest.mark.asyncio
+async def test_optional_audit_service_routes_system_id_to_default(monkeypatch):
+    sentinel = object()
+    called = {}
+
+    async def _fake_default():
+        called["default"] = True
+        return sentinel
+
+    monkeypatch.setattr(deps, "_is_test_context", lambda: False)
+    monkeypatch.setattr(deps, "_resolve_audit_storage_mode", lambda: "per_user")
+    monkeypatch.setattr(deps, "get_or_create_default_audit_service", _fake_default)
+
+    svc = await deps.get_or_create_audit_service_for_user_id_optional("system")
+
+    assert svc is sentinel
+    assert called["default"] is True

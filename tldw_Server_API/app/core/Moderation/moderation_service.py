@@ -507,9 +507,16 @@ class ModerationService:
                     break
         except Exception:
             pii_effective = False
+        cats_override: Optional[List[str]] = None
+        if "categories_enabled" in self._runtime_override:
+            cats_val = self._runtime_override.get("categories_enabled") or []
+            if isinstance(cats_val, (set, list, tuple)):
+                cats_override = sorted([str(c) for c in cats_val])
+            else:
+                cats_override = [str(cats_val)]
         return {
             "pii_enabled": bool(self._runtime_override.get("pii_enabled", None)) if ("pii_enabled" in self._runtime_override) else None,
-            "categories_enabled": list(self._runtime_override.get("categories_enabled") or []) if ("categories_enabled" in self._runtime_override) else None,
+            "categories_enabled": cats_override,
             "effective": {
                 "pii_enabled": pii_effective,
                 "categories_enabled": sorted(pol.categories_enabled) if pol.categories_enabled else [],
@@ -550,7 +557,13 @@ class ModerationService:
             if isinstance(data, dict):
                 ro: Dict[str, object] = {}
                 if "pii_enabled" in data:
-                    ro["pii_enabled"] = self._parse_bool_value(data.get("pii_enabled"))
+                    raw_val = data.get("pii_enabled")
+                    parsed = self._parse_bool_value(raw_val)
+                    if parsed is None:
+                        if raw_val is not None:
+                            logger.warning(f"Invalid pii_enabled override value: {raw_val!r}")
+                    else:
+                        ro["pii_enabled"] = parsed
                 cats = data.get("categories_enabled")
                 if isinstance(cats, list):
                     ro["categories_enabled"] = {str(c).strip().lower() for c in cats if str(c).strip()}
@@ -649,11 +662,11 @@ class ModerationService:
         return str(v).strip().lower() in {"1", "true", "yes", "y", "on"}
 
     @staticmethod
-    def _parse_bool_value(v: object) -> bool:
+    def _parse_bool_value(v: object) -> Optional[bool]:
         if isinstance(v, bool):
             return v
         if v is None:
-            return False
+            return None
         if isinstance(v, (int, float)):
             return bool(v)
         if isinstance(v, str):
@@ -662,12 +675,17 @@ class ModerationService:
                 return True
             if val in {"0", "false", "no", "n", "off"}:
                 return False
-        return bool(v)
+            return None
+        return None
 
     # --------------- Checking and transformations ---------------
     def check_text(self, text: str, policy: ModerationPolicy, phase: Optional[str] = None) -> Tuple[bool, Optional[str]]:
         """Return (is_flagged, matched_sample)."""
         if not policy.enabled or not text:
+            return False, None
+        if phase == "input" and not policy.input_enabled:
+            return False, None
+        if phase == "output" and not policy.output_enabled:
             return False, None
         if not policy.block_patterns:
             return False, None
@@ -904,17 +922,13 @@ class ModerationService:
             start += step
 
     def _find_match_span(self, pat: re.Pattern, text: str) -> Optional[Tuple[int, int]]:
-        text_len = len(text)
-        window = max(0, int(self._match_window_chars))
-        for start, end in self._iter_scan_chunks(text):
-            window_end = min(text_len, end + window)
-            try:
-                m = pat.search(text, start, window_end)
-            except re.error:
-                return None
-            if m and m.start() < end:
-                return m.start(), m.end()
-        return None
+        try:
+            m = pat.search(text)
+        except re.error:
+            return None
+        if not m:
+            return None
+        return m.start(), m.end()
 
     def _collect_rule_matches(self, text: str, pat: re.Pattern) -> List[re.Match]:
         """Collect non-overlapping matches across scan chunks for soft-capped redaction."""
@@ -923,30 +937,18 @@ class ModerationService:
         limit = self._max_replacements_per_pattern
         if limit is not None and int(limit) <= 0:
             limit = None
-        matches_by_span: Dict[Tuple[int, int], re.Match] = {}
-        text_len = len(text)
-        window = max(0, int(self._match_window_chars))
-        for start, end in self._iter_scan_chunks(text):
-            window_end = min(text_len, end + window)
-            try:
-                for m in pat.finditer(text, start, window_end):
-                    if m.start() >= end:
-                        break
-                    span = m.span()
-                    if span[0] == span[1]:
-                        continue
-                    if span in matches_by_span:
-                        continue
-                    matches_by_span[span] = m
-                    if limit is not None and len(matches_by_span) >= limit:
-                        break
-            except re.error:
-                return []
-            if limit is not None and len(matches_by_span) >= limit:
-                break
-        if not matches_by_span:
+        matches: List[re.Match] = []
+        try:
+            for m in pat.finditer(text):
+                span = m.span()
+                if span[0] == span[1]:
+                    continue
+                matches.append(m)
+                if limit is not None and len(matches) >= limit:
+                    break
+        except re.error:
             return []
-        return [matches_by_span[k] for k in sorted(matches_by_span)]
+        return matches
 
     @staticmethod
     def _apply_rule_redactions(text: str, matches: List[re.Match], replacement: str) -> str:
@@ -1168,6 +1170,14 @@ class ModerationService:
                 # Recognize /regex/flags form as regex
                 regex_parts = self._parse_regex_expr(expr)
                 is_regex = regex_parts is not None
+                invalid_flags_warning = None
+                if not is_regex and expr.startswith("/") and expr.rfind("/") > 0:
+                    last_slash = expr.rfind("/")
+                    flags_part = expr[last_slash + 1:]
+                    if flags_part and flags_part.isalpha() and len(flags_part) <= len(self._ALLOWED_REGEX_FLAGS):
+                        fs = flags_part.lower()
+                        if any(ch not in self._ALLOWED_REGEX_FLAGS for ch in fs):
+                            invalid_flags_warning = "invalid regex flags; treating as literal"
                 item.update({
                     "action": action,
                     "replacement": repl,
@@ -1202,6 +1212,8 @@ class ModerationService:
                 else:
                     # For literal samples, present unescaped '#'
                     item.update({"ok": True, "pattern_type": "literal", "sample": expr.replace("\\#", "#")})
+                    if invalid_flags_warning:
+                        item["warning"] = invalid_flags_warning
                     valid_count += 1
                 results.append(item)
             except Exception as e:

@@ -161,7 +161,8 @@ class WebScrapingService:
                     url_input, custom_titles, summarize_checkbox,
                     custom_prompt, api_name, api_key, keywords,
                     system_prompt, temperature, custom_cookies,
-                    job_priority, user_agent, custom_headers
+                    job_priority, user_agent, custom_headers,
+                    user_id=user_id,
                 )
 
             elif scrape_method == "Sitemap":
@@ -170,6 +171,7 @@ class WebScrapingService:
                     custom_prompt, api_name, api_key, keywords,
                     system_prompt, temperature, job_priority,
                     custom_cookies, user_agent, custom_headers,
+                    user_id=user_id,
                     task_id=task_id,
                 )
 
@@ -181,6 +183,7 @@ class WebScrapingService:
                     custom_prompt, api_name, api_key, keywords,
                     system_prompt, temperature, job_priority,
                     custom_cookies, user_agent, custom_headers,
+                    user_id=user_id,
                     include_external=eff_include_external,
                     score_threshold=eff_score_threshold,
                     crawl_strategy=eff_strategy,
@@ -193,6 +196,7 @@ class WebScrapingService:
                     custom_prompt, api_name, api_key, keywords,
                     system_prompt, temperature, custom_cookies,
                     job_priority, user_agent, custom_headers,
+                    user_id=user_id,
                     include_external=eff_include_external,
                     score_threshold=eff_score_threshold,
                     crawl_strategy=eff_strategy,
@@ -236,7 +240,9 @@ class WebScrapingService:
         temperature: float, custom_cookies: Optional[List[Dict[str, Any]]],
         priority: JobPriority,
         user_agent: Optional[str],
-        custom_headers: Optional[Dict[str, str]]
+        custom_headers: Optional[Dict[str, str]],
+        *,
+        user_id: Optional[int] = None,
     ) -> Dict[str, Any]:
         """Scrape individual URLs with enhanced features"""
         # Parse URLs and titles
@@ -265,7 +271,8 @@ class WebScrapingService:
             temperature=temperature,
             custom_cookies=custom_cookies,
             user_agent=user_agent,
-            custom_headers=custom_headers
+            custom_headers=custom_headers,
+            user_id=str(user_id) if user_id is not None else None,
         )
 
         logger.info(f"Scraping completed, got {len(results)} results")
@@ -296,6 +303,7 @@ class WebScrapingService:
         user_agent: Optional[str],
         custom_headers: Optional[Dict[str, str]],
         *,
+        user_id: Optional[int] = None,
         task_id: Optional[str] = None,
     ) -> Dict[str, Any]:
         """Scrape from sitemap with filtering"""
@@ -312,6 +320,7 @@ class WebScrapingService:
             custom_cookies=custom_cookies,
             user_agent=user_agent,
             custom_headers=custom_headers,
+            user_id=str(user_id) if user_id is not None else None,
             task_id=task_id,
         )
 
@@ -344,6 +353,7 @@ class WebScrapingService:
         user_agent: Optional[str],
         custom_headers: Optional[Dict[str, str]],
         *,
+        user_id: Optional[int] = None,
         include_external: Optional[bool] = None,
         score_threshold: Optional[float] = None,
         crawl_strategy: Optional[str] = None,
@@ -365,6 +375,7 @@ class WebScrapingService:
             custom_cookies=custom_cookies,
             user_agent=user_agent,
             custom_headers=custom_headers,
+            user_id=str(user_id) if user_id is not None else None,
             include_external_override=include_external,
             score_threshold_override=score_threshold,
             crawl_strategy=crawl_strategy,
@@ -400,6 +411,7 @@ class WebScrapingService:
         user_agent: Optional[str],
         custom_headers: Optional[Dict[str, str]],
         *,
+        user_id: Optional[int] = None,
         include_external: Optional[bool] = None,
         score_threshold: Optional[float] = None,
         crawl_strategy: Optional[str] = None,
@@ -420,6 +432,7 @@ class WebScrapingService:
                 custom_cookies=custom_cookies,
                 user_agent=user_agent,
                 custom_headers=custom_headers,
+                user_id=str(user_id) if user_id is not None else None,
                 include_external_override=include_external,
                 score_threshold_override=score_threshold,
                 crawl_strategy=crawl_strategy,
@@ -698,36 +711,62 @@ class WebScrapingService:
             "errors": errors if errors else None
         }
 
-    async def get_job_status(self, job_id: str) -> Dict[str, Any]:
-        """Get status of a scraping job"""
+    def _is_admin_user(self, user: Any) -> bool:
+        return bool(
+            getattr(user, "is_admin", False)
+            or getattr(user, "is_superuser", False)
+            or str(getattr(user, "role", "") or "").lower() == "admin"
+        )
+
+    def _can_access_job(self, job: ScrapingJob, user: Any) -> bool:
+        if self._is_admin_user(user):
+            return True
+        user_id = getattr(user, "id", None)
+        if user_id is None:
+            return False
+        return job.user_id is not None and str(job.user_id) == str(user_id)
+
+    async def get_job_status(self, job_id: str, current_user: Any) -> Dict[str, Any]:
+        """Get status of a scraping job (scoped to the requesting user)."""
         if not self._initialized:
             raise HTTPException(status_code=503, detail="Service not initialized")
+        if self.scraper is None:
+            raise HTTPException(status_code=503, detail="Scraping service unavailable")
+        if current_user is None:
+            raise HTTPException(status_code=401, detail="Authentication required")
 
-        # Check active jobs
-        if job_id in self._active_jobs:
-            job = self._active_jobs[job_id]
-            return job.to_dict()
+        job = self.scraper.job_queue.get_job(job_id)
+        if not job:
+            raise HTTPException(status_code=404, detail="Job not found")
+        if not self._can_access_job(job, current_user):
+            raise HTTPException(status_code=403, detail="Not authorized to access this job")
 
-        # Check queue status
-        queue_status = self.scraper.job_queue.get_status()
+        return job.to_dict()
+
+    async def cancel_job(self, job_id: str, current_user: Any) -> Dict[str, Any]:
+        """Cancel a scraping job (best-effort, scoped to the requesting user)."""
+        if not self._initialized:
+            raise HTTPException(status_code=503, detail="Service not initialized")
+        if self.scraper is None:
+            raise HTTPException(status_code=503, detail="Scraping service unavailable")
+        if current_user is None:
+            raise HTTPException(status_code=401, detail="Authentication required")
+
+        job = self.scraper.job_queue.get_job(job_id)
+        if not job:
+            raise HTTPException(status_code=404, detail="Job not found")
+        if not self._can_access_job(job, current_user):
+            raise HTTPException(status_code=403, detail="Not authorized to cancel this job")
+
+        cancelled = await self.scraper.job_queue.cancel_job(job_id)
+        if not cancelled:
+            raise HTTPException(status_code=404, detail="Job not found")
 
         return {
             "job_id": job_id,
-            "status": "unknown",
-            "queue_status": queue_status
-        }
-
-    async def cancel_job(self, job_id: str) -> Dict[str, Any]:
-        """Cancel a scraping job"""
-        if not self._initialized:
-            raise HTTPException(status_code=503, detail="Service not initialized")
-
-        # Implementation would cancel the job if it's in queue
-        # For now, return mock response
-        return {
-            "job_id": job_id,
-            "status": "cancelled",
-            "message": "Job cancellation requested"
+            "status": cancelled.status.name.lower(),
+            "cancel_requested": cancelled.cancel_requested,
+            "message": "Job cancellation requested" if cancelled.status != JobStatus.CANCELLED else "Job cancelled",
         }
 
     def get_service_status(self) -> Dict[str, Any]:
@@ -744,7 +783,7 @@ class WebScrapingService:
             "status": "operational",
             "initialized": True,
             "queue": queue_status,
-            "active_jobs": len(self._active_jobs),
+            "active_jobs": queue_status.get("active_jobs", 0),
             "rate_limiter": {
                 "max_rps": self.scraper.rate_limiter.max_rps,
                 "max_rpm": self.scraper.rate_limiter.max_rpm,

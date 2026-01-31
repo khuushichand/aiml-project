@@ -29,6 +29,7 @@ from urllib.parse import urlparse, urljoin
 import random
 import os
 import re
+import uuid
 
 from loguru import logger
 import aiofiles
@@ -100,7 +101,8 @@ BEST_FIRST_BATCH_SIZE = 10
 
 def _default_rules_path() -> str:
     here = Path(__file__).resolve()
-    project_root = here.parents[3]
+    # Resolve project root: .../tldw_Server_API/app/core/Web_Scraping/enhanced_web_scraping.py -> repo root
+    project_root = here.parents[4]  # tldw_Server_API/ at index 3; repo root at 4
     return str(project_root / "tldw_Server_API" / "Config_Files" / "custom_scrapers.yaml")
 
 
@@ -127,6 +129,7 @@ class ScrapingJob:
     job_id: str
     url: str
     method: str
+    user_id: Optional[str] = None
     priority: JobPriority = JobPriority.NORMAL
     status: JobStatus = JobStatus.PENDING
     created_at: datetime = field(default_factory=datetime.now)
@@ -137,6 +140,7 @@ class ScrapingJob:
     result: Optional[Dict[str, Any]] = None
     error: Optional[str] = None
     metadata: Dict[str, Any] = field(default_factory=dict)
+    cancel_requested: bool = False
 
     def to_dict(self) -> Dict[str, Any]:
         """Convert job to dictionary"""
@@ -144,6 +148,7 @@ class ScrapingJob:
             "job_id": self.job_id,
             "url": self.url,
             "method": self.method,
+            "user_id": self.user_id,
             "priority": self.priority.value,
             "status": self.status.name,
             "created_at": self.created_at.isoformat(),
@@ -152,7 +157,8 @@ class ScrapingJob:
             "retries": self.retries,
             "result": self.result,
             "error": self.error,
-            "metadata": self.metadata
+            "metadata": self.metadata,
+            "cancel_requested": self.cancel_requested,
         }
 
 
@@ -446,6 +452,7 @@ class ScrapingJobQueue:
             priority: asyncio.Queue() for priority in JobPriority
         }
         self._active_jobs: Dict[str, ScrapingJob] = {}
+        self._pending_jobs: Dict[str, ScrapingJob] = {}
         self._completed_jobs: Dict[str, ScrapingJob] = {}
         self._job_futures: Dict[str, asyncio.Future] = {}
         self._workers: List[asyncio.Task] = []
@@ -469,10 +476,13 @@ class ScrapingJobQueue:
                 try:
                     job = await queue.get()
                     job.status = JobStatus.CANCELLED
-                    if job.job_id in self._job_futures:
-                        self._job_futures[job.job_id].set_exception(
-                            Exception("Job cancelled due to shutdown")
-                        )
+                    job.cancel_requested = True
+                    job.completed_at = datetime.now()
+                    self._pending_jobs.pop(job.job_id, None)
+                    self._completed_jobs[job.job_id] = job
+                    future = self._job_futures.pop(job.job_id, None)
+                    if future and not future.done():
+                        future.set_exception(Exception("Job cancelled due to shutdown"))
                 except Exception as e:
                     logger.debug(f"Failed to cancel pending scraping job during shutdown: error={e}")
 
@@ -486,6 +496,7 @@ class ScrapingJobQueue:
             # Create future for job result
             future = asyncio.Future()
             self._job_futures[job.job_id] = future
+            self._pending_jobs[job.job_id] = job
 
             # Add to appropriate priority queue
             await self._queues[job.priority].put(job)
@@ -514,11 +525,25 @@ class ScrapingJobQueue:
                     continue
 
                 # Process job
+                skip_job = False
                 async with self._lock:
-                    job.status = JobStatus.IN_PROGRESS
-                    job.started_at = datetime.now()
-                    self._active_jobs[job.job_id] = job
+                    if job.cancel_requested or job.status == JobStatus.CANCELLED:
+                        job.status = JobStatus.CANCELLED
+                        job.completed_at = datetime.now()
+                        self._pending_jobs.pop(job.job_id, None)
+                        self._completed_jobs[job.job_id] = job
+                        future = self._job_futures.pop(job.job_id, None)
+                        if future and not future.done():
+                            future.set_exception(Exception("Job cancelled"))
+                        skip_job = True
+                    else:
+                        self._pending_jobs.pop(job.job_id, None)
+                        job.status = JobStatus.IN_PROGRESS
+                        job.started_at = datetime.now()
+                        self._active_jobs[job.job_id] = job
 
+                if skip_job:
+                    continue
                 logger.info(f"{worker_id} processing job {job.job_id}")
 
                 # Execute job (implement actual scraping logic)
@@ -527,7 +552,11 @@ class ScrapingJobQueue:
                 # Update job status
                 async with self._lock:
                     job.completed_at = datetime.now()
-                    if result.get("error"):
+                    if job.cancel_requested:
+                        job.status = JobStatus.CANCELLED
+                        job.error = job.error or "Job cancelled"
+                        job.result = None
+                    elif result.get("error"):
                         job.status = JobStatus.FAILED
                         job.error = result["error"]
 
@@ -535,6 +564,8 @@ class ScrapingJobQueue:
                         if job.retries < job.max_retries:
                             job.retries += 1
                             job.status = JobStatus.PENDING
+                            self._active_jobs.pop(job.job_id, None)
+                            self._pending_jobs[job.job_id] = job
                             await self._queues[job.priority].put(job)
                             logger.info(f"Retrying job {job.job_id} ({job.retries}/{job.max_retries})")
                             continue
@@ -543,7 +574,7 @@ class ScrapingJobQueue:
                         job.result = result
 
                     # Move to completed
-                    del self._active_jobs[job.job_id]
+                    self._active_jobs.pop(job.job_id, None)
                     self._completed_jobs[job.job_id] = job
 
                     # Resolve future
@@ -563,14 +594,21 @@ class ScrapingJobQueue:
                 if job:
                     async with self._lock:
                         job.completed_at = datetime.now()
-                        job.status = JobStatus.FAILED
-                        job.error = str(e)
+                        if job.cancel_requested:
+                            job.status = JobStatus.CANCELLED
+                            job.error = job.error or "Job cancelled"
+                        else:
+                            job.status = JobStatus.FAILED
+                            job.error = str(e)
                         if job.job_id in self._active_jobs:
                             del self._active_jobs[job.job_id]
                         self._completed_jobs[job.job_id] = job
                         future = self._job_futures.pop(job.job_id, None)
                     if future and not future.done():
-                        future.set_exception(e)
+                        if job.cancel_requested:
+                            future.set_exception(Exception("Job cancelled"))
+                        else:
+                            future.set_exception(e)
 
         logger.info(f"{worker_id} stopped")
 
@@ -602,6 +640,44 @@ class ScrapingJobQueue:
                 for priority in JobPriority
             }
         }
+
+    def get_job(self, job_id: str) -> Optional[ScrapingJob]:
+        """Get a job by ID from pending, active, or completed sets."""
+        if not job_id:
+            return None
+        job = self._active_jobs.get(job_id)
+        if job:
+            return job
+        job = self._pending_jobs.get(job_id)
+        if job:
+            return job
+        return self._completed_jobs.get(job_id)
+
+    async def cancel_job(self, job_id: str) -> Optional[ScrapingJob]:
+        """Cancel a job if it is pending or active (best-effort)."""
+        if not job_id:
+            return None
+        async with self._lock:
+            job = self.get_job(job_id)
+            if not job:
+                return None
+            # If already terminal, return as-is
+            if job.status in {JobStatus.COMPLETED, JobStatus.FAILED, JobStatus.CANCELLED}:
+                return job
+            # Pending jobs can be cancelled immediately
+            if job_id in self._pending_jobs:
+                job.status = JobStatus.CANCELLED
+                job.cancel_requested = True
+                job.completed_at = datetime.now()
+                self._pending_jobs.pop(job_id, None)
+                self._completed_jobs[job_id] = job
+                future = self._job_futures.pop(job_id, None)
+                if future and not future.done():
+                    future.set_exception(Exception("Job cancelled"))
+                return job
+            # Active jobs: mark cancel requested (cannot preempt in-flight work)
+            job.cancel_requested = True
+            return job
 
 
 class EnhancedWebScraper:
@@ -1649,20 +1725,36 @@ class EnhancedWebScraper:
         )
         return self._apply_dedup(url, data)
 
-    async def scrape_multiple(self, urls: List[str], method: str = "auto",
-                            priority: JobPriority = JobPriority.NORMAL,
-                            summarize: bool = False,
-                            **kwargs) -> List[Dict[str, Any]]:
+    async def scrape_multiple(
+        self,
+        urls: List[str],
+        method: str = "auto",
+        priority: JobPriority = JobPriority.NORMAL,
+        summarize: bool = False,
+        user_id: Optional[str] = None,
+        **kwargs,
+    ) -> List[Dict[str, Any]]:
         """Scrape multiple URLs concurrently"""
         jobs = []
         futures = []
 
+        if "user_id" in kwargs:
+            if user_id is None:
+                candidate = kwargs.pop("user_id")
+                if candidate is not None:
+                    user_id = str(candidate)
+            else:
+                kwargs.pop("user_id")
+
+        owner_id = str(user_id) if user_id is not None else None
+
         # Create jobs
         for url in urls:
             job = ScrapingJob(
-                job_id=f"job_{int(time.time() * 1000)}_{hash(url)}",
+                job_id=f"job_{uuid.uuid4().hex}",
                 url=url,
                 method=method,
+                user_id=owner_id,
                 priority=priority,
                 metadata=kwargs
             )
@@ -1720,6 +1812,7 @@ class EnhancedWebScraper:
         user_agent: Optional[str] = None,
         custom_headers: Optional[Dict[str, str]] = None,
         task_id: Optional[str] = None,
+        user_id: Optional[str] = None,
     ) -> List[Dict[str, Any]]:
         """Scrape all URLs from a sitemap"""
         # Egress guard for sitemap endpoint
@@ -1774,6 +1867,7 @@ class EnhancedWebScraper:
             custom_cookies=custom_cookies,
             user_agent=user_agent,
             custom_headers=custom_headers,
+            user_id=user_id,
         )
         self._set_progress(
             task_id,
@@ -1793,6 +1887,7 @@ class EnhancedWebScraper:
         user_agent: Optional[str] = None,
         custom_headers: Optional[Dict[str, str]] = None,
         task_id: Optional[str] = None,
+        user_id: Optional[str] = None,
         *,
         include_external_override: Optional[bool] = None,
         score_threshold_override: Optional[float] = None,
@@ -1986,6 +2081,7 @@ class EnhancedWebScraper:
                     custom_cookies=custom_cookies,
                     user_agent=user_agent,
                     custom_headers=custom_headers,
+                    user_id=user_id,
                 )
 
                 # Map url -> (neg_score, depth, parent)
@@ -2172,6 +2268,7 @@ class EnhancedWebScraper:
                     custom_cookies=custom_cookies,
                     user_agent=user_agent,
                     custom_headers=custom_headers,
+                    user_id=user_id,
                 )
 
                 meta_map_fifo = {u: (d, p) for (d, u, p) in batch_fifo}

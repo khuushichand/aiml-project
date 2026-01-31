@@ -653,6 +653,22 @@ def instrument_fastapi_app(app: Any, telemetry_manager: Optional[TelemetryManage
         ):
             if getattr(app, attr, False):
                 return True
+        # Guard against duplicate middleware if auto-instrumentation already ran.
+        try:
+            for middleware in getattr(app, "user_middleware", []) or []:
+                cls = getattr(middleware, "cls", None)
+                if not cls:
+                    continue
+                if cls.__name__ == "OpenTelemetryMiddleware" or cls.__module__.startswith(
+                    "opentelemetry.instrumentation"
+                ):
+                    try:
+                        setattr(app, "_tldw_otel_fastapi_instrumented", True)
+                    except Exception:
+                        pass
+                    return True
+        except Exception:
+            pass
         tm = telemetry_manager or get_telemetry_manager()
         FastAPIInstrumentor.instrument_app(
             app,

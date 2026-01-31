@@ -143,13 +143,15 @@ export default function WatchlistsPanel({
                   <Input
                     id="watchThreshold"
                     type="number"
-                    min="0"
+                    min="1"
                     max="100"
                     value={newWatchlist.threshold}
                     onChange={(event) =>
                       setNewWatchlist({
                         ...newWatchlist,
-                        threshold: parseInt(event.target.value, 10) || 80,
+                        threshold: Number.isFinite(Number(event.target.value))
+                          ? Math.min(100, Math.max(1, Math.round(Number(event.target.value))))
+                          : 80,
                       })
                     }
                   />

@@ -14,6 +14,7 @@ from contextlib import contextmanager, asynccontextmanager
 from dataclasses import dataclass
 import uuid
 import json
+import contextvars
 
 from loguru import logger
 
@@ -23,6 +24,9 @@ if OTEL_AVAILABLE:
     from opentelemetry import trace, context, baggage
     from opentelemetry.trace import Status, StatusCode, Link, SpanKind
     from opentelemetry.trace.propagation import set_span_in_context
+else:
+    Status = None  # type: ignore
+    StatusCode = None  # type: ignore
 
 
 # Type variable for decorators
@@ -91,7 +95,7 @@ class TracingManager:
         self.tracer = self.telemetry.get_tracer("tldw_server.tracing")
         self.active_spans = {}
         # Local baggage store when OpenTelemetry baggage is unavailable
-        self._local_baggage = {}
+        self._local_baggage = contextvars.ContextVar("tldw_local_baggage", default={})
 
     @contextmanager
     def span(
@@ -123,20 +127,25 @@ class TracingManager:
             attributes=attributes,
             links=links
         ) as span:
+            span_id: Optional[str] = None
             try:
                 # Track active span
-                span_id = format(span.get_span_context().span_id, '016x')
-                self.active_spans[span_id] = span
+                if hasattr(span, "get_span_context"):
+                    span_context = span.get_span_context()
+                    span_id = format(span_context.span_id, '016x')
+                    self.active_spans[span_id] = span
 
                 yield span
 
             except Exception as e:
-                span.record_exception(e)
-                span.set_status(Status(StatusCode.ERROR, str(e)))
+                if span and hasattr(span, "record_exception"):
+                    span.record_exception(e)
+                if span and hasattr(span, "set_status") and Status and StatusCode:
+                    span.set_status(Status(StatusCode.ERROR, str(e)))
                 raise
             finally:
                 # Remove from active spans
-                if span_id in self.active_spans:
+                if span_id and span_id in self.active_spans:
                     del self.active_spans[span_id]
 
     @asynccontextmanager
@@ -169,20 +178,25 @@ class TracingManager:
             attributes=attributes,
             links=links
         ) as span:
+            span_id: Optional[str] = None
             try:
                 # Track active span
-                span_id = format(span.get_span_context().span_id, '016x')
-                self.active_spans[span_id] = span
+                if hasattr(span, "get_span_context"):
+                    span_context = span.get_span_context()
+                    span_id = format(span_context.span_id, '016x')
+                    self.active_spans[span_id] = span
 
                 yield span
 
             except Exception as e:
-                span.record_exception(e)
-                span.set_status(Status(StatusCode.ERROR, str(e)))
+                if span and hasattr(span, "record_exception"):
+                    span.record_exception(e)
+                if span and hasattr(span, "set_status") and Status and StatusCode:
+                    span.set_status(Status(StatusCode.ERROR, str(e)))
                 raise
             finally:
                 # Remove from active spans
-                if span_id in self.active_spans:
+                if span_id and span_id in self.active_spans:
                     del self.active_spans[span_id]
 
     def get_current_span(self):
@@ -266,7 +280,9 @@ class TracingManager:
             context.attach(ctx)
         else:
             # Fallback: store in local in-memory baggage
-            self._local_baggage[key] = value
+            bag = dict(self._local_baggage.get() or {})
+            bag[key] = value
+            self._local_baggage.set(bag)
 
     def get_baggage(self, key: str) -> Optional[str]:
         """
@@ -280,7 +296,7 @@ class TracingManager:
         """
         if OTEL_AVAILABLE:
             return baggage.get_baggage(key)
-        return self._local_baggage.get(key)
+        return (self._local_baggage.get() or {}).get(key)
 
     def extract_context(self, carrier: Dict[str, str]) -> Optional[TraceContext]:
         """

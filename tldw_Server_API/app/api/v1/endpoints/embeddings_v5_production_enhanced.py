@@ -136,6 +136,7 @@ except Exception as e:
         return "./models/embedding_models_data/"
 
 from tldw_Server_API.app.core.Embeddings.request_batching import (
+    EmbeddingsRateLimitError,
     create_embeddings_batch_async as batching_create_embeddings_batch_async,
 )
 
@@ -1291,6 +1292,47 @@ def _supports_openai_dimensions(model: str) -> bool:
     model_key = (model or "").split(":", 1)[-1]
     return model_key.startswith("text-embedding-3")
 
+def _validate_dimensions_request(provider: str, model: str, dimensions: Optional[int]) -> Optional[int]:
+    """Validate requested dimensions for the provider/model pair."""
+    if dimensions is None:
+        return None
+    try:
+        dim = int(dimensions)
+    except Exception as exc:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="dimensions must be an integer",
+        ) from exc
+    if dim <= 0:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"dimensions must be positive, got {dim}",
+        )
+
+    provider_key = (provider or "").lower()
+    model_key = (model or "").split(":", 1)[-1]
+    if provider_key == "openai":
+        if not _supports_openai_dimensions(model):
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="dimensions is only supported for OpenAI text-embedding-3 models",
+            )
+        max_dims = {"text-embedding-3-small": 1536, "text-embedding-3-large": 3072}
+        max_dim = max_dims.get(model_key)
+        if max_dim is not None and dim > max_dim:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"dimensions {dim} exceeds maximum {max_dim} for model {model_key}",
+            )
+    else:
+        if dim > 4096:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="dimensions must be <= 4096 for non-OpenAI providers",
+            )
+
+    return dim
+
 def adjust_dimensions(
     vectors: List[List[float]],
     target_dim: Optional[int],
@@ -1848,6 +1890,7 @@ async def create_embeddings_batch_async(
     metadata: Optional[Dict[str, Any]] = None,
 ) -> List[List[float]]:
     """Async wrapper for embeddings with caching and circuit breaker"""
+    provider = (provider or "").strip().lower()
 
     if model_id:
         prefix_provider, stripped_model = _split_provider_model(model_id)
@@ -1891,6 +1934,7 @@ async def create_embeddings_batch_async(
             )
 
         try:
+            _validate_dimensions_request(provider, model_id or "", dimensions)
             config = build_provider_config(
                 provider_enum,
                 model_id,
@@ -1944,6 +1988,13 @@ async def create_embeddings_batch_async(
                             ),
                         )
                     all_new_embeddings.extend(batch_embeddings)
+                except EmbeddingsRateLimitError as e:
+                    headers = {"Retry-After": str(e.retry_after)} if e.retry_after else None
+                    raise HTTPException(
+                        status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+                        detail="Rate limit exceeded",
+                        headers=headers,
+                    ) from e
                 except HTTPException:
                     raise
                 except Exception as e:
@@ -2060,22 +2111,17 @@ async def create_embedding_endpoint(
                         provider = "huggingface"
                         break
 
+        provider = (provider or "").lower()
+
         try:
-            provider_enum = EmbeddingProvider(provider.lower())
+            provider_enum = EmbeddingProvider(provider)
         except ValueError:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail=f"Unknown provider: {provider}"
             )
 
-        # OpenAI-specific dimensions validation. For non-OpenAI providers we
-        # accept dimensions and apply the local dimension policy post-hoc.
-        if embedding_request.dimensions is not None and provider.lower() == "openai":
-            if not _supports_openai_dimensions(model):
-                raise HTTPException(
-                    status_code=status.HTTP_400_BAD_REQUEST,
-                    detail="dimensions is only supported for OpenAI text-embedding-3 models",
-                )
+        _validate_dimensions_request(provider, model, embedding_request.dimensions)
 
         # Parse and validate input FIRST (before policy checks)
         texts_to_embed: List[str] = []
@@ -2090,11 +2136,11 @@ async def create_embedding_endpoint(
         elif isinstance(embedding_request.input, list):
             if not embedding_request.input:
                 raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Input list cannot be empty")
-            if len(embedding_request.input) > 2048:
-                raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Maximum 2048 inputs allowed")
 
             # Support list[str], list[int], or list[list[int]]
             if all(isinstance(item, str) for item in embedding_request.input):
+                if len(embedding_request.input) > 2048:
+                    raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Maximum 2048 inputs allowed")
                 if any(not (item or "").strip() for item in embedding_request.input):  # type: ignore[union-attr]
                     raise HTTPException(
                         status_code=status.HTTP_400_BAD_REQUEST,
@@ -2110,6 +2156,8 @@ async def create_embedding_endpoint(
                 except Exception as e:
                     raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid token array input") from e
             elif all(isinstance(item, list) for item in embedding_request.input):
+                if len(embedding_request.input) > 2048:
+                    raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Maximum 2048 inputs allowed")
                 # Batch of token arrays
                 try:
                     texts_to_embed, provided_token_count, token_lengths = tokens_to_texts(embedding_request.input, model)
@@ -2455,7 +2503,7 @@ async def create_embedding_endpoint(
 
         # Optional dimension adjustment (post-process)
         dims_policy_used = None
-        if embedding_request.dimensions:
+        if embedding_request.dimensions is not None:
             # For base64 outputs, always reduce to requested dims for deterministic length
             if embedding_request.encoding_format == "base64":
                 try:
@@ -2634,12 +2682,7 @@ async def create_embeddings_batch_endpoint(
 
     model, provider = _resolve_model_and_provider(payload.model, payload.provider)
 
-    if payload.dimensions is not None and provider.lower() == "openai":
-        if not _supports_openai_dimensions(model):
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail="dimensions is only supported for OpenAI text-embedding-3 models",
-            )
+    _validate_dimensions_request(provider, model, payload.dimensions)
 
     enforce_policy = _should_enforce_policy(current_user)
     allowed_providers = _get_allowed_providers()
@@ -2695,6 +2738,9 @@ async def create_embeddings_batch_endpoint(
         metadata=user_metadata,
     )
     await credentials.touch_last_used()
+
+    if payload.dimensions is not None:
+        embeddings = adjust_dimensions(embeddings, payload.dimensions, provider, model)
 
     # Attach quota headers if present (parity with single-item endpoint)
     try:

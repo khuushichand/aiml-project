@@ -125,6 +125,46 @@ class EvaluationRunner:
         self.semaphore = asyncio.Semaphore(max_concurrent_evals)
         self.eval_timeout = eval_timeout
 
+    def _resolve_eval_provider_model_api_key(
+        self,
+        eval_spec: Dict[str, Any],
+        eval_config: Dict[str, Any],
+    ) -> tuple[str, Optional[str], Optional[str]]:
+        """Resolve provider, model override, and api_key for evaluator calls."""
+        run_config = eval_config.get("config") if isinstance(eval_config, dict) else None
+        if hasattr(run_config, "model_dump"):
+            run_config = run_config.model_dump()
+        elif hasattr(run_config, "dict"):
+            run_config = run_config.dict()
+        if not isinstance(run_config, dict):
+            run_config = {}
+
+        api_name = (
+            eval_spec.get("api_name")
+            or eval_spec.get("provider")
+            or run_config.get("api_name")
+            or run_config.get("provider")
+            or "openai"
+        )
+        api_name = str(api_name).strip() or "openai"
+        api_key = (
+            eval_spec.get("api_key")
+            or eval_spec.get("apiKey")
+            or run_config.get("api_key")
+        )
+        model_override = eval_spec.get("model") or run_config.get("model")
+
+        # Backward compatibility: evaluator_model may refer to provider OR model
+        evaluator_model = eval_spec.get("evaluator_model")
+        if evaluator_model:
+            normalized_provider = normalize_provider(str(evaluator_model))
+            if normalized_provider:
+                api_name = normalized_provider
+            elif not model_override:
+                model_override = str(evaluator_model)
+
+        return api_name, model_override, api_key
+
     @property
     def rag_evaluator(self) -> RAGEvaluator:
         """Get or create RAG evaluator instance (lazy initialization)."""
@@ -234,8 +274,33 @@ class EvaluationRunner:
             eval_fn = self._get_evaluation_function(eval_type, eval_spec)
 
             # Process samples in batches
-            batch_size = eval_config.get("config", {}).get("batch_size", 10)
-            max_workers = eval_config.get("config", {}).get("max_workers", 4)
+            run_config = eval_config.get("config") if isinstance(eval_config, dict) else None
+            if hasattr(run_config, "model_dump"):
+                run_config = run_config.model_dump()
+            elif hasattr(run_config, "dict"):
+                run_config = run_config.dict()
+            if not isinstance(run_config, dict):
+                run_config = {}
+
+            batch_size = run_config.get("batch_size", 10)
+            max_workers = run_config.get("max_workers", 4)
+            timeout_seconds = run_config.get("timeout_seconds", self.eval_timeout)
+            try:
+                batch_size = int(batch_size)
+            except (TypeError, ValueError):
+                batch_size = 10
+            if batch_size < 1:
+                batch_size = 1
+            try:
+                max_workers = int(max_workers)
+            except (TypeError, ValueError):
+                max_workers = 4
+            if max_workers < 1:
+                max_workers = 1
+            try:
+                timeout_seconds = float(timeout_seconds)
+            except (TypeError, ValueError):
+                timeout_seconds = float(self.eval_timeout)
 
             sample_results = []
 
@@ -250,7 +315,8 @@ class EvaluationRunner:
                     eval_spec,
                     eval_config,
                     max_workers,
-                    start_index=i
+                    start_index=i,
+                    timeout_seconds=timeout_seconds,
                 )
 
                 # Update progress
@@ -416,6 +482,7 @@ class EvaluationRunner:
         rp = (eval_spec or {}).get("rag_pipeline", {}) or {}
         metrics_sel = rp.get("metrics") or {}
         config_grid = self._build_config_grid(eval_spec)
+        eval_provider, eval_model, _ = self._resolve_eval_provider_model_api_key(eval_spec, eval_config)
 
         # Progress accounting
         total_work = max(1, len(config_grid) * max(1, len(samples)))
@@ -642,7 +709,8 @@ class EvaluationRunner:
                         response=response,
                         ground_truth=ground_truth,
                         metrics=eval_spec.get("metrics", ["relevance", "faithfulness", "answer_similarity"]),
-                        api_name=eval_spec.get("evaluator_model", "openai")
+                        api_name=eval_provider,
+                        model=eval_model,
                     )
                     # Extract normalized metric scores
                     scores = {}
@@ -732,7 +800,7 @@ class EvaluationRunner:
                 if chunk_index_stats:
                     rec["chunk_index_stats"] = chunk_index_stats
                 per_sample.append(rec)
-                if overall:
+                if overall is not None:
                     agg_scores.append(overall)
                 if latency:
                     agg_latency.append(latency)
@@ -1127,31 +1195,49 @@ class EvaluationRunner:
         eval_spec: Dict[str, Any],
         eval_config: Dict[str, Any],
         max_workers: int,
-        start_index: int = 0
+        start_index: int = 0,
+        timeout_seconds: Optional[float] = None,
     ) -> List[Dict[str, Any]]:
         """Process a batch of samples with proper concurrency control"""
+        run_timeout = timeout_seconds if timeout_seconds is not None else self.eval_timeout
+        try:
+            run_timeout = float(run_timeout)
+        except (TypeError, ValueError):
+            run_timeout = float(self.eval_timeout)
+        if run_timeout <= 0:
+            run_timeout = float(self.eval_timeout)
+
+        try:
+            max_workers = int(max_workers)
+        except (TypeError, ValueError):
+            max_workers = 1
+        if max_workers < 1:
+            max_workers = 1
+
+        run_semaphore = asyncio.Semaphore(max_workers)
 
         async def eval_with_timeout_and_semaphore(sample, sample_id):
             """Evaluate a single sample with timeout and semaphore control"""
             async with self.semaphore:
-                try:
-                    # Apply timeout to individual evaluation
-                    result = await asyncio.wait_for(
-                        eval_fn(
-                            sample=sample,
-                            eval_spec=eval_spec,
-                            config=eval_config,
-                            sample_id=sample_id
-                        ),
-                        timeout=self.eval_timeout
-                    )
-                    return result
-                except asyncio.TimeoutError:
-                    logger.error(f"Evaluation timeout for {sample_id}")
-                    return {"sample_id": sample_id, "error": f"Timeout after {self.eval_timeout}s"}
-                except Exception as e:
-                    logger.error(f"Evaluation failed for {sample_id}: {e}")
-                    return {"sample_id": sample_id, "error": str(e)}
+                async with run_semaphore:
+                    try:
+                        # Apply timeout to individual evaluation
+                        result = await asyncio.wait_for(
+                            eval_fn(
+                                sample=sample,
+                                eval_spec=eval_spec,
+                                config=eval_config,
+                                sample_id=sample_id
+                            ),
+                            timeout=run_timeout
+                        )
+                        return result
+                    except asyncio.TimeoutError:
+                        logger.error(f"Evaluation timeout for {sample_id}")
+                        return {"sample_id": sample_id, "error": f"Timeout after {run_timeout}s"}
+                    except Exception as e:
+                        logger.error(f"Evaluation failed for {sample_id}: {e}")
+                        return {"sample_id": sample_id, "error": str(e)}
 
         # Create tasks with proper error handling
         tasks = []
@@ -1202,20 +1288,8 @@ class EvaluationRunner:
             source_text = sample["input"].get("source_text", "")
             summary = sample["input"].get("summary", "")
 
-            # Resolve provider and API key (if provided)
-            run_config = config.get("config", {}) if isinstance(config, dict) else {}
-            api_name = (
-                eval_spec.get("api_name")
-                or eval_spec.get("provider")
-                or eval_spec.get("evaluator_model")
-                or run_config.get("api_name")
-                or "openai"
-            )
-            api_key = (
-                eval_spec.get("api_key")
-                or eval_spec.get("apiKey")
-                or run_config.get("api_key")
-            )
+            # Resolve provider, model, and API key (if provided)
+            api_name, model_override, api_key = self._resolve_eval_provider_model_api_key(eval_spec, config)
 
             # Run G-Eval with controlled thread pool usage
             loop = asyncio.get_event_loop()
@@ -1226,6 +1300,7 @@ class EvaluationRunner:
                 summary=summary,
                 api_key=api_key,
                 api_name=api_name,
+                model=model_override,
                 save=False,
             )
             result = await loop.run_in_executor(None, call_geval)
@@ -1295,13 +1370,15 @@ class EvaluationRunner:
                 ground_truth = ""
 
             # Run RAG evaluation
+            api_name, model_override, _ = self._resolve_eval_provider_model_api_key(eval_spec, config)
             result = await self.rag_evaluator.evaluate(
                 query=query,
                 contexts=contexts,
                 response=response,
                 ground_truth=ground_truth,
                 metrics=eval_spec.get("metrics", ["relevance", "faithfulness"]),
-                api_name=eval_spec.get("evaluator_model", "openai")
+                api_name=api_name,
+                model=model_override,
             )
 
             # Extract scores
@@ -1347,12 +1424,14 @@ class EvaluationRunner:
             expected_format = sample["input"].get("expected_format")
 
             # Run quality evaluation
+            api_name, model_override, _ = self._resolve_eval_provider_model_api_key(eval_spec, config)
             result = await self.quality_evaluator.evaluate(
                 prompt=prompt,
                 response=response,
                 expected_format=expected_format,
                 custom_criteria=eval_spec.get("custom_criteria"),
-                api_name=eval_spec.get("evaluator_model", "openai")
+                api_name=api_name,
+                model=model_override,
             )
 
             # Extract scores
@@ -1397,7 +1476,16 @@ class EvaluationRunner:
         """Evaluate exact match"""
         try:
             output = sample["input"].get("output", "")
-            expected = sample.get("expected", {}).get("output", "")
+            expected_field = sample.get("expected")
+            if isinstance(expected_field, dict):
+                expected = (
+                    expected_field.get("output")
+                    or expected_field.get("answer")
+                    or expected_field.get("expected")
+                )
+            else:
+                expected = expected_field
+            expected = expected if expected is not None else ""
 
             # Normalize strings
             output = str(output).strip().lower()
@@ -1427,9 +1515,17 @@ class EvaluationRunner:
         """Evaluate if output includes expected content"""
         try:
             output = str(sample["input"].get("output", ""))
-            expected_items = sample.get("expected", {}).get("includes", [])
+            expected_field = sample.get("expected")
+            if isinstance(expected_field, dict):
+                expected_items = expected_field.get("includes")
+                if expected_items is None:
+                    expected_items = expected_field.get("output") or expected_field.get("answer") or []
+            else:
+                expected_items = expected_field or []
 
             if isinstance(expected_items, str):
+                expected_items = [expected_items]
+            elif not isinstance(expected_items, list):
                 expected_items = [expected_items]
 
             # Check each expected item
@@ -1466,7 +1562,16 @@ class EvaluationRunner:
             from difflib import SequenceMatcher
 
             output = str(sample["input"].get("output", ""))
-            expected = str(sample.get("expected", {}).get("output", ""))
+            expected_field = sample.get("expected")
+            if isinstance(expected_field, dict):
+                expected = (
+                    expected_field.get("output")
+                    or expected_field.get("answer")
+                    or expected_field.get("expected")
+                )
+            else:
+                expected = expected_field
+            expected = str(expected or "")
 
             # Calculate similarity
             similarity = SequenceMatcher(None, output, expected).ratio()
@@ -1593,7 +1698,7 @@ class EvaluationRunner:
 
             # Generate prediction if needed
             if pred is None and eval_spec.get("generate_predictions", True):
-                api_name = (eval_spec.get("evaluator_model") or eval_spec.get("api_name") or "openai").lower()
+                api_name, model_override, api_key = self._resolve_eval_provider_model_api_key(eval_spec, config)
                 temperature = float(eval_spec.get("temperature", 0.0))
                 structured = bool(eval_spec.get("structured_output", False))
                 allowed_str = ", ".join(allowed)
@@ -1627,13 +1732,16 @@ class EvaluationRunner:
                 response_format = {"type": "json_object"} if structured else None
 
                 try:
-                    resp = _call_adapter_text(
+                    resp = await asyncio.to_thread(
+                        _call_adapter_text,
                         api_endpoint=api_name,
                         messages_payload=messages,
                         temperature=temperature,
                         system_message=system_prompt,
                         response_format=response_format,
                         max_tokens=16,
+                        api_key=api_key,
+                        model=model_override,
                     )
                 except Exception as ce:
                     logger.error(f"Chat call failed for label_choice {sample_id}: {ce}")
@@ -1790,7 +1898,7 @@ class EvaluationRunner:
             pred = inp.get("prediction")
 
             if pred is None and eval_spec.get("generate_predictions", True):
-                api_name = (eval_spec.get("evaluator_model") or eval_spec.get("api_name") or "openai").lower()
+                api_name, model_override, api_key = self._resolve_eval_provider_model_api_key(eval_spec, config)
                 temperature = float(eval_spec.get("temperature", 0.0))
                 structured = bool(eval_spec.get("structured_output", False))
 
@@ -1821,13 +1929,16 @@ class EvaluationRunner:
                 response_format = {"type": "json_object"} if structured else None
 
                 try:
-                    resp = _call_adapter_text(
+                    resp = await asyncio.to_thread(
+                        _call_adapter_text,
                         api_endpoint=api_name,
                         messages_payload=messages,
                         temperature=temperature,
                         system_message=system_prompt,
                         response_format=response_format,
                         max_tokens=16,
+                        api_key=api_key,
+                        model=model_override,
                     )
                 except Exception as ce:
                     logger.error(f"Chat call failed for nli_factcheck {sample_id}: {ce}")

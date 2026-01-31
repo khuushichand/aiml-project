@@ -4,6 +4,7 @@ from pathlib import Path
 
 import pytest
 
+import tldw_Server_API.app.core.Embeddings.audit_adapter as emb_adapter
 from tldw_Server_API.app.core.Embeddings.audit_adapter import (
     emit_security_violation_async,
     emit_model_evicted_async,
@@ -134,6 +135,25 @@ async def test_security_violation_threadpool_fallback(tmp_path, monkeypatch):
         assert match is not None, "Threadpool security violation event not found"
     finally:
         await svc.stop()
+        await shutdown_audit_adapter_services()
+
+
+@pytest.mark.asyncio
+async def test_embeddings_adapter_propagates_failures(monkeypatch):
+    async def _boom(_user_id):
+        raise RuntimeError("audit boom")
+
+    monkeypatch.setattr(emb_adapter, "get_or_create_audit_service_for_user_id_optional", _boom)
+
+    try:
+        with pytest.raises(RuntimeError):
+            await asyncio.to_thread(
+                log_security_violation,
+                user_id="user-x",
+                action="fail-path",
+                metadata={"reason": "boom"},
+            )
+    finally:
         await shutdown_audit_adapter_services()
 
 
