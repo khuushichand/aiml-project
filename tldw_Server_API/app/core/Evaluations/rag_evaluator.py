@@ -206,7 +206,7 @@ class RAGEvaluator:
             metric_names.append("faithfulness")
 
         if "answer_similarity" in metrics and ground_truth:
-            tasks.append(self._evaluate_answer_similarity(response, ground_truth, api_name=api_name))
+            tasks.append(self._evaluate_answer_similarity(response, ground_truth, api_name=api_name, model=model))
             metric_names.append("answer_similarity")
 
         if "context_relevance" in metrics:
@@ -290,7 +290,7 @@ class RAGEvaluator:
 
         return results
 
-    async def _evaluate_claim_faithfulness(self, response: str, contexts: List[str], api_name: str, model: Optional[str]) -> tuple:
+    async def _evaluate_claim_faithfulness(self, response: str, contexts: List[str], api_name: str, model: Optional[str] = None) -> tuple:
         """Evaluate claim-level faithfulness by verifying extracted claims against contexts.
 
         Uses ClaimsEngine with APS-style extraction (gemma_aps) and hybrid verification.
@@ -338,7 +338,7 @@ class RAGEvaluator:
             logger.error(f"Claim faithfulness evaluation failed: {e}")
             raise ValueError(f"Claim faithfulness evaluation failed: {str(e)}")
 
-    async def _evaluate_relevance(self, query: str, response: str, api_name: str, model: Optional[str]) -> tuple:
+    async def _evaluate_relevance(self, query: str, response: str, api_name: str, model: Optional[str] = None) -> tuple:
         """Evaluate relevance of response to query"""
         prompt = f"""
         Evaluate how relevant the following response is to the given query.
@@ -407,7 +407,7 @@ class RAGEvaluator:
             # Raise exception instead of returning 0.0
             raise ValueError(f"Relevance evaluation failed: {str(e)}")
 
-    async def _evaluate_faithfulness(self, response: str, contexts: List[str], api_name: str, model: Optional[str]) -> tuple:
+    async def _evaluate_faithfulness(self, response: str, contexts: List[str], api_name: str, model: Optional[str] = None) -> tuple:
         """Evaluate if response is grounded in contexts"""
         combined_context = "\n\n".join(contexts)
 
@@ -473,7 +473,7 @@ class RAGEvaluator:
             # Raise exception instead of returning 0.0
             raise ValueError(f"Faithfulness evaluation failed: {str(e)}")
 
-    async def _evaluate_answer_similarity(self, response: str, ground_truth: str, api_name: str = "openai") -> tuple:
+    async def _evaluate_answer_similarity(self, response: str, ground_truth: str, api_name: str = "openai", model: Optional[str] = None) -> tuple:
         """Evaluate similarity between response and ground truth"""
 
         # Use embedding-based similarity if available
@@ -619,7 +619,8 @@ class RAGEvaluator:
                 prompt,     # custom_prompt_arg
                 self.api_key,  # api_key (None to load from config)
                 "You are an evaluation expert. Provide only numeric scores.",  # system_message
-                0.1         # temp
+                0.1,        # temp
+                model_override=model,
             )
 
             score = float((score_str or "").strip()) / 5.0
@@ -637,7 +638,7 @@ class RAGEvaluator:
             # Raise exception instead of returning 0.0 (fixing error handling issue)
             raise ValueError(f"Answer similarity evaluation failed: {str(e)}")
 
-    async def _evaluate_context_precision(self, query: str, contexts: List[str], api_name: str, model: Optional[str]) -> tuple:
+    async def _evaluate_context_precision(self, query: str, contexts: List[str], api_name: str, model: Optional[str] = None) -> tuple:
         """Evaluate precision of retrieved contexts"""
         # Check each context for relevance
         relevance_scores = []
@@ -684,7 +685,7 @@ class RAGEvaluator:
             "metadata": {"individual_scores": relevance_scores}
         })
 
-    async def _evaluate_context_relevance(self, query: str, contexts: List[str], api_name: str) -> tuple:
+    async def _evaluate_context_relevance(self, query: str, contexts: List[str], api_name: str, model: Optional[str] = None) -> tuple:
         """Evaluate relevance of retrieved contexts to the query"""
         # Check each context for relevance
         relevance_scores = []
@@ -709,7 +710,8 @@ class RAGEvaluator:
                     prompt,    # custom_prompt_arg
                     self.api_key,  # api_key (None to load from config)
                     "You are an evaluation expert. Provide only numeric scores.",  # system_message
-                    0.1        # temp
+                    0.1,       # temp
+                    model_override=model,
                 )
 
                 # Parse score and handle invalid responses
@@ -737,7 +739,7 @@ class RAGEvaluator:
             "metadata": {"individual_scores": relevance_scores}
         })
 
-    async def _evaluate_context_recall(self, ground_truth: str, contexts: List[str], api_name: str) -> tuple:
+    async def _evaluate_context_recall(self, ground_truth: str, contexts: List[str], api_name: str, model: Optional[str] = None) -> tuple:
         """Evaluate if contexts contain necessary information"""
         combined_context = "\n\n".join(contexts)
 
@@ -768,7 +770,8 @@ class RAGEvaluator:
                 prompt,    # custom_prompt_arg
                 self.api_key,  # api_key (None to load from config)
                 "You are an evaluation expert. Provide only numeric scores.",  # system_message
-                0.1        # temp
+                0.1,       # temp
+                model_override=model,
             )
 
             score = float(score_str.strip()) / 5.0

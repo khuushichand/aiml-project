@@ -1,3 +1,4 @@
+import asyncio
 import pytest
 
 from tldw_Server_API.app.core.Evaluations.eval_runner import EvaluationRunner
@@ -11,6 +12,7 @@ async def test_eval_summarization_parses_geval_dict(monkeypatch, tmp_path):
 
         assert kwargs.get("api_name") == "openai"
         assert kwargs.get("api_key") is None
+        assert kwargs.get("model") == "gpt-4o-mini"
         return {
             "metrics": {
                 "coherence": 4.0,
@@ -28,6 +30,7 @@ async def test_eval_summarization_parses_geval_dict(monkeypatch, tmp_path):
         "metrics": ["coherence", "fluency"],
         "threshold": 0.7,
         "evaluator_model": "openai",
+        "model": "gpt-4o-mini",
     }
 
     result = await runner._eval_summarization(sample, eval_spec, {}, "sample_000001")
@@ -156,3 +159,86 @@ async def test_rag_pipeline_extracts_metric_scores(monkeypatch, tmp_path):
     assert usage == {"total_tokens": 0, "prompt_tokens": 0, "completion_tokens": 0}
     per_sample = results["by_config"][0]["per_sample"][0]
     assert per_sample["scores"]["relevance"] == pytest.approx(0.9)
+
+
+@pytest.mark.asyncio
+async def test_exact_match_accepts_string_expected(tmp_path):
+    runner = EvaluationRunner(db_path=str(tmp_path / "evals.db"))
+    sample = {"input": {"output": "Hello"}, "expected": "hello"}
+    eval_spec = {"threshold": 1.0}
+
+    result = await runner._eval_exact_match(sample, eval_spec, {}, "sample_000005")
+    assert result["scores"]["exact_match"] == pytest.approx(1.0)
+    assert result["passed"] is True
+
+
+@pytest.mark.asyncio
+async def test_includes_accepts_list_expected(tmp_path):
+    runner = EvaluationRunner(db_path=str(tmp_path / "evals.db"))
+    sample = {"input": {"output": "alpha beta"}, "expected": ["alpha", "gamma"]}
+    eval_spec = {"threshold": 0.5}
+
+    result = await runner._eval_includes(sample, eval_spec, {}, "sample_000006")
+    assert result["scores"]["includes"] == pytest.approx(0.5)
+    assert result["passed"] is True
+
+
+@pytest.mark.asyncio
+async def test_fuzzy_match_accepts_string_expected(tmp_path):
+    runner = EvaluationRunner(db_path=str(tmp_path / "evals.db"))
+    sample = {"input": {"output": "hello world"}, "expected": "hello world!"}
+    eval_spec = {"threshold": 0.5}
+
+    result = await runner._eval_fuzzy_match(sample, eval_spec, {}, "sample_000007")
+    assert result["scores"]["fuzzy_match"] >= 0.5
+
+
+@pytest.mark.asyncio
+async def test_process_batch_honors_timeout(tmp_path):
+    runner = EvaluationRunner(db_path=str(tmp_path / "evals.db"), eval_timeout=10)
+
+    async def slow_eval(*, sample, eval_spec, config, sample_id):
+        await asyncio.sleep(0.05)
+        return {"sample_id": sample_id, "avg_score": 1.0}
+
+    batch = [{"input": {}}, {"input": {}}]
+    results = await runner._process_batch(
+        batch=batch,
+        eval_fn=slow_eval,
+        eval_spec={},
+        eval_config={},
+        max_workers=2,
+        start_index=0,
+        timeout_seconds=0.01,
+    )
+    assert all("error" in r and "Timeout" in r["error"] for r in results)
+
+
+@pytest.mark.asyncio
+async def test_process_batch_honors_max_workers(tmp_path):
+    runner = EvaluationRunner(db_path=str(tmp_path / "evals.db"))
+    current = 0
+    max_seen = 0
+    lock = asyncio.Lock()
+
+    async def tracking_eval(*, sample, eval_spec, config, sample_id):
+        nonlocal current, max_seen
+        async with lock:
+            current += 1
+            max_seen = max(max_seen, current)
+        await asyncio.sleep(0.05)
+        async with lock:
+            current -= 1
+        return {"sample_id": sample_id, "avg_score": 1.0}
+
+    batch = [{"input": {}}, {"input": {}}, {"input": {}}, {"input": {}}]
+    await runner._process_batch(
+        batch=batch,
+        eval_fn=tracking_eval,
+        eval_spec={},
+        eval_config={},
+        max_workers=2,
+        start_index=0,
+        timeout_seconds=1.0,
+    )
+    assert max_seen <= 2

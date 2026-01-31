@@ -1411,31 +1411,49 @@ class UnifiedEvaluationService:
             # Generate evaluation ID
             eval_id = f"eval_{evaluation_type}_{uuid.uuid4().hex[:12]}"
 
-            # Store using unified method if available
+            # Store using unified method if available (best-effort)
             if hasattr(self.db, 'store_unified_evaluation'):
-                success = self.db.store_unified_evaluation(
-                    evaluation_id=eval_id,
-                    name=f"{evaluation_type}_{int(time.time())}",
-                    evaluation_type=evaluation_type,
-                    input_data=input_data,
-                    results=results if isinstance(results, dict) else {"result": results},
-                    status="completed",
-                    user_id=metadata.get("user_id", "system"),
-                    metadata=metadata,
-                    embedding_provider=metadata.get("embedding_provider"),
-                    embedding_model=metadata.get("embedding_model")
-                )
-                if success:
-                    logger.info(f"Stored evaluation {eval_id} in unified table")
-                    return eval_id
+                try:
+                    success = self.db.store_unified_evaluation(
+                        evaluation_id=eval_id,
+                        name=f"{evaluation_type}_{int(time.time())}",
+                        evaluation_type=evaluation_type,
+                        input_data=input_data,
+                        results=results if isinstance(results, dict) else {"result": results},
+                        status="completed",
+                        user_id=metadata.get("user_id", "system"),
+                        metadata=metadata,
+                        embedding_provider=metadata.get("embedding_provider"),
+                        embedding_model=metadata.get("embedding_model")
+                    )
+                    if success:
+                        logger.info(f"Stored evaluation {eval_id} in unified table")
+                except Exception:
+                    pass
 
-            # Fallback to standard approach
+            # Fallback to standard approach (ensure evals are runnable via CRUD)
+            eval_type_value = evaluation_type
+            eval_spec_payload = {"type": evaluation_type, "input": input_data}
+            if metadata.get("api_name"):
+                eval_spec_payload["api_name"] = metadata.get("api_name")
+            if metadata.get("model"):
+                eval_spec_payload["model"] = metadata.get("model")
+            if evaluation_type in {"geval", "rag", "response_quality"}:
+                sub_type_map = {
+                    "geval": "summarization",
+                    "rag": "rag",
+                    "response_quality": "response_quality",
+                }
+                eval_type_value = "model_graded"
+                eval_spec_payload.setdefault("sub_type", sub_type_map[evaluation_type])
+
             eval_id = self.db.create_evaluation(
                 name=f"{evaluation_type}_{int(time.time())}",
-                eval_type=evaluation_type,
-                eval_spec={"type": evaluation_type, "input": input_data},
+                eval_type=eval_type_value,
+                eval_spec=eval_spec_payload,
                 created_by=metadata.get("user_id", "system"),
-                metadata=metadata
+                metadata=metadata,
+                eval_id=eval_id,
             )
 
             # Create and complete a run with results
