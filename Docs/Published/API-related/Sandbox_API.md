@@ -8,6 +8,76 @@ Auth: Standard tldw AuthNZ
 - Single user: `X-API-KEY: <key>`
 - Multi user (JWT): `Authorization: Bearer <token>`
 
+## Firecracker host prep
+
+If you plan to use the Firecracker runtime, follow the host prerequisites and
+smoke-test steps in `Docs/Deployment/Operations/Firecracker_Host_Checklist.md`.
+
+## Lima runtime (macOS/Linux VMs)
+
+Lima provides full VM isolation via Virtualization.framework (macOS) or QEMU (Linux).
+
+### Requirements
+- Install Lima: `brew install lima` (macOS) or via package manager
+- Verify: `limactl version`
+
+### Usage
+```json
+{
+  "spec_version": "1.0",
+  "runtime": "lima",
+  "base_image": "ubuntu:24.04",
+  "command": ["python3", "-c", "print('hello')"],
+  "timeout_sec": 300
+}
+```
+
+### Notes
+- VMs use Virtualization.framework on macOS (faster) or QEMU on Linux
+- Network isolation: deny_all by default (no internet access)
+- Workspace mounted at `/workspace` inside VM
+- Slower startup than containers (~10-30s vs ~1s for Docker)
+- Recommended for macOS development or when maximum isolation is required
+
+## Trust-Level Tiers
+
+Risk-based isolation profiles auto-apply resource limits based on code trustworthiness.
+
+| Level | Max CPU | Max Memory | Timeout | Network | Use Case |
+|-------|---------|------------|---------|---------|----------|
+| `trusted` | 8 | 16GB | 600s | allowlist | Verified internal code |
+| `standard` | 4 | 8GB | 300s | deny_all | Default for most runs |
+| `untrusted` | 1 | 1GB | 60s | deny_all | User-submitted code |
+
+### Session with trust level
+```json
+{
+  "spec_version": "1.0",
+  "runtime": "docker",
+  "base_image": "python:3.11-slim",
+  "trust_level": "untrusted"
+}
+```
+
+### Run with trust level
+```json
+{
+  "spec_version": "1.0",
+  "runtime": "docker",
+  "base_image": "python:3.11-slim",
+  "command": ["python", "user_script.py"],
+  "trust_level": "untrusted"
+}
+```
+
+When `untrusted` is specified, the run is automatically constrained to:
+- Max 1 CPU
+- Max 1GB memory
+- Max 60s execution timeout
+- Network deny_all (no egress)
+- Max 64 PIDs
+- Restricted file descriptors (256)
+
 ## Feature discovery
 GET `/api/v1/sandbox/runtimes`
 Response (example):
@@ -194,6 +264,84 @@ Notes:
 - Suffix tokens (like `.example.com`) behave like wildcards for a few common subdomains plus the apex (configurable).
 - If `iptables-restore` is unavailable, the code falls back to iterative `iptables` commands.
 - To revoke rules for a finished container, the runner labels and deletes rules by that label.
+
+## Snapshots and Cloning
+
+Save session state and create copies for experimentation.
+
+### Create Snapshot
+POST `/api/v1/sandbox/sessions/{id}/snapshot`
+
+Response:
+```json
+{
+  "snapshot_id": "snap-abc123def456",
+  "created_at": "2026-01-31T12:00:00Z",
+  "size_bytes": 1048576
+}
+```
+
+### List Snapshots
+GET `/api/v1/sandbox/sessions/{id}/snapshots`
+
+Response:
+```json
+{
+  "items": [
+    {
+      "snapshot_id": "snap-abc123def456",
+      "session_id": "sess-xyz789",
+      "created_at": "2026-01-31T12:00:00Z",
+      "size_bytes": 1048576
+    }
+  ]
+}
+```
+
+### Restore Snapshot
+POST `/api/v1/sandbox/sessions/{id}/restore`
+
+Body:
+```json
+{ "snapshot_id": "snap-abc123def456" }
+```
+
+Response:
+```json
+{
+  "restored": true,
+  "snapshot_id": "snap-abc123def456"
+}
+```
+
+### Clone Session
+POST `/api/v1/sandbox/sessions/{id}/clone`
+
+Body (optional):
+```json
+{ "new_session_name": "my-experiment" }
+```
+
+Response:
+```json
+{
+  "session_id": "new-session-id",
+  "cloned_from": "original-session-id"
+}
+```
+
+### Delete Snapshot
+DELETE `/api/v1/sandbox/sessions/{id}/snapshots/{snapshot_id}`
+
+Response:
+```json
+{ "ok": true, "snapshot_id": "snap-abc123def456" }
+```
+
+### Use Cases
+- **Safe experimentation**: Create a snapshot before making changes, restore if something breaks
+- **Parallel exploration**: Clone a session to try multiple approaches simultaneously
+- **State preservation**: Save workspace state across restarts or long-running investigations
 
 ## Notes
 - Spec versions are validated against server config. Default: `["1.0","1.1"]`.

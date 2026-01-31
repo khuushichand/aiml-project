@@ -187,6 +187,26 @@ export class PageAssistDatabase {
     return history || null;
   }
 
+  async getHistoryByDocId(docId: string): Promise<HistoryInfo | null> {
+    if (!docId) return null;
+    // Get the most recent history for this document
+    const history = await db.chatHistories
+      .where('doc_id')
+      .equals(docId)
+      .reverse()
+      .sortBy('createdAt');
+    return history[0] || null;
+  }
+
+  async getAllHistoriesByDocId(docId: string): Promise<HistoryInfo[]> {
+    if (!docId) return [];
+    return await db.chatHistories
+      .where('doc_id')
+      .equals(docId)
+      .reverse()
+      .sortBy('createdAt');
+  }
+
   async getHistoryMetadata(historyId: string): Promise<{
     messageCount: number;
     lastMessage?: { content: string; role: string; createdAt: number };

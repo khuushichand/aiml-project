@@ -186,6 +186,10 @@ services:
         condition: service_healthy
 ```
 
+Note: `deploy.replicas` in `docker-compose.override.yml` only applies to Docker Swarm
+(`docker stack deploy`). Standard `docker compose up` ignores the `deploy` key; for
+plain Compose, use `docker compose up --scale app=3` or run the stack in Swarm mode.
+
 ### Background Workers
 
 For heavy processing (embeddings, media ingestion):

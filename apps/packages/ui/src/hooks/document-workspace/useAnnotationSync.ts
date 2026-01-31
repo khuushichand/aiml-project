@@ -6,6 +6,49 @@ import { useDocumentWorkspaceStore } from "@/store/document-workspace"
 import type { Annotation, AnnotationColor } from "@/components/DocumentWorkspace/types"
 
 /**
+ * Sync annotations using navigator.sendBeacon for guaranteed delivery on page unload.
+ * sendBeacon is specifically designed for this use case - it queues the request
+ * and guarantees delivery even if the page is closed immediately.
+ *
+ * @returns true if sendBeacon was used, false if not available or failed
+ */
+function syncAnnotationsWithBeacon(
+  serverUrl: string | null,
+  mediaId: number,
+  pendingAnnotations: Annotation[]
+): boolean {
+  if (!serverUrl || pendingAnnotations.length === 0) {
+    return false
+  }
+
+  // sendBeacon is not available in all environments (e.g., some older browsers, Node.js)
+  if (typeof navigator === "undefined" || !navigator.sendBeacon) {
+    return false
+  }
+
+  try {
+    const url = `${serverUrl}/api/v1/media/${mediaId}/annotations/sync`
+    const payload = JSON.stringify({
+      annotations: pendingAnnotations.map((ann) => ({
+        location: String(ann.location),
+        text: ann.text,
+        color: ann.color,
+        note: ann.note,
+        annotation_type: ann.annotationType ?? "highlight"
+      })),
+      client_ids: pendingAnnotations.map((ann) => ann.id)
+    })
+
+    // sendBeacon returns true if the browser successfully queued the request
+    const blob = new Blob([payload], { type: "application/json" })
+    return navigator.sendBeacon(url, blob)
+  } catch (error) {
+    console.error("sendBeacon failed:", error)
+    return false
+  }
+}
+
+/**
  * Hook to automatically sync pending annotations to the backend.
  *
  * This hook watches the store's pendingAnnotations and syncs them
@@ -141,15 +184,22 @@ export function useAnnotationSync(
 /**
  * Hook that syncs annotations when the document is closed or changed.
  * Call this from the document workspace page component.
+ *
+ * Uses navigator.sendBeacon for page unload events to guarantee delivery,
+ * since regular async requests may not complete before the page closes.
  */
 export function useAnnotationSyncOnClose(mediaId: number | null) {
   const { forceSync } = useAnnotationSync(mediaId, 0)
   const annotationSyncStatus = useDocumentWorkspaceStore(
     (s) => s.annotationSyncStatus
   )
+  const pendingAnnotations = useDocumentWorkspaceStore(
+    (s) => s.pendingAnnotations
+  )
+  const serverUrl = useConnectionStore((s) => s.state.serverUrl)
   const previousMediaIdRef = useRef<number | null>(mediaId)
 
-  // Sync when document changes
+  // Sync when document changes (normal async sync is fine here)
   useEffect(() => {
     if (previousMediaIdRef.current !== mediaId && annotationSyncStatus === "pending") {
       forceSync()
@@ -158,19 +208,30 @@ export function useAnnotationSyncOnClose(mediaId: number | null) {
   }, [mediaId, annotationSyncStatus, forceSync])
 
   // Sync on unmount / page close
+  // Use sendBeacon for beforeunload to guarantee delivery
   useEffect(() => {
     const handleBeforeUnload = () => {
-      if (annotationSyncStatus === "pending") {
-        forceSync()
+      if (annotationSyncStatus === "pending" && mediaId !== null) {
+        // Try sendBeacon first (guaranteed delivery on page close)
+        const beaconSent = syncAnnotationsWithBeacon(
+          serverUrl,
+          mediaId,
+          pendingAnnotations
+        )
+        // Fall back to regular sync if beacon fails (might not complete)
+        if (!beaconSent) {
+          forceSync()
+        }
       }
     }
 
     window.addEventListener("beforeunload", handleBeforeUnload)
     return () => {
       window.removeEventListener("beforeunload", handleBeforeUnload)
+      // On unmount (not page close), regular async sync is fine
       if (annotationSyncStatus === "pending") {
         forceSync()
       }
     }
-  }, [annotationSyncStatus, forceSync])
+  }, [annotationSyncStatus, forceSync, mediaId, pendingAnnotations, serverUrl])
 }

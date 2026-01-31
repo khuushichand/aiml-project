@@ -14,6 +14,10 @@ from loguru import logger
 from tldw_Server_API.app.core.Chat.prompt_template_manager import apply_template_to_string
 from tldw_Server_API.app.core.Workflows.adapters._registry import registry
 from tldw_Server_API.app.core.Workflows.adapters._common import resolve_context_user_id
+from tldw_Server_API.app.core.Workflows.adapters.llm._config import (
+    ModerationConfig,
+    PolicyCheckConfig,
+)
 
 
 @registry.register(
@@ -22,6 +26,7 @@ from tldw_Server_API.app.core.Workflows.adapters._common import resolve_context_
     description="Check or redact text content using the moderation service",
     parallelizable=True,
     tags=["moderation", "safety"],
+    config_model=ModerationConfig,
 )
 async def run_moderation_adapter(config: Dict[str, Any], context: Dict[str, Any]) -> Dict[str, Any]:
     """Check or redact text content using the moderation service.
@@ -162,6 +167,7 @@ async def run_moderation_adapter(config: Dict[str, Any], context: Dict[str, Any]
     description="Policy/PII gate step for content validation",
     parallelizable=True,
     tags=["moderation", "pii", "policy"],
+    config_model=PolicyCheckConfig,
 )
 async def run_policy_check_adapter(config: Dict[str, Any], context: Dict[str, Any]) -> Dict[str, Any]:
     """Policy/PII gate step.

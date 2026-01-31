@@ -28,11 +28,31 @@ export interface SearchResult {
   itemIndex: number
 }
 
+/**
+ * Per-document viewer state that persists when switching between tabs.
+ * This state is stored locally in memory; server-side persistence
+ * happens via the reading progress hooks.
+ */
+export interface DocumentViewerState {
+  currentPage: number
+  totalPages: number
+  zoomLevel: number
+  viewMode: ViewMode
+  currentCfi: string | null
+  currentPercentage: number
+  currentChapterTitle: string | null
+  searchQuery: string
+  searchResults: SearchResult[]
+  activeSearchIndex: number
+}
+
 export interface OpenDocument {
   id: number
   title: string
   type: DocumentType
   url?: string
+  /** Per-document viewer state, saved when switching away */
+  viewerState?: DocumentViewerState
 }
 
 export interface Annotation {

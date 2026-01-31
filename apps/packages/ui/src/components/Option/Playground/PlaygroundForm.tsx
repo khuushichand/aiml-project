@@ -4065,7 +4065,7 @@ export const PlaygroundForm = ({ droppedFiles }: Props) => {
             <span className="text-[10px] text-text-muted">
               {t(
                 "playground:actions.attachDocumentHint",
-                "PDF/DOCX/TXT/CSV"
+                "PDF/DOCX/TXT/CSV/MD"
               )}
             </span>
           </span>
@@ -4375,7 +4375,7 @@ export const PlaygroundForm = ({ droppedFiles }: Props) => {
                     type="file"
                     className="sr-only"
                     ref={fileInputRef}
-                    accept=".pdf,.doc,.docx,.txt,.csv"
+                    accept=".pdf,.doc,.docx,.txt,.csv,.md,.markdown,text/markdown"
                     multiple={false}
                     onChange={onFileInputChange}
                   />

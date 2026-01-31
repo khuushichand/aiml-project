@@ -22,7 +22,7 @@ from tldw_Server_API.app.core.Workflows.subprocess_utils import start_process, t
 from tldw_Server_API.app.core.Metrics import start_async_span as _start_span
 from tldw_Server_API.app.core.Security.egress import is_url_allowed, is_url_allowed_for_tenant
 from tldw_Server_API.app.core.http_client import create_client as _wf_create_client
-from tldw_Server_API.app.core.Workflows.constants import MAP_SUBSTEP_TYPES
+from tldw_Server_API.app.core.Workflows.adapters._registry import get_parallelizable
 from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import resolve_user_id_value
 from tldw_Server_API.app.core.DB_Management.Kanban_DB import (
     KanbanDB,
@@ -2757,7 +2757,7 @@ async def run_map_adapter(config: Dict[str, Any], context: Dict[str, Any]) -> Di
     sub_cfg = sub.get("config") or {}
     if not sub_type:
         raise AdapterError("missing_substep_type")
-    if sub_type not in MAP_SUBSTEP_TYPES:
+    if sub_type not in get_parallelizable():
         raise AdapterError(f"unsupported_substep_type:{sub_type}")
     concurrency = max(1, int(config.get("concurrency", 4)))
 

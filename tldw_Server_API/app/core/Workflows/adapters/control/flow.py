@@ -20,6 +20,14 @@ from tldw_Server_API.app.core.Workflows.adapters._registry import registry, get_
 from tldw_Server_API.app.core.Workflows.adapters._common import (
     resolve_artifacts_dir,
 )
+from tldw_Server_API.app.core.Workflows.adapters.control._config import (
+    PromptConfig,
+    DelayConfig,
+    LogConfig,
+    BranchConfig,
+    MapConfig,
+    ParallelConfig,
+)
 
 
 @registry.register(
@@ -28,6 +36,7 @@ from tldw_Server_API.app.core.Workflows.adapters._common import (
     description="Render a prompt using the sandboxed Jinja engine",
     parallelizable=True,
     tags=["core", "template"],
+    config_model=PromptConfig,
 )
 async def run_prompt_adapter(config: Dict[str, Any], context: Dict[str, Any]) -> Dict[str, Any]:
     """Render a prompt using the sandboxed Jinja engine.
@@ -119,6 +128,7 @@ async def run_prompt_adapter(config: Dict[str, Any], context: Dict[str, Any]) ->
     description="Wait for specified milliseconds",
     parallelizable=True,
     tags=["control", "utility"],
+    config_model=DelayConfig,
 )
 async def run_delay_adapter(config: Dict[str, Any], context: Dict[str, Any]) -> Dict[str, Any]:
     """Simple delay step; waits for the specified milliseconds.
@@ -147,6 +157,7 @@ async def run_delay_adapter(config: Dict[str, Any], context: Dict[str, Any]) -> 
     description="Log a templated message for debugging pipelines",
     parallelizable=True,
     tags=["control", "debug"],
+    config_model=LogConfig,
 )
 async def run_log_adapter(config: Dict[str, Any], context: Dict[str, Any]) -> Dict[str, Any]:
     """Log a templated message; useful for debugging pipelines.
@@ -208,6 +219,7 @@ async def run_log_adapter(config: Dict[str, Any], context: Dict[str, Any]) -> Di
     description="Evaluate a condition and select the next step",
     parallelizable=False,
     tags=["control", "conditional"],
+    config_model=BranchConfig,
 )
 async def run_branch_adapter(config: Dict[str, Any], context: Dict[str, Any]) -> Dict[str, Any]:
     """Evaluate a simple boolean condition and select the next step.
@@ -247,6 +259,7 @@ async def run_branch_adapter(config: Dict[str, Any], context: Dict[str, Any]) ->
     description="Fan-out over a list of items and apply a step to each",
     parallelizable=False,
     tags=["control", "parallel"],
+    config_model=MapConfig,
 )
 async def run_map_adapter(config: Dict[str, Any], context: Dict[str, Any]) -> Dict[str, Any]:
     """Fan-out over a list of items and apply a simple step to each item.
@@ -330,6 +343,7 @@ async def run_map_adapter(config: Dict[str, Any], context: Dict[str, Any]) -> Di
     description="Execute multiple steps in parallel",
     parallelizable=False,
     tags=["control", "parallel"],
+    config_model=ParallelConfig,
 )
 async def run_parallel_adapter(config: Dict[str, Any], context: Dict[str, Any]) -> Dict[str, Any]:
     """Execute multiple steps in parallel.

@@ -14,6 +14,12 @@ from loguru import logger
 
 from tldw_Server_API.app.core.Workflows.adapters._registry import registry, get_adapter
 from tldw_Server_API.app.core.Workflows.adapters._common import resolve_artifacts_dir
+from tldw_Server_API.app.core.Workflows.adapters.control._config import (
+    BatchConfig,
+    CacheResultConfig,
+    RetryConfig,
+    CheckpointConfig,
+)
 
 
 @registry.register(
@@ -22,6 +28,7 @@ from tldw_Server_API.app.core.Workflows.adapters._common import resolve_artifact
     description="Batch items into chunks for processing",
     parallelizable=False,
     tags=["control", "data"],
+    config_model=BatchConfig,
 )
 async def run_batch_adapter(config: Dict[str, Any], context: Dict[str, Any]) -> Dict[str, Any]:
     """Batch items into chunks for processing.
@@ -59,6 +66,7 @@ async def run_batch_adapter(config: Dict[str, Any], context: Dict[str, Any]) -> 
     description="Cache step result by key for reuse",
     parallelizable=False,
     tags=["control", "cache"],
+    config_model=CacheResultConfig,
 )
 async def run_cache_result_adapter(config: Dict[str, Any], context: Dict[str, Any]) -> Dict[str, Any]:
     """Cache step result by key for reuse.
@@ -149,6 +157,7 @@ async def run_cache_result_adapter(config: Dict[str, Any], context: Dict[str, An
     description="Wrap a step with retry logic",
     parallelizable=False,
     tags=["control", "error-handling"],
+    config_model=RetryConfig,
 )
 async def run_retry_adapter(config: Dict[str, Any], context: Dict[str, Any]) -> Dict[str, Any]:
     """Wrap a step with retry logic.
@@ -220,6 +229,7 @@ async def run_retry_adapter(config: Dict[str, Any], context: Dict[str, Any]) -> 
     description="Save workflow state for recovery",
     parallelizable=False,
     tags=["control", "state"],
+    config_model=CheckpointConfig,
 )
 async def run_checkpoint_adapter(config: Dict[str, Any], context: Dict[str, Any]) -> Dict[str, Any]:
     """Save workflow state for recovery.

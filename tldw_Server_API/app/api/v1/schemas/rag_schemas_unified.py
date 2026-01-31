@@ -636,6 +636,21 @@ class UnifiedRAGRequest(BaseModel):
         description="Local HuggingFace model id or path for MNLI (e.g., roberta-large-mnli or /models/mnli)",
         example="roberta-large-mnli",
     )
+    numeric_precision_mode: Literal["standard", "strict", "academic"] = Field(
+        default="standard",
+        description="Numeric precision mode for claim verification: standard (5% tolerance), strict (1%), academic (exact match)",
+        example="standard",
+    )
+    doc_only_verification: bool = Field(
+        default=False,
+        description="Only accept evidence from provided documents; flag claims requiring external knowledge",
+        example=False,
+    )
+    generate_verification_report: bool = Field(
+        default=False,
+        description="Generate a structured JSON verification report in the response",
+        example=False,
+    )
 
     # ========== RERANKING ==========
     enable_reranking: bool = Field(
@@ -1233,6 +1248,10 @@ class UnifiedRAGResponse(BaseModel):
     factuality: Optional[Dict[str, Any]] = Field(
         default=None,
         description="Summary of factuality (supported/refuted/nei, precision, coverage)",
+    )
+    verification_report: Optional[Dict[str, Any]] = Field(
+        default=None,
+        description="Structured verification report for machine-readable audit (when generate_verification_report=true)",
     )
 
     model_config = ConfigDict(json_schema_extra={

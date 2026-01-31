@@ -6,7 +6,8 @@ from typing import Dict, List, Literal, Optional
 from pydantic import BaseModel, Field
 
 
-RuntimeType = Literal["docker", "firecracker"]
+RuntimeType = Literal["docker", "firecracker", "lima"]
+TrustLevelType = Literal["trusted", "standard", "untrusted"]
 
 
 class SandboxRuntimeInfo(BaseModel):
@@ -42,6 +43,10 @@ class SandboxSessionCreateRequest(BaseModel):
     network_policy: Optional[Literal["deny_all", "allowlist"]] = Field(default="deny_all")
     env: Optional[Dict[str, str]] = Field(default=None, description="Non-secret environment variables")
     labels: Optional[Dict[str, str]] = Field(default=None)
+    trust_level: Optional[TrustLevelType] = Field(
+        default="standard",
+        description="Trust level for risk-based isolation: trusted (relaxed), standard (default), untrusted (strict)"
+    )
 
 
 class SandboxSession(BaseModel):
@@ -89,6 +94,11 @@ class SandboxRunCreateRequest(BaseModel):
     stdin_idle_timeout_sec: Optional[int] = Field(default=None, ge=0, description="Close WS after this many seconds of stdin inactivity")
     # Spec 1.1: Optional resume hint for clients; WS also supports a 'from_seq' query parameter on /runs/{id}/stream
     resume_from_seq: Optional[int] = Field(default=None, ge=0, description="Suggest resuming WS from this sequence number (spec 1.1)")
+    # Trust level for risk-based isolation profiles
+    trust_level: Optional[TrustLevelType] = Field(
+        default="standard",
+        description="Trust level for risk-based isolation: trusted (relaxed), standard (default), untrusted (strict)"
+    )
 
 
 class SandboxRun(BaseModel):
@@ -211,3 +221,49 @@ class SandboxAdminUsageResponse(BaseModel):
     offset: int
     has_more: bool
     items: List[SandboxAdminUsageItem]
+
+
+# Snapshot/Clone Schemas
+class SnapshotCreateResponse(BaseModel):
+    """Response when creating a session snapshot."""
+    snapshot_id: str = Field(description="Unique identifier for the snapshot")
+    created_at: str = Field(description="ISO 8601 timestamp of snapshot creation")
+    size_bytes: int = Field(description="Size of the snapshot in bytes")
+
+
+class SnapshotInfo(BaseModel):
+    """Information about a session snapshot."""
+    snapshot_id: str = Field(description="Unique identifier for the snapshot")
+    session_id: str = Field(description="Session ID this snapshot belongs to")
+    created_at: str = Field(description="ISO 8601 timestamp of snapshot creation")
+    size_bytes: int = Field(description="Size of the snapshot in bytes")
+
+
+class SnapshotListResponse(BaseModel):
+    """Response listing available snapshots for a session."""
+    items: List[SnapshotInfo] = Field(default_factory=list)
+
+
+class SnapshotRestoreRequest(BaseModel):
+    """Request to restore a session from a snapshot."""
+    snapshot_id: str = Field(description="ID of the snapshot to restore")
+
+
+class SnapshotRestoreResponse(BaseModel):
+    """Response after restoring a session from a snapshot."""
+    restored: bool = Field(description="Whether restoration was successful")
+    snapshot_id: str = Field(description="ID of the restored snapshot")
+
+
+class SessionCloneRequest(BaseModel):
+    """Request to clone a session."""
+    new_session_name: Optional[str] = Field(
+        default=None,
+        description="Optional name for the new session"
+    )
+
+
+class SessionCloneResponse(BaseModel):
+    """Response after cloning a session."""
+    session_id: str = Field(description="ID of the newly created session")
+    cloned_from: str = Field(description="ID of the original session")

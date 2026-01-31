@@ -1,6 +1,6 @@
 # Chatbooks Jobs Worker Migration (Phase 2)
 
-Status: Draft
+Status: Complete
 Owner: Core Maintainers
 Target Release: 0.2.x
 
@@ -76,5 +76,5 @@ Move chatbooks async export/import execution onto the core Jobs worker SDK. Jobs
 python -m tldw_Server_API.app.core.Chatbooks.services.jobs_worker
 ```
 
-## 8. Open Questions
-- Remove or deprecate `_core_worker_loop` in `ChatbookService` after worker adoption.
+## 8. Resolved Questions
+- ✅ `_core_worker_loop` removed from `ChatbookService` - standalone `jobs_worker.py` is now the only execution path.

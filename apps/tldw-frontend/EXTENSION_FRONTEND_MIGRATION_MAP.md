@@ -49,7 +49,7 @@ Workspace + knowledge
 - `/dictionaries` -> `src/routes/option-dictionaries.tsx`
 - `/characters` -> `src/routes/option-characters.tsx`
 - `/prompts` -> `src/routes/option-prompts.tsx`
-- `/prompt-studio` -> `src/routes/option-prompt-studio.tsx`
+- `/prompt-studio` -> redirects to `/prompts?tab=studio` (unified with Prompts page)
 - `/evaluations` -> `src/routes/option-evaluations.tsx`
 - `/flashcards` -> `src/routes/option-flashcards.tsx`
 - `/quiz` -> `src/routes/option-quiz.tsx`

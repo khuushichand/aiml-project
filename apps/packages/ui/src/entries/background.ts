@@ -653,6 +653,11 @@ export default defineBackground({
         const fileDefaults = payload.fileDefaults && typeof payload.fileDefaults === 'object'
           ? payload.fileDefaults
           : {}
+        // Chunking template options
+        const chunkingTemplateName = typeof payload.chunkingTemplateName === 'string'
+          ? payload.chunkingTemplateName
+          : undefined
+        const autoApplyTemplate = Boolean(payload.autoApplyTemplate)
         // processOnly=true forces local-only processing even if storeRemote was requested
         const shouldStoreRemote = storeRemote && !processOnly
         console.log('[QUICK_INGEST] Options', { storeRemote, processOnly, shouldStoreRemote })
@@ -725,6 +730,13 @@ export default defineBackground({
           }
           if (typeof document.ocr === 'boolean' && fields.pdf_parsing_engine == null) {
             fields.pdf_parsing_engine = document.ocr ? 'pymupdf4llm' : ''
+          }
+          // Add chunking template fields if provided
+          if (chunkingTemplateName) {
+            fields.chunking_template_name = chunkingTemplateName
+          }
+          if (autoApplyTemplate) {
+            fields.auto_apply_template = true
           }
           return fields
         }

@@ -476,16 +476,16 @@ export const PAGE_MAPPINGS: PageMapping[] = [
   {
     name: "Prompt Studio",
     category: "workspace",
-    webuiPath: "/prompt-studio",
-    extensionOptionsPath: "/prompt-studio",
+    webuiPath: "/prompts?tab=studio",
+    extensionOptionsPath: "/prompts?tab=studio",
     extensionSidepanelPath: null,
-    sharedComponent: "OptionPromptStudio",
+    sharedComponent: "OptionPromptsWorkspace",
     session: 5,
     checklistItems: [
-      "Project list loads",
-      "Can create new project",
-      "Editor opens correctly",
-      "Can run prompts"
+      "Studio tab loads",
+      "Project list loads from server",
+      "Can pull prompts to local",
+      "Can push local prompts to studio"
     ]
   },
   {

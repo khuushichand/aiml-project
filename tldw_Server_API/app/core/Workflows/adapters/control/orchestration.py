@@ -11,6 +11,7 @@ from typing import Any, Dict
 from loguru import logger
 
 from tldw_Server_API.app.core.Workflows.adapters._registry import registry
+from tldw_Server_API.app.core.Workflows.adapters.control._config import WorkflowCallConfig
 
 
 @registry.register(
@@ -19,6 +20,7 @@ from tldw_Server_API.app.core.Workflows.adapters._registry import registry
     description="Call another workflow as a sub-workflow",
     parallelizable=False,
     tags=["control", "orchestration"],
+    config_model=WorkflowCallConfig,
 )
 async def run_workflow_call_adapter(config: Dict[str, Any], context: Dict[str, Any]) -> Dict[str, Any]:
     """Call another workflow as a sub-workflow.

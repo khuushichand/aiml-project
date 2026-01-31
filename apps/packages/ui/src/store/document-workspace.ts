@@ -2,6 +2,7 @@ import { create } from "zustand"
 import type {
   DocumentWorkspaceStore,
   OpenDocument,
+  DocumentViewerState,
   SidebarTab,
   RightPanelTab,
   ViewMode,
@@ -20,6 +21,38 @@ import {
 
 const generateId = () =>
   `ann_${Date.now()}_${Math.random().toString(36).slice(2, 9)}`
+
+/**
+ * Creates a default viewer state for a new document
+ */
+const createDefaultViewerState = (): DocumentViewerState => ({
+  currentPage: 1,
+  totalPages: 0,
+  zoomLevel: DEFAULT_ZOOM_LEVEL,
+  viewMode: "single",
+  currentCfi: null,
+  currentPercentage: 0,
+  currentChapterTitle: null,
+  searchQuery: "",
+  searchResults: [],
+  activeSearchIndex: 0
+})
+
+/**
+ * Captures the current viewer state from the store
+ */
+const captureViewerState = (state: DocumentWorkspaceStore): DocumentViewerState => ({
+  currentPage: state.currentPage,
+  totalPages: state.totalPages,
+  zoomLevel: state.zoomLevel,
+  viewMode: state.viewMode,
+  currentCfi: state.currentCfi,
+  currentPercentage: state.currentPercentage,
+  currentChapterTitle: state.currentChapterTitle,
+  searchQuery: state.searchQuery,
+  searchResults: state.searchResults,
+  activeSearchIndex: state.activeSearchIndex
+})
 
 export const useDocumentWorkspaceStore = create<DocumentWorkspaceStore>(
   (set, get) => ({
@@ -52,35 +85,53 @@ export const useDocumentWorkspaceStore = create<DocumentWorkspaceStore>(
     // Document management
     openDocument: (doc: OpenDocument) => {
       set((state) => {
-        const exists = state.openDocuments.some((d) => d.id === doc.id)
-        if (exists) {
-          // Just activate existing document
+        // Save current document's viewer state before switching
+        let updatedOpenDocs = state.openDocuments
+        if (state.activeDocumentId !== null && state.activeDocumentId !== doc.id) {
+          updatedOpenDocs = state.openDocuments.map((d) =>
+            d.id === state.activeDocumentId
+              ? { ...d, viewerState: captureViewerState(state) }
+              : d
+          )
+        }
+
+        const existingDoc = updatedOpenDocs.find((d) => d.id === doc.id)
+        if (existingDoc) {
+          // Restore existing document's viewer state
+          const viewerState = existingDoc.viewerState ?? createDefaultViewerState()
           return {
+            openDocuments: updatedOpenDocs,
             activeDocumentId: doc.id,
             activeDocumentType: doc.type,
-            currentPage: 1,
-            totalPages: 0,
-            currentCfi: null,
-            currentPercentage: 0,
-            currentChapterTitle: null,
-            searchQuery: "",
-            searchResults: [],
-            activeSearchIndex: 0
+            currentPage: viewerState.currentPage,
+            totalPages: viewerState.totalPages,
+            zoomLevel: viewerState.zoomLevel,
+            viewMode: viewerState.viewMode,
+            currentCfi: viewerState.currentCfi,
+            currentPercentage: viewerState.currentPercentage,
+            currentChapterTitle: viewerState.currentChapterTitle,
+            searchQuery: viewerState.searchQuery,
+            searchResults: viewerState.searchResults,
+            activeSearchIndex: viewerState.activeSearchIndex
           }
         }
-        // Add new document and activate it
+
+        // Add new document with default viewer state
+        const defaultState = createDefaultViewerState()
         return {
-          openDocuments: [...state.openDocuments, doc],
+          openDocuments: [...updatedOpenDocs, { ...doc, viewerState: defaultState }],
           activeDocumentId: doc.id,
           activeDocumentType: doc.type,
-          currentPage: 1,
-          totalPages: 0,
-          currentCfi: null,
-          currentPercentage: 0,
-          currentChapterTitle: null,
-          searchQuery: "",
-          searchResults: [],
-          activeSearchIndex: 0
+          currentPage: defaultState.currentPage,
+          totalPages: defaultState.totalPages,
+          zoomLevel: defaultState.zoomLevel,
+          viewMode: defaultState.viewMode,
+          currentCfi: defaultState.currentCfi,
+          currentPercentage: defaultState.currentPercentage,
+          currentChapterTitle: defaultState.currentChapterTitle,
+          searchQuery: defaultState.searchQuery,
+          searchResults: defaultState.searchResults,
+          activeSearchIndex: defaultState.activeSearchIndex
         }
       })
     },
@@ -94,35 +145,97 @@ export const useDocumentWorkspaceStore = create<DocumentWorkspaceStore>(
           return { openDocuments: newOpenDocs }
         }
 
-        // If closing active document, activate the next available
+        // If closing active document, activate the next available and restore its state
         const newActive = newOpenDocs.length > 0 ? newOpenDocs[0] : null
+        if (!newActive) {
+          const defaultState = createDefaultViewerState()
+          return {
+            openDocuments: newOpenDocs,
+            activeDocumentId: null,
+            activeDocumentType: null,
+            currentPage: defaultState.currentPage,
+            totalPages: defaultState.totalPages,
+            zoomLevel: defaultState.zoomLevel,
+            viewMode: defaultState.viewMode,
+            currentCfi: defaultState.currentCfi,
+            currentPercentage: defaultState.currentPercentage,
+            currentChapterTitle: defaultState.currentChapterTitle,
+            searchQuery: defaultState.searchQuery,
+            searchResults: defaultState.searchResults,
+            activeSearchIndex: defaultState.activeSearchIndex
+          }
+        }
+
+        // Restore the new active document's viewer state
+        const viewerState = newActive.viewerState ?? createDefaultViewerState()
         return {
           openDocuments: newOpenDocs,
-          activeDocumentId: newActive?.id ?? null,
-          activeDocumentType: newActive?.type ?? null,
-          currentPage: 1,
-          totalPages: 0
+          activeDocumentId: newActive.id,
+          activeDocumentType: newActive.type,
+          currentPage: viewerState.currentPage,
+          totalPages: viewerState.totalPages,
+          zoomLevel: viewerState.zoomLevel,
+          viewMode: viewerState.viewMode,
+          currentCfi: viewerState.currentCfi,
+          currentPercentage: viewerState.currentPercentage,
+          currentChapterTitle: viewerState.currentChapterTitle,
+          searchQuery: viewerState.searchQuery,
+          searchResults: viewerState.searchResults,
+          activeSearchIndex: viewerState.activeSearchIndex
         }
       })
     },
 
     setActiveDocument: (id: number | null) => {
       set((state) => {
+        // Save current document's viewer state before switching
+        let updatedOpenDocs = state.openDocuments
+        if (state.activeDocumentId !== null && state.activeDocumentId !== id) {
+          updatedOpenDocs = state.openDocuments.map((d) =>
+            d.id === state.activeDocumentId
+              ? { ...d, viewerState: captureViewerState(state) }
+              : d
+          )
+        }
+
         if (id === null) {
+          const defaultState = createDefaultViewerState()
           return {
+            openDocuments: updatedOpenDocs,
             activeDocumentId: null,
             activeDocumentType: null,
-            currentPage: 1,
-            totalPages: 0
+            currentPage: defaultState.currentPage,
+            totalPages: defaultState.totalPages,
+            zoomLevel: defaultState.zoomLevel,
+            viewMode: defaultState.viewMode,
+            currentCfi: defaultState.currentCfi,
+            currentPercentage: defaultState.currentPercentage,
+            currentChapterTitle: defaultState.currentChapterTitle,
+            searchQuery: defaultState.searchQuery,
+            searchResults: defaultState.searchResults,
+            activeSearchIndex: defaultState.activeSearchIndex
           }
         }
-        const doc = state.openDocuments.find((d) => d.id === id)
-        if (!doc) return {}
+
+        const doc = updatedOpenDocs.find((d) => d.id === id)
+        if (!doc) return { openDocuments: updatedOpenDocs }
+
+        // Restore the target document's viewer state
+        const viewerState = doc.viewerState ?? createDefaultViewerState()
         return {
+          openDocuments: updatedOpenDocs,
           activeDocumentId: id,
           activeDocumentType: doc.type,
-          currentPage: 1,
-          totalPages: 0
+          currentPage: viewerState.currentPage,
+          totalPages: viewerState.totalPages,
+          zoomLevel: viewerState.zoomLevel,
+          viewMode: viewerState.viewMode,
+          currentCfi: viewerState.currentCfi,
+          currentPercentage: viewerState.currentPercentage,
+          currentChapterTitle: viewerState.currentChapterTitle,
+          searchQuery: viewerState.searchQuery,
+          searchResults: viewerState.searchResults,
+          activeSearchIndex: viewerState.activeSearchIndex
         }
       })
     },

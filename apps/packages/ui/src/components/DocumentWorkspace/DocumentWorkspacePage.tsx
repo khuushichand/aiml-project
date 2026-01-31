@@ -1,7 +1,7 @@
-import React from "react"
+import React, { useState, useEffect, useCallback } from "react"
 import { useTranslation } from "react-i18next"
 import { useStorage } from "@plasmohq/storage/hook"
-import { Drawer, Tabs, Empty } from "antd"
+import { Drawer, Tabs, Empty, Tooltip } from "antd"
 import {
   FileText,
   MessageSquare,
@@ -16,7 +16,8 @@ import {
   BookOpen,
   Highlighter,
   Quote,
-  HelpCircle
+  HelpCircle,
+  Keyboard
 } from "lucide-react"
 import { useDocumentWorkspaceStore } from "@/store/document-workspace"
 import { useMobile } from "@/hooks/useMediaQuery"
@@ -31,6 +32,7 @@ import {
 } from "./LeftSidebar"
 import { DocumentChat, AnnotationsPanel, CitationPanel, QuizPanel } from "./RightPanel"
 import { DocumentWorkspaceErrorBoundary } from "./DocumentWorkspaceErrorBoundary"
+import { DocumentShortcutsModal } from "./DocumentShortcutsModal"
 import {
   useAnnotations,
   useAnnotationSyncOnClose,
@@ -177,12 +179,14 @@ const WorkspaceHeader: React.FC<{
   rightPaneOpen: boolean
   onToggleLeftPane: () => void
   onToggleRightPane: () => void
+  onShowShortcuts: () => void
   hideToggles?: boolean
 }> = ({
   leftPaneOpen,
   rightPaneOpen,
   onToggleLeftPane,
   onToggleRightPane,
+  onShowShortcuts,
   hideToggles
 }) => {
   const { t } = useTranslation(["option", "common"])
@@ -220,23 +224,34 @@ const WorkspaceHeader: React.FC<{
         </div>
       </div>
 
-      {!hideToggles && (
-        <button
-          onClick={onToggleRightPane}
-          className="rounded p-1.5 hover:bg-hover"
-          title={
-            rightPaneOpen
-              ? t("common:collapse", "Collapse")
-              : t("common:expand", "Expand")
-          }
-        >
-          {rightPaneOpen ? (
-            <PanelRightClose className="h-5 w-5" />
-          ) : (
-            <PanelRightOpen className="h-5 w-5" />
-          )}
-        </button>
-      )}
+      <div className="flex items-center gap-1">
+        <Tooltip title={t("option:documentWorkspace.shortcuts", "Keyboard shortcuts (?)")}>
+          <button
+            onClick={onShowShortcuts}
+            className="rounded p-1.5 hover:bg-hover text-text-subtle hover:text-text"
+            aria-label={t("option:documentWorkspace.shortcuts", "Keyboard shortcuts")}
+          >
+            <Keyboard className="h-5 w-5" />
+          </button>
+        </Tooltip>
+        {!hideToggles && (
+          <button
+            onClick={onToggleRightPane}
+            className="rounded p-1.5 hover:bg-hover"
+            title={
+              rightPaneOpen
+                ? t("common:collapse", "Collapse")
+                : t("common:expand", "Expand")
+            }
+          >
+            {rightPaneOpen ? (
+              <PanelRightClose className="h-5 w-5" />
+            ) : (
+              <PanelRightOpen className="h-5 w-5" />
+            )}
+          </button>
+        )}
+      </div>
     </header>
   )
 }
@@ -276,13 +291,47 @@ export const DocumentWorkspacePage: React.FC = () => {
   )
 
   // Mobile drawer state
-  const [leftDrawerOpen, setLeftDrawerOpen] = React.useState(false)
-  const [rightDrawerOpen, setRightDrawerOpen] = React.useState(false)
+  const [leftDrawerOpen, setLeftDrawerOpen] = useState(false)
+  const [rightDrawerOpen, setRightDrawerOpen] = useState(false)
 
   // Mobile tab state
-  const [activeTab, setActiveTab] = React.useState<
-    "sidebar" | "viewer" | "chat"
-  >("viewer")
+  const [activeTab, setActiveTab] = useState<"sidebar" | "viewer" | "chat">(
+    "viewer"
+  )
+
+  // Keyboard shortcuts modal state
+  const [shortcutsModalOpen, setShortcutsModalOpen] = useState(false)
+
+  const handleShowShortcuts = useCallback(() => {
+    setShortcutsModalOpen(true)
+  }, [])
+
+  const handleCloseShortcuts = useCallback(() => {
+    setShortcutsModalOpen(false)
+  }, [])
+
+  // Listen for "?" key to open shortcuts modal
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      // Don't trigger if typing in an input or if modal is already open
+      const target = e.target as HTMLElement
+      const isInputField =
+        target.tagName === "INPUT" ||
+        target.tagName === "TEXTAREA" ||
+        target.isContentEditable
+
+      if (isInputField) return
+
+      // "?" key (Shift + /)
+      if (e.key === "?" || (e.shiftKey && e.key === "/")) {
+        e.preventDefault()
+        setShortcutsModalOpen(true)
+      }
+    }
+
+    window.addEventListener("keydown", handleKeyDown)
+    return () => window.removeEventListener("keydown", handleKeyDown)
+  }, [])
 
   const handleToggleLeftPane = () => {
     if (isMobile) {
@@ -344,7 +393,12 @@ export const DocumentWorkspacePage: React.FC = () => {
             rightPaneOpen={false}
             onToggleLeftPane={handleToggleLeftPane}
             onToggleRightPane={handleToggleRightPane}
+            onShowShortcuts={handleShowShortcuts}
             hideToggles
+          />
+          <DocumentShortcutsModal
+            open={shortcutsModalOpen}
+            onClose={handleCloseShortcuts}
           />
 
           <Tabs
@@ -371,6 +425,11 @@ export const DocumentWorkspacePage: React.FC = () => {
           rightPaneOpen={!!rightPaneOpen}
           onToggleLeftPane={handleToggleLeftPane}
           onToggleRightPane={handleToggleRightPane}
+          onShowShortcuts={handleShowShortcuts}
+        />
+        <DocumentShortcutsModal
+          open={shortcutsModalOpen}
+          onClose={handleCloseShortcuts}
         />
 
         <div className="flex min-h-0 flex-1">

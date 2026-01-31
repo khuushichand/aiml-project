@@ -32,6 +32,7 @@ import { ALL_TARGETS, type PlatformTarget } from "@/config/platform"
 import OptionLayout from "@web/components/layout/WebLayout"
 import { OnboardingWizard } from "@/components/Option/Onboarding/OnboardingWizard"
 import { createSettingsRoute } from "./settings-route"
+import { Navigate } from "react-router-dom"
 
 export type RouteKind = "options" | "sidepanel"
 
@@ -130,7 +131,8 @@ const OptionSpeechSettings = createSettingsRoute(
   () => import("@/components/Option/Settings/SpeechSettings"),
   "SpeechSettings"
 )
-const OptionPromptStudio = lazy(() => import("./option-prompt-studio"))
+// Note: OptionPromptStudio has been unified with OptionPromptsWorkspace (/prompts)
+// The /prompt-studio route now redirects to /prompts?tab=studio
 const OptionSettingsPromptStudio = createSettingsRoute(
   () => import("~/components/Option/Settings/prompt-studio"),
   "PromptStudioSettings"
@@ -521,7 +523,8 @@ export const ROUTE_DEFINITIONS: RouteDefinition[] = [
   { kind: "options", path: "/dictionaries", element: <OptionDictionariesWorkspace /> },
   { kind: "options", path: "/characters", element: <OptionCharactersWorkspace /> },
   { kind: "options", path: "/prompts", element: <OptionPromptsWorkspace /> },
-  { kind: "options", path: "/prompt-studio", element: <OptionPromptStudio /> },
+  // Legacy route - redirect to unified Prompts page
+  { kind: "options", path: "/prompt-studio", element: <Navigate to="/prompts?tab=studio" replace /> },
   { kind: "options", path: "/tts", element: <OptionTts /> },
   { kind: "options", path: "/stt", element: <OptionStt /> },
   { kind: "options", path: "/speech", element: <OptionSpeech /> },

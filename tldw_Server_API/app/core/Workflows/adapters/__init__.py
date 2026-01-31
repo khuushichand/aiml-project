@@ -87,9 +87,7 @@ from tldw_Server_API.app.core.Workflows.adapters import evaluation
 from tldw_Server_API.app.core.Workflows.adapters import research
 from tldw_Server_API.app.core.Workflows.adapters import utility
 
-# Register legacy adapters that haven't been migrated yet
-from tldw_Server_API.app.core.Workflows.adapters._legacy_bridge import register_legacy_adapters
-register_legacy_adapters(registry)
+# Note: Legacy bridge has been removed as all adapters are now registered in submodules
 
 # Re-export exceptions and internal module references for backward compatibility
 from tldw_Server_API.app.core.exceptions import AdapterError

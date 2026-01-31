@@ -30,7 +30,13 @@ function isReadingProgress(
 }
 
 /**
- * Hook to fetch reading progress from the backend
+ * Hook to fetch reading progress from the backend.
+ *
+ * Note: This hook only applies server progress on initial load (when no local
+ * viewerState exists for the document). When switching between already-open
+ * documents, the Zustand store preserves per-document state, so we don't
+ * override it with server data. Server progress is used as a fallback for
+ * cold starts and fresh document opens.
  */
 export function useReadingProgress(mediaId: number | null) {
   const isConnected = useConnectionStore((s) => s.state.isConnected)
@@ -42,6 +48,10 @@ export function useReadingProgress(mediaId: number | null) {
   const setViewMode = useDocumentWorkspaceStore((s) => s.setViewMode)
   const setCurrentCfi = useDocumentWorkspaceStore((s) => s.setCurrentCfi)
   const setCurrentPercentage = useDocumentWorkspaceStore((s) => s.setCurrentPercentage)
+  const openDocuments = useDocumentWorkspaceStore((s) => s.openDocuments)
+
+  // Track which documents have had server progress applied (only apply once per session)
+  const appliedProgressRef = useRef<Set<number>>(new Set())
 
   return useQuery<ReadingProgressResponse | null>({
     queryKey: ["reading-progress", mediaId],
@@ -50,15 +60,24 @@ export function useReadingProgress(mediaId: number | null) {
 
       const response = await tldwClient.getReadingProgress(mediaId)
 
-      // If progress exists and has data, restore state
+      // Only apply server progress if:
+      // 1. We haven't already applied progress for this document this session
+      // 2. The document doesn't have local viewerState (fresh open)
+      const doc = openDocuments.find((d) => d.id === mediaId)
+      const hasLocalState = doc?.viewerState !== undefined
+      const alreadyApplied = appliedProgressRef.current.has(mediaId)
+
       if (response.current_page && response.zoom_level && response.view_mode) {
-        setCurrentPage(response.current_page)
-        setZoomLevel(response.zoom_level)
-        setViewMode(response.view_mode as ViewMode)
-        // Restore EPUB position if CFI is available
-        if (response.cfi) {
-          setCurrentCfi(response.cfi)
-          setCurrentPercentage(response.percent_complete ?? 0)
+        if (!hasLocalState && !alreadyApplied) {
+          setCurrentPage(response.current_page)
+          setZoomLevel(response.zoom_level)
+          setViewMode(response.view_mode as ViewMode)
+          // Restore EPUB position if CFI is available
+          if (response.cfi) {
+            setCurrentCfi(response.cfi)
+            setCurrentPercentage(response.percent_complete ?? 0)
+          }
+          appliedProgressRef.current.add(mediaId)
         }
       }
 

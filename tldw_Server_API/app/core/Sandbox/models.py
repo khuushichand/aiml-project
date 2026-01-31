@@ -10,6 +10,19 @@ import hashlib
 class RuntimeType(str, Enum):
     docker = "docker"
     firecracker = "firecracker"
+    lima = "lima"
+
+
+class TrustLevel(str, Enum):
+    """Risk-based isolation profiles for sandbox execution.
+
+    - trusted: Relaxed restrictions, more resources, some egress allowed
+    - standard: Default behavior, balanced security/usability
+    - untrusted: Maximum isolation, strict limits, no network, minimal resources
+    """
+    trusted = "trusted"
+    standard = "standard"
+    untrusted = "untrusted"
 
 
 @dataclass
@@ -22,6 +35,7 @@ class SessionSpec:
     network_policy: str = "deny_all"
     env: Dict[str, str] = field(default_factory=dict)
     labels: Dict[str, str] = field(default_factory=dict)
+    trust_level: Optional[TrustLevel] = None  # Defaults to standard if not specified
 
 
 @dataclass
@@ -52,6 +66,8 @@ class RunSpec:
     stdin_max_frame_bytes: Optional[int] = None
     stdin_bps: Optional[int] = None
     stdin_idle_timeout_sec: Optional[int] = None
+    # Trust level for risk-based isolation profiles
+    trust_level: Optional[TrustLevel] = None  # Defaults to standard if not specified
 
 
 class RunPhase(str, Enum):

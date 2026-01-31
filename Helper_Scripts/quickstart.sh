@@ -13,6 +13,7 @@
 #   4. Prints next steps
 
 set -e
+set -o pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
@@ -21,6 +22,11 @@ echo "=== tldw_server Quickstart ==="
 echo ""
 
 # Check Python version
+if ! command -v python3 &> /dev/null; then
+    echo "Error: python3 not found. Please install Python 3.10+ and retry."
+    exit 1
+fi
+
 PYTHON_VERSION=$(python3 --version 2>&1 | cut -d' ' -f2)
 PYTHON_MAJOR=$(echo "$PYTHON_VERSION" | cut -d. -f1)
 PYTHON_MINOR=$(echo "$PYTHON_VERSION" | cut -d. -f2)

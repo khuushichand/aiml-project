@@ -266,8 +266,11 @@ export const useTutorialCompletion = () => {
   }))
 }
 
-// Expose for debugging
-if (typeof window !== "undefined") {
+// Expose for debugging in non-production builds
+if (
+  typeof window !== "undefined" &&
+  process.env.NODE_ENV !== "production"
+) {
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   ;(window as any).__tldw_useTutorialStore = useTutorialStore
 }

@@ -9023,13 +9023,14 @@ class MediaDatabase:
         fts_condition_params: List[Any] = []
         postgres_tsquery: Optional[str] = None
 
-        def _is_sqlite_fts_query_error(err: sqlite3.OperationalError) -> bool:
+        def _is_sqlite_fts_query_error(err: Exception) -> bool:
             if self.backend_type != BackendType.SQLITE or fts_condition_index is None:
                 return False
             msg = str(err).lower()
             return (
                 "unable to use function match" in msg
                 or "no such column" in msg
+                or "no such table: media_fts" in msg
                 or "fts5: syntax error" in msg
                 or ("malformed" in msg and "match" in msg)
             )
@@ -9331,7 +9332,7 @@ class MediaDatabase:
                 else:
                     total_matches = total_matches_row[0] if total_matches_row else 0
                 logging.info(f"Search query '{search_query}' found {total_matches} total matches")
-            except sqlite3.OperationalError as e:
+            except (sqlite3.OperationalError, DatabaseError) as e:
                 if _is_sqlite_fts_query_error(e):
                     logging.warning(f"FTS MATCH error, falling back to LIKE-only search: {e}")
                     fallback_conditions = [
@@ -9397,7 +9398,7 @@ class MediaDatabase:
                 try:
                     results_cursor = self.execute_query(results_sql, paginated_params)
                     results_list = [dict(row) for row in results_cursor.fetchall()]
-                except sqlite3.OperationalError as e:
+                except (sqlite3.OperationalError, DatabaseError) as e:
                     # Handle specific FTS MATCH errors in results query
                     if _is_sqlite_fts_query_error(e):
                         logging.warning(f"FTS MATCH error in results query, falling back to LIKE-only search: {e}")

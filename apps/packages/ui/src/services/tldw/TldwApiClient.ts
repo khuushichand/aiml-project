@@ -2799,6 +2799,22 @@ export class TldwApiClient {
     })
   }
 
+  async removeChatbookExportJob(job_id: string): Promise<any> {
+    const id = String(job_id)
+    return await bgRequest<any>({
+      path: `/api/v1/chatbooks/export/jobs/${id}/remove`,
+      method: "DELETE"
+    })
+  }
+
+  async removeChatbookImportJob(job_id: string): Promise<any> {
+    const id = String(job_id)
+    return await bgRequest<any>({
+      path: `/api/v1/chatbooks/import/jobs/${id}/remove`,
+      method: "DELETE"
+    })
+  }
+
   async cleanupChatbooks(): Promise<any> {
     return await bgRequest<any>({
       path: "/api/v1/chatbooks/cleanup",

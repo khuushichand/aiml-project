@@ -223,6 +223,9 @@ const isActiveJobStatus = (status?: string) => {
   return value === "pending" || value === "in_progress" || value === "validating"
 }
 
+const isRemovableJobStatus = (status?: string) =>
+  ["completed", "cancelled", "expired", "failed"].includes((status || "").toLowerCase())
+
 const buildJobSignature = (jobs: ChatbookJob[]) =>
   jobs
     .map(
@@ -1189,6 +1192,58 @@ export const ChatbooksPlaygroundPage: React.FC = () => {
     }
   }
 
+  const handleRemoveJob = async (job: ChatbookJob, kind: JobKind) => {
+    try {
+      await tldwClient.initialize().catch(() => null)
+      if (kind === "export") {
+        await tldwClient.removeChatbookExportJob(job.job_id)
+      } else {
+        await tldwClient.removeChatbookImportJob(job.job_id)
+      }
+      notification.success({
+        message: t("settings:chatbooksPlayground.jobRemoved", "Job removed")
+      })
+      resetPolling()
+      await loadJobs()
+    } catch (error) {
+      notification.error({
+        message: t("settings:chatbooksPlayground.jobRemoveError", "Unable to remove job"),
+        description: error instanceof Error ? error.message : String(error)
+      })
+    }
+  }
+
+  const handleRemoveAllFinished = async () => {
+    const removableExports = exportJobs.filter(j => isRemovableJobStatus(j.status))
+    const removableImports = importJobs.filter(j => isRemovableJobStatus(j.status))
+
+    if (removableExports.length === 0 && removableImports.length === 0) {
+      notification.info({
+        message: t("settings:chatbooksPlayground.noJobsToRemove", "No finished jobs to remove")
+      })
+      return
+    }
+
+    try {
+      await tldwClient.initialize().catch(() => null)
+      await Promise.all([
+        ...removableExports.map(j => tldwClient.removeChatbookExportJob(j.job_id)),
+        ...removableImports.map(j => tldwClient.removeChatbookImportJob(j.job_id))
+      ])
+      notification.success({
+        message: t("settings:chatbooksPlayground.allFinishedRemoved", "All finished jobs removed")
+      })
+      resetPolling()
+      await loadJobs()
+    } catch (error) {
+      notification.error({
+        message: t("settings:chatbooksPlayground.removeAllError", "Failed to remove some jobs"),
+        description: error instanceof Error ? error.message : String(error)
+      })
+      await loadJobs()
+    }
+  }
+
   const resolveExportSelections = async () => {
     const entries: Array<readonly [ContentTypeKey, string[]] | null> = []
     for (const key of CONTENT_TYPE_KEYS) {
@@ -1761,6 +1816,12 @@ export const ChatbooksPlaygroundPage: React.FC = () => {
           >
             {t("settings:chatbooksPlayground.cleanup", "Cleanup exports")}
           </Button>
+          <Button
+            icon={<Trash2 className="h-4 w-4" />}
+            onClick={handleRemoveAllFinished}
+          >
+            {t("settings:chatbooksPlayground.removeAllFinished", "Remove finished")}
+          </Button>
         </Space>
       </div>
 
@@ -1839,6 +1900,15 @@ export const ChatbooksPlaygroundPage: React.FC = () => {
                       {t("settings:chatbooksPlayground.cancel", "Cancel")}
                     </Button>
                   )}
+                  {isRemovableJobStatus(job.status) && (
+                    <Button
+                      size="small"
+                      icon={<Trash2 className="h-4 w-4" />}
+                      onClick={() => handleRemoveJob(job, "export")}
+                    >
+                      {t("settings:chatbooksPlayground.remove", "Remove")}
+                    </Button>
+                  )}
                 </Space>
               )
             }
@@ -1891,6 +1961,15 @@ export const ChatbooksPlaygroundPage: React.FC = () => {
                       onClick={() => handleCancelJob(job, "import")}
                     >
                       {t("settings:chatbooksPlayground.cancel", "Cancel")}
+                    </Button>
+                  )}
+                  {isRemovableJobStatus(job.status) && (
+                    <Button
+                      size="small"
+                      icon={<Trash2 className="h-4 w-4" />}
+                      onClick={() => handleRemoveJob(job, "import")}
+                    >
+                      {t("settings:chatbooksPlayground.remove", "Remove")}
                     </Button>
                   )}
                 </Space>
@@ -2023,6 +2102,15 @@ export const ChatbooksPlaygroundPage: React.FC = () => {
                                 onClick={() => handleCancelJob(job, job.kind)}
                               >
                                 {t("settings:chatbooksPlayground.cancel", "Cancel")}
+                              </Button>
+                            )}
+                            {isRemovableJobStatus(job.status) && (
+                              <Button
+                                size="small"
+                                icon={<Trash2 className="h-4 w-4" />}
+                                onClick={() => handleRemoveJob(job, job.kind)}
+                              >
+                                {t("settings:chatbooksPlayground.remove", "Remove")}
                               </Button>
                             )}
                           </Space>

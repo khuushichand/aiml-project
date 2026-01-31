@@ -19,7 +19,7 @@ quick reference for the ACP module.
 
 ## Architecture
 
-```
+```text
 ┌─────────────────┐     ┌─────────────────┐     ┌─────────────────┐
 │   WebUI/Client  │────▶│  tldw_server    │────▶│   tldw-agent    │
 │                 │◀────│  (FastAPI)      │◀────│   (Go Runner)   │
@@ -80,13 +80,13 @@ quick reference for the ACP module.
 
 ### REST Endpoints
 
-| Endpoint | Method | Description |
-|----------|--------|-------------|
-| `/api/v1/acp/sessions/new` | POST | Create a new ACP session |
-| `/api/v1/acp/sessions/prompt` | POST | Send a prompt to a session |
-| `/api/v1/acp/sessions/cancel` | POST | Cancel the current operation |
-| `/api/v1/acp/sessions/close` | POST | Close and cleanup a session |
-| `/api/v1/acp/sessions/{session_id}/updates` | GET | Poll for session updates |
+|Endpoint|Method|Description|
+|---|---|---|
+|`/api/v1/acp/sessions/new`|POST|Create a new ACP session|
+|`/api/v1/acp/sessions/prompt`|POST|Send a prompt to a session|
+|`/api/v1/acp/sessions/cancel`|POST|Cancel the current operation|
+|`/api/v1/acp/sessions/close`|POST|Close and cleanup a session|
+|`/api/v1/acp/sessions/{session_id}/updates`|GET|Poll for session updates|
 
 ### WebSocket Endpoint
 
@@ -98,21 +98,21 @@ quick reference for the ACP module.
 
 **Server → Client Messages:**
 
-| Type | Description |
-|------|-------------|
-| `connected` | Connection established, includes agent capabilities |
-| `update` | Real-time update from agent session |
-| `permission_request` | Tool execution requires approval |
-| `error` | Error occurred |
-| `prompt_complete` | Prompt execution completed |
+|Type|Description|
+|---|---|
+|`connected`|Connection established, includes agent capabilities|
+|`update`|Real-time update from agent session|
+|`permission_request`|Tool execution requires approval|
+|`error`|Error occurred|
+|`prompt_complete`|Prompt execution completed|
 
 **Client → Server Messages:**
 
-| Type | Description |
-|------|-------------|
-| `permission_response` | Approve or deny a permission request |
-| `cancel` | Cancel the current operation |
-| `prompt` | Send a new prompt |
+|Type|Description|
+|---|---|
+|`permission_response`|Approve or deny a permission request|
+|`cancel`|Cancel the current operation|
+|`prompt`|Send a new prompt|
 
 ### Permission Request Example
 

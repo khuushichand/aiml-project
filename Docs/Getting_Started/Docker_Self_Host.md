@@ -175,10 +175,10 @@ services:
 
 ```bash
 # SQLite
-docker compose exec app cp /app/Databases/users.db /app/Databases/users.db.backup
+docker cp $(docker compose ps -q app):/app/Databases/users.db ./users.db.backup
 
 # PostgreSQL
-docker compose exec postgres pg_dump -U tldw tldw > backup.sql
+docker compose exec -T postgres pg_dump -U tldw tldw > backup.sql
 ```
 
 ### Full Volume Backup

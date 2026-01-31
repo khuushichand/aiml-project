@@ -27,12 +27,19 @@ from tldw_Server_API.app.api.v1.schemas.sandbox_schemas import (
     SandboxAdminIdempotencyItem,
     SandboxAdminUsageResponse,
     SandboxAdminUsageItem,
+    SnapshotCreateResponse,
+    SnapshotInfo,
+    SnapshotListResponse,
+    SnapshotRestoreRequest,
+    SnapshotRestoreResponse,
+    SessionCloneRequest,
+    SessionCloneResponse,
 )
 from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import User, get_request_user
 from tldw_Server_API.app.core.AuthNZ.ip_allowlist import is_single_user_ip_allowed, resolve_client_ip
 from tldw_Server_API.app.core.AuthNZ.api_key_manager import get_api_key_manager
 from tldw_Server_API.app.core.AuthNZ.settings import get_settings
-from tldw_Server_API.app.core.Sandbox.models import RunSpec, SessionSpec, RuntimeType as CoreRuntimeType
+from tldw_Server_API.app.core.Sandbox.models import RunSpec, SessionSpec, RuntimeType as CoreRuntimeType, TrustLevel as CoreTrustLevel
 from tldw_Server_API.app.core.Sandbox.service import SandboxService
 from tldw_Server_API.app.core.config import settings as app_settings
 from tldw_Server_API.app.core.Sandbox.streams import get_hub
@@ -370,6 +377,7 @@ async def create_session(
         network_policy=payload.network_policy or "deny_all",
         env=payload.env or {},
         labels=payload.labels or {},
+        trust_level=CoreTrustLevel(payload.trust_level) if payload.trust_level else None,
     )
     try:
         session = _service.create_session(
@@ -504,6 +512,134 @@ async def delete_session(
     if not ok:
         raise HTTPException(status_code=404, detail="session_not_found")
     return {"ok": True}
+
+
+# -----------------
+# Snapshot/Clone API
+# -----------------
+
+@router.post(
+    "/sessions/{session_id}/snapshot",
+    response_model=SnapshotCreateResponse,
+    summary="Create a snapshot of the session's current state",
+)
+async def create_snapshot(
+    session_id: str = Path(..., min_length=1),
+    current_user: User = Depends(get_request_user),
+) -> SnapshotCreateResponse:
+    """Create a snapshot of the session's current workspace state.
+
+    The snapshot can be used later to restore the session to this point in time.
+    """
+    _require_session_owner(session_id, current_user)
+    try:
+        result = _service.create_snapshot(session_id)
+        return SnapshotCreateResponse(
+            snapshot_id=result["snapshot_id"],
+            created_at=result["created_at"],
+            size_bytes=result["size_bytes"],
+        )
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    except IOError as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.post(
+    "/sessions/{session_id}/restore",
+    response_model=SnapshotRestoreResponse,
+    summary="Restore session to snapshot state",
+)
+async def restore_snapshot(
+    session_id: str = Path(..., min_length=1),
+    payload: SnapshotRestoreRequest = Body(...),
+    current_user: User = Depends(get_request_user),
+) -> SnapshotRestoreResponse:
+    """Restore a session's workspace to a previous snapshot state.
+
+    This will clear the current workspace and replace it with the snapshot contents.
+    """
+    _require_session_owner(session_id, current_user)
+    try:
+        restored = _service.restore_snapshot(session_id, payload.snapshot_id)
+        return SnapshotRestoreResponse(
+            restored=restored,
+            snapshot_id=payload.snapshot_id,
+        )
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    except IOError as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.post(
+    "/sessions/{session_id}/clone",
+    response_model=SessionCloneResponse,
+    summary="Clone a session including its workspace",
+)
+async def clone_session(
+    session_id: str = Path(..., min_length=1),
+    payload: SessionCloneRequest = Body(default=None),
+    current_user: User = Depends(get_request_user),
+) -> SessionCloneResponse:
+    """Create a new session as a copy of the current one.
+
+    The new session will have a copy of the original session's workspace.
+    """
+    _require_session_owner(session_id, current_user)
+    try:
+        new_session = _service.clone_session(
+            session_id,
+            new_name=(payload.new_session_name if payload else None),
+        )
+        return SessionCloneResponse(
+            session_id=new_session.id,
+            cloned_from=session_id,
+        )
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    except Exception as e:
+        logger.exception(f"Clone session failed: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.get(
+    "/sessions/{session_id}/snapshots",
+    response_model=SnapshotListResponse,
+    summary="List available snapshots for a session",
+)
+async def list_snapshots(
+    session_id: str = Path(..., min_length=1),
+    current_user: User = Depends(get_request_user),
+) -> SnapshotListResponse:
+    """List all available snapshots for a session, sorted by creation time (newest first)."""
+    _require_session_owner(session_id, current_user)
+    snapshots = _service.list_snapshots(session_id)
+    items = [
+        SnapshotInfo(
+            snapshot_id=s.get("snapshot_id", ""),
+            session_id=s.get("session_id", session_id),
+            created_at=s.get("created_at", ""),
+            size_bytes=s.get("size_bytes", 0),
+        )
+        for s in snapshots
+    ]
+    return SnapshotListResponse(items=items)
+
+
+@router.delete(
+    "/sessions/{session_id}/snapshots/{snapshot_id}",
+    summary="Delete a specific snapshot",
+)
+async def delete_snapshot(
+    session_id: str = Path(..., min_length=1),
+    snapshot_id: str = Path(..., min_length=1),
+    current_user: User = Depends(get_request_user),
+) -> dict:
+    """Delete a specific snapshot from a session."""
+    _require_session_owner(session_id, current_user)
+    deleted = _service.delete_snapshot(session_id, snapshot_id)
+    return {"ok": deleted, "snapshot_id": snapshot_id}
 
 
 @router.post("/sessions/{session_id}/files", response_model=SandboxFileUploadResponse, summary="Upload files to a session workspace")
@@ -694,6 +830,7 @@ async def start_run(
         stdin_max_frame_bytes=(int(payload.stdin_max_frame_bytes) if hasattr(payload, "stdin_max_frame_bytes") and payload.stdin_max_frame_bytes is not None else None),
         stdin_bps=(int(payload.stdin_bps) if hasattr(payload, "stdin_bps") and payload.stdin_bps is not None else None),
         stdin_idle_timeout_sec=(int(payload.stdin_idle_timeout_sec) if hasattr(payload, "stdin_idle_timeout_sec") and payload.stdin_idle_timeout_sec is not None else None),
+        trust_level=(CoreTrustLevel(payload.trust_level) if hasattr(payload, "trust_level") and payload.trust_level else None),
     )
     # Scaffold: return immediate completed status without real execution
     try:

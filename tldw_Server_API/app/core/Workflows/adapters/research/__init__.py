@@ -11,8 +11,33 @@ This module includes adapters for research operations:
 - reference_parse: Parse references
 - bibtex_generate: Generate BibTeX
 - literature_review: Generate literature review
-
-Adapters in this module are registered via the legacy bridge during migration.
 """
 
-# Adapters are registered via _legacy_bridge.py
+from tldw_Server_API.app.core.Workflows.adapters.research.search import (
+    run_arxiv_search_adapter,
+    run_arxiv_download_adapter,
+    run_pubmed_search_adapter,
+    run_semantic_scholar_search_adapter,
+    run_google_scholar_search_adapter,
+    run_patent_search_adapter,
+)
+
+from tldw_Server_API.app.core.Workflows.adapters.research.bibliography import (
+    run_doi_resolve_adapter,
+    run_reference_parse_adapter,
+    run_bibtex_generate_adapter,
+    run_literature_review_adapter,
+)
+
+__all__ = [
+    "run_arxiv_search_adapter",
+    "run_arxiv_download_adapter",
+    "run_pubmed_search_adapter",
+    "run_semantic_scholar_search_adapter",
+    "run_google_scholar_search_adapter",
+    "run_patent_search_adapter",
+    "run_doi_resolve_adapter",
+    "run_reference_parse_adapter",
+    "run_bibtex_generate_adapter",
+    "run_literature_review_adapter",
+]

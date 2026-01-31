@@ -34,11 +34,52 @@ from tldw_Server_API.app.core.Claims_Extraction.monitoring import (
 from tldw_Server_API.app.core.Claims_Extraction.span_alignment import find_text_span
 from tldw_Server_API.app.core.Utils.prompt_loader import load_prompt
 
-# Prefer importing Document from RAG types to keep consistency in pipelines
+# Prefer importing Document and verification types from RAG types for consistency
 try:
-    from tldw_Server_API.app.core.RAG.rag_service.types import Document
+    from tldw_Server_API.app.core.RAG.rag_service.types import (
+        Document,
+        ClaimType,
+        VerificationStatus,
+        MatchLevel,
+        SourceAuthority,
+    )
 except Exception:
-    # Lightweight fallback type for non-RAG usage
+    # Lightweight fallback types for non-RAG usage
+    from enum import Enum
+
+    class ClaimType(Enum):  # type: ignore
+        STATISTIC = "statistic"
+        COMPARATIVE = "comparative"
+        TEMPORAL = "temporal"
+        ATTRIBUTION = "attribution"
+        CAUSAL = "causal"
+        EXISTENCE = "existence"
+        RANKING = "ranking"
+        QUOTE = "quote"
+        GENERAL = "general"
+
+    class VerificationStatus(Enum):  # type: ignore
+        VERIFIED = "verified"
+        CITATION_NOT_FOUND = "citation_not_found"
+        MISQUOTED = "misquoted"
+        MISLEADING = "misleading"
+        HALLUCINATION = "hallucination"
+        UNVERIFIED = "unverified"
+        NUMERICAL_ERROR = "numerical_error"
+        REFUTED = "refuted"
+
+    class MatchLevel(Enum):  # type: ignore
+        EXACT = "exact"
+        PARAPHRASE = "paraphrase"
+        INTERPRETATION = "interpretation"
+
+    class SourceAuthority(Enum):  # type: ignore
+        PRIMARY = 5
+        GOVERNMENT = 4
+        PEER_REVIEWED = 3
+        INDUSTRY = 2
+        SECONDARY = 1
+
     @dataclass
     class Document:  # type: ignore
         id: str
@@ -51,26 +92,67 @@ except Exception:
 
 @dataclass
 class Claim:
+    """A factual claim extracted from generated text."""
     id: str
     text: str
     span: Optional[Tuple[int, int]] = None
+    claim_type: ClaimType = ClaimType.GENERAL
+    extracted_values: Dict[str, Any] = field(default_factory=dict)
 
 
 @dataclass
 class Evidence:
+    """Evidence snippet from a source document."""
     doc_id: str
     snippet: str
     score: float = 0.0
+    authority: SourceAuthority = SourceAuthority.SECONDARY
 
 
 @dataclass
 class ClaimVerification:
+    """Result of verifying a claim against evidence."""
     claim: Claim
-    label: str  # supported | refuted | nei
-    confidence: float
+    status: VerificationStatus = VerificationStatus.UNVERIFIED
+    confidence: float = 0.0
     evidence: List[Evidence] = field(default_factory=list)
     citations: List[Dict[str, Any]] = field(default_factory=list)
     rationale: Optional[str] = None
+    match_level: MatchLevel = MatchLevel.INTERPRETATION
+    source_authority: SourceAuthority = SourceAuthority.SECONDARY
+    requires_external_knowledge: bool = False
+
+    @property
+    def label(self) -> str:
+        """Backward-compatible label property mapping status to supported/refuted/nei."""
+        status_to_label = {
+            VerificationStatus.VERIFIED: "supported",
+            VerificationStatus.REFUTED: "refuted",
+            VerificationStatus.CITATION_NOT_FOUND: "nei",
+            VerificationStatus.MISQUOTED: "refuted",
+            VerificationStatus.MISLEADING: "refuted",
+            VerificationStatus.HALLUCINATION: "refuted",
+            VerificationStatus.UNVERIFIED: "nei",
+            VerificationStatus.NUMERICAL_ERROR: "refuted",
+        }
+        return status_to_label.get(self.status, "nei")
+
+
+@dataclass
+class ExtractionResult:
+    """Result from claim extraction phase."""
+    claims: List[Claim]
+    extractor_mode: str
+    extraction_time_s: float = 0.0
+    total_input_chars: int = 0
+
+
+@dataclass
+class VerificationResult:
+    """Result from claim verification phase."""
+    verifications: List[ClaimVerification]
+    verification_time_s: float = 0.0
+    summary: Dict[str, Any] = field(default_factory=dict)
 
 
 # --------------------------- Interfaces ---------------------------
@@ -108,11 +190,269 @@ class ClaimVerifier(Protocol):
 _NUMERIC_RE = re.compile(r"\b(\d{1,3}(?:[\,\._]\d{3})*|\d+)(?:\s*(%|k|m|b))?\b", re.IGNORECASE)
 _DATE_RE = re.compile(r"\b(\d{4}|\d{1,2}\s+[A-Za-z]{3,9}\s+\d{4}|[A-Za-z]{3,9}\s+\d{4})\b")
 
+# Claim type classification patterns
+_STAT_PATTERNS = re.compile(
+    r"\b(\d+(?:\.\d+)?)\s*(%|percent|percentage|million|billion|thousand)|"
+    r"\b(grew|increased|decreased|fell|rose|dropped)\s+(?:by\s+)?\d+",
+    re.IGNORECASE
+)
+_COMPARATIVE_PATTERNS = re.compile(
+    r"\b(more|less|greater|fewer|larger|smaller|higher|lower|better|worse)\s+than\b|"
+    r"\b(compared\s+to|relative\s+to|versus|vs\.?)\b",
+    re.IGNORECASE
+)
+_TEMPORAL_PATTERNS = re.compile(
+    r"\b(in\s+\d{4}|since\s+\d{4}|before\s+\d{4}|after\s+\d{4}|"
+    r"during\s+\d{4}|as\s+of\s+\d{4}|by\s+\d{4})\b|"
+    r"\b(yesterday|today|last\s+(?:week|month|year)|"
+    r"(?:january|february|march|april|may|june|july|august|september|october|november|december)\s+\d{4})\b",
+    re.IGNORECASE
+)
+_ATTRIBUTION_PATTERNS = re.compile(
+    r"\b(according\s+to|said|stated|reported|claimed|wrote|noted|argued)\b|"
+    r"\"[^\"]+\"\s*,?\s*(?:said|wrote|stated)",
+    re.IGNORECASE
+)
+_CAUSAL_PATTERNS = re.compile(
+    r"\b(caused|led\s+to|resulted\s+in|because\s+of|due\s+to|"
+    r"as\s+a\s+result|consequently|therefore|thus)\b",
+    re.IGNORECASE
+)
+_EXISTENCE_PATTERNS = re.compile(
+    r"\b(there\s+(?:is|are|exists?|was|were)|"
+    r"exists?\b|contains?\b|includes?\b)\b",
+    re.IGNORECASE
+)
+_RANKING_PATTERNS = re.compile(
+    r"\b(largest|smallest|biggest|highest|lowest|best|worst|"
+    r"most|least|first|last|top|bottom|leading|primary)\b",
+    re.IGNORECASE
+)
+_QUOTE_PATTERNS = re.compile(r'"[^"]{10,}"|\u201c[^\u201d]{10,}\u201d')
+
+# Source authority classification patterns
+_GOV_PATTERNS = re.compile(r"\.gov\b|government|official\s+(?:data|statistics|report)", re.IGNORECASE)
+_PEER_REVIEWED_PATTERNS = re.compile(r"\bdoi\b|journal|peer[\-\s]?review|published\s+in", re.IGNORECASE)
+_PRIMARY_PATTERNS = re.compile(r"original\s+(?:research|study|data)|primary\s+source|first[\-\s]?hand", re.IGNORECASE)
+_INDUSTRY_PATTERNS = re.compile(r"whitepaper|industry\s+report|market\s+(?:research|analysis)", re.IGNORECASE)
+
 
 def _extract_numbers_and_dates(text: str) -> Dict[str, List[str]]:
     nums = [m.group(0) for m in _NUMERIC_RE.finditer(text or "")]
     dates = [m.group(0) for m in _DATE_RE.finditer(text or "")]
     return {"numbers": nums, "dates": dates}
+
+
+def classify_claim_type(claim_text: str) -> Tuple[ClaimType, Dict[str, Any]]:
+    """
+    Classify a claim into its type based on pattern matching.
+
+    Returns:
+        Tuple of (ClaimType, extracted_values dict)
+    """
+    text = (claim_text or "").strip()
+    extracted: Dict[str, Any] = {}
+
+    # Check for quotes first (highest priority)
+    if _QUOTE_PATTERNS.search(text):
+        quotes = _QUOTE_PATTERNS.findall(text)
+        extracted["quotes"] = [q.strip('""\u201c\u201d') for q in quotes]
+        return ClaimType.QUOTE, extracted
+
+    # Check for statistics (numbers with context)
+    if _STAT_PATTERNS.search(text):
+        nums = _NUMERIC_RE.findall(text)
+        extracted["numbers"] = [n[0] if isinstance(n, tuple) else n for n in nums]
+        return ClaimType.STATISTIC, extracted
+
+    # Check for rankings
+    if _RANKING_PATTERNS.search(text):
+        return ClaimType.RANKING, extracted
+
+    # Check for comparatives
+    if _COMPARATIVE_PATTERNS.search(text):
+        return ClaimType.COMPARATIVE, extracted
+
+    # Check for temporal claims
+    if _TEMPORAL_PATTERNS.search(text):
+        dates = _DATE_RE.findall(text)
+        extracted["dates"] = dates
+        return ClaimType.TEMPORAL, extracted
+
+    # Check for attribution
+    if _ATTRIBUTION_PATTERNS.search(text):
+        return ClaimType.ATTRIBUTION, extracted
+
+    # Check for causal claims
+    if _CAUSAL_PATTERNS.search(text):
+        return ClaimType.CAUSAL, extracted
+
+    # Check for existence claims
+    if _EXISTENCE_PATTERNS.search(text):
+        return ClaimType.EXISTENCE, extracted
+
+    return ClaimType.GENERAL, extracted
+
+
+def classify_source_authority(doc: Document) -> SourceAuthority:
+    """
+    Classify the authority level of a source document.
+
+    Uses heuristics based on metadata (URL, DOI, source type).
+    """
+    metadata = getattr(doc, "metadata", {}) or {}
+    content = getattr(doc, "content", "") or ""
+
+    # Check URL patterns
+    url = str(metadata.get("url", "") or metadata.get("source_url", "") or "")
+
+    # Primary source indicators
+    if _PRIMARY_PATTERNS.search(content) or metadata.get("source_type") == "primary":
+        return SourceAuthority.PRIMARY
+
+    # Government sources
+    if _GOV_PATTERNS.search(url) or _GOV_PATTERNS.search(content):
+        return SourceAuthority.GOVERNMENT
+
+    # Peer-reviewed sources
+    if metadata.get("doi") or _PEER_REVIEWED_PATTERNS.search(content):
+        return SourceAuthority.PEER_REVIEWED
+
+    # Industry sources
+    if _INDUSTRY_PATTERNS.search(content) or metadata.get("source_type") == "whitepaper":
+        return SourceAuthority.INDUSTRY
+
+    return SourceAuthority.SECONDARY
+
+
+def classify_match_confidence(
+    claim_text: str,
+    evidence_text: str,
+    semantic_score: float = 0.0
+) -> Tuple[MatchLevel, float]:
+    """
+    Classify the match level between a claim and evidence.
+
+    Uses lexical overlap and semantic similarity to determine match confidence.
+
+    Returns:
+        Tuple of (MatchLevel, confidence_score)
+    """
+    claim = (claim_text or "").strip().lower()
+    evidence = (evidence_text or "").strip().lower()
+
+    if not claim or not evidence:
+        return MatchLevel.INTERPRETATION, 0.0
+
+    # Exact match check
+    if claim in evidence or evidence in claim:
+        return MatchLevel.EXACT, 1.0
+
+    # Calculate word overlap (Jaccard similarity)
+    claim_words = set(re.findall(r'\w+', claim))
+    evidence_words = set(re.findall(r'\w+', evidence))
+
+    if not claim_words or not evidence_words:
+        return MatchLevel.INTERPRETATION, semantic_score
+
+    intersection = claim_words & evidence_words
+    union = claim_words | evidence_words
+    jaccard = len(intersection) / len(union) if union else 0.0
+
+    # High lexical overlap suggests paraphrase
+    if jaccard >= 0.6:
+        return MatchLevel.EXACT, max(jaccard, semantic_score)
+    elif jaccard >= 0.3:
+        return MatchLevel.PARAPHRASE, max(jaccard, semantic_score)
+    else:
+        # Rely on semantic score for interpretation
+        if semantic_score >= 0.7:
+            return MatchLevel.PARAPHRASE, semantic_score
+        return MatchLevel.INTERPRETATION, max(jaccard, semantic_score)
+
+
+def determine_verification_status(
+    claim: Claim,
+    evidence_snippets: List[Evidence],
+    nli_label: Optional[str] = None,
+    nli_confidence: float = 0.0,
+    numeric_match: Optional[bool] = None,
+    quote_match: Optional[bool] = None,
+    doc_only_mode: bool = False,
+) -> Tuple[VerificationStatus, float, str]:
+    """
+    Decision tree for determining verification status.
+
+    Args:
+        claim: The claim being verified
+        evidence_snippets: Evidence found for the claim
+        nli_label: NLI model label if available (entailment/contradiction/neutral)
+        nli_confidence: NLI model confidence score
+        numeric_match: Whether numeric values match (True/False/None if not checked)
+        quote_match: Whether quoted text matches source (True/False/None if not a quote)
+        doc_only_mode: If True, require evidence from documents
+
+    Returns:
+        Tuple of (VerificationStatus, confidence, rationale)
+    """
+    # No evidence at all
+    if not evidence_snippets:
+        if doc_only_mode:
+            return VerificationStatus.CITATION_NOT_FOUND, 0.0, "No supporting documents found"
+        return VerificationStatus.UNVERIFIED, 0.0, "No evidence available"
+
+    # Quote verification
+    if claim.claim_type == ClaimType.QUOTE:
+        if quote_match is True:
+            return VerificationStatus.VERIFIED, 0.95, "Quote matches source"
+        elif quote_match is False:
+            return VerificationStatus.MISQUOTED, 0.9, "Quote does not match source text"
+
+    # Numeric verification
+    if claim.claim_type == ClaimType.STATISTIC:
+        if numeric_match is False:
+            return VerificationStatus.NUMERICAL_ERROR, 0.85, "Numeric values do not match source"
+        elif numeric_match is True:
+            # Continue to check NLI for context
+            pass
+
+    # NLI-based verification
+    if nli_label:
+        nli_label_lower = nli_label.lower()
+        if nli_label_lower == "entailment" or nli_label_lower == "supported":
+            if nli_confidence >= 0.8:
+                return VerificationStatus.VERIFIED, nli_confidence, f"NLI entailment ({nli_confidence:.2f})"
+            elif nli_confidence >= 0.6:
+                return VerificationStatus.VERIFIED, nli_confidence, f"NLI entailment (moderate: {nli_confidence:.2f})"
+        elif nli_label_lower == "contradiction" or nli_label_lower == "refuted":
+            if nli_confidence >= 0.7:
+                return VerificationStatus.REFUTED, nli_confidence, f"NLI contradiction ({nli_confidence:.2f})"
+        # Check for potentially misleading: high retrieval score but NLI neutral
+        # This indicates evidence exists but doesn't clearly support the claim,
+        # which may suggest the claim is technically related but deceptive in context
+        elif nli_label_lower == "neutral" and nli_confidence >= 0.6:
+            max_retrieval_score = max((e.score for e in evidence_snippets), default=0.0)
+            if max_retrieval_score >= 0.7:
+                return VerificationStatus.MISLEADING, 0.6, "Evidence found but context may be misleading"
+        # Neutral or low confidence
+        if nli_confidence < 0.5:
+            return VerificationStatus.UNVERIFIED, nli_confidence, "Insufficient NLI confidence"
+
+    # Fallback: check evidence quality
+    max_score = max((e.score for e in evidence_snippets), default=0.0)
+    max_authority = max((e.authority.value for e in evidence_snippets), default=1)
+
+    if max_score >= 0.8 and max_authority >= 3:
+        return VerificationStatus.VERIFIED, max_score, "High-quality evidence from authoritative source"
+    elif max_score >= 0.6:
+        return VerificationStatus.VERIFIED, max_score * 0.9, "Moderate evidence support"
+    elif max_score >= 0.3:
+        return VerificationStatus.UNVERIFIED, max_score, "Weak evidence - needs manual review"
+
+    if doc_only_mode:
+        return VerificationStatus.HALLUCINATION, 0.7, "No supporting evidence in provided documents"
+
+    return VerificationStatus.UNVERIFIED, max_score, "Insufficient evidence"
 
 
 def _contains_any(hay: str, needles: List[str]) -> bool:
@@ -125,7 +465,13 @@ def _first_n_snippets(docs: List[Document], n: int = 3, snippet_len: int = 480) 
     for d in docs[:n]:
         txt = d.content or ""
         snip = txt[:snippet_len] + ("..." if len(txt) > snippet_len else "")
-        out.append(Evidence(doc_id=getattr(d, "id", ""), snippet=snip, score=getattr(d, "score", 0.0)))
+        authority = classify_source_authority(d)
+        out.append(Evidence(
+            doc_id=getattr(d, "id", ""),
+            snippet=snip,
+            score=getattr(d, "score", 0.0),
+            authority=authority
+        ))
     return out
 
 
@@ -433,6 +779,7 @@ class HybridClaimVerifier:
     def __init__(self, analyze_fn: Any, nli_model: Optional[str] = None):
         self._analyze = analyze_fn
         self._nli = None
+        self._nli_lock = asyncio.Lock()
         # Try to initialize local NLI model if available
         try:
             from transformers import pipeline  # type: ignore
@@ -450,12 +797,13 @@ class HybridClaimVerifier:
             self._nli = None
 
     async def _get_nli(self):
-        if asyncio.isfuture(self._nli) or hasattr(self._nli, "__await__"):
-            try:
-                self._nli = await self._nli  # type: ignore
-            except Exception:
-                self._nli = None
-        return self._nli
+        async with self._nli_lock:
+            if asyncio.isfuture(self._nli) or hasattr(self._nli, "__await__"):
+                try:
+                    self._nli = await self._nli  # type: ignore
+                except Exception:
+                    self._nli = None
+            return self._nli
 
     @staticmethod
     def _nli_best_label(nli_scores: List[Dict[str, Any]]) -> Tuple[str, float]:
@@ -475,9 +823,15 @@ class HybridClaimVerifier:
         mode: str = "hybrid",
         budget: Optional[ClaimsJobBudget] = None,
         job_context: Optional[ClaimsJobContext] = None,
+        doc_only_mode: bool = False,
+        numeric_precision_mode: str = "standard",
     ) -> ClaimVerification:
         claim_text = claim.text.strip()
         nums_dates = _extract_numbers_and_dates(claim_text)
+
+        # Classify claim type if not already done
+        if claim.claim_type == ClaimType.GENERAL:
+            claim.claim_type, claim.extracted_values = classify_claim_type(claim_text)
 
         candidate_docs: List[Document] = []
         try:
@@ -526,18 +880,25 @@ class HybridClaimVerifier:
                     if best_tuple[1] >= conf_threshold:
                         # Populate citations only for supported/refuted with best-effort exact offsets
                         cit: List[Dict[str, Any]] = []
+                        nli_status = VerificationStatus.VERIFIED if best_tuple[0] == "supported" else VerificationStatus.REFUTED
                         if best_tuple[0] in {"supported", "refuted"}:
                             for ev in evidence_snips:
                                 full = _doc_map.get(ev.doc_id, "")
                                 s, e = _find_offsets(full, claim_text, ev.snippet)
                                 cit.append({"doc_id": ev.doc_id, "start": int(s), "end": int(e)})
+                        # Classify match level
+                        best_ev_text = evidence_snips[best_tuple[2]].snippet if best_tuple[2] >= 0 else ""
+                        match_lvl, _ = classify_match_confidence(claim_text, best_ev_text, best_tuple[1])
+                        max_auth = max((ev.authority for ev in evidence_snips), default=SourceAuthority.SECONDARY)
                         return ClaimVerification(
                             claim=claim,
-                            label=best_tuple[0],
+                            status=nli_status,
                             confidence=best_tuple[1],
                             evidence=evidence_snips,
                             citations=cit,
                             rationale=f"NLI-{best_tuple[0]} {best_tuple[1]:.2f}",
+                            match_level=match_lvl,
+                            source_authority=max_auth,
                         )
                     else:
                         nli_decision = best_tuple
@@ -547,14 +908,14 @@ class HybridClaimVerifier:
                     else:
                         logger.warning(f"NLI verification failed under nli mode: {e}")
 
-            # If mode is strict NLI and we didn't return, finish with NEI (no LLM fallback)
+            # If mode is strict NLI and we didn't return, finish with UNVERIFIED (no LLM fallback)
             if mode == "nli":
                 conf = 0.0
                 if nli_decision is not None:
                     conf = float(nli_decision[1])
                 return ClaimVerification(
                     claim=claim,
-                    label="nei",
+                    status=VerificationStatus.UNVERIFIED,
                     confidence=conf,
                     evidence=evidence_snips,
                     citations=[],
@@ -591,7 +952,7 @@ class HybridClaimVerifier:
             )
             return ClaimVerification(
                 claim=claim,
-                label="nei",
+                status=VerificationStatus.UNVERIFIED,
                 confidence=0.0,
                 evidence=evidence_snips,
                 citations=[],
@@ -608,7 +969,7 @@ class HybridClaimVerifier:
                 )
                 return ClaimVerification(
                     claim=claim,
-                    label="nei",
+                    status=VerificationStatus.UNVERIFIED,
                     confidence=0.0,
                     evidence=evidence_snips,
                     citations=[],
@@ -694,21 +1055,82 @@ class HybridClaimVerifier:
             except Exception:
                 pass
             logger.warning(f"LLM judge failed; defaulting to NEI: {e}")
+        # Check numeric precision for statistic claims
+        numeric_match: Optional[bool] = None
+        if claim.claim_type == ClaimType.STATISTIC and claim.extracted_values.get("numbers"):
+            try:
+                from tldw_Server_API.app.core.RAG.rag_service.guardrails import check_numeric_precision
+                num_result = check_numeric_precision(
+                    claim_text,
+                    candidate_docs,
+                    mode=numeric_precision_mode,
+                )
+                numeric_match = num_result.all_within_tolerance
+            except Exception:
+                pass
+
+        # Check quote match for quote claims
+        quote_match: Optional[bool] = None
+        if claim.claim_type == ClaimType.QUOTE:
+            quotes = claim.extracted_values.get("quotes", [])
+            if quotes:
+                quote_match = False
+                combined_evidence = " ".join(ev.snippet for ev in evidence_snips)
+                for q in quotes:
+                    if q.lower() in combined_evidence.lower():
+                        quote_match = True
+                        break
+
+        # Use decision tree to determine final status
+        status, decision_conf, decision_rationale = determine_verification_status(
+            claim=claim,
+            evidence_snippets=evidence_snips,
+            nli_label=label,
+            nli_confidence=confidence,
+            numeric_match=numeric_match,
+            quote_match=quote_match,
+            doc_only_mode=doc_only_mode,
+        )
+
+        # Override with LLM-based result if it's more confident
+        if label in {"supported", "refuted"} and confidence > decision_conf:
+            if label == "supported":
+                status = VerificationStatus.VERIFIED
+            else:
+                status = VerificationStatus.REFUTED
+            decision_rationale = rationale or decision_rationale
+            decision_conf = confidence
+
         # Construct citations for traceability (doc IDs with snippet offsets)
         citations: List[Dict[str, Any]] = []
-        if label in {"supported", "refuted"}:
+        if status in {VerificationStatus.VERIFIED, VerificationStatus.REFUTED, VerificationStatus.MISQUOTED, VerificationStatus.NUMERICAL_ERROR}:
             for ev in evidence_snips:
                 full = _doc_map.get(ev.doc_id, "")
                 s, e = _find_offsets(full, claim_text, ev.snippet)
                 citations.append({"doc_id": ev.doc_id, "start": int(s), "end": int(e)})
 
+        # Classify match level
+        best_ev_text = evidence_snips[0].snippet if evidence_snips else ""
+        match_lvl, _ = classify_match_confidence(claim_text, best_ev_text, decision_conf)
+        max_auth = max((ev.authority for ev in evidence_snips), default=SourceAuthority.SECONDARY)
+
+        # Check if external knowledge is required
+        requires_external = (
+            status == VerificationStatus.UNVERIFIED and
+            not evidence_snips and
+            doc_only_mode
+        )
+
         return ClaimVerification(
             claim=claim,
-            label=label,
-            confidence=max(0.0, min(1.0, confidence)),
+            status=status,
+            confidence=max(0.0, min(1.0, decision_conf)),
             evidence=evidence_snips,
             citations=citations,
-            rationale=rationale,
+            rationale=decision_rationale,
+            match_level=match_lvl,
+            source_authority=max_auth,
+            requires_external_knowledge=requires_external,
         )
 
 
@@ -939,6 +1361,14 @@ class ClaimsEngine:
         precision = supported / total
         coverage = (supported + refuted) / total
 
+        # Count by new status values
+        verified_count = sum(1 for v in verifications if v.status == VerificationStatus.VERIFIED)
+        refuted_count = sum(1 for v in verifications if v.status == VerificationStatus.REFUTED)
+        hallucination_count = sum(1 for v in verifications if v.status == VerificationStatus.HALLUCINATION)
+        numerical_error_count = sum(1 for v in verifications if v.status == VerificationStatus.NUMERICAL_ERROR)
+        misquoted_count = sum(1 for v in verifications if v.status == VerificationStatus.MISQUOTED)
+        unverified_count = sum(1 for v in verifications if v.status == VerificationStatus.UNVERIFIED)
+
         claims_out: List[Dict[str, Any]] = []
         for v in verifications:
             claims_out.append(
@@ -946,10 +1376,20 @@ class ClaimsEngine:
                     "id": v.claim.id,
                     "text": v.claim.text,
                     "span": list(v.claim.span) if v.claim.span else None,
-                    "label": v.label,
+                    "claim_type": v.claim.claim_type.value,
+                    "status": v.status.value,
+                    "label": v.label,  # Backward compatibility
                     "confidence": v.confidence,
+                    "match_level": v.match_level.value,
+                    "source_authority": v.source_authority.value,
+                    "requires_external_knowledge": v.requires_external_knowledge,
                     "evidence": [
-                        {"doc_id": e.doc_id, "snippet": e.snippet, "score": e.score} for e in v.evidence
+                        {
+                            "doc_id": e.doc_id,
+                            "snippet": e.snippet,
+                            "score": e.score,
+                            "authority": e.authority.value,
+                        } for e in v.evidence
                     ],
                     "citations": v.citations,
                     "rationale": v.rationale,
@@ -964,8 +1404,236 @@ class ClaimsEngine:
                 "nei": nei,
                 "precision": precision,
                 "coverage": coverage,
-                # claim_faithfulness: fraction of supported among all verified claims
                 "claim_faithfulness": (supported / total) if total else 0.0,
+                # Enhanced summary with new status breakdown
+                "verified": verified_count,
+                "hallucination": hallucination_count,
+                "numerical_error": numerical_error_count,
+                "misquoted": misquoted_count,
+                "unverified": unverified_count,
+                "verification_rate": verified_count / total if total else 0.0,
                 "budget": (budget.snapshot() if budget is not None else None),
             },
+            # Raw ClaimVerification objects for full report generation
+            "verifications": verifications,
         }
+
+    async def extract_claims_only(
+        self,
+        answer: str,
+        claim_extractor: str = "auto",
+        claims_max: int = 25,
+        job_budget: Optional[ClaimsJobBudget] = None,
+        job_context: Optional[ClaimsJobContext] = None,
+    ) -> ExtractionResult:
+        """
+        Extract claims from text without verification (first pass of two-pass architecture).
+
+        Args:
+            answer: Text to extract claims from
+            claim_extractor: Extraction strategy ("auto", "ner", "aps", "llm")
+            claims_max: Maximum claims to extract
+            job_budget: Optional budget constraints
+            job_context: Optional job context for logging
+
+        Returns:
+            ExtractionResult with claims and extraction metadata
+        """
+        start_time = time.time()
+
+        if not answer or not isinstance(answer, str):
+            return ExtractionResult(
+                claims=[],
+                extractor_mode="none",
+                extraction_time_s=0.0,
+                total_input_chars=0,
+            )
+
+        budget = job_budget
+        if budget is None:
+            try:
+                from tldw_Server_API.app.core.config import settings as _settings
+            except Exception:
+                _settings = {}
+            budget = resolve_claims_job_budget(settings=_settings)
+
+        claims: List[Claim] = []
+        extractor_mode = (claim_extractor or "auto").strip().lower()
+
+        # Use existing extraction logic based on mode
+        if extractor_mode == "ner":
+            try:
+                import spacy
+                try:
+                    from tldw_Server_API.app.core.config import settings as _settings
+                except Exception:
+                    _settings = {}
+                model_name = str(_settings.get("CLAIMS_LOCAL_NER_MODEL", "en_core_web_sm") or "en_core_web_sm")
+                try:
+                    nlp = spacy.load(model_name)
+                except Exception:
+                    nlp = spacy.blank("en")
+                    if not nlp.has_pipe("sentencizer"):
+                        nlp.add_pipe("sentencizer")
+                doc = nlp(answer)
+                sents_text: List[str] = []
+                for sent in getattr(doc, "sents", [doc]):
+                    has_ent = any(getattr(ent, "label_", "") for ent in getattr(sent, "ents", []))
+                    if has_ent:
+                        st = sent.text.strip()
+                        if len(st) >= 12:
+                            sents_text.append(st)
+                    if len(sents_text) >= claims_max:
+                        break
+                claims = [Claim(id=f"c{i+1}", text=t) for i, t in enumerate(sents_text[:claims_max])]
+                if not claims:
+                    claims = await self.extractor_llm.extract(answer, max_claims=claims_max, budget=budget, job_context=job_context)
+            except Exception as e:
+                logger.warning(f"NER extractor failed: {e}")
+                claims = await self.extractor_llm.extract(answer, max_claims=claims_max, budget=budget, job_context=job_context)
+        elif extractor_mode == "aps":
+            try:
+                from tldw_Server_API.app.core.Chunking.strategies.propositions import PropositionChunkingStrategy
+                try:
+                    from tldw_Server_API.app.core.config import settings as _settings
+                except Exception:
+                    _settings = {}
+                provider = str(_settings.get("CLAIMS_LLM_PROVIDER", "")).strip() or str(_settings.get("default_api", "openai")).strip()
+                model_override = str(_settings.get("CLAIMS_LLM_MODEL", "")).strip() or None
+                temperature = float(_settings.get("CLAIMS_LLM_TEMPERATURE", 0.2))
+                strategy = PropositionChunkingStrategy(
+                    language="en",
+                    llm_call_func=self._analyze,
+                    llm_config={"window_chars": 1200, "api_name": provider, "temp": temperature, "model_override": model_override},
+                )
+                prop_chunks = strategy.chunk(text=answer, max_size=1, overlap=0, engine="llm", proposition_prompt_profile="gemma_aps")
+                for i, ptxt in enumerate((prop_chunks or [])[:claims_max]):
+                    if isinstance(ptxt, str) and ptxt.strip():
+                        claims.append(Claim(id=f"c{i+1}", text=ptxt.strip()))
+            except Exception as e:
+                logger.warning(f"APS extractor failed: {e}")
+                claims = await self.extractor_llm.extract(answer, max_claims=claims_max, budget=budget, job_context=job_context)
+        else:
+            claims = await self.extractor_llm.extract(answer, max_claims=claims_max, budget=budget, job_context=job_context)
+
+        # Classify all claims
+        for claim in claims:
+            if claim.claim_type == ClaimType.GENERAL:
+                claim.claim_type, claim.extracted_values = classify_claim_type(claim.text)
+
+        return ExtractionResult(
+            claims=claims,
+            extractor_mode=extractor_mode,
+            extraction_time_s=time.time() - start_time,
+            total_input_chars=len(answer),
+        )
+
+    async def verify_claims_only(
+        self,
+        claims: List[Claim],
+        query: str,
+        documents: List[Document],
+        claim_verifier: str = "hybrid",
+        claims_top_k: int = 5,
+        claims_conf_threshold: float = 0.7,
+        claims_concurrency: int = 8,
+        retrieve_fn: Optional[Any] = None,
+        nli_model: Optional[str] = None,
+        job_budget: Optional[ClaimsJobBudget] = None,
+        job_context: Optional[ClaimsJobContext] = None,
+        doc_only_mode: bool = False,
+        numeric_precision_mode: str = "standard",
+    ) -> VerificationResult:
+        """
+        Verify pre-extracted claims against documents (second pass of two-pass architecture).
+
+        Args:
+            claims: List of claims to verify
+            query: Original query context
+            documents: Source documents for verification
+            claim_verifier: Verification strategy ("hybrid", "nli", "llm")
+            claims_top_k: Top-K evidence per claim
+            claims_conf_threshold: Confidence threshold
+            claims_concurrency: Max parallel verifications
+            retrieve_fn: Optional retrieval function
+            nli_model: Optional NLI model override
+            job_budget: Budget constraints
+            job_context: Job context for logging
+            doc_only_mode: Only accept evidence from provided documents
+            numeric_precision_mode: "standard", "strict", or "academic"
+
+        Returns:
+            VerificationResult with verifications and summary
+        """
+        start_time = time.time()
+
+        if not claims:
+            return VerificationResult(
+                verifications=[],
+                verification_time_s=0.0,
+                summary={"total": 0, "verified": 0},
+            )
+
+        budget = job_budget
+        if budget is None:
+            try:
+                from tldw_Server_API.app.core.config import settings as _settings
+            except Exception:
+                _settings = {}
+            budget = resolve_claims_job_budget(settings=_settings)
+
+        if nli_model:
+            self.verifier = HybridClaimVerifier(self._analyze, nli_model=nli_model)
+
+        async def _verify_one(c: Claim) -> ClaimVerification:
+            return await self.verifier.verify(
+                claim=c,
+                query=query,
+                base_documents=documents,
+                retrieve_fn=retrieve_fn,
+                top_k=claims_top_k,
+                conf_threshold=claims_conf_threshold,
+                mode=(claim_verifier or "hybrid").strip().lower(),
+                budget=budget,
+                job_context=job_context,
+                doc_only_mode=doc_only_mode,
+                numeric_precision_mode=numeric_precision_mode,
+            )
+
+        max_conc = max(1, min(32, claims_concurrency))
+        try:
+            provider, model_override, _ = _resolve_claims_llm_config()
+            budget_ratio = budget.remaining_ratio() if budget is not None else None
+            max_conc = suggest_claims_concurrency(provider=provider, model=model_override or "", requested=max_conc, budget_ratio=budget_ratio)
+        except Exception:
+            pass
+
+        sem = asyncio.Semaphore(max_conc)
+
+        async def _bounded_verify(c: Claim) -> ClaimVerification:
+            async with sem:
+                return await _verify_one(c)
+
+        verifications = await asyncio.gather(*[_bounded_verify(c) for c in claims])
+
+        # Build summary
+        total = len(verifications)
+        verified = sum(1 for v in verifications if v.status == VerificationStatus.VERIFIED)
+        refuted = sum(1 for v in verifications if v.status == VerificationStatus.REFUTED)
+        hallucination = sum(1 for v in verifications if v.status == VerificationStatus.HALLUCINATION)
+
+        summary = {
+            "total": total,
+            "verified": verified,
+            "refuted": refuted,
+            "hallucination": hallucination,
+            "verification_rate": verified / total if total else 0.0,
+            "supported": sum(1 for v in verifications if v.label == "supported"),
+            "nei": sum(1 for v in verifications if v.label == "nei"),
+        }
+
+        return VerificationResult(
+            verifications=list(verifications),
+            verification_time_s=time.time() - start_time,
+            summary=summary,
+        )

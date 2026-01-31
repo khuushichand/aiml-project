@@ -327,6 +327,8 @@ paths:
           $ref: '#/components/responses/NotFound'
         '500':
           $ref: '#/components/responses/InternalError'
+
+  /chatbooks/import/jobs/{job_id}/cancel:
     delete:
       tags:
         - Jobs

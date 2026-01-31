@@ -176,5 +176,5 @@ python -m uvicorn tldw_Server_API.app.main:app --reload
 
 - [Installation & Setup Guide](Installation-Setup-Guide.md)
 - [Authentication Setup](Authentication_Setup.md)
-- [API Documentation](../API-related/index.md)
+- [API Documentation](../API-related/API_README.md)
 - [TTS Getting Started](TTS_Getting_Started.md)

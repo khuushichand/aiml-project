@@ -16,6 +16,12 @@ from tldw_Server_API.app.core.Chat.prompt_template_manager import apply_template
 from tldw_Server_API.app.core.exceptions import AdapterError
 from tldw_Server_API.app.core.Workflows.adapters._registry import registry
 from tldw_Server_API.app.core.Workflows.adapters._common import extract_openai_content
+from tldw_Server_API.app.core.Workflows.adapters.llm._config import (
+    LLMConfig,
+    LLMWithToolsConfig,
+    LLMCompareConfig,
+    LLMCritiqueConfig,
+)
 
 
 @registry.register(
@@ -24,6 +30,7 @@ from tldw_Server_API.app.core.Workflows.adapters._common import extract_openai_c
     description="Execute an LLM chat completion via the adapter registry",
     parallelizable=True,
     tags=["core", "ai"],
+    config_model=LLMConfig,
 )
 async def run_llm_adapter(config: Dict[str, Any], context: Dict[str, Any]) -> Dict[str, Any]:
     """Execute an LLM chat completion via the adapter registry.
@@ -227,6 +234,7 @@ async def run_llm_adapter(config: Dict[str, Any], context: Dict[str, Any]) -> Di
     description="LLM call that can invoke defined tools",
     parallelizable=False,
     tags=["ai", "tools", "agentic"],
+    config_model=LLMWithToolsConfig,
 )
 async def run_llm_with_tools_adapter(config: Dict[str, Any], context: Dict[str, Any]) -> Dict[str, Any]:
     """LLM call that can invoke defined tools.
@@ -332,6 +340,7 @@ async def run_llm_with_tools_adapter(config: Dict[str, Any], context: Dict[str, 
     description="Run same prompt through multiple LLMs and compare",
     parallelizable=True,
     tags=["ai", "comparison"],
+    config_model=LLMCompareConfig,
 )
 async def run_llm_compare_adapter(config: Dict[str, Any], context: Dict[str, Any]) -> Dict[str, Any]:
     """Run same prompt through multiple LLMs and compare.
@@ -425,6 +434,7 @@ async def run_llm_compare_adapter(config: Dict[str, Any], context: Dict[str, Any
     description="Run LLM critique on content (Constitutional AI pattern)",
     parallelizable=True,
     tags=["ai", "evaluation"],
+    config_model=LLMCritiqueConfig,
 )
 async def run_llm_critique_adapter(config: Dict[str, Any], context: Dict[str, Any]) -> Dict[str, Any]:
     """Run LLM critique on content (Constitutional AI pattern).

@@ -7,8 +7,22 @@ This module includes adapters for knowledge operations:
 - chunking: Chunk text content
 - claims_extract: Extract claims from text
 - voice_intent: Voice intent detection
-
-Adapters in this module are registered via the legacy bridge during migration.
 """
 
-# Adapters are registered via _legacy_bridge.py
+from tldw_Server_API.app.core.Workflows.adapters.knowledge.crud import (
+    run_notes_adapter,
+    run_prompts_adapter,
+    run_collections_adapter,
+    run_chunking_adapter,
+    run_claims_extract_adapter,
+    run_voice_intent_adapter,
+)
+
+__all__ = [
+    "run_notes_adapter",
+    "run_prompts_adapter",
+    "run_collections_adapter",
+    "run_chunking_adapter",
+    "run_claims_extract_adapter",
+    "run_voice_intent_adapter",
+]

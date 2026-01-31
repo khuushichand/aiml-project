@@ -19,6 +19,12 @@ from tldw_Server_API.app.core.Workflows.adapters._common import (
     extract_openai_content,
     resolve_context_user_id,
 )
+from tldw_Server_API.app.core.Workflows.adapters.evaluation._config import (
+    EvaluationsConfig,
+    QuizEvaluateConfig,
+    EvalReadabilityConfig,
+    ContextWindowCheckConfig,
+)
 from tldw_Server_API.app.core.DB_Management.db_path_utils import DatabasePaths
 from tldw_Server_API.app.core.Chat.prompt_template_manager import apply_template_to_string
 
@@ -29,6 +35,7 @@ from tldw_Server_API.app.core.Chat.prompt_template_manager import apply_template
     description="Run LLM evaluations (geval, rag, response_quality)",
     parallelizable=True,
     tags=["evaluation", "testing"],
+    config_model=EvaluationsConfig,
 )
 async def run_evaluations_adapter(config: Dict[str, Any], context: Dict[str, Any]) -> Dict[str, Any]:
     """Run LLM evaluations (geval, rag, response_quality) within a workflow step.
@@ -302,6 +309,7 @@ async def run_evaluations_adapter(config: Dict[str, Any], context: Dict[str, Any
     description="Evaluate quiz answers and provide feedback",
     parallelizable=True,
     tags=["evaluation", "education"],
+    config_model=QuizEvaluateConfig,
 )
 async def run_quiz_evaluate_adapter(config: Dict[str, Any], context: Dict[str, Any]) -> Dict[str, Any]:
     """Evaluate quiz answers and provide feedback."""
@@ -358,6 +366,7 @@ async def run_quiz_evaluate_adapter(config: Dict[str, Any], context: Dict[str, A
     description="Calculate readability scores for text",
     parallelizable=True,
     tags=["evaluation", "readability"],
+    config_model=EvalReadabilityConfig,
 )
 async def run_eval_readability_adapter(config: Dict[str, Any], context: Dict[str, Any]) -> Dict[str, Any]:
     """Calculate readability scores for text."""
@@ -416,6 +425,7 @@ async def run_eval_readability_adapter(config: Dict[str, Any], context: Dict[str
     description="Check if content fits in model context window",
     parallelizable=True,
     tags=["evaluation", "utility"],
+    config_model=ContextWindowCheckConfig,
 )
 async def run_context_window_check_adapter(config: Dict[str, Any], context: Dict[str, Any]) -> Dict[str, Any]:
     """Check if content fits in model context window.

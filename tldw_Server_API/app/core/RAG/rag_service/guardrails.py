@@ -13,7 +13,7 @@ run in constrained environments and unit tests without network access.
 from __future__ import annotations
 
 import re
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any, Dict, List, Tuple, Set, Optional
 from html.parser import HTMLParser
 
@@ -211,10 +211,23 @@ def _extract_numeric_tokens(text: str) -> Set[str]:
 
 
 @dataclass
+class NumericDeviation:
+    """Represents a numeric deviation between claim and source."""
+    claim_value: str
+    source_value: Optional[str]
+    deviation_percent: Optional[float]
+    is_match: bool
+
+
+@dataclass
 class NumericFidelityResult:
+    """Result of numeric fidelity check."""
     present: Set[str]
     missing: Set[str]
     union_source_numbers: Set[str]
+    deviations: List[NumericDeviation] = field(default_factory=list)
+    precision_mode: str = "standard"
+    all_within_tolerance: bool = True
 
 
 def check_numeric_fidelity(answer: str, docs: List[Document]) -> NumericFidelityResult:
@@ -252,6 +265,157 @@ def check_numeric_fidelity(answer: str, docs: List[Document]) -> NumericFidelity
             present.add(n)
     missing = answer_nums - present
     return NumericFidelityResult(present=present, missing=missing, union_source_numbers=union)
+
+
+def _parse_numeric_value(token: str) -> Optional[float]:
+    """Parse a numeric token to a float value."""
+    if not token:
+        return None
+    try:
+        t = token.strip().lower()
+        unit = ""
+        if t.endswith(("%", "k", "m", "b")):
+            unit = t[-1]
+            t = t[:-1]
+        # Strip currency and separators
+        while t and t[0] in "$€£¥₩₹":
+            t = t[1:]
+        t = t.replace(",", "").replace("_", "")
+        val = float(t)
+        if unit == "k":
+            val *= 1_000
+        elif unit == "m":
+            val *= 1_000_000
+        elif unit == "b":
+            val *= 1_000_000_000
+        return val
+    except Exception:
+        return None
+
+
+def check_numeric_precision(
+    answer: str,
+    docs: List[Document],
+    tolerance_percent: float = 0.0,
+    mode: str = "standard"
+) -> NumericFidelityResult:
+    """
+    Check numeric precision with configurable tolerance.
+
+    Args:
+        answer: The generated answer text
+        docs: Source documents
+        tolerance_percent: Allowed deviation percentage (0 = exact match required)
+        mode: "standard" (5% tolerance), "strict" (1% tolerance), "academic" (0% tolerance)
+
+    Returns:
+        NumericFidelityResult with deviation details
+    """
+    # Set tolerance based on mode
+    if mode == "academic":
+        tolerance = 0.0
+    elif mode == "strict":
+        tolerance = 1.0
+    else:  # standard
+        tolerance = tolerance_percent if tolerance_percent > 0 else 5.0
+
+    answer_nums = _extract_numeric_tokens(answer or "")
+    source_nums = set()
+    source_values: Dict[str, float] = {}
+
+    for d in docs or []:
+        doc_nums = _extract_numeric_tokens(getattr(d, "content", ""))
+        source_nums |= doc_nums
+        for tok in doc_nums:
+            val = _parse_numeric_value(tok)
+            if val is not None:
+                source_values[tok] = val
+
+    present = set()
+    missing = set()
+    deviations: List[NumericDeviation] = []
+    all_within_tolerance = True
+
+    for ans_tok in answer_nums:
+        ans_val = _parse_numeric_value(ans_tok)
+
+        # Check for exact token match first
+        if ans_tok in source_nums:
+            present.add(ans_tok)
+            deviations.append(NumericDeviation(
+                claim_value=ans_tok,
+                source_value=ans_tok,
+                deviation_percent=0.0,
+                is_match=True
+            ))
+            continue
+
+        # Check for value match within tolerance
+        if ans_val is not None:
+            found_match = False
+            best_deviation = None
+            best_source = None
+
+            for src_tok, src_val in source_values.items():
+                if src_val == 0:
+                    if ans_val == 0:
+                        found_match = True
+                        best_deviation = 0.0
+                        best_source = src_tok
+                        break
+                    continue
+
+                deviation = abs((ans_val - src_val) / src_val) * 100
+                if deviation <= tolerance:
+                    found_match = True
+                    if best_deviation is None or deviation < best_deviation:
+                        best_deviation = deviation
+                        best_source = src_tok
+
+            if found_match:
+                present.add(ans_tok)
+                deviations.append(NumericDeviation(
+                    claim_value=ans_tok,
+                    source_value=best_source,
+                    deviation_percent=best_deviation,
+                    is_match=True
+                ))
+            else:
+                missing.add(ans_tok)
+                all_within_tolerance = False
+                # Find closest source value for reporting
+                closest_dev = None
+                closest_src = None
+                for src_tok, src_val in source_values.items():
+                    if src_val != 0:
+                        dev = abs((ans_val - src_val) / src_val) * 100
+                        if closest_dev is None or dev < closest_dev:
+                            closest_dev = dev
+                            closest_src = src_tok
+                deviations.append(NumericDeviation(
+                    claim_value=ans_tok,
+                    source_value=closest_src,
+                    deviation_percent=closest_dev,
+                    is_match=False
+                ))
+        else:
+            missing.add(ans_tok)
+            all_within_tolerance = False
+            deviations.append(NumericDeviation(
+                claim_value=ans_tok,
+                source_value=None,
+                deviation_percent=None,
+                is_match=False
+            ))
+
+    return NumericFidelityResult(
+        present=present,
+        missing=missing,
+        union_source_numbers=source_nums,
+        deviations=deviations,
+        precision_mode=mode,
+        all_within_tolerance=all_within_tolerance
+    )
 
 
 # -------------------- Hard citation mapping --------------------

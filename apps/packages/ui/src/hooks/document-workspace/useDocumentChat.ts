@@ -1,7 +1,13 @@
 import { useEffect, useRef, useCallback } from "react"
 import { useStoreMessageOption } from "@/store/option"
-import type { Knowledge, State } from "@/store/option"
+import type { Knowledge, State, Message as StoreMessage } from "@/store/option"
 import { useConnectionStore } from "@/store/connection"
+import {
+  saveHistory,
+  saveMessage,
+  getHistoryByDocId,
+  getFullChatData
+} from "@/db/dexie/helpers"
 
 type DocumentChatSession = Pick<
   State,
@@ -43,6 +49,130 @@ const createEmptySession = (): DocumentChatSession => ({
   replyTarget: null,
   actionInfo: null
 })
+
+/**
+ * Save a document chat session to IndexedDB for persistence across page refreshes.
+ * Creates a new history entry if one doesn't exist, otherwise updates existing.
+ */
+async function persistDocumentSession(
+  mediaId: number,
+  session: DocumentChatSession
+): Promise<string | null> {
+  // Don't persist empty sessions
+  if (session.messages.length === 0) {
+    return session.historyId
+  }
+
+  const docId = `document:${mediaId}`
+
+  try {
+    // Check if we already have a history ID for this session
+    let historyId = session.historyId
+
+    if (!historyId) {
+      // Check if there's an existing history for this document
+      const existingHistory = await getHistoryByDocId(docId)
+      if (existingHistory) {
+        historyId = existingHistory.id
+      } else {
+        // Create new history entry
+        const title = session.messages[0]?.content?.slice(0, 50) || "Document Chat"
+        const newHistory = await saveHistory(
+          title,
+          true, // is_rag
+          "web-ui",
+          docId,
+          session.serverChatId ?? undefined
+        )
+        historyId = newHistory.id
+      }
+    }
+
+    // Save each message that doesn't have a persisted flag
+    for (const msg of session.messages) {
+      // Skip if message is already persisted (check by looking for a generated ID pattern)
+      if (msg.id && !msg.id.startsWith("temp_")) {
+        continue
+      }
+
+      await saveMessage({
+        history_id: historyId,
+        name: msg.name || "user",
+        role: msg.role,
+        content: msg.content,
+        images: msg.images || [],
+        source: msg.sources,
+        documents: msg.documents
+      })
+    }
+
+    return historyId
+  } catch (error) {
+    console.error("Failed to persist document chat session:", error)
+    return session.historyId
+  }
+}
+
+/**
+ * Load a document chat session from IndexedDB.
+ */
+async function loadDocumentSession(
+  mediaId: number
+): Promise<DocumentChatSession | null> {
+  const docId = `document:${mediaId}`
+
+  try {
+    const history = await getHistoryByDocId(docId)
+    if (!history) {
+      return null
+    }
+
+    // Load full chat data including messages
+    const chatData = await getFullChatData(history.id)
+    if (!chatData) {
+      return null
+    }
+
+    const { historyInfo, messages } = chatData
+
+    // Convert DB messages to store message format
+    const storeMessages: StoreMessage[] = messages.map((msg) => ({
+      id: msg.id,
+      role: msg.role as "user" | "assistant" | "system",
+      content: msg.content,
+      name: msg.name,
+      images: msg.images || [],
+      sources: msg.source,
+      documents: msg.documents,
+      isBot: msg.role === "assistant",
+      modelName: msg.modelName,
+      modelImage: msg.modelImage
+    }))
+
+    return {
+      messages: storeMessages,
+      history: storeMessages,
+      historyId: historyInfo.id,
+      isFirstMessage: storeMessages.length === 0,
+      serverChatId: historyInfo.server_chat_id ?? null,
+      serverChatTitle: historyInfo.title ?? null,
+      serverChatCharacterId: null,
+      serverChatMetaLoaded: false,
+      serverChatState: null,
+      serverChatVersion: null,
+      serverChatTopic: null,
+      serverChatClusterId: null,
+      serverChatSource: null,
+      serverChatExternalRef: null,
+      selectedKnowledge: null,
+      replyTarget: null,
+      actionInfo: null
+    }
+  } catch (error) {
+    console.error("Failed to load document chat session:", error)
+    return null
+  }
+}
 
 const documentKnowledgeId = (mediaId: number) => `document:${mediaId}`
 
@@ -210,20 +340,61 @@ export function useDocumentChat(mediaId: number | null) {
     }
 
     const previousMediaId = previousMediaIdRef.current
+
+    // Save previous session to memory and persist to IndexedDB
     if (previousMediaId !== null) {
-      sessionsRef.current.set(previousMediaId, snapshotSession())
+      const session = snapshotSession()
+      sessionsRef.current.set(previousMediaId, session)
+      // Persist to IndexedDB in background (don't await)
+      persistDocumentSession(previousMediaId, session).then((historyId) => {
+        if (historyId) {
+          const savedSession = sessionsRef.current.get(previousMediaId)
+          if (savedSession) {
+            sessionsRef.current.set(previousMediaId, {
+              ...savedSession,
+              historyId
+            })
+          }
+        }
+      })
     }
 
     previousMediaIdRef.current = mediaId
 
     if (mediaId !== null) {
-      const session = sessionsRef.current.get(mediaId) ?? createEmptySession()
-      applySession(session)
-      // Scope RAG to this specific document
-      setRagMediaIds([mediaId])
-      if (isDocumentKnowledge(session.selectedKnowledge, mediaId)) {
-        ensureDocumentSources()
+      // Try to get from memory first
+      let session = sessionsRef.current.get(mediaId)
+
+      if (session) {
+        // Use cached in-memory session
+        applySession(session)
+        setRagMediaIds([mediaId])
+        if (isDocumentKnowledge(session.selectedKnowledge, mediaId)) {
+          ensureDocumentSources()
+        } else {
+          restoreRagSources()
+        }
       } else {
+        // Try to load from IndexedDB
+        loadDocumentSession(mediaId).then((loadedSession) => {
+          // Only apply if we're still on the same document
+          if (activeMediaIdRef.current === mediaId) {
+            const sessionToUse = loadedSession ?? createEmptySession()
+            sessionsRef.current.set(mediaId, sessionToUse)
+            applySession(sessionToUse)
+            // Scope RAG to this specific document
+            setRagMediaIds([mediaId])
+            if (isDocumentKnowledge(sessionToUse.selectedKnowledge, mediaId)) {
+              ensureDocumentSources()
+            } else {
+              restoreRagSources()
+            }
+          }
+        })
+
+        // Apply empty session immediately while loading
+        applySession(createEmptySession())
+        setRagMediaIds([mediaId])
         restoreRagSources()
       }
     } else {
@@ -246,7 +417,10 @@ export function useDocumentChat(mediaId: number | null) {
     return () => {
       const currentMediaId = activeMediaIdRef.current
       if (currentMediaId !== null) {
-        sessionsRef.current.set(currentMediaId, snapshotSession())
+        const session = snapshotSession()
+        sessionsRef.current.set(currentMediaId, session)
+        // Persist to IndexedDB (fire-and-forget since we're unmounting)
+        persistDocumentSession(currentMediaId, session)
       }
       if (baselineSessionRef.current) {
         applySession(baselineSessionRef.current)

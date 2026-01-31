@@ -68,6 +68,16 @@ export const getHistoryByServerChatId = async (serverChatId: string) => {
   const db = new PageAssistDatabase()
   return await db.getHistoryByServerChatId(serverChatId)
 }
+
+export const getHistoryByDocId = async (docId: string) => {
+  const db = new PageAssistDatabase()
+  return await db.getHistoryByDocId(docId)
+}
+
+export const getAllHistoriesByDocId = async (docId: string) => {
+  const db = new PageAssistDatabase()
+  return await db.getAllHistoriesByDocId(docId)
+}
 export const updateChatHistoryCreatedAt = async (history_id: string) => {
   const createdAt = Date.now()
   const db = new PageAssistDatabase()

@@ -560,6 +560,9 @@ export const QuickIngestModal: React.FC<Props> = ({
     perform_chunking: true,
     overwrite_existing: false
   })
+  // Chunking template state for IngestOptionsPanel
+  const [chunkingTemplateName, setChunkingTemplateName] = React.useState<string | undefined>(undefined)
+  const [autoApplyTemplate, setAutoApplyTemplate] = React.useState<boolean>(false)
   const [running, setRunning] = React.useState<boolean>(false)
   const [results, setResults] = React.useState<ResultItem[]>([])
   const [localFiles, setLocalFiles] = React.useState<File[]>([])
@@ -1887,7 +1890,10 @@ export const QuickIngestModal: React.FC<Props> = ({
             processOnly,
             common,
             advancedValues,
-            fileDefaults
+            fileDefaults,
+            // Chunking template options
+            chunkingTemplateName,
+            autoApplyTemplate
           }
         })
         const timeoutPromise = new Promise<null>((resolve) => {
@@ -1993,6 +1999,8 @@ export const QuickIngestModal: React.FC<Props> = ({
     }
   }, [
     advancedValues,
+    autoApplyTemplate,
+    chunkingTemplateName,
     clearFailure,
     common,
     createDraftsFromResults,
@@ -4132,6 +4140,10 @@ export const QuickIngestModal: React.FC<Props> = ({
           ingestConnectionStatus={ingestConnectionStatus}
           checkOnce={checkOnce}
           onClose={onClose}
+          chunkingTemplateName={chunkingTemplateName}
+          setChunkingTemplateName={setChunkingTemplateName}
+          autoApplyTemplate={autoApplyTemplate}
+          setAutoApplyTemplate={setAutoApplyTemplate}
         />
 
         {/* Inspector drawer glow and drawer - visible when queue tab active */}

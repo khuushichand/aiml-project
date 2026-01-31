@@ -8,7 +8,7 @@ groups:
       # HTTP 5xx ratio > 5% for 5 minutes
       - uid: tldw_app_http_5xx_ratio
         title: HTTP 5xx ratio high
-        condition: C
+        condition: D
         for: 5m
         annotations:
           summary: 'HTTP 5xx ratio > 5%'

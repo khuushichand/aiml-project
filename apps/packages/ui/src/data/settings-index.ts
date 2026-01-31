@@ -401,10 +401,10 @@ export const SETTINGS_INDEX: SettingDefinition[] = [
     id: "setting-prompt-studio",
     labelKey: "settings:promptStudioNav",
     defaultLabel: "Prompt Studio",
-    defaultDescription: "Advanced prompt engineering tools",
-    route: "/settings/prompt-studio",
+    defaultDescription: "Advanced prompt engineering tools with cloud sync",
+    route: "/prompts?tab=studio",
     section: "Workspace",
-    keywords: ["prompt", "studio", "engineering", "test", "iterate"],
+    keywords: ["prompt", "studio", "engineering", "test", "iterate", "cloud", "sync"],
     controlType: "button",
   },
   {
