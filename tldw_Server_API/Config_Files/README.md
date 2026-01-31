@@ -536,6 +536,7 @@ async for evt in astream_sse(method="GET", url="https://host/stream"):
 Notes
 - The egress policy denies unsupported schemes, disallowed ports, denylisted hosts, and private/reserved IP ranges by default (when `block_private=true`).
 - HTTP helpers in `http_client.py` and workflows/webhook components consult this policy before network I/O and on each redirect hop.
+- Local LLM model discovery (e.g., Aphrodite/Oobabooga/VLLM/Ollama endpoints) also uses the same egress policy. If a local endpoint runs on non-default ports like `8080` or on `127.0.0.1`, discovery calls can be blocked unless the port is listed in `WORKFLOWS_EGRESS_ALLOWED_PORTS` and private IP blocking is disabled via `WORKFLOWS_EGRESS_BLOCK_PRIVATE=false`. To avoid discovery entirely, set the provider’s model explicitly in config (e.g., `aphrodite_model=...`).
 
 ## [Moderation]
 - `enabled` (bool)

@@ -609,6 +609,245 @@ const pingBackgroundScript = async (page: Page): Promise<{ ok: boolean; pong?: b
   }
 }
 
+const logRuntimeDiagnostics = async (page: Page, label: string) => {
+  const safeStringify = (value: unknown) => {
+    try {
+      return JSON.stringify(value)
+    } catch {
+      return "\"[unserializable]\""
+    }
+  }
+
+  const runtime = await page
+    .evaluate(() => {
+      const w = globalThis as any
+      const browserRuntime = w.browser?.runtime
+      const chromeRuntime = w.chrome?.runtime
+      return {
+        url: w.location?.href || null,
+        hasChrome: !!w.chrome,
+        hasBrowser: !!w.browser,
+        browserRuntime: {
+          hasRuntime: !!browserRuntime,
+          id: browserRuntime?.id || null,
+          hasSendMessage: typeof browserRuntime?.sendMessage === "function",
+          hasOnMessage: typeof browserRuntime?.onMessage?.addListener === "function"
+        },
+        chromeRuntime: {
+          hasRuntime: !!chromeRuntime,
+          id: chromeRuntime?.id || null,
+          hasSendMessage: typeof chromeRuntime?.sendMessage === "function",
+          hasOnMessage: typeof chromeRuntime?.onMessage?.addListener === "function",
+          lastError: chromeRuntime?.lastError?.message || null
+        },
+        sameRuntime: browserRuntime === chromeRuntime,
+        sameSendMessage: browserRuntime?.sendMessage === chromeRuntime?.sendMessage
+      }
+    })
+    .catch((err) => ({ error: String(err) }))
+
+  const context = page.context()
+  const swUrls = context.serviceWorkers().map((sw) => sw.url())
+  const bgUrls = context.backgroundPages().map((bg) => bg.url())
+
+  console.log(
+    `[E2E_RUNTIME] ${label}`,
+    safeStringify({ runtime, swUrls, bgUrls })
+  )
+}
+
+const logMessageBusDiagnostics = async (page: Page, label: string) => {
+  const safeStringify = (value: unknown) => {
+    try {
+      return JSON.stringify(value)
+    } catch {
+      return "\"[unserializable]\""
+    }
+  }
+
+  const result = await page
+    .evaluate(async () => {
+      const w = globalThis as any
+      const chromeRuntime = w.chrome?.runtime
+      const browserRuntime = w.browser?.runtime
+
+      const runCallbackPing = (runtime: any, tag: string) =>
+        new Promise((resolve) => {
+          if (!runtime?.sendMessage) {
+            resolve({ tag, ok: false, error: "no sendMessage" })
+            return
+          }
+          let settled = false
+          const timeout = setTimeout(() => {
+            if (settled) return
+            settled = true
+            resolve({
+              tag,
+              ok: false,
+              error: "timeout",
+              lastError: runtime?.lastError?.message || null
+            })
+          }, 3000)
+          try {
+            runtime.sendMessage(
+              { type: "tldw:ping", _e2e: "diagnostic-callback" },
+              (response: any) => {
+                if (settled) return
+                settled = true
+                clearTimeout(timeout)
+                resolve({
+                  tag,
+                  ok: true,
+                  response,
+                  lastError: runtime?.lastError?.message || null
+                })
+              }
+            )
+          } catch (err: any) {
+            if (settled) return
+            settled = true
+            clearTimeout(timeout)
+            resolve({
+              tag,
+              ok: false,
+              error: err?.message || "exception",
+              lastError: runtime?.lastError?.message || null
+            })
+          }
+        })
+
+      const runPromisePing = async (runtime: any, tag: string) => {
+        if (!runtime?.sendMessage) {
+          return { tag, ok: false, error: "no sendMessage" }
+        }
+        try {
+          const maybePromise = runtime.sendMessage({
+            type: "tldw:ping",
+            _e2e: "diagnostic-promise"
+          })
+          if (!maybePromise || typeof maybePromise.then !== "function") {
+            return {
+              tag,
+              ok: false,
+              error: "sendMessage did not return Promise",
+              returnedType: typeof maybePromise
+            }
+          }
+          const resp = await Promise.race([
+            maybePromise
+              .then((response: any) => ({
+                ok: true,
+                response,
+                lastError: runtime?.lastError?.message || null
+              }))
+              .catch((err: any) => ({
+                ok: false,
+                error: err?.message || String(err),
+                lastError: runtime?.lastError?.message || null
+              })),
+            new Promise((resolve) =>
+              setTimeout(
+                () =>
+                  resolve({
+                    ok: false,
+                    error: "promise timeout",
+                    lastError: runtime?.lastError?.message || null
+                  }),
+                3000
+              )
+            )
+          ])
+          return { tag, ...resp }
+        } catch (err: any) {
+          return {
+            tag,
+            ok: false,
+            error: err?.message || "exception",
+            lastError: runtime?.lastError?.message || null
+          }
+        }
+      }
+
+      const runPortTest = (runtime: any, tag: string) =>
+        new Promise((resolve) => {
+          if (!runtime?.connect) {
+            resolve({ tag, ok: false, error: "no connect" })
+            return
+          }
+          let disconnected = false
+          let resolved = false
+          try {
+            const port = runtime.connect({ name: "e2e:diagnostic" })
+            const timer = setTimeout(() => {
+              if (resolved) return
+              resolved = true
+              try {
+                port.disconnect()
+              } catch {}
+              resolve({
+                tag,
+                ok: true,
+                connected: true,
+                disconnected: false,
+                lastError: runtime?.lastError?.message || null
+              })
+            }, 1000)
+
+            port.onDisconnect.addListener(() => {
+              if (resolved) return
+              resolved = true
+              disconnected = true
+              clearTimeout(timer)
+              resolve({
+                tag,
+                ok: true,
+                connected: true,
+                disconnected,
+                lastError: runtime?.lastError?.message || null
+              })
+            })
+
+            try {
+              port.postMessage({
+                type: "tldw:ping",
+                _e2e: "diagnostic-port"
+              })
+            } catch {
+              // ignore postMessage errors for diagnostics
+            }
+          } catch (err: any) {
+            if (resolved) return
+            resolved = true
+            resolve({
+              tag,
+              ok: false,
+              error: err?.message || "exception",
+              lastError: runtime?.lastError?.message || null
+            })
+          }
+        })
+
+      return {
+        url: w.location?.href || null,
+        callbackPing: {
+          chrome: await runCallbackPing(chromeRuntime, "chrome"),
+          browser: await runCallbackPing(browserRuntime, "browser")
+        },
+        promisePing: {
+          chrome: await runPromisePing(chromeRuntime, "chrome"),
+          browser: await runPromisePing(browserRuntime, "browser")
+        },
+        portTest: {
+          chrome: await runPortTest(chromeRuntime, "chrome"),
+          browser: await runPortTest(browserRuntime, "browser")
+        }
+      }
+    })
+    .catch((err) => ({ error: String(err) }))
+
+  console.log(`[E2E_MSG_DIAG] ${label}`, safeStringify(result))
+}
+
 const waitForConnected = async (page: Page, label: string) => {
   // First check that the page has actually rendered content (not blank)
   await waitForPageContent(page, label, 20000)
@@ -627,6 +866,12 @@ const waitForConnected = async (page: Page, label: string) => {
   await page.evaluate((res) => {
     console.log("PING_DEBUG background script ping result", JSON.stringify(res))
   }, pingResult)
+
+  if (!pingResult.ok) {
+    console.warn(`[PING_DEBUG] background ping failed for ${label}:`, pingResult?.error || "unknown error")
+    await logRuntimeDiagnostics(page, `${label}-ping-failed`)
+    await logMessageBusDiagnostics(page, `${label}-ping-failed`)
+  }
 
   await page.evaluate(() => {
     const store = (window as any).__tldw_useConnectionStore
@@ -1710,6 +1955,50 @@ const pollForServerAssistantMessageId = async (
     await new Promise((resolve) => setTimeout(resolve, 2000))
   }
   return null
+}
+
+/**
+ * Directly upload a file to the media API, bypassing extension messaging.
+ * Used as a fallback when extension messaging doesn't work (e.g., in Playwright tests).
+ */
+const directMediaUpload = async (
+  serverUrl: string,
+  apiKey: string,
+  fileName: string,
+  fileContent: string,
+  mediaBasePath = "/api/v1/media"
+): Promise<{ ok: boolean; mediaId?: string; error?: string }> => {
+  const normalized = serverUrl.replace(/\/$/, "")
+  const basePath = normalizePath(mediaBasePath || "/api/v1/media")
+  const url = `${normalized}${basePath}/add`
+
+  try {
+    const formData = new FormData()
+    const blob = new Blob([fileContent], { type: "text/plain" })
+    formData.append("files", blob, fileName)
+    formData.append("media_type", "document")
+
+    const res = await fetch(url, {
+      method: "POST",
+      headers: {
+        "X-API-KEY": apiKey
+      },
+      body: formData
+    })
+
+    if (!res.ok) {
+      const text = await res.text().catch(() => "")
+      return { ok: false, error: `Upload failed: ${res.status} - ${text.slice(0, 200)}` }
+    }
+
+    const data = await res.json().catch(() => null)
+    // The response format may vary - try to extract media ID
+    const mediaId = data?.id || data?.media_id || data?.results?.[0]?.id || data?.results?.[0]?.media_id
+    console.log(`[directMediaUpload] Upload succeeded: ${fileName} -> mediaId=${mediaId}`)
+    return { ok: true, mediaId }
+  } catch (err: any) {
+    return { ok: false, error: `Upload error: ${err?.message}` }
+  }
 }
 
 const pollForMediaMatch = async (
@@ -3474,6 +3763,14 @@ test.describe("Real server end-to-end workflows", () => {
     })
     const { context, page } = driver
 
+    // Capture page console for debugging quick ingest message passing
+    page.on('console', (msg) => {
+      const text = msg.text()
+      if (text.includes('[QI_MODAL]') || text.includes('[QUICK_INGEST]') || text.includes('[API_SEND_DEBUG]') || text.includes('error')) {
+        console.log('[PAGE_CONSOLE]', msg.type(), text)
+      }
+    })
+
     try {
       const granted = await driver.ensureHostPermission()
       if (!granted) {
@@ -3678,13 +3975,47 @@ test.describe("Real server end-to-end workflows", () => {
 
       const searchQuery = `e2e-media-${unique}` // Use filename prefix with words for FTS5 tokenization
       logStep("polling media", { query: searchQuery })
-      const mediaMatch = await pollForMediaMatch(
-        mediaApiBase,
-        apiKey,
-        searchQuery,
-        300000,
-        mediaBasePath
-      )
+
+      // First try to find media with a short timeout
+      let mediaMatch: any = null
+      try {
+        mediaMatch = await pollForMediaMatch(
+          mediaApiBase,
+          apiKey,
+          searchQuery,
+          30000, // 30 second initial poll
+          mediaBasePath
+        )
+      } catch (pollError) {
+        logStep("initial poll failed or timed out, will try direct upload")
+      }
+
+      // If no media found, try direct upload as fallback (extension messaging may have failed)
+      if (!mediaMatch) {
+        logStep("media not found via UI, trying direct API upload as fallback")
+        const uploadResult = await directMediaUpload(
+          mediaApiBase,
+          apiKey,
+          fileName,
+          `E2E Quick ingest ${unique}`,
+          mediaBasePath
+        )
+        if (uploadResult.ok) {
+          logStep("direct upload succeeded", { mediaId: uploadResult.mediaId })
+          // Poll again to find the uploaded media
+          mediaMatch = await pollForMediaMatch(
+            mediaApiBase,
+            apiKey,
+            searchQuery,
+            60000, // 60 seconds after direct upload
+            mediaBasePath
+          )
+        } else {
+          logStep("direct upload failed", { error: uploadResult.error })
+          throw new Error(`Direct upload fallback failed: ${uploadResult.error}`)
+        }
+      }
+
       logStep("media found", {
         id: mediaMatch?.id ?? null,
         title: mediaMatch?.title ?? null

@@ -16,7 +16,6 @@ import {
   Modal,
   Button
 } from "antd"
-import { Image } from "antd"
 import { useWebUI } from "~/store/webui"
 import { defaultEmbeddingModelForRag } from "~/services/tldw-server"
 import {
@@ -37,7 +36,8 @@ import {
   PaperclipIcon,
   Gauge,
   Search,
-  CornerUpLeft
+  CornerUpLeft,
+  Settings2
 } from "lucide-react"
 import { getVariable } from "@/utils/select-variable"
 import { useTranslation } from "react-i18next"
@@ -79,7 +79,7 @@ import { tldwClient, type ConversationState } from "@/services/tldw/TldwApiClien
 import { CharacterSelect } from "@/components/Common/CharacterSelect"
 import { ProviderIcons } from "@/components/Common/ProviderIcon"
 import type { Character } from "@/types/character"
-import { KnowledgePanel } from "@/components/Knowledge"
+import { KnowledgePanel, type KnowledgeTab } from "@/components/Knowledge"
 import { BetaTag } from "@/components/Common/Beta"
 import {
   SlashCommandMenu,
@@ -361,6 +361,10 @@ export const PlaygroundForm = ({ droppedFiles }: Props) => {
     "playgroundKnowledgeSearchOpen",
     false
   )
+  const [knowledgePanelTab, setKnowledgePanelTab] =
+    React.useState<KnowledgeTab>("search")
+  const [knowledgePanelTabRequestId, setKnowledgePanelTabRequestId] =
+    React.useState(0)
   const replyLabel = replyTarget
     ? [
         t("common:replyingTo", "Replying to"),
@@ -1497,6 +1501,19 @@ export const PlaygroundForm = ({ droppedFiles }: Props) => {
     setShowQueuedBanner((prev) => (prev === next ? prev : next))
   }, [queuedMessages.length])
 
+  const notifyImageAttachmentDisabled = React.useCallback(() => {
+    notificationApi.warning({
+      message: t(
+        "playground:attachments.imageDisabledTitle",
+        "Image attachments disabled"
+      ),
+      description: t(
+        "playground:attachments.imageDisabledBody",
+        "Disable Knowledge Search to attach images."
+      )
+    })
+  }, [notificationApi, t])
+
   const onFileInputChange = React.useCallback(
     async (e: React.ChangeEvent<HTMLInputElement>) => {
       if (e.target.files && e.target.files[0]) {
@@ -1511,6 +1528,10 @@ export const PlaygroundForm = ({ droppedFiles }: Props) => {
 
         const isImage = file.type.startsWith("image/")
         if (isImage) {
+          if (chatMode === "rag") {
+            notifyImageAttachmentDisabled()
+            return
+          }
           const base64 = await toBase64(file)
           form.setFieldValue("image", base64)
         } else {
@@ -1518,7 +1539,14 @@ export const PlaygroundForm = ({ droppedFiles }: Props) => {
         }
       }
     },
-    [form, handleFileUpload, otherUnsupportedTypes, toBase64]
+    [
+      chatMode,
+      form,
+      handleFileUpload,
+      notifyImageAttachmentDisabled,
+      otherUnsupportedTypes,
+      toBase64
+    ]
   )
 
   const onInputChange = React.useCallback(
@@ -1533,6 +1561,10 @@ export const PlaygroundForm = ({ droppedFiles }: Props) => {
 
         const isImage = e.type.startsWith("image/")
         if (isImage) {
+          if (chatMode === "rag") {
+            notifyImageAttachmentDisabled()
+            return
+          }
           const base64 = await toBase64(e)
           form.setFieldValue("image", base64)
         } else {
@@ -1544,7 +1576,15 @@ export const PlaygroundForm = ({ droppedFiles }: Props) => {
         }
       }
     },
-    [form, handleFileUpload, onFileInputChange, otherUnsupportedTypes, toBase64]
+    [
+      chatMode,
+      form,
+      handleFileUpload,
+      notifyImageAttachmentDisabled,
+      onFileInputChange,
+      otherUnsupportedTypes,
+      toBase64
+    ]
   )
 
   const syncCollapsedCaret = React.useCallback(
@@ -2685,9 +2725,29 @@ export const PlaygroundForm = ({ droppedFiles }: Props) => {
     })
   }, [history.length, notificationApi, setHistory, t])
 
-  const handleToggleContextTools = React.useCallback(() => {
-    setContextToolsOpen(!contextToolsOpen)
-  }, [contextToolsOpen, setContextToolsOpen])
+  const requestKnowledgePanelTab = React.useCallback((tab: KnowledgeTab) => {
+    setKnowledgePanelTab(tab)
+    setKnowledgePanelTabRequestId((id) => id + 1)
+  }, [])
+
+  const openKnowledgePanel = React.useCallback(
+    (tab: KnowledgeTab) => {
+      requestKnowledgePanelTab(tab)
+      setContextToolsOpen(true)
+    },
+    [requestKnowledgePanelTab, setContextToolsOpen]
+  )
+
+  const toggleKnowledgePanel = React.useCallback(
+    (tab: KnowledgeTab = "search") => {
+      const nextOpen = !contextToolsOpen
+      if (nextOpen) {
+        requestKnowledgePanelTab(tab)
+      }
+      setContextToolsOpen(nextOpen)
+    },
+    [contextToolsOpen, requestKnowledgePanelTab, setContextToolsOpen]
+  )
 
   const handleImageUpload = React.useCallback(() => {
     inputRef.current?.click()
@@ -3327,7 +3387,7 @@ export const PlaygroundForm = ({ droppedFiles }: Props) => {
           </span>
           <button
             type="button"
-            onClick={handleToggleContextTools}
+            onClick={() => toggleKnowledgePanel("search")}
             aria-pressed={contextToolsOpen}
             title={
               contextToolsOpen
@@ -3372,22 +3432,11 @@ export const PlaygroundForm = ({ droppedFiles }: Props) => {
           </span>
           <button
             type="button"
-            onClick={handleImageUpload}
-            disabled={chatMode === "rag"}
-            title={t("playground:actions.upload", "Attach image") as string}
-            className="flex w-full items-center justify-between rounded-md px-2 py-1.5 text-sm text-text transition hover:bg-surface2 disabled:cursor-not-allowed disabled:opacity-40 disabled:text-text-muted"
-          >
-            <span>{t("playground:actions.attachImage", "Attach image")}</span>
-            <ImageIcon className="h-4 w-4" />
-          </button>
-          <button
-            type="button"
-            onClick={handleDocumentUpload}
-            title={t("tooltip.uploadDocuments") as string}
+            onClick={() => openKnowledgePanel("context")}
             className="flex w-full items-center justify-between rounded-md px-2 py-1.5 text-sm text-text transition hover:bg-surface2"
           >
-            <span>{t("playground:actions.attachDocument", "Attach document")}</span>
-            <PaperclipIcon className="h-4 w-4" />
+            <span>{t("playground:attachments.manageContext", "Manage in Knowledge Panel")}</span>
+            <Settings2 className="h-4 w-4" />
           </button>
         </div>
 
@@ -3512,12 +3561,10 @@ export const PlaygroundForm = ({ droppedFiles }: Props) => {
     ),
     [
       advancedToolsExpanded,
-      chatMode,
       contextToolsOpen,
       handleClearContext,
-      handleDocumentUpload,
-      handleImageUpload,
-      handleToggleContextTools,
+      openKnowledgePanel,
+      toggleKnowledgePanel,
       handleVoiceChatToggle,
       history.length,
       imageProviderControl,
@@ -3974,6 +4021,110 @@ export const PlaygroundForm = ({ droppedFiles }: Props) => {
     </Popover>
   )
 
+  const imageAttachmentDisabled =
+    chatMode === "rag"
+      ? t(
+          "playground:attachments.imageDisabledBody",
+          "Disable Knowledge Search to attach images."
+        )
+      : null
+
+  const attachmentMenu = React.useMemo(
+    () => (
+      <div className="flex w-56 flex-col gap-1 p-1">
+        <Tooltip title={imageAttachmentDisabled || undefined}>
+          <span className="block">
+            <button
+              type="button"
+              onClick={handleImageUpload}
+              disabled={chatMode === "rag"}
+              title={t("playground:actions.upload", "Attach image") as string}
+              className="flex w-full items-center justify-between rounded-md px-2 py-1.5 text-sm text-text transition hover:bg-surface2 disabled:cursor-not-allowed disabled:opacity-40 disabled:text-text-muted"
+            >
+              <span className="flex flex-col items-start">
+                <span>{t("playground:actions.attachImage", "Attach image")}</span>
+                <span className="text-[10px] text-text-muted">
+                  {t(
+                    "playground:actions.attachImageHint",
+                    "JPG/PNG (Vision)"
+                  )}
+                </span>
+              </span>
+              <ImageIcon className="h-4 w-4" />
+            </button>
+          </span>
+        </Tooltip>
+        <button
+          type="button"
+          onClick={handleDocumentUpload}
+          title={t("tooltip.uploadDocuments") as string}
+          className="flex w-full items-center justify-between rounded-md px-2 py-1.5 text-sm text-text transition hover:bg-surface2"
+        >
+          <span className="flex flex-col items-start">
+            <span>{t("playground:actions.attachDocument", "Attach document")}</span>
+            <span className="text-[10px] text-text-muted">
+              {t(
+                "playground:actions.attachDocumentHint",
+                "PDF/DOCX/TXT/CSV"
+              )}
+            </span>
+          </span>
+          <PaperclipIcon className="h-4 w-4" />
+        </button>
+        <div className="border-t border-border my-1" />
+        <button
+          type="button"
+          onClick={() => openKnowledgePanel("context")}
+          className="flex w-full items-center justify-between rounded-md px-2 py-1.5 text-sm text-text transition hover:bg-surface2"
+        >
+          <span>{t("playground:attachments.manageContext", "Manage in Knowledge Panel")}</span>
+          <Settings2 className="h-4 w-4" />
+        </button>
+      </div>
+    ),
+    [
+      chatMode,
+      handleDocumentUpload,
+      handleImageUpload,
+      imageAttachmentDisabled,
+      openKnowledgePanel,
+      t
+    ]
+  )
+
+  const attachmentButton = (
+    <Popover
+      trigger="click"
+      placement="topRight"
+      content={attachmentMenu}
+      overlayClassName="playground-attachment-menu"
+    >
+      <TldwButton
+        variant="outline"
+        size="sm"
+        shape={isProMode ? "rounded" : "pill"}
+        iconOnly={!isProMode}
+        ariaLabel={t("playground:actions.attach", "Attach") as string}
+        title={t("playground:actions.attach", "Attach") as string}
+        data-testid="attachment-button"
+      >
+        {isProMode ? (
+          <span className="inline-flex items-center gap-1.5">
+            <PaperclipIcon className="h-4 w-4" aria-hidden="true" />
+            <span>{t("playground:actions.attach", "Attach")}</span>
+          </span>
+        ) : (
+          <>
+            <PaperclipIcon className="h-4 w-4" aria-hidden="true" />
+            <span className="sr-only">
+              {t("playground:actions.attach", "Attach")}
+            </span>
+          </>
+        )}
+      </TldwButton>
+    </Popover>
+  )
+
   const sendControl = !isSending ? (
     <Dropdown.Button
       size={isProMode ? "middle" : "small"}
@@ -4103,13 +4254,13 @@ export const PlaygroundForm = ({ droppedFiles }: Props) => {
               image={form.values.image}
               documents={selectedDocuments}
               files={uploadedFiles}
-              fileRetrievalEnabled={fileRetrievalEnabled}
-              onFileRetrievalChange={setFileRetrievalEnabled}
               onRemoveImage={() => form.setFieldValue("image", "")}
               onRemoveDocument={removeDocument}
               onClearDocuments={clearSelectedDocuments}
               onRemoveFile={removeUploadedFile}
               onClearFiles={clearUploadedFiles}
+              onOpenKnowledgePanel={() => openKnowledgePanel("context")}
+              readOnly
             />
             {/* Link to Model Playground for Compare mode */}
             <div>
@@ -4266,14 +4417,18 @@ export const PlaygroundForm = ({ droppedFiles }: Props) => {
                               isConnected={isConnectionReady}
                               open={contextToolsOpen}
                               onOpenChange={(nextOpen) => setContextToolsOpen(nextOpen)}
+                              openTab={knowledgePanelTab}
+                              openTabRequestId={knowledgePanelTabRequestId}
                               autoFocus
                               showToggle={false}
                               variant="embedded"
                               currentMessage={form.values.message}
                               showAttachedContext
+                              attachedImage={form.values.image}
                               attachedTabs={selectedDocuments}
                               availableTabs={availableTabs}
                               attachedFiles={uploadedFiles}
+                              onRemoveImage={() => form.setFieldValue("image", "")}
                               onRemoveTab={removeDocument}
                               onAddTab={addDocument}
                               onClearTabs={clearSelectedDocuments}
@@ -4281,6 +4436,8 @@ export const PlaygroundForm = ({ droppedFiles }: Props) => {
                               onAddFile={() => fileInputRef.current?.click()}
                               onRemoveFile={removeUploadedFile}
                               onClearFiles={clearUploadedFiles}
+                              fileRetrievalEnabled={fileRetrievalEnabled}
+                              onFileRetrievalChange={setFileRetrievalEnabled}
                             />
                           </div>
                         </div>
@@ -4658,7 +4815,7 @@ export const PlaygroundForm = ({ droppedFiles }: Props) => {
                             <div className="flex flex-wrap items-center gap-2 text-[11px] text-text-muted">
                               <button
                                 type="button"
-                                onClick={handleToggleContextTools}
+                                onClick={() => toggleKnowledgePanel("search")}
                                 title={
                                   contextToolsOpen
                                     ? (t(
@@ -4875,6 +5032,7 @@ export const PlaygroundForm = ({ droppedFiles }: Props) => {
                                 </button>
                               </Tooltip>
                               {voiceChatButton}
+                              {attachmentButton}
                               {toolsButton}
                               {sendControl}
                             </div>
@@ -4920,7 +5078,7 @@ export const PlaygroundForm = ({ droppedFiles }: Props) => {
                           </Tooltip>
                           <button
                             type="button"
-                            onClick={handleToggleContextTools}
+                            onClick={() => toggleKnowledgePanel("search")}
                             title={
                               contextToolsOpen
                                 ? (t(
@@ -5056,6 +5214,7 @@ export const PlaygroundForm = ({ droppedFiles }: Props) => {
                             </TldwButton>
                           </Tooltip>
                           {voiceChatButton}
+                          {attachmentButton}
                           {toolsButton}
                           {sendControl}
                         </div>

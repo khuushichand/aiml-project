@@ -1,5 +1,5 @@
 import { FileIcon, X } from "lucide-react"
-import { Form, Input, Select, Switch } from "antd"
+import { Form, Input, Select } from "antd"
 import { useQueryClient } from "@tanstack/react-query"
 import { useTranslation } from "react-i18next"
 import { tldwClient, type ConversationState } from "@/services/tldw/TldwApiClient"
@@ -22,8 +22,6 @@ interface ConversationTabProps {
   onSystemPromptChange: (value: string) => void
   uploadedFiles: UploadedFile[]
   onRemoveFile: (id: string) => void
-  fileRetrievalEnabled: boolean
-  onFileRetrievalChange: (enabled: boolean) => void
   serverChatId: string | null
   serverChatState: ConversationState | null
   onStateChange: (state: ConversationState) => void
@@ -63,8 +61,6 @@ export function ConversationTab({
   onSystemPromptChange,
   uploadedFiles,
   onRemoveFile,
-  fileRetrievalEnabled,
-  onFileRetrievalChange,
   serverChatId,
   serverChatState,
   onStateChange,
@@ -165,18 +161,12 @@ export function ConversationTab({
                 defaultValue: "Uploaded Files ({{count}})"
               })}
             </h4>
-            <div className="flex items-center gap-2">
-              <span className="text-sm text-text-muted">
-                {t("playground:composer.fileRetrieval", {
-                  defaultValue: "File Retrieval"
-                })}
-              </span>
-              <Switch
-                size="small"
-                checked={fileRetrievalEnabled}
-                onChange={onFileRetrievalChange}
-              />
-            </div>
+            <span className="text-xs text-text-muted">
+              {t(
+                "playground:composer.manageContextHint",
+                "Manage Knowledge Search in the Context tab."
+              )}
+            </span>
           </div>
           <div className="space-y-2 max-h-32 overflow-y-auto">
             {uploadedFiles.map((file) => (
@@ -191,7 +181,7 @@ export function ConversationTab({
                     </p>
                     <div className="flex items-center gap-2 text-xs text-text-subtle">
                       <span>{(file.size / 1024).toFixed(1)} KB</span>
-                      {fileRetrievalEnabled && (
+                      {typeof file.processed === "boolean" && (
                         <span className="flex items-center gap-1">
                           <span
                             className={`inline-block w-2 h-2 rounded-full ${

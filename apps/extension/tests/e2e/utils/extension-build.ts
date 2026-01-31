@@ -7,6 +7,7 @@ import { resolveExtensionId } from './extension-id'
 type LaunchOptions = {
   seedConfig?: Record<string, any>
   allowOffline?: boolean
+  seedLocalStorage?: Record<string, any>
 }
 
 async function waitForStorageSeed(page: any) {
@@ -35,7 +36,7 @@ function makeTempProfileDirs() {
 }
 
 export async function launchWithBuiltExtension(
-  { seedConfig, allowOffline }: LaunchOptions = {}
+  { seedConfig, allowOffline, seedLocalStorage }: LaunchOptions = {}
 ) {
   const extensionPath = path.resolve('build/chrome-mv3')
   const { homeDir, userDataDir } = makeTempProfileDirs()
@@ -120,6 +121,16 @@ export async function launchWithBuiltExtension(
     ])
   }
   await waitForTargets()
+
+  // Seed localStorage for tutorials and other non-extension storage
+  if (seedLocalStorage) {
+    await context.addInitScript((localStorageData) => {
+      if (typeof localStorage === 'undefined') return
+      for (const [key, value] of Object.entries(localStorageData)) {
+        localStorage.setItem(key, typeof value === 'string' ? value : JSON.stringify(value))
+      }
+    }, seedLocalStorage)
+  }
 
   const extensionId = await resolveExtensionId(context)
   const optionsUrl = `chrome-extension://${extensionId}/options.html`

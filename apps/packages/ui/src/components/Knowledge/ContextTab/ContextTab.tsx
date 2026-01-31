@@ -1,5 +1,7 @@
 import React from "react"
 import { useTranslation } from "react-i18next"
+import { Switch, Tooltip } from "antd"
+import { X } from "lucide-react"
 import type { UploadedFile } from "@/db/dexie/types"
 import type { TabInfo } from "@/hooks/useTabMentions"
 import type { RagPinnedResult } from "@/utils/rag-format"
@@ -16,6 +18,10 @@ type ContextTabProps = {
   onClearTabs: () => void
   onRefreshTabs: () => void
 
+  // Attached image
+  attachedImage?: string
+  onRemoveImage?: () => void
+
   // Attached files
   attachedFiles: UploadedFile[]
   onAddFile: () => void
@@ -26,6 +32,10 @@ type ContextTabProps = {
   pinnedResults: RagPinnedResult[]
   onUnpinResult: (id: string) => void
   onClearPins: () => void
+
+  // File retrieval (RAG) toggle
+  fileRetrievalEnabled: boolean
+  onFileRetrievalChange: (enabled: boolean) => void
 }
 
 /**
@@ -41,17 +51,22 @@ export const ContextTab: React.FC<ContextTabProps> = ({
   onAddTab,
   onClearTabs,
   onRefreshTabs,
+  attachedImage,
+  onRemoveImage,
   attachedFiles,
   onAddFile,
   onRemoveFile,
   onClearFiles,
   pinnedResults,
   onUnpinResult,
-  onClearPins
+  onClearPins,
+  fileRetrievalEnabled,
+  onFileRetrievalChange
 }) => {
-  const { t } = useTranslation(["sidepanel"])
+  const { t } = useTranslation(["sidepanel", "playground", "common"])
 
   const hasAnyContent =
+    Boolean(attachedImage) ||
     attachedTabs.length > 0 ||
     attachedFiles.length > 0 ||
     pinnedResults.length > 0
@@ -63,18 +78,75 @@ export const ContextTab: React.FC<ContextTabProps> = ({
       id="knowledge-tabpanel-context"
       aria-labelledby="knowledge-tab-context"
     >
-      {/* Header explanation */}
+      {/* Header with RAG toggle */}
       <div className="px-3 py-2 border-b border-border bg-surface2/50">
-        <p className="text-xs text-text-muted">
-          {t(
-            "sidepanel:rag.contextExplanation",
-            "These items will be included in your next query."
-          )}
-        </p>
+        <div className="flex items-center justify-between gap-2">
+          <p className="text-xs text-text-muted flex-1">
+            {t(
+              "sidepanel:rag.contextExplanation",
+              "These items will be included in your next query."
+            )}
+          </p>
+          <Tooltip
+            title={t(
+              "playground:attachments.enableKnowledgeSearchTooltip",
+              "When enabled, attached files and pinned results will be searched for relevant context"
+            )}
+          >
+            <div className="inline-flex items-center gap-1.5 shrink-0">
+              <Switch
+                size="small"
+                checked={fileRetrievalEnabled}
+                onChange={onFileRetrievalChange}
+                aria-label={
+                  t(
+                    "playground:attachments.enableKnowledgeSearch",
+                    "Enable Knowledge Search"
+                  ) as string
+                }
+              />
+              <span className="text-xs text-text-muted whitespace-nowrap">
+                {t(
+                  "playground:attachments.enableKnowledgeSearch",
+                  "Enable Knowledge Search"
+                )}
+              </span>
+            </div>
+          </Tooltip>
+        </div>
       </div>
 
       {/* Content sections */}
       <div className="flex-1 px-3 py-3 space-y-4">
+        {/* Attached Image */}
+        {attachedImage && (
+          <div className="rounded border border-border bg-surface overflow-hidden">
+            <div className="flex items-center justify-between px-3 py-2 bg-surface2/50">
+              <span className="text-xs font-semibold text-text">
+                {t("playground:attachments.image", "Image")}
+              </span>
+              {onRemoveImage && (
+                <button
+                  type="button"
+                  onClick={onRemoveImage}
+                  className="p-1 text-text-muted hover:text-red-500 transition-colors rounded hover:bg-surface3"
+                  aria-label={t("common:remove", "Remove") as string}
+                  title={t("common:remove", "Remove") as string}
+                >
+                  <X className="h-3.5 w-3.5" />
+                </button>
+              )}
+            </div>
+            <div className="px-3 py-2">
+              <img
+                src={attachedImage}
+                alt={t("playground:attachments.imageLabel", "Attached image") as string}
+                className="rounded-md max-h-28"
+              />
+            </div>
+          </div>
+        )}
+
         {/* Attached Browser Tabs */}
         <AttachedTabs
           tabs={attachedTabs}
@@ -112,7 +184,7 @@ export const ContextTab: React.FC<ContextTabProps> = ({
             <p className="text-xs mt-2">
               {t(
                 "sidepanel:rag.contextHint",
-                "Pin search results or attach browser tabs and files to include them in your queries."
+                "Save search results or attach web pages and files to include them in your queries."
               )}
             </p>
           </div>

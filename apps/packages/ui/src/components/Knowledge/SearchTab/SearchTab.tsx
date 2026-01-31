@@ -7,7 +7,6 @@ import type { RagResult, SortMode } from "../hooks"
 import { SearchInput } from "./SearchInput"
 import { SourceChips } from "./SourceChips"
 import { ResultsList } from "./ResultsList"
-import { PinnedChips } from "./PinnedChips"
 
 type SearchTabProps = {
   // Query state
@@ -41,8 +40,7 @@ type SearchTabProps = {
   // Pinned results
   pinnedResults: RagPinnedResult[]
   onPin: (result: RagResult) => void
-  onUnpin: (id: string) => void
-  onClearPins: () => void
+  onOpenContext?: () => void
 
   // Result actions
   onInsert: (result: RagResult) => void
@@ -85,13 +83,12 @@ export const SearchTab: React.FC<SearchTabProps> = ({
   highlightTerms = true,
   pinnedResults,
   onPin,
-  onUnpin,
-  onClearPins,
   onInsert,
   onAsk,
   onPreview,
   isConnected = true,
-  autoFocus = true
+  autoFocus = true,
+  onOpenContext
 }) => {
   const { t } = useTranslation(["sidepanel"])
 
@@ -179,12 +176,27 @@ export const SearchTab: React.FC<SearchTabProps> = ({
         highlightTerms={highlightTerms}
       />
 
-      {/* Pinned results */}
-      <PinnedChips
-        pinnedResults={pinnedResults}
-        onUnpin={onUnpin}
-        onClearAll={onClearPins}
-      />
+      {pinnedResults.length > 0 && (
+        <div className="flex items-center justify-between border-t border-border pt-2 text-xs text-text-muted">
+          <span>
+            {t("sidepanel:rag.savedResultsCount", "Saved results ({{count}})", {
+              count: pinnedResults.length
+            })}
+          </span>
+          {onOpenContext && (
+            <button
+              type="button"
+              onClick={onOpenContext}
+              className="text-xs text-accent hover:text-accent/80 transition-colors"
+            >
+              {t(
+                "sidepanel:rag.manageSavedResults",
+                "Manage in Context"
+              )}
+            </button>
+          )}
+        </div>
+      )}
     </div>
   )
 }

@@ -200,8 +200,6 @@ export const CurrentChatModelSettings = ({
     removeUploadedFile,
     selectedModel,
     setSelectedModel,
-    fileRetrievalEnabled,
-    setFileRetrievalEnabled,
     serverChatId,
     serverChatTopic,
     setServerChatTopic,
@@ -603,8 +601,6 @@ export const CurrentChatModelSettings = ({
             onSystemPromptChange={savePrompt}
             uploadedFiles={uploadedFiles}
             onRemoveFile={removeUploadedFile}
-            fileRetrievalEnabled={fileRetrievalEnabled}
-            onFileRetrievalChange={setFileRetrievalEnabled}
             serverChatId={serverChatId}
             serverChatState={serverChatState}
             onStateChange={(state) => setServerChatState(state)}
@@ -659,8 +655,6 @@ export const CurrentChatModelSettings = ({
       savePrompt,
       uploadedFiles,
       removeUploadedFile,
-      fileRetrievalEnabled,
-      setFileRetrievalEnabled,
       serverChatId,
       serverChatState,
       setServerChatState,

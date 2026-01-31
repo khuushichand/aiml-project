@@ -24,6 +24,7 @@ export default defineConfig({
       "tabs",
       "scripting"
     ],
+    optional_host_permissions: ["<all_urls>"],
     action: {
       default_title: "tldw Assistant",
       default_icon: {

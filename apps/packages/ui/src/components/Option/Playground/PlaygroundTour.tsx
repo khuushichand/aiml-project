@@ -31,9 +31,9 @@ export const PlaygroundTour: React.FC<PlaygroundTourProps> = ({ run, onComplete 
       placement: "top" as const
     },
     {
-      target: '[data-testid="tools-button"]',
-      title: t("playground:tour.toolsTitle", "Tools & Attachments"),
-      content: t("playground:tour.toolsContent", "Access knowledge search, upload files, configure MCP tools, and more advanced features here."),
+      target: '[data-testid="attachment-button"]',
+      title: t("playground:tour.toolsTitle", "Attach files"),
+      content: t("playground:tour.toolsContent", "Attach images or documents to include them in your message. Manage context from Knowledge Search → Context."),
       placement: "top" as const
     },
     {

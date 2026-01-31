@@ -438,6 +438,7 @@ export default defineBackground({
       fileFieldName?: string
       timeoutMs?: number
     }) => {
+      console.log('[HANDLE_UPLOAD] Called', { path: payload?.path, hasFile: !!payload?.file })
       const { path, method = 'POST', fields = {}, file, fileFieldName } = payload || {}
       const cfg = await storage.get<any>('tldwConfig')
       const isAbsolute = typeof path === 'string' && /^https?:/i.test(path)
@@ -525,11 +526,13 @@ export default defineBackground({
                   : 60000
         const timeout = setTimeout(() => controller.abort(), timeoutMs)
         let resp: Response
+        console.log('[HANDLE_UPLOAD] About to fetch', { url, method, timeoutMs })
         try {
           resp = await fetch(url, { method, headers, body: form, signal: controller.signal })
         } finally {
           clearTimeout(timeout)
         }
+        console.log('[HANDLE_UPLOAD] Fetch completed', { status: resp.status, ok: resp.ok })
         const contentType = resp.headers.get('content-type') || ''
         let data: any = null
         if (contentType.includes('application/json')) data = await resp.json().catch(() => null)
@@ -539,6 +542,7 @@ export default defineBackground({
           : formatErrorMessage(data, `Upload failed: ${resp.status}`)
         return { ok: resp.ok, status: resp.status, data, error }
       } catch (e: any) {
+        console.log('[HANDLE_UPLOAD] Fetch error', { message: e?.message, name: e?.name })
         const raw = String(e?.message || "")
         const isAbort = raw.toLowerCase().includes("abort")
         return {
@@ -635,9 +639,11 @@ export default defineBackground({
         return { ok: tabId != null, tabId }
       }
       if (message.type === 'tldw:quick-ingest-batch') {
+        console.log('[QUICK_INGEST] Message received')
         const payload = message.payload || {}
         const entries = Array.isArray(payload.entries) ? payload.entries : []
         const files = Array.isArray(payload.files) ? payload.files : []
+        console.log('[QUICK_INGEST] Parsed payload', { entriesCount: entries.length, filesCount: files.length })
         const storeRemote = Boolean(payload.storeRemote)
         const processOnly = Boolean(payload.processOnly)
         const common = payload.common || {}
@@ -649,7 +655,9 @@ export default defineBackground({
           : {}
         // processOnly=true forces local-only processing even if storeRemote was requested
         const shouldStoreRemote = storeRemote && !processOnly
+        console.log('[QUICK_INGEST] Options', { storeRemote, processOnly, shouldStoreRemote })
         const cfg = await storage.get<any>('tldwConfig')
+        console.log('[QUICK_INGEST] Config loaded', { serverUrl: cfg?.serverUrl, authMode: cfg?.authMode })
         const ingestTimeoutMs = Math.max(
           Number(cfg?.uploadRequestTimeoutMs) || 0,
           Number(cfg?.mediaRequestTimeoutMs) || 0,
@@ -897,10 +905,12 @@ export default defineBackground({
         }
 
         // Process local files (upload or process)
+        console.log('[QUICK_INGEST] Starting file processing loop', { fileCount: files.length })
         for (const f of files) {
           const id = f?.id || crypto.randomUUID()
           const name = f?.name || 'upload'
           const mediaType = inferUploadMediaTypeFromFile(name, f?.type)
+          console.log('[QUICK_INGEST] Processing file', { id, name, mediaType, dataLength: f?.data?.length })
           const resolvedFileDefaults =
             f?.defaults && typeof f.defaults === 'object'
               ? f.defaults
@@ -913,6 +923,7 @@ export default defineBackground({
                 undefined,
                 resolvedFileDefaults
               )
+              console.log('[QUICK_INGEST] Calling handleUpload', { path: '/api/v1/media/add', name, mediaType })
               const resp = await handleUpload({
                 path: '/api/v1/media/add',
                 method: 'POST',
@@ -920,6 +931,7 @@ export default defineBackground({
                 file: { name, type: f?.type || 'application/octet-stream', data: f?.data },
                 timeoutMs: ingestTimeoutMs
               })
+              console.log('[QUICK_INGEST] handleUpload returned', { ok: resp?.ok, status: resp?.status, error: resp?.error })
               if (!resp?.ok) {
                 const msg = resp?.error || `Upload failed: ${resp?.status}`
                 throw new Error(msg)
@@ -1054,6 +1066,7 @@ export default defineBackground({
     console.log('[BG_STARTUP] Message listener registered')
 
     browser.runtime.onConnect.addListener((port) => {
+      console.log('[BG_CONNECT] Port connected', { name: port.name })
       if (port.name === "pgCopilot") {
         isCopilotRunning = true
         backgroundDiagnostics.ports.copilot += 1

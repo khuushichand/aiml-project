@@ -1,5 +1,5 @@
 import { registerRealServerWorkflows, type CreateWorkflowDriver, withFeatures, ALL_FEATURE_FLAGS_ENABLED } from "../../../test-utils/real-server-workflows"
-import { launchWithExtension } from "./utils/extension"
+import { launchWithBuiltExtension } from "./utils/extension-build"
 import { grantHostPermission } from "./utils/permissions"
 
 const normalizeRoute = (route: string) => {
@@ -54,7 +54,7 @@ const createExtensionDriver: CreateWorkflowDriver = async ({
     })
   }
 
-  const launchResult = await launchWithExtension("", { seedConfig, seedLocalStorage })
+  const launchResult = await launchWithBuiltExtension({ seedConfig, seedLocalStorage })
   const { context, page, extensionId, optionsUrl, sidepanelUrl, openSidepanel } =
     launchResult
 

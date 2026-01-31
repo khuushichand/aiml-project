@@ -19,6 +19,7 @@ https://github.com/OmniSVG/OmniSVG/
 https://pikchr.org/home/doc/trunk/doc/userman.md
 https://news.ycombinator.com/item?id=39651796
 https://d2lang.com/blog/ascii/
+https://github.com/excalidraw/excalidraw
 https://xosh.org/text-to-diagram/
 https://github.com/presenton/presenton
 https://r2r-docs.sciphi.ai/self-hosting/configuration/ingestion

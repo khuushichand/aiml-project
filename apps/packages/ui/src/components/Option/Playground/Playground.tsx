@@ -66,7 +66,7 @@ export const Playground = () => {
     "idle" | "dragging" | "error"
   >("idle")
   const [dropFeedback, setDropFeedback] = React.useState<
-    { type: "info" | "error"; message: string } | null
+    { type: "info" | "error" | "warning"; message: string } | null
   >(null)
   const [playgroundReady, setPlaygroundReady] = React.useState(false)
   const feedbackTimerRef = React.useRef<ReturnType<typeof setTimeout> | null>(
@@ -78,7 +78,7 @@ export const Playground = () => {
   const initializePlaygroundRef = React.useRef(false)
 
   const showDropFeedback = React.useCallback(
-    (feedback: { type: "info" | "error"; message: string }) => {
+    (feedback: { type: "info" | "error" | "warning"; message: string }) => {
       setDropFeedback(feedback)
       if (feedbackTimerRef.current) {
         clearTimeout(feedbackTimerRef.current)
@@ -86,7 +86,7 @@ export const Playground = () => {
       feedbackTimerRef.current = setTimeout(() => {
         setDropFeedback(null)
         feedbackTimerRef.current = null
-      }, 4000)
+      }, 6000)
     },
     []
   )
@@ -124,22 +124,40 @@ export const Playground = () => {
         return
       }
 
-      const newFiles = Array.from(e.dataTransfer?.files || []).slice(0, 5) // Allow multiple files
+      const FILE_LIMIT = 5
+      const allFiles = Array.from(e.dataTransfer?.files || [])
+      const newFiles = allFiles.slice(0, FILE_LIMIT)
+      const droppedExtra = allFiles.length - newFiles.length
+
       if (newFiles.length > 0) {
         setDroppedFiles(newFiles)
-        showDropFeedback({
-          type: "info",
-          message:
-            newFiles.length > 1
-              ? t("playground:drop.readyMultiple", {
-                  count: newFiles.length
-                })
-              : t("playground:drop.readySingle", {
-                  name:
-                    newFiles[0]?.name ||
-                    t("playground:drop.defaultFileName", "File")
-                })
-        })
+
+        // Show warning if files were truncated
+        if (droppedExtra > 0) {
+          showDropFeedback({
+            type: "warning",
+            message: t("playground:drop.limitWarning", {
+              count: newFiles.length,
+              extra: droppedExtra,
+              limit: FILE_LIMIT,
+              defaultValue: `Attached first ${newFiles.length} files. ${droppedExtra} additional file(s) were not attached (limit: ${FILE_LIMIT}).`
+            })
+          })
+        } else {
+          showDropFeedback({
+            type: "info",
+            message:
+              newFiles.length > 1
+                ? t("playground:drop.readyMultiple", {
+                    count: newFiles.length
+                  })
+                : t("playground:drop.readySingle", {
+                    name:
+                      newFiles[0]?.name ||
+                      t("playground:drop.defaultFileName", "File")
+                  })
+          })
+        }
       }
     }
     const handleDragEnter = (e: DragEvent) => {
@@ -480,7 +498,9 @@ export const Playground = () => {
             className={`max-w-lg rounded-full px-4 py-2 text-sm shadow-lg backdrop-blur-sm ${
               dropFeedback.type === "error"
                 ? "border border-danger bg-danger text-white"
-                : "border border-border bg-elevated text-text"
+                : dropFeedback.type === "warning"
+                  ? "border border-yellow-500 bg-yellow-500/10 text-yellow-700 dark:text-yellow-400"
+                  : "border border-border bg-elevated text-text"
             }`}
           >
             {dropFeedback.message}

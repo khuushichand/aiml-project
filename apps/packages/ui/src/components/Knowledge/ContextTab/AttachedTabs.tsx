@@ -44,7 +44,7 @@ export const AttachedTabs: React.FC<AttachedTabsProps> = ({
       {/* Header */}
       <div className="flex items-center justify-between px-3 py-2 bg-surface2/50">
         <span className="text-xs font-semibold text-text">
-          {t("sidepanel:rag.browserTabs", "Browser Tabs")}
+          {t("sidepanel:rag.browserTabs", "Web Pages")}
           {tabs.length > 0 && (
             <span className="ml-1.5 text-text-muted">({tabs.length})</span>
           )}

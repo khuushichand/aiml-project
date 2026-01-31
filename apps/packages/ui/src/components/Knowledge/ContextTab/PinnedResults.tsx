@@ -46,7 +46,7 @@ export const PinnedResults: React.FC<PinnedResultsProps> = ({
       {/* Header */}
       <div className="flex items-center justify-between px-3 py-2 bg-surface2/50">
         <span className="text-xs font-semibold text-text">
-          {t("sidepanel:rag.pinnedResults", "Pinned Results")}
+          {t("sidepanel:rag.pinnedResults", "Saved Results")}
           {results.length > 0 && (
             <span className="ml-1.5 text-text-muted">({results.length})</span>
           )}
@@ -87,7 +87,7 @@ export const PinnedResults: React.FC<PinnedResultsProps> = ({
                     {result.source && (
                       <span className="text-[10px] text-text-muted/70 truncate block mt-0.5">
                         {result.type && `${result.type} • `}
-                        {t("sidepanel:rag.pinnedFromSearch", "Pinned from search")}
+                        {t("sidepanel:rag.pinnedFromSearch", "Saved from search")}
                       </span>
                     )}
                   </div>
@@ -106,7 +106,7 @@ export const PinnedResults: React.FC<PinnedResultsProps> = ({
           <p className="text-xs text-text-muted text-center py-2">
             {t(
               "sidepanel:rag.noPinnedResults",
-              "No pinned results. Pin items from the Search tab."
+              "No saved results. Save items from the Search tab."
             )}
           </p>
         )}

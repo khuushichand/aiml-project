@@ -8,4 +8,4 @@
  */
 
 export { KnowledgePanel } from "./KnowledgePanel"
-export type { KnowledgePanelProps } from "./KnowledgePanel"
+export type { KnowledgePanelProps, KnowledgeTab } from "./KnowledgePanel"

@@ -8341,11 +8341,9 @@ async def run_parallel_adapter(config: Dict[str, Any], context: Dict[str, Any]) 
             step_cfg = step_config.get("config", {})
 
             try:
-                # Dynamic dispatch to adapter
-                adapter_name = f"run_{step_type}_adapter"
-                adapter_module = sys.modules.get(__name__)
-                if adapter_module and hasattr(adapter_module, adapter_name):
-                    adapter = getattr(adapter_module, adapter_name)
+                # Look up adapter in explicit registry (avoids fragile sys.modules inspection)
+                adapter = get_adapter(step_type)
+                if adapter is not None:
                     result = await adapter(step_cfg, context)
                     results[idx] = result
                 else:
@@ -8452,12 +8450,10 @@ async def run_retry_adapter(config: Dict[str, Any], context: Dict[str, Any]) -> 
     backoff_max = float(config.get("backoff_max", 30.0))
     retry_on_errors = config.get("retry_on_errors")  # List of error patterns to retry on
 
-    adapter_name = f"run_{step_type}_adapter"
-    adapter_module = sys.modules.get(__name__)
-    if not adapter_module or not hasattr(adapter_module, adapter_name):
+    # Look up adapter in explicit registry (avoids fragile sys.modules inspection)
+    adapter = get_adapter(step_type)
+    if adapter is None:
         return {"error": f"unknown_step_type: {step_type}", "result": None}
-
-    adapter = getattr(adapter_module, adapter_name)
     last_error = None
 
     for attempt in range(max_retries + 1):
@@ -12031,3 +12027,155 @@ async def run_literature_review_adapter(config: Dict[str, Any], context: Dict[st
     except Exception as e:
         logger.exception(f"Literature review error: {e}")
         return {"review": "", "error": str(e)}
+
+
+# ---------------------------------------------------------------------------
+# Adapter Registry
+# ---------------------------------------------------------------------------
+# This registry provides explicit mapping from step_type -> adapter function.
+# Used by parallel/retry adapters instead of dynamic sys.modules inspection.
+# ---------------------------------------------------------------------------
+
+def get_adapter(step_type: str):
+    """Look up adapter function by step type name.
+
+    Args:
+        step_type: The workflow step type (e.g., "llm", "prompt", "rag_search")
+
+    Returns:
+        The adapter coroutine function, or None if not found.
+    """
+    return ADAPTER_REGISTRY.get(step_type)
+
+
+ADAPTER_REGISTRY: Dict[str, Any] = {
+    "prompt": run_prompt_adapter,
+    "llm": run_llm_adapter,
+    "rag_search": run_rag_search_adapter,
+    "media_ingest": run_media_ingest_adapter,
+    "kanban": run_kanban_adapter,
+    "delay": run_delay_adapter,
+    "log": run_log_adapter,
+    "policy_check": run_policy_check_adapter,
+    "tts": run_tts_adapter,
+    "process_media": run_process_media_adapter,
+    "rss_fetch": run_rss_fetch_adapter,
+    "atom_fetch": run_rss_fetch_adapter,  # Alias
+    "embed": run_embed_adapter,
+    "translate": run_translate_adapter,
+    "stt_transcribe": run_stt_transcribe_adapter,
+    "notify": run_notify_adapter,
+    "diff_change_detector": run_diff_change_adapter,
+    "branch": run_branch_adapter,
+    "map": run_map_adapter,
+    "mcp_tool": run_mcp_tool_adapter,
+    "webhook": run_webhook_adapter,
+    "notes": run_notes_adapter,
+    "prompts": run_prompts_adapter,
+    "chunking": run_chunking_adapter,
+    "web_search": run_web_search_adapter,
+    "collections": run_collections_adapter,
+    "chatbooks": run_chatbooks_adapter,
+    "evaluations": run_evaluations_adapter,
+    "claims_extract": run_claims_extract_adapter,
+    "character_chat": run_character_chat_adapter,
+    "moderation": run_moderation_adapter,
+    "sandbox_exec": run_sandbox_exec_adapter,
+    "image_gen": run_image_gen_adapter,
+    "summarize": run_summarize_adapter,
+    "query_expand": run_query_expand_adapter,
+    "rerank": run_rerank_adapter,
+    "citations": run_citations_adapter,
+    "ocr": run_ocr_adapter,
+    "pdf_extract": run_pdf_extract_adapter,
+    "voice_intent": run_voice_intent_adapter,
+    # Tier 1: Research Automation
+    "query_rewrite": run_query_rewrite_adapter,
+    "hyde_generate": run_hyde_generate_adapter,
+    "semantic_cache_check": run_semantic_cache_check_adapter,
+    "search_aggregate": run_search_aggregate_adapter,
+    "entity_extract": run_entity_extract_adapter,
+    "bibliography_generate": run_bibliography_generate_adapter,
+    "document_table_extract": run_document_table_extract_adapter,
+    "audio_diarize": run_audio_diarize_adapter,
+    # Tier 2: Learning/Education
+    "flashcard_generate": run_flashcard_generate_adapter,
+    "quiz_generate": run_quiz_generate_adapter,
+    "quiz_evaluate": run_quiz_evaluate_adapter,
+    "outline_generate": run_outline_generate_adapter,
+    "glossary_extract": run_glossary_extract_adapter,
+    "mindmap_generate": run_mindmap_generate_adapter,
+    "eval_readability": run_eval_readability_adapter,
+    # Tier 3: Data Processing
+    "json_transform": run_json_transform_adapter,
+    "json_validate": run_json_validate_adapter,
+    "csv_to_json": run_csv_to_json_adapter,
+    "json_to_csv": run_json_to_csv_adapter,
+    "regex_extract": run_regex_extract_adapter,
+    "text_clean": run_text_clean_adapter,
+    "xml_transform": run_xml_transform_adapter,
+    "template_render": run_template_render_adapter,
+    "batch": run_batch_adapter,
+    # Tier 4: Workflow Orchestration
+    "workflow_call": run_workflow_call_adapter,
+    "parallel": run_parallel_adapter,
+    "cache_result": run_cache_result_adapter,
+    "retry": run_retry_adapter,
+    "checkpoint": run_checkpoint_adapter,
+    # Tier 5: External Integrations
+    "s3_upload": run_s3_upload_adapter,
+    "s3_download": run_s3_download_adapter,
+    "github_create_issue": run_github_create_issue_adapter,
+    # Tier 6: Agentic Support
+    "llm_with_tools": run_llm_with_tools_adapter,
+    "llm_critique": run_llm_critique_adapter,
+    "context_build": run_context_build_adapter,
+    # Phase 2: Group A - Individual Utility Nodes
+    "document_merge": run_document_merge_adapter,
+    "document_diff": run_document_diff_adapter,
+    "markdown_to_html": run_markdown_to_html_adapter,
+    "html_to_markdown": run_html_to_markdown_adapter,
+    "keyword_extract": run_keyword_extract_adapter,
+    "sentiment_analyze": run_sentiment_analyze_adapter,
+    "language_detect": run_language_detect_adapter,
+    "topic_model": run_topic_model_adapter,
+    "token_count": run_token_count_adapter,
+    "context_window_check": run_context_window_check_adapter,
+    "llm_compare": run_llm_compare_adapter,
+    "image_describe": run_image_describe_adapter,
+    "report_generate": run_report_generate_adapter,
+    "newsletter_generate": run_newsletter_generate_adapter,
+    "slides_generate": run_slides_generate_adapter,
+    "diagram_generate": run_diagram_generate_adapter,
+    "email_send": run_email_send_adapter,
+    "screenshot_capture": run_screenshot_capture_adapter,
+    "schedule_workflow": run_schedule_workflow_adapter,
+    "timing_start": run_timing_start_adapter,
+    "timing_stop": run_timing_stop_adapter,
+    # Phase 2: Group B - Audio & Video Processing
+    "audio_normalize": run_audio_normalize_adapter,
+    "audio_concat": run_audio_concat_adapter,
+    "audio_trim": run_audio_trim_adapter,
+    "audio_convert": run_audio_convert_adapter,
+    "audio_extract": run_audio_extract_adapter,
+    "audio_mix": run_audio_mix_adapter,
+    "video_thumbnail": run_video_thumbnail_adapter,
+    "video_trim": run_video_trim_adapter,
+    "video_concat": run_video_concat_adapter,
+    "video_convert": run_video_convert_adapter,
+    "video_extract_frames": run_video_extract_frames_adapter,
+    "subtitle_generate": run_subtitle_generate_adapter,
+    "subtitle_translate": run_subtitle_translate_adapter,
+    "subtitle_burn": run_subtitle_burn_adapter,
+    # Phase 2: Group C - Research & Academic
+    "arxiv_search": run_arxiv_search_adapter,
+    "arxiv_download": run_arxiv_download_adapter,
+    "pubmed_search": run_pubmed_search_adapter,
+    "semantic_scholar_search": run_semantic_scholar_search_adapter,
+    "google_scholar_search": run_google_scholar_search_adapter,
+    "patent_search": run_patent_search_adapter,
+    "doi_resolve": run_doi_resolve_adapter,
+    "reference_parse": run_reference_parse_adapter,
+    "bibtex_generate": run_bibtex_generate_adapter,
+    "literature_review": run_literature_review_adapter,
+}

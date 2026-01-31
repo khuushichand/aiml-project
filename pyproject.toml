@@ -89,6 +89,7 @@ dependencies = [
 
   # Security
   "cryptography>=41.0.0",
+  "regex>=2024.0.0",
   "keyring>=24.0.0",
   "puremagic>=1.15",
   "pycryptodomex>=3.18.0",
