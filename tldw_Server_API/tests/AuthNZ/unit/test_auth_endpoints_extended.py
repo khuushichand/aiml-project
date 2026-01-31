@@ -218,9 +218,14 @@ async def test_login_returns_mfa_challenge_when_enabled(monkeypatch):
     class _StubSessionManager:
         def __init__(self):
             self.cached = {}
+            self.created_kwargs = {}
+            self.created_at = None
             self.redis_client = object()
 
         async def create_session(self, **kwargs):
+            from datetime import datetime, timezone as _tz
+            self.created_kwargs = dict(kwargs)
+            self.created_at = datetime.now(_tz.utc)
             return {"session_id": 777}
 
         async def store_ephemeral_value(self, key: str, value: str, ttl_seconds: int):
@@ -279,6 +284,14 @@ async def test_login_returns_mfa_challenge_when_enabled(monkeypatch):
     assert result.expires_in == 300
     assert result.session_token
     assert session_manager.cached
+    expires_at = session_manager.created_kwargs.get("expires_at_override")
+    refresh_expires_at = session_manager.created_kwargs.get("refresh_expires_at_override")
+    assert expires_at is not None
+    assert refresh_expires_at == expires_at
+    # Should be a short-lived expiry (roughly the MFA TTL)
+    assert expires_at.tzinfo is not None
+    delta = (expires_at - session_manager.created_at).total_seconds()
+    assert 290 <= delta <= 305
 
 
 @pytest.mark.asyncio
@@ -403,3 +416,109 @@ async def test_mfa_login_completes_tokens(monkeypatch):
     assert result.refresh_token == "REFRESH"
     assert session_manager.updated["session_id"] == 55
     assert cache_key in session_manager.deleted
+
+
+@pytest.mark.asyncio
+async def test_logout_accepts_lowercase_bearer(monkeypatch):
+    reset_settings()
+
+    import tldw_Server_API.app.api.v1.endpoints.auth as auth
+
+    captured = {"revoked": False}
+
+    class StubJWT:
+        def extract_jti(self, token: str) -> str:
+            return "jti-abc"
+
+        def verify_token(self, token: str):
+            return {"exp": 1_700_000_000, "session_id": 123}
+
+    class StubBlacklist:
+        async def revoke_all_user_tokens(self, **kwargs):
+            return 0
+
+        async def revoke_token(self, **kwargs):
+            captured["revoked"] = True
+            return True
+
+    class StubSessionManager:
+        async def revoke_all_user_sessions(self, **kwargs):
+            return None
+
+        async def revoke_session(self, **kwargs):
+            return None
+
+    monkeypatch.setattr(auth, "get_token_blacklist", lambda: StubBlacklist())
+
+    scope = {
+        "type": "http",
+        "method": "POST",
+        "path": "/api/v1/auth/logout",
+        "headers": [(b"authorization", b"bearer my-token")],
+        "client": ("203.0.113.5", 1234),
+        "scheme": "http",
+        "query_string": b"",
+        "server": ("testserver", 80),
+    }
+    request = Request(scope)
+    data = auth.LogoutRequest(all_devices=False)
+    current_user = SimpleNamespace(id=99)
+    session_manager = StubSessionManager()
+    jwt_service = StubJWT()
+
+    result = await auth.logout(
+        data=data,
+        request=request,
+        current_user=current_user,
+        session_manager=session_manager,
+        jwt_service=jwt_service,
+    )
+
+    assert result.message == "Successfully logged out"
+    assert captured["revoked"] is True
+
+
+@pytest.mark.asyncio
+async def test_refresh_single_user_respects_ip_allowlist(monkeypatch):
+    monkeypatch.setenv("AUTH_MODE", "single_user")
+    monkeypatch.setenv("SINGLE_USER_API_KEY", "single-key")
+    monkeypatch.setenv("SINGLE_USER_ALLOWED_IPS", "127.0.0.1")
+    reset_settings()
+
+    import tldw_Server_API.app.api.v1.endpoints.auth as auth
+
+    async def _fake_fetch_active_user_by_id(db, user_id: int):
+        return {
+            "id": user_id,
+            "username": "single_user",
+            "email": "single@example.com",
+            "role": "admin",
+            "is_active": True,
+        }
+
+    monkeypatch.setattr(auth, "fetch_active_user_by_id", _fake_fetch_active_user_by_id)
+
+    scope = {
+        "type": "http",
+        "method": "POST",
+        "path": "/api/v1/auth/refresh",
+        "headers": [],
+        "client": ("203.0.113.10", 1234),
+        "scheme": "http",
+        "query_string": b"",
+        "server": ("testserver", 80),
+    }
+    request = Request(scope)
+    response = Response()
+
+    with pytest.raises(auth.HTTPException) as exc:
+        await auth.refresh_token(
+            payload=auth.RefreshTokenRequest(refresh_token="single-key"),
+            response=response,
+            http_request=request,
+            jwt_service=object(),
+            session_manager=object(),
+            db=None,
+            settings=auth.get_settings(),
+        )
+    assert exc.value.status_code == 401

@@ -167,7 +167,8 @@ class RAGEvaluator:
         ground_truth: Optional[str] = None,
         metrics: Optional[List[str]] = None,
         api_name: str = "openai",
-        metric_weights: Optional[Dict[str, float]] = None
+        metric_weights: Optional[Dict[str, float]] = None,
+        model: Optional[str] = None,
     ) -> Dict[str, Any]:
         """
         Evaluate RAG system performance.
@@ -197,11 +198,11 @@ class RAGEvaluator:
         metric_names = []  # Track which metrics we're actually evaluating
 
         if "relevance" in metrics or "answer_relevance" in metrics:
-            tasks.append(self._evaluate_relevance(query, response, api_name))
+            tasks.append(self._evaluate_relevance(query, response, api_name, model))
             metric_names.append("relevance")
 
         if "faithfulness" in metrics or "answer_faithfulness" in metrics:
-            tasks.append(self._evaluate_faithfulness(response, contexts, api_name))
+            tasks.append(self._evaluate_faithfulness(response, contexts, api_name, model))
             metric_names.append("faithfulness")
 
         if "answer_similarity" in metrics and ground_truth:
@@ -209,20 +210,20 @@ class RAGEvaluator:
             metric_names.append("answer_similarity")
 
         if "context_relevance" in metrics:
-            tasks.append(self._evaluate_context_relevance(query, contexts, api_name))
+            tasks.append(self._evaluate_context_relevance(query, contexts, api_name, model))
             metric_names.append("context_relevance")
 
         if "context_precision" in metrics:
-            tasks.append(self._evaluate_context_precision(query, contexts, api_name))
+            tasks.append(self._evaluate_context_precision(query, contexts, api_name, model))
             metric_names.append("context_precision")
 
         if "context_recall" in metrics and ground_truth:
-            tasks.append(self._evaluate_context_recall(ground_truth, contexts, api_name))
+            tasks.append(self._evaluate_context_recall(ground_truth, contexts, api_name, model))
             metric_names.append("context_recall")
 
         # Optional: claim-level faithfulness using claim extraction + verification
         if "claim_faithfulness" in metrics:
-            tasks.append(self._evaluate_claim_faithfulness(response, contexts, api_name))
+            tasks.append(self._evaluate_claim_faithfulness(response, contexts, api_name, model))
             metric_names.append("claim_faithfulness")
 
         # Run evaluations in parallel with error handling
@@ -289,7 +290,7 @@ class RAGEvaluator:
 
         return results
 
-    async def _evaluate_claim_faithfulness(self, response: str, contexts: List[str], api_name: str) -> tuple:
+    async def _evaluate_claim_faithfulness(self, response: str, contexts: List[str], api_name: str, model: Optional[str]) -> tuple:
         """Evaluate claim-level faithfulness by verifying extracted claims against contexts.
 
         Uses ClaimsEngine with APS-style extraction (gemma_aps) and hybrid verification.
@@ -305,7 +306,10 @@ class RAGEvaluator:
                     # Minimal fallback if Document import shape changes
                     docs.append(Document(id=f"ctx_{i+1}", content=str(ctx or ""), metadata={}))
 
-            engine = ClaimsEngine(analyze)
+            analyze_fn = analyze
+            if model:
+                analyze_fn = lambda *args, **kwargs: analyze(*args, model_override=model, **kwargs)
+            engine = ClaimsEngine(analyze_fn)
             claims_result = await engine.run(
                 answer=response or "",
                 query="",  # not needed for direct verification against contexts
@@ -334,7 +338,7 @@ class RAGEvaluator:
             logger.error(f"Claim faithfulness evaluation failed: {e}")
             raise ValueError(f"Claim faithfulness evaluation failed: {str(e)}")
 
-    async def _evaluate_relevance(self, query: str, response: str, api_name: str) -> tuple:
+    async def _evaluate_relevance(self, query: str, response: str, api_name: str, model: Optional[str]) -> tuple:
         """Evaluate relevance of response to query"""
         prompt = f"""
         Evaluate how relevant the following response is to the given query.
@@ -371,7 +375,8 @@ class RAGEvaluator:
                 prompt,    # custom_prompt_arg
                 self.api_key,  # api_key (None to load from config)
                 "You are an evaluation expert. Provide only numeric scores.",  # system_message
-                0.1        # temp
+                0.1,       # temp
+                model_override=model,
             )
 
             raw = float(score_str.strip())
@@ -402,7 +407,7 @@ class RAGEvaluator:
             # Raise exception instead of returning 0.0
             raise ValueError(f"Relevance evaluation failed: {str(e)}")
 
-    async def _evaluate_faithfulness(self, response: str, contexts: List[str], api_name: str) -> tuple:
+    async def _evaluate_faithfulness(self, response: str, contexts: List[str], api_name: str, model: Optional[str]) -> tuple:
         """Evaluate if response is grounded in contexts"""
         combined_context = "\n\n".join(contexts)
 
@@ -442,7 +447,8 @@ class RAGEvaluator:
                 prompt,    # custom_prompt_arg
                 self.api_key,  # api_key (None to load from config)
                 "You are an evaluation expert. Provide only numeric scores.",  # system_message
-                0.1        # temp
+                0.1,       # temp
+                model_override=model,
             )
 
             raw = float(score_str.strip())
@@ -631,7 +637,7 @@ class RAGEvaluator:
             # Raise exception instead of returning 0.0 (fixing error handling issue)
             raise ValueError(f"Answer similarity evaluation failed: {str(e)}")
 
-    async def _evaluate_context_precision(self, query: str, contexts: List[str], api_name: str) -> tuple:
+    async def _evaluate_context_precision(self, query: str, contexts: List[str], api_name: str, model: Optional[str]) -> tuple:
         """Evaluate precision of retrieved contexts"""
         # Check each context for relevance
         relevance_scores = []
@@ -655,7 +661,8 @@ class RAGEvaluator:
                     prompt,    # custom_prompt_arg
                     self.api_key,  # api_key (None to load from config)
                     "You are an evaluation expert. Provide only numeric scores.",  # system_message
-                    0.1        # temp
+                    0.1,       # temp
+                    model_override=model,
                 )
 
                 relevance_scores.append(float(score_str.strip()) / 5.0)

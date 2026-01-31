@@ -2,7 +2,8 @@
 Evaluations audit adapter
 
 Bridges legacy Evaluations audit events to the unified audit service.
-Provides small wrappers suitable for use from service code without DI.
+Provides sync and async wrappers that enforce mandatory audit logging
+without requiring DI at call sites.
 """
 
 from __future__ import annotations
@@ -46,6 +47,7 @@ _SYNC_LOOP: Optional[asyncio.AbstractEventLoop] = None
 _SYNC_LOOP_THREAD: Optional[threading.Thread] = None
 _SYNC_LOOP_LOCK = threading.Lock()
 _SYNC_LOOP_READY = threading.Event()
+_MANDATORY_TIMEOUT_S = 5.0
 
 
 def _env_truthy(key: str) -> bool:
@@ -124,48 +126,33 @@ async def _get_svc(user_id: Optional[str]) -> UnifiedAuditService:
 
 
 def _schedule(coro) -> None:
-    try:
-        asyncio.get_running_loop().create_task(coro)
-        return
-    except RuntimeError:
-        pass
-
     loop = _ensure_sync_loop()
     if loop is None:
-        # No loop available; suppress warning and close coroutine
+        # No loop available; close coroutine and surface the failure.
         with warnings.catch_warnings():
             warnings.filterwarnings("ignore", message="coroutine.*was never awaited")
             try:
                 coro.close()  # type: ignore[attr-defined]
             except Exception:
                 pass
-        return
+        raise RuntimeError("Evaluations audit adapter unavailable: no event loop")
 
     try:
         fut = asyncio.run_coroutine_threadsafe(coro, loop)
-    except Exception:
+    except Exception as exc:
         with warnings.catch_warnings():
             warnings.filterwarnings("ignore", message="coroutine.*was never awaited")
             try:
                 coro.close()  # type: ignore[attr-defined]
             except Exception:
                 pass
-        return
+        raise RuntimeError("Evaluations audit adapter failed to schedule") from exc
 
-    def _log_failure(done_fut) -> None:
-        try:
-            exc = done_fut.exception()
-            if exc:
-                logger.warning(f"Evaluations audit sync task failed: {exc}")
-        except Exception:
-            pass
-
-    fut.add_done_callback(_log_failure)
-    if _in_test_mode():
-        try:
-            fut.result(timeout=5)
-        except Exception as e:
-            logger.warning(f"Evaluations audit sync task timed out: {e}")
+    try:
+        fut.result(timeout=_MANDATORY_TIMEOUT_S)
+    except Exception as exc:
+        logger.error(f"Evaluations audit sync task failed: {exc}")
+        raise
 
 
 async def _emit(
@@ -178,29 +165,69 @@ async def _emit(
     result: str = "success",
     metadata: Optional[Dict[str, Any]] = None,
 ) -> None:
-    try:
-        svc = await _get_svc(user_id)
-        ctx = AuditContext(user_id=user_id)
-        await svc.log_event(
-            event_type=event_type,
-            context=ctx,
-            action=action,
-            resource_type=resource_type,
-            resource_id=resource_id,
-            result=result,
-            metadata=metadata,
-        )
-        # Flush immediately in test environments to make events visible to queries
-        try:
-            if _in_test_mode():
-                await svc.flush()
-        except Exception:
-            pass
-    except Exception as e:
-        logger.debug(f"Evaluations audit emit failed: {e}")
+    svc = await _get_svc(user_id)
+    ctx = AuditContext(user_id=user_id)
+    await svc.log_event(
+        event_type=event_type,
+        context=ctx,
+        action=action,
+        resource_type=resource_type,
+        resource_id=resource_id,
+        result=result,
+        metadata=metadata,
+    )
+    # Mandatory audit: flush immediately and surface failures.
+    await svc.flush(raise_on_failure=True)
 
 
 # Convenience wrappers
+
+async def log_evaluation_created_async(*, user_id: str, eval_id: str, name: str, eval_type: str) -> None:
+    await _emit(user_id=user_id, event_type=UEvent.DATA_WRITE, action="evaluation_create", resource_type="evaluation", resource_id=eval_id, metadata={"name": name, "type": eval_type})
+
+
+async def log_evaluation_updated_async(*, user_id: str, eval_id: str, updates: Dict[str, Any]) -> None:
+    await _emit(user_id=user_id, event_type=UEvent.DATA_UPDATE, action="evaluation_update", resource_type="evaluation", resource_id=eval_id, metadata={"updates": list(updates.keys())})
+
+
+async def log_evaluation_deleted_async(*, user_id: str, eval_id: str) -> None:
+    await _emit(user_id=user_id, event_type=UEvent.DATA_DELETE, action="evaluation_delete", resource_type="evaluation", resource_id=eval_id)
+
+
+async def log_evaluation_exported_async(*, user_id: str, eval_id: str, eval_type: str, export_format: str, total: Optional[int] = None) -> None:
+    metadata: Dict[str, Any] = {"type": eval_type, "format": export_format}
+    if total is not None:
+        metadata["total"] = int(total)
+    await _emit(user_id=user_id, event_type=UEvent.DATA_EXPORT, action="evaluation_export", resource_type="evaluation", resource_id=eval_id, metadata=metadata)
+
+
+async def log_run_started_async(*, user_id: str, run_id: str, eval_id: str, target_model: str) -> None:
+    await _emit(user_id=user_id, event_type=UEvent.EVAL_STARTED, action="run_create", resource_type="evaluation_run", resource_id=run_id, metadata={"eval_id": eval_id, "target_model": target_model})
+
+
+async def log_run_cancelled_async(*, user_id: str, run_id: str) -> None:
+    await _emit(user_id=user_id, event_type=UEvent.EVAL_FAILED, action="run_cancelled", resource_type="evaluation_run", resource_id=run_id, result="failure")
+
+
+async def log_dataset_created_async(*, user_id: str, dataset_id: str, name: str, samples: int) -> None:
+    await _emit(user_id=user_id, event_type=UEvent.DATA_WRITE, action="dataset_create", resource_type="dataset", resource_id=dataset_id, metadata={"name": name, "samples": samples})
+
+
+async def log_dataset_deleted_async(*, user_id: str, dataset_id: str) -> None:
+    await _emit(user_id=user_id, event_type=UEvent.DATA_DELETE, action="dataset_delete", resource_type="dataset", resource_id=dataset_id)
+
+
+async def log_webhook_registration_async(*, user_id: str, webhook_id: Optional[str], url: str, events: list[str], success: bool, error: Optional[str] = None) -> None:
+    event = UEvent.SECURITY_SCAN if success else UEvent.SECURITY_VIOLATION
+    res = "success" if success else "failure"
+    await _emit(user_id=user_id, event_type=event, action="webhook_register", resource_type="webhook", resource_id=str(webhook_id) if webhook_id else None, result=res, metadata={"url": url, "events": events, "error": error})
+
+
+async def log_webhook_unregistration_async(*, user_id: str, webhook_id: Optional[str], url: str, events: list[str], success: bool, error: Optional[str] = None) -> None:
+    event = UEvent.SECURITY_SCAN if success else UEvent.SECURITY_VIOLATION
+    res = "success" if success else "failure"
+    await _emit(user_id=user_id, event_type=event, action="webhook_unregister", resource_type="webhook", resource_id=str(webhook_id) if webhook_id else None, result=res, metadata={"url": url, "events": events, "error": error})
+
 
 def log_evaluation_created(*, user_id: str, eval_id: str, name: str, eval_type: str) -> None:
     _schedule(_emit(user_id=user_id, event_type=UEvent.DATA_WRITE, action="evaluation_create", resource_type="evaluation", resource_id=eval_id, metadata={"name": name, "type": eval_type}))

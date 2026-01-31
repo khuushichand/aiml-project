@@ -17,7 +17,9 @@ import WatchlistsPanel from './components/WatchlistsPanel';
 import type {
   Metric,
   MetricsHistoryPoint,
+  NotificationChannel,
   NotificationSettings,
+  NotificationSettingsApi,
   RecentNotification,
   SystemAlert,
   SystemHealthStatus,
@@ -47,6 +49,12 @@ const METRICS_HISTORY_MAX_POINTS = 288;
 const METRICS_HISTORY_POLL_MS = 5 * 60 * 1000;
 const METRIC_CRITICAL_THRESHOLD = 90;
 const METRIC_WARNING_THRESHOLD = 70;
+const DEFAULT_NOTIFICATION_SETTINGS: NotificationSettings = {
+  channels: [],
+  alert_threshold: 'warning',
+  digest_enabled: false,
+  digest_frequency: 'daily',
+};
 const DEFAULT_SYSTEM_STATUS: SystemStatusItem[] = [
   { key: 'api', label: 'API Server', status: 'unknown', detail: 'Checking...' },
   { key: 'database', label: 'Database', status: 'unknown', detail: 'Checking...' },
@@ -92,6 +100,95 @@ export const normalizeHealthStatus = (status?: string): SystemHealthStatus => {
     return 'critical';
   }
   return 'unknown';
+};
+
+const normalizeAlertThreshold = (value?: string): NotificationSettings['alert_threshold'] => {
+  const normalized = typeof value === 'string' ? value.toLowerCase() : '';
+  switch (normalized) {
+    case 'info':
+    case 'warning':
+    case 'error':
+    case 'critical':
+      return normalized as NotificationSettings['alert_threshold'];
+    default:
+      return 'warning';
+  }
+};
+
+const toApiMinSeverity = (value: NotificationSettings['alert_threshold']): string => {
+  if (value === 'info' || value === 'warning' || value === 'critical') {
+    return value;
+  }
+  return 'warning';
+};
+
+const isNotificationSettingsUi = (value: unknown): value is NotificationSettings =>
+  Boolean(value && typeof value === 'object' && Array.isArray((value as NotificationSettings).channels));
+
+const getChannelConfigValue = (channel?: NotificationChannel): string => {
+  if (!channel?.config) return '';
+  const direct = channel.type === 'email' ? channel.config.address : channel.config.url;
+  if (typeof direct === 'string' && direct.trim()) return direct.trim();
+  const first = Object.values(channel.config)[0];
+  return typeof first === 'string' ? first.trim() : '';
+};
+
+const normalizeNotificationSettings = (value: unknown): NotificationSettings => {
+  if (!value || typeof value !== 'object') {
+    return { ...DEFAULT_NOTIFICATION_SETTINGS };
+  }
+
+  if (isNotificationSettingsUi(value)) {
+    const ui = value as NotificationSettings;
+    return {
+      id: ui.id,
+      channels: Array.isArray(ui.channels) ? ui.channels : [],
+      alert_threshold: normalizeAlertThreshold(ui.alert_threshold),
+      digest_enabled: ui.digest_enabled ?? DEFAULT_NOTIFICATION_SETTINGS.digest_enabled,
+      digest_frequency: ui.digest_frequency ?? DEFAULT_NOTIFICATION_SETTINGS.digest_frequency,
+    };
+  }
+
+  const apiValue = value as NotificationSettingsApi;
+  const enabled = apiValue.enabled ?? true;
+  const channels: NotificationChannel[] = [];
+  if (apiValue.email_to && String(apiValue.email_to).trim()) {
+    channels.push({
+      type: 'email',
+      enabled,
+      config: { address: String(apiValue.email_to).trim() },
+    });
+  }
+  if (apiValue.webhook_url && String(apiValue.webhook_url).trim()) {
+    channels.push({
+      type: 'webhook',
+      enabled,
+      config: { url: String(apiValue.webhook_url).trim() },
+    });
+  }
+  return {
+    ...DEFAULT_NOTIFICATION_SETTINGS,
+    channels,
+    alert_threshold: normalizeAlertThreshold(apiValue.min_severity),
+  };
+};
+
+const buildNotificationSettingsUpdate = (settings: NotificationSettings): NotificationSettingsApi => {
+  const channels = settings.channels ?? [];
+  const emailValues = channels
+    .filter((channel) => channel.type === 'email')
+    .map(getChannelConfigValue)
+    .filter((value) => value);
+  const webhookChannel = channels.find(
+    (channel) => channel.type === 'webhook' || channel.type === 'slack' || channel.type === 'discord'
+  );
+  const webhookUrl = getChannelConfigValue(webhookChannel);
+  return {
+    enabled: channels.some((channel) => channel.enabled),
+    min_severity: toApiMinSeverity(settings.alert_threshold),
+    email_to: emailValues.length ? emailValues.join(',') : '',
+    webhook_url: webhookUrl || '',
+  };
 };
 
 export default function MonitoringPage() {
@@ -190,13 +287,7 @@ export default function MonitoringPage() {
       // Process notification settings
       setNotificationSettingsStatus(notificationSettingsData.status);
       if (notificationSettingsData.status === 'fulfilled') {
-        const data = notificationSettingsData.value as NotificationSettings;
-        setNotificationSettings(data || {
-          channels: [],
-          alert_threshold: 'warning',
-          digest_enabled: false,
-          digest_frequency: 'daily',
-        });
+        setNotificationSettings(normalizeNotificationSettings(notificationSettingsData.value));
       } else {
         setNotificationSettings(null);
       }
@@ -432,8 +523,9 @@ export default function MonitoringPage() {
     try {
       setNotificationsSaving(true);
       setError('');
-      await api.updateNotificationSettings(settings as unknown as Record<string, unknown>);
-      setNotificationSettings(settings);
+      const payload = buildNotificationSettingsUpdate(settings);
+      const updated = await api.updateNotificationSettings(payload as unknown as Record<string, unknown>);
+      setNotificationSettings(normalizeNotificationSettings(updated));
       setSuccess('Notification settings saved');
       return true;
     } catch (err: unknown) {

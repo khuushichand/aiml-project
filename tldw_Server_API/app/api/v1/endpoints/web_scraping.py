@@ -59,7 +59,7 @@ async def get_scraping_job_status(
     """
     try:
         service = get_web_scraping_service()
-        return await service.get_job_status(job_id)
+        return await service.get_job_status(job_id, current_user)
     except Exception as e:
         logger.error(f"Failed to get job status for {job_id}: {e}")
         raise HTTPException(status_code=500, detail=str(e))
@@ -81,7 +81,7 @@ async def cancel_scraping_job(
     """
     try:
         service = get_web_scraping_service()
-        return await service.cancel_job(job_id)
+        return await service.cancel_job(job_id, current_user)
     except Exception as e:
         logger.error(f"Failed to cancel job {job_id}: {e}")
         raise HTTPException(status_code=500, detail=str(e))

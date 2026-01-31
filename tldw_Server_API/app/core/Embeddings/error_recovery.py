@@ -172,17 +172,14 @@ class DeadLetterQueue:
             f"provider={provider}, "
             f"model={model}"
         )
-        try:
-            # Best-effort audit for certain classes of failures
-            if failure_reason in {FailureReason.RATE_LIMIT, FailureReason.QUOTA_EXCEEDED}:
-                log_security_violation(user_id=user_id, action="embeddings_rate_limit_or_quota", metadata={
-                    "job_id": job_id,
-                    "provider": provider,
-                    "model": model,
-                    "failure_reason": failure_reason.value,
-                })
-        except Exception:
-            pass
+        # Mandatory audit for certain classes of failures
+        if failure_reason in {FailureReason.RATE_LIMIT, FailureReason.QUOTA_EXCEEDED}:
+            log_security_violation(user_id=user_id, action="embeddings_rate_limit_or_quota", metadata={
+                "job_id": job_id,
+                "provider": provider,
+                "model": model,
+                "failure_reason": failure_reason.value,
+            })
 
         return job_id
 

@@ -125,3 +125,39 @@ def test_list_input_rejects_empty_strings(client):
     r = client.post("/api/v1/embeddings", json=payload)
     assert r.status_code == 400
     assert "empty strings" in r.json().get("detail", "").lower()
+
+
+@pytest.mark.unit
+def test_single_token_array_allows_large_length(client, monkeypatch):
+    async def override_user():
+        from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import User
+        return User(id=1, username="u", email="u@x", is_active=True, is_admin=False)
+
+    app.dependency_overrides[get_request_user] = override_user
+
+    import tldw_Server_API.app.api.v1.endpoints.embeddings_v5_production_enhanced as emb_mod
+    monkeypatch.setattr(emb_mod, "_get_model_max_tokens", lambda _provider, _model: 4096)
+
+    payload = {
+        "model": "text-embedding-3-small",
+        "input": list(range(2050)),
+    }
+    r = client.post("/api/v1/embeddings", json=payload)
+    assert r.status_code == 200
+
+
+@pytest.mark.unit
+def test_provider_header_case_insensitive(client):
+    async def override_user():
+        from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import User
+        return User(id=1, username="u", email="u@x", is_active=True, is_admin=False)
+
+    app.dependency_overrides[get_request_user] = override_user
+
+    client.headers["x-provider"] = "OpenAI"
+    payload = {
+        "model": "text-embedding-3-small",
+        "input": "hello",
+    }
+    r = client.post("/api/v1/embeddings", json=payload)
+    assert r.status_code == 200
