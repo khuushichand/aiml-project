@@ -14,8 +14,14 @@ This module includes adapters for various content generation operations:
 
 from __future__ import annotations
 
+import json
+import re
 from typing import Any, Dict
 
+from loguru import logger
+
+from tldw_Server_API.app.core.Chat.prompt_template_manager import apply_template_to_string
+from tldw_Server_API.app.core.Workflows.adapters._common import extract_openai_content
 from tldw_Server_API.app.core.Workflows.adapters._registry import registry
 from tldw_Server_API.app.core.Workflows.adapters.content._config import (
     FlashcardGenerateConfig,
@@ -39,19 +45,73 @@ from tldw_Server_API.app.core.Workflows.adapters.content._config import (
     config_model=FlashcardGenerateConfig,
 )
 async def run_flashcard_generate_adapter(config: Dict[str, Any], context: Dict[str, Any]) -> Dict[str, Any]:
-    """Generate flashcards from text content.
+    """Generate flashcards from content using LLM."""
+    if callable(context.get("is_cancelled")) and context["is_cancelled"]():
+        return {"__status__": "cancelled"}
 
-    Config:
-      - text: str (templated) - Source text for flashcard generation
-      - provider: str - LLM provider
-      - model: str - Model to use
-      - count: int = 10 - Number of flashcards to generate
-      - difficulty: Literal["easy", "medium", "hard"] = "medium"
-    Output:
-      - {"flashcards": [{"front": str, "back": str}], "count": int}
-    """
-    from tldw_Server_API.app.core.Workflows._adapters_legacy import run_flashcard_generate_adapter as _legacy
-    return await _legacy(config, context)
+    text = config.get("text") or ""
+    if isinstance(text, str):
+        text = apply_template_to_string(text, context) or text
+    text = str(text).strip()
+
+    if not text:
+        prev = context.get("prev") or context.get("last") or {}
+        if isinstance(prev, dict):
+            text = prev.get("text") or prev.get("content") or prev.get("transcript") or ""
+        text = str(text).strip()
+
+    if not text:
+        return {"error": "missing_text", "flashcards": [], "count": 0}
+
+    num_cards = int(config.get("num_cards", 10))
+    card_type = str(config.get("card_type", "basic")).lower()
+    difficulty = str(config.get("difficulty", "medium")).lower()
+    focus_topics = config.get("focus_topics")
+    provider = config.get("provider")
+    model = config.get("model")
+
+    type_instructions = {
+        "basic": "Create standard question/answer flashcards.",
+        "cloze": "Create cloze deletion cards.",
+        "basic_reverse": "Create bidirectional cards."
+    }
+    difficulty_hints = {
+        "easy": "Focus on basic concepts.",
+        "medium": "Include intermediate concepts.",
+        "hard": "Focus on complex details."
+    }
+    topics_hint = f"\nFocus on: {', '.join(focus_topics)}" if focus_topics else ""
+
+    system_prompt = (
+        f"Generate {num_cards} flashcards.\n"
+        f"{type_instructions.get(card_type, type_instructions['basic'])}\n"
+        f"{difficulty_hints.get(difficulty, difficulty_hints['medium'])}{topics_hint}\n"
+        'Return JSON array: [{"front": "Q", "back": "A", "tags": []}]'
+    )
+
+    try:
+        from tldw_Server_API.app.core.Chat.chat_service import perform_chat_api_call_async
+        messages = [{"role": "user", "content": f"Generate flashcards from:\n\n{text[:8000]}"}]
+        response = await perform_chat_api_call_async(
+            messages=messages,
+            api_provider=provider,
+            model=model,
+            system_message=system_prompt,
+            max_tokens=4000,
+            temperature=0.7
+        )
+        response_text = extract_openai_content(response) or "[]"
+        try:
+            json_match = re.search(r'\[[\s\S]*\]', response_text)
+            flashcards = json.loads(json_match.group()) if json_match else []
+        except json.JSONDecodeError:
+            flashcards = []
+        for card in flashcards:
+            card["model_type"] = card_type
+        return {"flashcards": flashcards, "count": len(flashcards)}
+    except Exception as e:
+        logger.exception(f"Flashcard generate adapter error: {e}")
+        return {"error": f"flashcard_generate_error:{e}", "flashcards": [], "count": 0}
 
 
 @registry.register(
@@ -63,20 +123,60 @@ async def run_flashcard_generate_adapter(config: Dict[str, Any], context: Dict[s
     config_model=QuizGenerateConfig,
 )
 async def run_quiz_generate_adapter(config: Dict[str, Any], context: Dict[str, Any]) -> Dict[str, Any]:
-    """Generate quiz questions from text content.
+    """Generate quiz questions from content using LLM."""
+    if callable(context.get("is_cancelled")) and context["is_cancelled"]():
+        return {"__status__": "cancelled"}
 
-    Config:
-      - text: str (templated) - Source text for quiz generation
-      - provider: str - LLM provider
-      - model: str - Model to use
-      - count: int = 5 - Number of questions
-      - question_types: list[str] = ["multiple_choice"] - Types of questions
-      - difficulty: Literal["easy", "medium", "hard"] = "medium"
-    Output:
-      - {"questions": [dict], "count": int}
-    """
-    from tldw_Server_API.app.core.Workflows._adapters_legacy import run_quiz_generate_adapter as _legacy
-    return await _legacy(config, context)
+    text = config.get("text") or ""
+    if isinstance(text, str):
+        text = apply_template_to_string(text, context) or text
+    text = str(text).strip()
+
+    if not text:
+        prev = context.get("prev") or context.get("last") or {}
+        if isinstance(prev, dict):
+            text = prev.get("text") or prev.get("content") or prev.get("transcript") or ""
+        text = str(text).strip()
+
+    if not text:
+        return {"error": "missing_text", "questions": [], "count": 0}
+
+    num_questions = int(config.get("num_questions", 10))
+    question_types = config.get("question_types", ["multiple_choice"])
+    if isinstance(question_types, str):
+        question_types = [question_types]
+    difficulty = str(config.get("difficulty", "medium")).lower()
+    provider = config.get("provider")
+    model = config.get("model")
+
+    system_prompt = (
+        f"Generate {num_questions} quiz questions. Types: {', '.join(question_types)}. "
+        f"Difficulty: {difficulty}.\n"
+        'Return JSON: [{"question_type": "multiple_choice", "question_text": "Q", '
+        '"options": ["A","B","C","D"], "correct_answer": 0, "explanation": "Why", "points": 1}]'
+    )
+
+    try:
+        from tldw_Server_API.app.core.Chat.chat_service import perform_chat_api_call_async
+        messages = [{"role": "user", "content": f"Generate quiz from:\n\n{text[:8000]}"}]
+        response = await perform_chat_api_call_async(
+            messages=messages,
+            api_provider=provider,
+            model=model,
+            system_message=system_prompt,
+            max_tokens=4000,
+            temperature=0.7
+        )
+        response_text = extract_openai_content(response) or "[]"
+        try:
+            json_match = re.search(r'\[[\s\S]*\]', response_text)
+            questions = json.loads(json_match.group()) if json_match else []
+        except json.JSONDecodeError:
+            questions = []
+        return {"questions": questions, "count": len(questions)}
+    except Exception as e:
+        logger.exception(f"Quiz generate adapter error: {e}")
+        return {"error": f"quiz_generate_error:{e}", "questions": [], "count": 0}
 
 
 @registry.register(
@@ -88,43 +188,49 @@ async def run_quiz_generate_adapter(config: Dict[str, Any], context: Dict[str, A
     config_model=OutlineGenerateConfig,
 )
 async def run_outline_generate_adapter(config: Dict[str, Any], context: Dict[str, Any]) -> Dict[str, Any]:
-    """Generate a structured outline from text or topic.
+    """Generate a hierarchical outline from content."""
+    if callable(context.get("is_cancelled")) and context["is_cancelled"]():
+        return {"__status__": "cancelled"}
 
-    Config:
-      - text: str (templated) - Source text or topic
-      - provider: str - LLM provider
-      - model: str - Model to use
-      - depth: int = 3 - Maximum outline depth
-      - style: Literal["academic", "business", "creative"] = "academic"
-    Output:
-      - {"outline": dict, "sections": int}
-    """
-    from tldw_Server_API.app.core.Workflows._adapters_legacy import run_outline_generate_adapter as _legacy
-    return await _legacy(config, context)
+    text = config.get("text") or ""
+    if isinstance(text, str):
+        text = apply_template_to_string(text, context) or text
+    text = str(text).strip()
+    if not text:
+        prev = context.get("prev") or context.get("last") or {}
+        text = str(prev.get("text") or prev.get("content") or "") if isinstance(prev, dict) else ""
 
+    if not text:
+        return {"error": "missing_text", "outline": {}, "outline_text": ""}
 
-@registry.register(
-    "mindmap_generate",
-    category="content",
-    description="Generate mind maps",
-    parallelizable=True,
-    tags=["content", "visualization"],
-    config_model=MindmapGenerateConfig,
-)
-async def run_mindmap_generate_adapter(config: Dict[str, Any], context: Dict[str, Any]) -> Dict[str, Any]:
-    """Generate a mind map from text content.
+    max_depth = int(config.get("max_depth", 3))
+    provider, model = config.get("provider"), config.get("model")
+    system_prompt = (
+        f"Create outline. Max depth: {max_depth}. "
+        'Return JSON: {"sections": [{"title": "Section", "level": 1, "subsections": []}]}'
+    )
 
-    Config:
-      - text: str (templated) - Source text for mind map
-      - provider: str - LLM provider
-      - model: str - Model to use
-      - format: Literal["json", "mermaid", "markdown"] = "json"
-      - max_nodes: int = 20 - Maximum number of nodes
-    Output:
-      - {"mindmap": dict | str, "format": str, "nodes": int}
-    """
-    from tldw_Server_API.app.core.Workflows._adapters_legacy import run_mindmap_generate_adapter as _legacy
-    return await _legacy(config, context)
+    try:
+        from tldw_Server_API.app.core.Chat.chat_service import perform_chat_api_call_async
+        response = await perform_chat_api_call_async(
+            messages=[{"role": "user", "content": f"Outline:\n\n{text[:8000]}"}],
+            api_provider=provider,
+            model=model,
+            system_message=system_prompt,
+            max_tokens=2000,
+            temperature=0.5
+        )
+        response_text = extract_openai_content(response) or ""
+        outline = {}
+        try:
+            json_match = re.search(r'\{[\s\S]*"sections"[\s\S]*\}', response_text)
+            outline = json.loads(json_match.group()) if json_match else {}
+        except json.JSONDecodeError:
+            pass
+        return {"outline": outline, "outline_text": response_text, "sections": len(outline.get("sections", []))}
+    except Exception as e:
+        logger.exception(f"Outline generate error: {e}")
+        return {"error": str(e), "outline": {}, "outline_text": ""}
 
 
 @registry.register(
@@ -136,19 +242,99 @@ async def run_mindmap_generate_adapter(config: Dict[str, Any], context: Dict[str
     config_model=GlossaryExtractConfig,
 )
 async def run_glossary_extract_adapter(config: Dict[str, Any], context: Dict[str, Any]) -> Dict[str, Any]:
-    """Extract glossary terms and definitions from text.
+    """Extract key terms and definitions from content."""
+    if callable(context.get("is_cancelled")) and context["is_cancelled"]():
+        return {"__status__": "cancelled"}
 
-    Config:
-      - text: str (templated) - Source text
-      - provider: str - LLM provider
-      - model: str - Model to use
-      - max_terms: int = 20 - Maximum number of terms
-      - include_context: bool = True - Include usage context
-    Output:
-      - {"terms": [{"term": str, "definition": str}], "count": int}
-    """
-    from tldw_Server_API.app.core.Workflows._adapters_legacy import run_glossary_extract_adapter as _legacy
-    return await _legacy(config, context)
+    text = config.get("text") or ""
+    if isinstance(text, str):
+        text = apply_template_to_string(text, context) or text
+    text = str(text).strip()
+    if not text:
+        prev = context.get("prev") or context.get("last") or {}
+        text = str(prev.get("text") or prev.get("content") or "") if isinstance(prev, dict) else ""
+
+    if not text:
+        return {"error": "missing_text", "glossary": [], "count": 0}
+
+    max_terms = int(config.get("max_terms", 20))
+    provider, model = config.get("provider"), config.get("model")
+    system_prompt = f'Extract up to {max_terms} key terms. Return JSON: [{{"term": "Name", "definition": "Def"}}]'
+
+    try:
+        from tldw_Server_API.app.core.Chat.chat_service import perform_chat_api_call_async
+        response = await perform_chat_api_call_async(
+            messages=[{"role": "user", "content": f"Extract glossary:\n\n{text[:8000]}"}],
+            api_provider=provider,
+            model=model,
+            system_message=system_prompt,
+            max_tokens=3000,
+            temperature=0.5
+        )
+        response_text = extract_openai_content(response) or "[]"
+        try:
+            json_match = re.search(r'\[[\s\S]*\]', response_text)
+            glossary = json.loads(json_match.group()) if json_match else []
+        except json.JSONDecodeError:
+            glossary = []
+        return {"glossary": glossary, "count": len(glossary)}
+    except Exception as e:
+        logger.exception(f"Glossary extract error: {e}")
+        return {"error": str(e), "glossary": [], "count": 0}
+
+
+@registry.register(
+    "mindmap_generate",
+    category="content",
+    description="Generate mind maps",
+    parallelizable=True,
+    tags=["content", "visualization"],
+    config_model=MindmapGenerateConfig,
+)
+async def run_mindmap_generate_adapter(config: Dict[str, Any], context: Dict[str, Any]) -> Dict[str, Any]:
+    """Generate a mindmap structure from content."""
+    if callable(context.get("is_cancelled")) and context["is_cancelled"]():
+        return {"__status__": "cancelled"}
+
+    text = config.get("text") or ""
+    if isinstance(text, str):
+        text = apply_template_to_string(text, context) or text
+    text = str(text).strip()
+    if not text:
+        prev = context.get("prev") or context.get("last") or {}
+        text = str(prev.get("text") or prev.get("content") or "") if isinstance(prev, dict) else ""
+
+    if not text:
+        return {"error": "missing_text", "mindmap": {}, "mermaid": ""}
+
+    max_branches = int(config.get("max_branches", 6))
+    provider, model = config.get("provider"), config.get("model")
+    system_prompt = (
+        f"Create mindmap. Max {max_branches} branches. "
+        'Return JSON: {"central": "Topic", "branches": [{"topic": "Branch", "children": []}]}'
+    )
+
+    try:
+        from tldw_Server_API.app.core.Chat.chat_service import perform_chat_api_call_async
+        response = await perform_chat_api_call_async(
+            messages=[{"role": "user", "content": f"Mindmap:\n\n{text[:8000]}"}],
+            api_provider=provider,
+            model=model,
+            system_message=system_prompt,
+            max_tokens=2000,
+            temperature=0.6
+        )
+        response_text = extract_openai_content(response) or ""
+        mindmap = {}
+        try:
+            json_match = re.search(r'\{[\s\S]*"central"[\s\S]*\}', response_text)
+            mindmap = json.loads(json_match.group()) if json_match else {}
+        except json.JSONDecodeError:
+            pass
+        return {"mindmap": mindmap, "mermaid": "", "node_count": 0}
+    except Exception as e:
+        logger.exception(f"Mindmap generate error: {e}")
+        return {"error": str(e), "mindmap": {}, "mermaid": ""}
 
 
 @registry.register(
@@ -160,20 +346,74 @@ async def run_glossary_extract_adapter(config: Dict[str, Any], context: Dict[str
     config_model=SlidesGenerateConfig,
 )
 async def run_slides_generate_adapter(config: Dict[str, Any], context: Dict[str, Any]) -> Dict[str, Any]:
-    """Generate presentation slides from text content.
+    """Generate slide deck structure.
 
     Config:
-      - text: str (templated) - Source text for slides
+      - content: str - Content to create slides from
+      - title: str - Presentation title
+      - num_slides: int - Target number of slides (default: 10)
+      - style: str - "professional", "educational", "casual" (default: "professional")
       - provider: str - LLM provider
       - model: str - Model to use
-      - num_slides: int = 10 - Target number of slides
-      - format: Literal["json", "markdown", "marp"] = "json"
-      - style: Literal["professional", "academic", "creative"] = "professional"
     Output:
-      - {"slides": [dict], "count": int, "format": str}
+      - slides: list[dict] - Slide content with title, bullets, notes
     """
-    from tldw_Server_API.app.core.Workflows._adapters_legacy import run_slides_generate_adapter as _legacy
-    return await _legacy(config, context)
+    if callable(context.get("is_cancelled")) and context["is_cancelled"]():
+        return {"__status__": "cancelled"}
+
+    content = config.get("content") or ""
+    if isinstance(content, str):
+        content = apply_template_to_string(content, context) or content
+
+    if not content:
+        prev = context.get("prev") or context.get("last") or {}
+        if isinstance(prev, dict):
+            content = prev.get("text") or prev.get("content") or ""
+
+    if not content:
+        return {"slides": [], "error": "missing_content"}
+
+    title = config.get("title", "Presentation")
+    num_slides = int(config.get("num_slides", 10))
+    style = config.get("style", "professional")
+
+    try:
+        from tldw_Server_API.app.core.Chat.chat_service import perform_chat_api_call_async
+
+        prompt = f"""Create a {num_slides}-slide presentation outline titled "{title}".
+Style: {style}
+
+Return as JSON array with this format:
+[{{"slide_number": 1, "title": "Slide Title", "bullets": ["Point 1", "Point 2"], "speaker_notes": "Notes for presenter"}}]
+
+Content:
+{content[:5000]}"""
+
+        messages = [{"role": "user", "content": prompt}]
+        response = await perform_chat_api_call_async(
+            messages=messages,
+            api_provider=config.get("provider"),
+            model=config.get("model"),
+            system_message="Generate presentation slides as JSON.",
+            max_tokens=3000,
+            temperature=0.5,
+        )
+
+        result_text = extract_openai_content(response) or ""
+        try:
+            start = result_text.find("[")
+            end = result_text.rfind("]") + 1
+            if start >= 0 and end > start:
+                slides = json.loads(result_text[start:end])
+                return {"slides": slides, "title": title, "slide_count": len(slides)}
+        except json.JSONDecodeError:
+            pass
+
+        return {"slides": [], "raw_text": result_text, "error": "json_parse_failed"}
+
+    except Exception as e:
+        logger.exception(f"Slides generate error: {e}")
+        return {"slides": [], "error": str(e)}
 
 
 @registry.register(
@@ -185,20 +425,71 @@ async def run_slides_generate_adapter(config: Dict[str, Any], context: Dict[str,
     config_model=ReportGenerateConfig,
 )
 async def run_report_generate_adapter(config: Dict[str, Any], context: Dict[str, Any]) -> Dict[str, Any]:
-    """Generate a structured report from data or text.
+    """Generate a structured report from content.
 
     Config:
-      - text: str (templated) - Source content
+      - content: str - Content to generate report from
+      - title: str - Report title
+      - sections: list[str] - Section headings (default: auto-generated)
+      - format: str - "markdown", "html", or "plain" (default: "markdown")
       - provider: str - LLM provider
       - model: str - Model to use
-      - report_type: Literal["summary", "analysis", "research"] = "summary"
-      - format: Literal["markdown", "html", "text"] = "markdown"
-      - sections: list[str] (optional) - Custom section headers
     Output:
-      - {"report": str, "format": str, "sections": int}
+      - report: str
+      - title: str
+      - sections: list[str]
     """
-    from tldw_Server_API.app.core.Workflows._adapters_legacy import run_report_generate_adapter as _legacy
-    return await _legacy(config, context)
+    if callable(context.get("is_cancelled")) and context["is_cancelled"]():
+        return {"__status__": "cancelled"}
+
+    content = config.get("content") or ""
+    if isinstance(content, str):
+        content = apply_template_to_string(content, context) or content
+
+    if not content:
+        prev = context.get("prev") or context.get("last") or {}
+        if isinstance(prev, dict):
+            content = prev.get("text") or prev.get("content") or ""
+
+    if not content:
+        return {"report": "", "error": "missing_content"}
+
+    title = config.get("title", "Report")
+    if isinstance(title, str):
+        title = apply_template_to_string(title, context) or title
+
+    sections = config.get("sections")
+    output_format = config.get("format", "markdown")
+
+    try:
+        from tldw_Server_API.app.core.Chat.chat_service import perform_chat_api_call_async
+
+        sections_str = ""
+        if sections:
+            sections_str = f"\n\nInclude these sections: {', '.join(sections)}"
+
+        prompt = f"""Generate a structured report titled "{title}" from this content.
+Format: {output_format}{sections_str}
+
+Content:
+{content[:6000]}"""
+
+        messages = [{"role": "user", "content": prompt}]
+        response = await perform_chat_api_call_async(
+            messages=messages,
+            api_provider=config.get("provider"),
+            model=config.get("model"),
+            system_message="Generate well-structured reports with clear sections.",
+            max_tokens=3000,
+            temperature=0.5,
+        )
+
+        report = extract_openai_content(response) or ""
+        return {"report": report, "text": report, "title": title, "format": output_format}
+
+    except Exception as e:
+        logger.exception(f"Report generate error: {e}")
+        return {"report": "", "error": str(e)}
 
 
 @registry.register(
@@ -210,20 +501,81 @@ async def run_report_generate_adapter(config: Dict[str, Any], context: Dict[str,
     config_model=NewsletterGenerateConfig,
 )
 async def run_newsletter_generate_adapter(config: Dict[str, Any], context: Dict[str, Any]) -> Dict[str, Any]:
-    """Generate newsletter content from sources.
+    """Generate newsletter from content/items.
 
     Config:
-      - text: str (templated) - Source content
+      - items: list[dict] - Items to include (title, summary, url)
+      - content: str - Alternative: raw content to summarize
+      - title: str - Newsletter title
+      - intro: str - Introduction text
+      - format: str - "markdown" or "html" (default: "markdown")
       - provider: str - LLM provider
       - model: str - Model to use
-      - format: Literal["markdown", "html", "text"] = "markdown"
-      - tone: Literal["formal", "casual", "professional"] = "professional"
-      - sections: list[str] (optional) - Custom sections
     Output:
-      - {"newsletter": str, "format": str, "word_count": int}
+      - newsletter: str
     """
-    from tldw_Server_API.app.core.Workflows._adapters_legacy import run_newsletter_generate_adapter as _legacy
-    return await _legacy(config, context)
+    if callable(context.get("is_cancelled")) and context["is_cancelled"]():
+        return {"__status__": "cancelled"}
+
+    items = config.get("items") or []
+    content = config.get("content") or ""
+
+    if not items and not content:
+        prev = context.get("prev") or context.get("last") or {}
+        if isinstance(prev, dict):
+            items = prev.get("items") or []
+            content = prev.get("text") or prev.get("content") or ""
+
+    if not items and not content:
+        return {"newsletter": "", "error": "missing_items_or_content"}
+
+    title = config.get("title", "Newsletter")
+    if isinstance(title, str):
+        title = apply_template_to_string(title, context) or title
+
+    intro = config.get("intro", "")
+    if isinstance(intro, str):
+        intro = apply_template_to_string(intro, context) or intro
+
+    output_format = config.get("format", "markdown")
+
+    try:
+        from tldw_Server_API.app.core.Chat.chat_service import perform_chat_api_call_async
+
+        items_text = ""
+        if items:
+            for i, item in enumerate(items[:20]):
+                item_title = item.get("title", f"Item {i + 1}")
+                item_summary = item.get("summary", "")
+                item_url = item.get("url", "")
+                items_text += f"\n- {item_title}: {item_summary}"
+                if item_url:
+                    items_text += f" ({item_url})"
+
+        prompt = f"""Generate a newsletter titled "{title}".
+Format: {output_format}
+
+{f'Introduction: {intro}' if intro else ''}
+{f'Items:{items_text}' if items_text else f'Content:\n{content[:5000]}'}
+
+Include a header, brief intro, main content sections, and a closing."""
+
+        messages = [{"role": "user", "content": prompt}]
+        response = await perform_chat_api_call_async(
+            messages=messages,
+            api_provider=config.get("provider"),
+            model=config.get("model"),
+            system_message="Generate engaging newsletters with clear sections.",
+            max_tokens=2500,
+            temperature=0.6,
+        )
+
+        newsletter = extract_openai_content(response) or ""
+        return {"newsletter": newsletter, "text": newsletter, "title": title}
+
+    except Exception as e:
+        logger.exception(f"Newsletter generate error: {e}")
+        return {"newsletter": "", "error": str(e)}
 
 
 @registry.register(
@@ -235,16 +587,80 @@ async def run_newsletter_generate_adapter(config: Dict[str, Any], context: Dict[
     config_model=DiagramGenerateConfig,
 )
 async def run_diagram_generate_adapter(config: Dict[str, Any], context: Dict[str, Any]) -> Dict[str, Any]:
-    """Generate diagrams from text descriptions.
+    """Generate diagram code (mermaid/graphviz).
 
     Config:
-      - text: str (templated) - Description or source text
+      - content: str - Content to visualize
+      - diagram_type: str - "flowchart", "sequence", "class", "er", "mindmap" (default: "flowchart")
+      - format: str - "mermaid" or "graphviz" (default: "mermaid")
       - provider: str - LLM provider
       - model: str - Model to use
-      - diagram_type: Literal["flowchart", "sequence", "class", "er", "state"] = "flowchart"
-      - format: Literal["mermaid", "plantuml", "graphviz"] = "mermaid"
     Output:
-      - {"diagram": str, "format": str, "type": str}
+      - diagram: str - Diagram code
+      - format: str
     """
-    from tldw_Server_API.app.core.Workflows._adapters_legacy import run_diagram_generate_adapter as _legacy
-    return await _legacy(config, context)
+    if callable(context.get("is_cancelled")) and context["is_cancelled"]():
+        return {"__status__": "cancelled"}
+
+    content = config.get("content") or ""
+    if isinstance(content, str):
+        content = apply_template_to_string(content, context) or content
+
+    if not content:
+        prev = context.get("prev") or context.get("last") or {}
+        if isinstance(prev, dict):
+            content = prev.get("text") or prev.get("content") or ""
+
+    if not content:
+        return {"diagram": "", "error": "missing_content"}
+
+    diagram_type = config.get("diagram_type", "flowchart")
+    output_format = config.get("format", "mermaid")
+
+    try:
+        from tldw_Server_API.app.core.Chat.chat_service import perform_chat_api_call_async
+
+        format_examples = {
+            "mermaid": "```mermaid\nflowchart TD\n    A --> B\n```",
+            "graphviz": "digraph G {\n    A -> B;\n}",
+        }
+
+        prompt = f"""Create a {diagram_type} diagram from this content using {output_format} syntax.
+
+Example format:
+{format_examples.get(output_format, format_examples['mermaid'])}
+
+Return ONLY the diagram code, no explanations.
+
+Content:
+{content[:4000]}"""
+
+        messages = [{"role": "user", "content": prompt}]
+        response = await perform_chat_api_call_async(
+            messages=messages,
+            api_provider=config.get("provider"),
+            model=config.get("model"),
+            system_message=f"Generate {output_format} diagrams. Return only diagram code.",
+            max_tokens=1500,
+            temperature=0.3,
+        )
+
+        diagram = extract_openai_content(response) or ""
+        # Clean up code blocks
+        if "```" in diagram:
+            lines = diagram.split("\n")
+            cleaned = []
+            in_code = False
+            for line in lines:
+                if line.startswith("```"):
+                    in_code = not in_code
+                    continue
+                if in_code or not line.startswith("```"):
+                    cleaned.append(line)
+            diagram = "\n".join(cleaned)
+
+        return {"diagram": diagram.strip(), "format": output_format, "diagram_type": diagram_type}
+
+    except Exception as e:
+        logger.exception(f"Diagram generate error: {e}")
+        return {"diagram": "", "error": str(e)}

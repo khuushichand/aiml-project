@@ -1,0 +1,169 @@
+import React, { useRef, useEffect, useCallback } from "react"
+import { useTranslation } from "react-i18next"
+import { Tooltip } from "antd"
+import { X, FileText, BookOpen } from "lucide-react"
+import { useDocumentWorkspaceStore } from "@/store/document-workspace"
+import type { OpenDocument } from "./types"
+
+interface DocumentTabProps {
+  document: OpenDocument
+  isActive: boolean
+  onSelect: () => void
+  onClose: (e: React.MouseEvent) => void
+}
+
+const DocumentTab: React.FC<DocumentTabProps> = ({
+  document,
+  isActive,
+  onSelect,
+  onClose
+}) => {
+  const { t } = useTranslation(["option", "common"])
+  const Icon = document.type === "epub" ? BookOpen : FileText
+
+  return (
+    <div
+      role="tab"
+      aria-selected={isActive}
+      tabIndex={isActive ? 0 : -1}
+      onClick={onSelect}
+      onKeyDown={(e) => {
+        if (e.key === "Enter" || e.key === " ") {
+          e.preventDefault()
+          onSelect()
+        }
+      }}
+      className={`
+        group flex items-center gap-2 px-3 py-2 min-w-0 max-w-[200px]
+        border-r border-border cursor-pointer select-none
+        transition-colors duration-150
+        ${isActive
+          ? "bg-surface text-text border-b-2 border-b-primary"
+          : "bg-bg-subtle text-text-subtle hover:bg-hover hover:text-text"
+        }
+      `}
+    >
+      <Icon className="h-4 w-4 shrink-0" />
+      <Tooltip title={document.title} mouseEnterDelay={0.5}>
+        <span className="truncate text-sm">{document.title}</span>
+      </Tooltip>
+      <button
+        onClick={onClose}
+        className={`
+          ml-1 p-0.5 rounded shrink-0
+          opacity-0 group-hover:opacity-100 focus:opacity-100
+          hover:bg-hover-strong focus:outline-none focus:ring-1 focus:ring-primary
+          transition-opacity duration-150
+        `}
+        aria-label={t("common:close", "Close")}
+        title={t("option:documentWorkspace.closeDocument", "Close document")}
+      >
+        <X className="h-3.5 w-3.5" />
+      </button>
+    </div>
+  )
+}
+
+/**
+ * DocumentTabBar - Displays open documents as clickable tabs
+ *
+ * Features:
+ * - Shows all open documents with icons based on type (PDF/EPUB)
+ * - Allows switching between documents by clicking tabs
+ * - Close button on each tab (visible on hover)
+ * - Active tab is visually highlighted
+ * - Horizontal scrolling when many documents are open
+ * - Keyboard navigation support
+ */
+export const DocumentTabBar: React.FC = () => {
+  const { t } = useTranslation(["option", "common"])
+  const tabsContainerRef = useRef<HTMLDivElement>(null)
+
+  const openDocuments = useDocumentWorkspaceStore((s) => s.openDocuments)
+  const activeDocumentId = useDocumentWorkspaceStore((s) => s.activeDocumentId)
+  const setActiveDocument = useDocumentWorkspaceStore((s) => s.setActiveDocument)
+  const closeDocument = useDocumentWorkspaceStore((s) => s.closeDocument)
+
+  // Scroll active tab into view when it changes
+  useEffect(() => {
+    if (tabsContainerRef.current && activeDocumentId !== null) {
+      const activeTab = tabsContainerRef.current.querySelector(
+        '[aria-selected="true"]'
+      )
+      if (activeTab) {
+        activeTab.scrollIntoView({ behavior: "smooth", block: "nearest", inline: "nearest" })
+      }
+    }
+  }, [activeDocumentId])
+
+  const handleSelectDocument = useCallback((id: number) => {
+    setActiveDocument(id)
+  }, [setActiveDocument])
+
+  const handleCloseDocument = useCallback((e: React.MouseEvent, id: number) => {
+    e.stopPropagation()
+    closeDocument(id)
+  }, [closeDocument])
+
+  // Keyboard navigation between tabs
+  const handleKeyDown = useCallback((e: React.KeyboardEvent) => {
+    if (openDocuments.length === 0) return
+
+    const currentIndex = openDocuments.findIndex((d) => d.id === activeDocumentId)
+    let newIndex = currentIndex
+
+    if (e.key === "ArrowLeft") {
+      e.preventDefault()
+      newIndex = currentIndex > 0 ? currentIndex - 1 : openDocuments.length - 1
+    } else if (e.key === "ArrowRight") {
+      e.preventDefault()
+      newIndex = currentIndex < openDocuments.length - 1 ? currentIndex + 1 : 0
+    } else if (e.key === "Home") {
+      e.preventDefault()
+      newIndex = 0
+    } else if (e.key === "End") {
+      e.preventDefault()
+      newIndex = openDocuments.length - 1
+    }
+
+    if (newIndex !== currentIndex && openDocuments[newIndex]) {
+      setActiveDocument(openDocuments[newIndex].id)
+    }
+  }, [openDocuments, activeDocumentId, setActiveDocument])
+
+  // Don't render if no documents are open
+  if (openDocuments.length === 0) {
+    return null
+  }
+
+  // Don't render if only one document is open (no need for tabs)
+  if (openDocuments.length === 1) {
+    return null
+  }
+
+  return (
+    <div
+      className="flex h-10 shrink-0 border-b border-border bg-bg-subtle overflow-hidden"
+      role="tablist"
+      aria-label={t("option:documentWorkspace.openDocuments", "Open documents")}
+      onKeyDown={handleKeyDown}
+    >
+      <div
+        ref={tabsContainerRef}
+        className="flex items-stretch overflow-x-auto scrollbar-thin scrollbar-track-transparent scrollbar-thumb-border"
+      >
+        {openDocuments.map((doc) => (
+          <DocumentTab
+            key={doc.id}
+            document={doc}
+            isActive={doc.id === activeDocumentId}
+            onSelect={() => handleSelectDocument(doc.id)}
+            onClose={(e) => handleCloseDocument(e, doc.id)}
+          />
+        ))}
+      </div>
+    </div>
+  )
+}
+
+export default DocumentTabBar

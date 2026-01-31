@@ -467,7 +467,34 @@ def format_time_vtt(seconds: float) -> str:
     return f"{hours:02d}:{minutes:02d}:{secs:02d}.{millis:03d}"
 
 
+class AsyncFileWriter:
+    """Minimal async file writer context manager for streaming to disk.
+
+    Uses synchronous file I/O; keep payloads small or swap to aiofiles if needed.
+    """
+
+    def __init__(self, path: Path):
+        self._path = path
+        self._fp = None
+
+    async def __aenter__(self):
+        self._fp = open(self._path, "wb")
+        return self
+
+    async def write(self, data: bytes):
+        self._fp.write(data)
+
+    async def __aexit__(self, exc_type, exc, tb):
+        try:
+            if self._fp:
+                self._fp.flush()
+                self._fp.close()
+        except Exception:
+            pass
+
+
 # Backward-compatible aliases with underscore prefix
+_async_file_writer = AsyncFileWriter
 _extract_openai_content = extract_openai_content
 _sanitize_path_component = sanitize_path_component
 _is_subpath = is_subpath

@@ -11,8 +11,14 @@ This module includes adapters for text transformation operations:
 
 from __future__ import annotations
 
+import html
+import re
+from pathlib import Path
 from typing import Any, Dict
 
+from loguru import logger
+
+from tldw_Server_API.app.core.Workflows.adapters._common import resolve_workflow_file_path
 from tldw_Server_API.app.core.Workflows.adapters._registry import registry
 from tldw_Server_API.app.core.Workflows.adapters.text._config import (
     JSONTransformConfig,
@@ -42,8 +48,39 @@ async def run_json_transform_adapter(config: Dict[str, Any], context: Dict[str, 
     Output:
       - {"result": Any, "text": str}
     """
-    from tldw_Server_API.app.core.Workflows._adapters_legacy import run_json_transform_adapter as _legacy
-    return await _legacy(config, context)
+    if callable(context.get("is_cancelled")) and context["is_cancelled"]():
+        return {"__status__": "cancelled"}
+
+    data = config.get("data")
+    if data is None:
+        prev = context.get("prev") or context.get("last") or {}
+        data = prev if isinstance(prev, (dict, list)) else {}
+
+    expression = config.get("expression") or config.get("query") or "."
+
+    try:
+        import jmespath
+        result = jmespath.search(expression, data)
+        return {"result": result, "expression": expression}
+    except ImportError:
+        # Fallback: simple path extraction
+        if expression == ".":
+            return {"result": data, "expression": expression}
+        parts = expression.strip(".").split(".")
+        result = data
+        for part in parts:
+            if isinstance(result, dict):
+                result = result.get(part)
+            elif isinstance(result, list) and part.isdigit():
+                idx = int(part)
+                result = result[idx] if 0 <= idx < len(result) else None
+            else:
+                result = None
+                break
+        return {"result": result, "expression": expression}
+    except Exception as e:
+        logger.exception(f"JSON transform error: {e}")
+        return {"error": str(e), "result": None}
 
 
 @registry.register(
@@ -64,8 +101,28 @@ async def run_json_validate_adapter(config: Dict[str, Any], context: Dict[str, A
     Output:
       - {"valid": bool, "errors": [str]}
     """
-    from tldw_Server_API.app.core.Workflows._adapters_legacy import run_json_validate_adapter as _legacy
-    return await _legacy(config, context)
+    if callable(context.get("is_cancelled")) and context["is_cancelled"]():
+        return {"__status__": "cancelled"}
+
+    data = config.get("data")
+    if data is None:
+        prev = context.get("prev") or context.get("last") or {}
+        data = prev if isinstance(prev, (dict, list)) else {}
+
+    schema = config.get("schema")
+    if not schema:
+        return {"error": "missing_schema", "valid": False, "errors": []}
+
+    try:
+        import jsonschema
+        jsonschema.validate(data, schema)
+        return {"valid": True, "errors": []}
+    except ImportError:
+        return {"error": "jsonschema_not_installed", "valid": False, "errors": ["Install jsonschema package"]}
+    except jsonschema.ValidationError as e:
+        return {"valid": False, "errors": [str(e.message)], "path": list(e.path)}
+    except Exception as e:
+        return {"error": str(e), "valid": False, "errors": [str(e)]}
 
 
 @registry.register(
@@ -87,8 +144,39 @@ async def run_xml_transform_adapter(config: Dict[str, Any], context: Dict[str, A
     Output:
       - {"result": Any, "text": str}
     """
-    from tldw_Server_API.app.core.Workflows._adapters_legacy import run_xml_transform_adapter as _legacy
-    return await _legacy(config, context)
+    from tldw_Server_API.app.core.Chat.prompt_template_manager import apply_template_to_string as _tmpl
+
+    if callable(context.get("is_cancelled")) and context["is_cancelled"]():
+        return {"__status__": "cancelled"}
+
+    xml_data = config.get("xml") or config.get("data") or ""
+    if isinstance(xml_data, str):
+        xml_data = _tmpl(xml_data, context) or xml_data
+
+    if not xml_data:
+        prev = context.get("prev") or context.get("last") or {}
+        xml_data = prev.get("xml") or prev.get("text") or "" if isinstance(prev, dict) else ""
+
+    xpath = config.get("xpath") or config.get("query")
+    if not xpath:
+        return {"error": "missing_xpath", "results": []}
+
+    try:
+        from lxml import etree
+        root = etree.fromstring(xml_data.encode() if isinstance(xml_data, str) else xml_data)
+        results = root.xpath(xpath)
+        output = []
+        for r in results:
+            if hasattr(r, 'text'):
+                output.append({"tag": r.tag, "text": r.text, "attrib": dict(r.attrib)})
+            else:
+                output.append(str(r))
+        return {"results": output, "count": len(output), "xpath": xpath}
+    except ImportError:
+        return {"error": "lxml_not_installed", "results": []}
+    except Exception as e:
+        logger.exception(f"XML transform error: {e}")
+        return {"error": str(e), "results": []}
 
 
 @registry.register(
@@ -109,8 +197,35 @@ async def run_template_render_adapter(config: Dict[str, Any], context: Dict[str,
     Output:
       - {"rendered": str, "text": str}
     """
-    from tldw_Server_API.app.core.Workflows._adapters_legacy import run_template_render_adapter as _legacy
-    return await _legacy(config, context)
+    from tldw_Server_API.app.core.Chat.prompt_template_manager import apply_template_to_string as _tmpl
+
+    if callable(context.get("is_cancelled")) and context["is_cancelled"]():
+        return {"__status__": "cancelled"}
+
+    template = config.get("template") or ""
+    template_file = config.get("template_file")
+
+    if template_file:
+        try:
+            file_path = resolve_workflow_file_path(template_file, context, config)
+            template = Path(file_path).read_text(encoding="utf-8")
+        except Exception as e:
+            return {"error": f"template_file_error: {e}", "text": ""}
+
+    if not template:
+        return {"error": "missing_template", "text": ""}
+
+    variables = config.get("variables") or {}
+    # Merge context inputs
+    render_context = {**context.get("inputs", {}), **variables}
+    render_context["prev"] = context.get("prev") or context.get("last") or {}
+
+    try:
+        rendered = _tmpl(template, render_context) or template
+        return {"text": rendered}
+    except Exception as e:
+        logger.exception(f"Template render error: {e}")
+        return {"error": str(e), "text": ""}
 
 
 @registry.register(
@@ -133,8 +248,49 @@ async def run_regex_extract_adapter(config: Dict[str, Any], context: Dict[str, A
     Output:
       - {"matches": [str], "count": int, "text": str}
     """
-    from tldw_Server_API.app.core.Workflows._adapters_legacy import run_regex_extract_adapter as _legacy
-    return await _legacy(config, context)
+    from tldw_Server_API.app.core.Chat.prompt_template_manager import apply_template_to_string as _tmpl
+
+    if callable(context.get("is_cancelled")) and context["is_cancelled"]():
+        return {"__status__": "cancelled"}
+
+    text = config.get("text") or ""
+    if isinstance(text, str):
+        text = _tmpl(text, context) or text
+    text = str(text).strip()
+
+    if not text:
+        prev = context.get("prev") or context.get("last") or {}
+        text = prev.get("text") or prev.get("content") or "" if isinstance(prev, dict) else ""
+
+    pattern = config.get("pattern")
+    if not pattern:
+        return {"error": "missing_pattern", "matches": [], "count": 0}
+
+    flags = 0
+    if config.get("ignore_case"):
+        flags |= re.IGNORECASE
+    if config.get("multiline"):
+        flags |= re.MULTILINE
+    if config.get("dotall"):
+        flags |= re.DOTALL
+
+    try:
+        regex = re.compile(pattern, flags)
+        matches = []
+        for match in regex.finditer(text):
+            m = {"full": match.group(0), "start": match.start(), "end": match.end()}
+            if match.groupdict():
+                m["groups"] = match.groupdict()
+            elif match.groups():
+                m["groups"] = list(match.groups())
+            matches.append(m)
+
+        return {"matches": matches, "count": len(matches), "pattern": pattern}
+    except re.error as e:
+        return {"error": f"invalid_pattern: {e}", "matches": [], "count": 0}
+    except Exception as e:
+        logger.exception(f"Regex extract error: {e}")
+        return {"error": str(e), "matches": [], "count": 0}
 
 
 @registry.register(
@@ -159,5 +315,47 @@ async def run_text_clean_adapter(config: Dict[str, Any], context: Dict[str, Any]
     Output:
       - {"text": str, "original_length": int, "cleaned_length": int}
     """
-    from tldw_Server_API.app.core.Workflows._adapters_legacy import run_text_clean_adapter as _legacy
-    return await _legacy(config, context)
+    from tldw_Server_API.app.core.Chat.prompt_template_manager import apply_template_to_string as _tmpl
+
+    if callable(context.get("is_cancelled")) and context["is_cancelled"]():
+        return {"__status__": "cancelled"}
+
+    text = config.get("text") or ""
+    if isinstance(text, str):
+        text = _tmpl(text, context) or text
+    text = str(text)
+
+    if not text:
+        prev = context.get("prev") or context.get("last") or {}
+        text = prev.get("text") or prev.get("content") or "" if isinstance(prev, dict) else ""
+
+    operations = config.get("operations", ["strip_html", "normalize_whitespace", "fix_encoding"])
+
+    original_len = len(text)
+
+    if "strip_html" in operations:
+        text = re.sub(r'<[^>]+>', '', text)
+        text = html.unescape(text)
+
+    if "fix_encoding" in operations:
+        try:
+            text = text.encode('utf-8', errors='ignore').decode('utf-8')
+        except Exception:
+            pass
+
+    if "normalize_whitespace" in operations:
+        text = re.sub(r'\s+', ' ', text)
+
+    if "strip" in operations or "normalize_whitespace" in operations:
+        text = text.strip()
+
+    if "lowercase" in operations:
+        text = text.lower()
+
+    if "remove_urls" in operations:
+        text = re.sub(r'https?://\S+', '', text)
+
+    if "remove_emails" in operations:
+        text = re.sub(r'\S+@\S+\.\S+', '', text)
+
+    return {"text": text, "original_length": original_len, "cleaned_length": len(text), "operations": operations}

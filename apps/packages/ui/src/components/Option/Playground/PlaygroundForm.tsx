@@ -37,7 +37,9 @@ import {
   Gauge,
   Search,
   CornerUpLeft,
-  Settings2
+  Settings2,
+  HelpCircle,
+  ArrowRight
 } from "lucide-react"
 import { getVariable } from "@/utils/select-variable"
 import { useTranslation } from "react-i18next"
@@ -453,16 +455,26 @@ export const PlaygroundForm = ({ droppedFiles }: Props) => {
     }
   }, [compareFeatureEnabled, compareMode, setCompareMode])
 
-  // Auto-select first favorite model on initial load when no model is selected
+  // Auto-select model on initial load when no model is selected
+  // Priority: 1) First favorite model, 2) First available model
   React.useEffect(() => {
-    if (selectedModel || !composerModels?.length || !favoriteModels?.length) return
+    if (selectedModel || !composerModels?.length) return
 
-    // Find first favorite model that exists in available models
-    const firstFavorite = (composerModels as any[]).find(m =>
-      favoriteModels.includes(String(m.model))
-    )
-    if (firstFavorite) {
-      setSelectedModel(firstFavorite.model)
+    // Try to find first favorite model
+    if (favoriteModels?.length) {
+      const firstFavorite = (composerModels as any[]).find(m =>
+        favoriteModels.includes(String(m.model))
+      )
+      if (firstFavorite) {
+        setSelectedModel(firstFavorite.model)
+        return
+      }
+    }
+
+    // Fall back to first available model
+    const firstModel = (composerModels as any[])[0]
+    if (firstModel?.model) {
+      setSelectedModel(firstModel.model)
     }
   }, [composerModels, selectedModel, favoriteModels, setSelectedModel])
 
@@ -548,12 +560,15 @@ export const PlaygroundForm = ({ droppedFiles }: Props) => {
   const apiModelLabel = React.useMemo(() => {
     if (!selectedModel) {
       return t(
-        "playground:composer.modelPlaceholder",
-        "API / model"
+        "playground:composer.selectModel",
+        "Select a model"
       )
     }
     return `${providerLabel} / ${modelSummaryLabel}`
   }, [modelSummaryLabel, providerLabel, selectedModel, t])
+
+  // Whether model selector should show warning state (no model selected)
+  const modelSelectorWarning = !selectedModel
 
   const favoriteModelSet = React.useMemo(
     () => new Set((favoriteModels || []).map((value) => String(value))),
@@ -670,6 +685,35 @@ export const PlaygroundForm = ({ droppedFiles }: Props) => {
       ? models.find(m => favoriteModels.includes(String(m.model)))?.model
       : null
 
+    // Generate a brief description for a model based on its capabilities
+    const getModelDescription = (model: any, capabilities: string[], contextLength: number | undefined) => {
+      const parts: string[] = []
+      const providerDisplay = getProviderDisplayName(toProviderKey(model.provider))
+
+      // Add provider context
+      parts.push(`${providerDisplay} model.`)
+
+      // Add capability descriptions
+      if (capabilities.includes("vision") || model.supportsVision) {
+        parts.push("Can analyze images.")
+      }
+      if (capabilities.includes("tools") || model.supportsTools) {
+        parts.push("Supports tool use and function calling.")
+      }
+      if (typeof contextLength === "number") {
+        if (contextLength > 100000) {
+          parts.push(`Long context (${Math.round(contextLength / 1000)}k tokens).`)
+        } else if (contextLength > 0) {
+          parts.push(`Context: ${Math.round(contextLength / 1000)}k tokens.`)
+        }
+      }
+      if (capabilities.includes("fast") || model.fast) {
+        parts.push("Optimized for speed.")
+      }
+
+      return parts.join(" ")
+    }
+
     const buildItem = (model: any) => {
       const providerRaw = toProviderKey(model.provider)
       const modelLabel = model.nickname || model.model
@@ -688,44 +732,54 @@ export const PlaygroundForm = ({ droppedFiles }: Props) => {
       if (typeof contextLength === "number" && contextLength > 100000) capabilityBadges.push("Long context")
       if (capabilities.includes("tools") || model.supportsTools) capabilityBadges.push("Tools")
 
+      // Generate tooltip description
+      const modelDescription = getModelDescription(model, capabilities, contextLength)
+
       return {
         key: model.model,
         label: (
-          <div className="flex items-center gap-2 text-sm">
-            <ProviderIcons provider={providerRaw} className="h-3 w-3 text-text-subtle" />
-            <span className="truncate flex-1">{modelLabel}</span>
-            {isRecommended && (
-              <span className="rounded-full bg-blue-100 dark:bg-blue-900/30 px-1.5 py-0.5 text-[10px] text-blue-600 dark:text-blue-400">
-                {t("playground:composer.recommended", "Recommended")}
-              </span>
-            )}
-            {capabilityBadges.slice(0, 2).map(cap => (
-              <span key={cap} className="rounded bg-surface2 px-1 py-0.5 text-[9px] text-text-muted">
-                {cap}
-              </span>
-            ))}
-            <button
-              type="button"
-              className="rounded p-0.5 text-text-subtle transition hover:bg-surface2"
-              onMouseDown={(event) => {
-                event.preventDefault()
-                event.stopPropagation()
-              }}
-              onClick={(event) => {
-                event.preventDefault()
-                event.stopPropagation()
-                toggleFavoriteModel(String(model.model))
-              }}
-              aria-label={favoriteTitle}
-              title={favoriteTitle}
-            >
-              <Star
-                className={`h-3.5 w-3.5 ${
-                  isFavorite ? "fill-warn text-warn" : "text-text-subtle"
-                }`}
-              />
-            </button>
-          </div>
+          <Tooltip
+            title={modelDescription}
+            placement="right"
+            mouseEnterDelay={0.5}
+            overlayStyle={{ maxWidth: 280 }}
+          >
+            <div className="flex items-center gap-2 text-sm">
+              <ProviderIcons provider={providerRaw} className="h-3 w-3 text-text-subtle" />
+              <span className="truncate flex-1">{modelLabel}</span>
+              {isRecommended && (
+                <span className="rounded-full bg-blue-100 dark:bg-blue-900/30 px-1.5 py-0.5 text-[10px] text-blue-600 dark:text-blue-400">
+                  {t("playground:composer.recommended", "Recommended")}
+                </span>
+              )}
+              {capabilityBadges.slice(0, 2).map(cap => (
+                <span key={cap} className="rounded bg-surface2 px-1 py-0.5 text-[9px] text-text-muted">
+                  {cap}
+                </span>
+              ))}
+              <button
+                type="button"
+                className="rounded p-0.5 text-text-subtle transition hover:bg-surface2"
+                onMouseDown={(event) => {
+                  event.preventDefault()
+                  event.stopPropagation()
+                }}
+                onClick={(event) => {
+                  event.preventDefault()
+                  event.stopPropagation()
+                  toggleFavoriteModel(String(model.model))
+                }}
+                aria-label={favoriteTitle}
+                title={favoriteTitle}
+              >
+                <Star
+                  className={`h-3.5 w-3.5 ${
+                    isFavorite ? "fill-warn text-warn" : "text-text-subtle"
+                  }`}
+                />
+              </button>
+            </div>
+          </Tooltip>
         ),
         onClick: () => setSelectedModel(model.model)
       }
@@ -1330,22 +1384,37 @@ export const PlaygroundForm = ({ droppedFiles }: Props) => {
               <div className="max-h-[400px] overflow-y-auto no-scrollbar">
                 {menu}
               </div>
+              <div className="p-2 border-t border-border">
+                <Link
+                  to="/docs/models"
+                  className="flex items-center gap-1.5 text-xs text-primary hover:text-primary/80 transition-colors"
+                  onClick={() => setModelDropdownOpen(false)}
+                >
+                  <HelpCircle className="h-3.5 w-3.5" />
+                  <span>{t("playground:composer.helpMeChoose", "Help me choose a model")}</span>
+                  <ArrowRight className="h-3 w-3" />
+                </Link>
+              </div>
             </div>
           )}
           trigger={["click"]}
           placement="topLeft"
         >
-          <Tooltip title={apiModelLabel} placement="top">
+          <Tooltip title={modelSelectorWarning ? t("playground:composer.selectModelTooltip", "Click to select a model") : apiModelLabel} placement="top">
             <button
               type="button"
               title={apiModelLabel}
               aria-label={apiModelLabel}
               data-testid="model-selector"
-              className="inline-flex min-w-0 items-center gap-1 rounded-full border border-border bg-surface px-2 h-9 text-[10px] cursor-pointer hover:bg-surface-hover transition-colors"
+              className={`inline-flex min-w-0 items-center gap-1 rounded-full border px-2 h-9 text-[10px] cursor-pointer transition-colors ${
+                modelSelectorWarning
+                  ? "border-warn/50 bg-warn/10 text-warn hover:bg-warn/20"
+                  : "border-border bg-surface hover:bg-surface-hover"
+              }`}
             >
               <ProviderIcons
                 provider={resolvedProviderKey}
-                className="h-3 w-3 text-text-subtle"
+                className={`h-3 w-3 ${modelSelectorWarning ? "text-warn" : "text-text-subtle"}`}
               />
               <span className="truncate max-w-[120px]">
                 {apiModelLabel}

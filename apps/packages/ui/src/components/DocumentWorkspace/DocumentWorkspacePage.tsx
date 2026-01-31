@@ -33,8 +33,11 @@ import {
 import { DocumentChat, AnnotationsPanel, CitationPanel, QuizPanel } from "./RightPanel"
 import { DocumentWorkspaceErrorBoundary } from "./DocumentWorkspaceErrorBoundary"
 import { DocumentShortcutsModal } from "./DocumentShortcutsModal"
+import { DocumentTabBar } from "./DocumentTabBar"
+import { SyncStatusIndicator } from "./SyncStatusIndicator"
 import {
   useAnnotations,
+  useAnnotationSync,
   useAnnotationSyncOnClose,
   useReadingProgress,
   useReadingProgressAutoSave,
@@ -180,6 +183,7 @@ const WorkspaceHeader: React.FC<{
   onToggleLeftPane: () => void
   onToggleRightPane: () => void
   onShowShortcuts: () => void
+  onRetrySync?: () => void
   hideToggles?: boolean
 }> = ({
   leftPaneOpen,
@@ -187,6 +191,7 @@ const WorkspaceHeader: React.FC<{
   onToggleLeftPane,
   onToggleRightPane,
   onShowShortcuts,
+  onRetrySync,
   hideToggles
 }) => {
   const { t } = useTranslation(["option", "common"])
@@ -224,7 +229,10 @@ const WorkspaceHeader: React.FC<{
         </div>
       </div>
 
-      <div className="flex items-center gap-1">
+      <div className="flex items-center gap-2">
+        {/* Sync status indicator */}
+        <SyncStatusIndicator onRetry={onRetrySync} />
+
         <Tooltip title={t("option:documentWorkspace.shortcuts", "Keyboard shortcuts (?)")}>
           <button
             onClick={onShowShortcuts}
@@ -276,6 +284,7 @@ export const DocumentWorkspacePage: React.FC = () => {
 
   // Initialize annotation fetching and sync
   useAnnotations(activeDocumentId)
+  const { retrySync } = useAnnotationSync(activeDocumentId)
   useAnnotationSyncOnClose(activeDocumentId)
 
   // Initialize reading progress loading and auto-save
@@ -394,6 +403,7 @@ export const DocumentWorkspacePage: React.FC = () => {
             onToggleLeftPane={handleToggleLeftPane}
             onToggleRightPane={handleToggleRightPane}
             onShowShortcuts={handleShowShortcuts}
+            onRetrySync={retrySync}
             hideToggles
           />
           <DocumentShortcutsModal
@@ -426,11 +436,15 @@ export const DocumentWorkspacePage: React.FC = () => {
           onToggleLeftPane={handleToggleLeftPane}
           onToggleRightPane={handleToggleRightPane}
           onShowShortcuts={handleShowShortcuts}
+          onRetrySync={retrySync}
         />
         <DocumentShortcutsModal
           open={shortcutsModalOpen}
           onClose={handleCloseShortcuts}
         />
+
+        {/* Document tabs - shown when multiple documents are open */}
+        <DocumentTabBar />
 
         <div className="flex min-h-0 flex-1">
           {/* Left pane - Sidebar (desktop) */}

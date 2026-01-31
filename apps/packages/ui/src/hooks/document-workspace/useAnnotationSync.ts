@@ -1,9 +1,14 @@
-import { useEffect, useRef, useCallback } from "react"
+import { useEffect, useRef, useCallback, useState } from "react"
 import { useMutation, useQueryClient } from "@tanstack/react-query"
 import { tldwClient } from "@/services/tldw"
 import { useConnectionStore } from "@/store/connection"
 import { useDocumentWorkspaceStore } from "@/store/document-workspace"
 import type { Annotation, AnnotationColor } from "@/components/DocumentWorkspace/types"
+
+// Retry configuration
+const MAX_RETRY_ATTEMPTS = 3
+const INITIAL_RETRY_DELAY_MS = 1000 // 1 second
+const MAX_RETRY_DELAY_MS = 8000 // 8 seconds
 
 /**
  * Sync annotations using navigator.sendBeacon for guaranteed delivery on page unload.
@@ -52,7 +57,8 @@ function syncAnnotationsWithBeacon(
  * Hook to automatically sync pending annotations to the backend.
  *
  * This hook watches the store's pendingAnnotations and syncs them
- * to the backend when connection is available.
+ * to the backend when connection is available. Includes automatic
+ * retry with exponential backoff on failure.
  *
  * @param mediaId - The active document's media ID
  * @param debounceMs - Debounce time in milliseconds (default: 2000)
@@ -77,6 +83,24 @@ export function useAnnotationSync(
   )
 
   const syncTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const retryTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const [retryCount, setRetryCount] = useState(0)
+
+  // Clear retry timeout on cleanup
+  useEffect(() => {
+    return () => {
+      if (retryTimeoutRef.current) {
+        clearTimeout(retryTimeoutRef.current)
+      }
+    }
+  }, [])
+
+  // Reset retry count when sync succeeds or annotations change
+  useEffect(() => {
+    if (annotationSyncStatus === "synced") {
+      setRetryCount(0)
+    }
+  }, [annotationSyncStatus])
 
   // Mutation for batch sync
   const syncMutation = useMutation({
@@ -104,9 +128,32 @@ export function useAnnotationSync(
     onSuccess: (_data, { mediaId }) => {
       queryClient.invalidateQueries({ queryKey: ["document-annotations", mediaId] })
       setAnnotationSyncStatus("synced")
+      setRetryCount(0)
     },
     onError: () => {
-      setAnnotationSyncStatus("error")
+      // Schedule retry with exponential backoff if under max attempts
+      if (retryCount < MAX_RETRY_ATTEMPTS) {
+        const delay = Math.min(
+          INITIAL_RETRY_DELAY_MS * Math.pow(2, retryCount),
+          MAX_RETRY_DELAY_MS
+        )
+        setRetryCount((prev) => prev + 1)
+        setAnnotationSyncStatus("pending") // Keep as pending to trigger retry
+
+        retryTimeoutRef.current = setTimeout(() => {
+          // The debounced effect will pick this up
+        }, delay)
+
+        console.warn(
+          `Annotation sync failed, will retry in ${delay}ms (attempt ${retryCount + 1}/${MAX_RETRY_ATTEMPTS})`
+        )
+      } else {
+        // Max retries exceeded, set error status
+        setAnnotationSyncStatus("error")
+        console.error(
+          `Annotation sync failed after ${MAX_RETRY_ATTEMPTS} attempts`
+        )
+      }
     }
   })
 
@@ -173,10 +220,21 @@ export function useAnnotationSync(
     syncPendingAnnotations()
   }, [syncPendingAnnotations])
 
+  // Manual retry function for user-initiated retries
+  const retrySync = useCallback(() => {
+    if (annotationSyncStatus === "error") {
+      setRetryCount(0)
+      setAnnotationSyncStatus("pending")
+    }
+  }, [annotationSyncStatus, setAnnotationSyncStatus])
+
   return {
     isSyncing: syncMutation.isPending,
     syncStatus: annotationSyncStatus,
     forceSync,
+    retrySync,
+    retryCount,
+    maxRetries: MAX_RETRY_ATTEMPTS,
     error: syncMutation.error
   }
 }

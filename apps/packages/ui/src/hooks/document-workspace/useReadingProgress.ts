@@ -5,6 +5,47 @@ import { useConnectionStore } from "@/store/connection"
 import { useDocumentWorkspaceStore } from "@/store/document-workspace"
 import type { ViewMode } from "@/components/DocumentWorkspace/types"
 
+/**
+ * Sync reading progress using navigator.sendBeacon for guaranteed delivery on page unload.
+ * Similar to annotation sync, this ensures reading progress is saved even if the page
+ * is closed immediately.
+ *
+ * @returns true if sendBeacon was used, false if not available or failed
+ */
+function syncReadingProgressWithBeacon(
+  serverUrl: string | null,
+  mediaId: number,
+  progress: {
+    current_page: number
+    total_pages: number
+    zoom_level?: number
+    view_mode?: ViewMode
+    cfi?: string
+    percentage?: number
+  }
+): boolean {
+  if (!serverUrl || progress.total_pages === 0) {
+    return false
+  }
+
+  // sendBeacon is not available in all environments (e.g., some older browsers, Node.js)
+  if (typeof navigator === "undefined" || !navigator.sendBeacon) {
+    return false
+  }
+
+  try {
+    const url = `${serverUrl}/api/v1/media/${mediaId}/reading-progress`
+    const payload = JSON.stringify(progress)
+
+    // sendBeacon returns true if the browser successfully queued the request
+    const blob = new Blob([payload], { type: "application/json" })
+    return navigator.sendBeacon(url, blob)
+  } catch (error) {
+    console.error("sendBeacon for reading progress failed:", error)
+    return false
+  }
+}
+
 export interface ReadingProgress {
   media_id: number
   current_page: number
@@ -258,13 +299,22 @@ export function useReadingProgressAutoSave(
 
 /**
  * Hook that saves reading progress when the document is closed or changed.
+ *
+ * Uses navigator.sendBeacon for page unload events to guarantee delivery,
+ * since regular async requests may not complete before the page closes.
  */
 export function useReadingProgressSaveOnClose(mediaId: number | null) {
   const { forceSave } = useReadingProgressAutoSave(mediaId, 0)
   const totalPages = useDocumentWorkspaceStore((s) => s.totalPages)
+  const currentPage = useDocumentWorkspaceStore((s) => s.currentPage)
+  const zoomLevel = useDocumentWorkspaceStore((s) => s.zoomLevel)
+  const viewMode = useDocumentWorkspaceStore((s) => s.viewMode)
+  const currentCfi = useDocumentWorkspaceStore((s) => s.currentCfi)
+  const currentPercentage = useDocumentWorkspaceStore((s) => s.currentPercentage)
+  const serverUrl = useConnectionStore((s) => s.state.serverUrl)
   const previousMediaIdRef = useRef<number | null>(mediaId)
 
-  // Save when document changes
+  // Save when document changes (normal async sync is fine here)
   useEffect(() => {
     if (previousMediaIdRef.current !== mediaId && previousMediaIdRef.current !== null) {
       forceSave()
@@ -273,17 +323,62 @@ export function useReadingProgressSaveOnClose(mediaId: number | null) {
   }, [mediaId, forceSave])
 
   // Save on unmount / page close
+  // Use sendBeacon for beforeunload to guarantee delivery
   useEffect(() => {
     const handleBeforeUnload = () => {
-      forceSave()
+      if (mediaId !== null && totalPages > 0) {
+        // Build progress object
+        const progress: {
+          current_page: number
+          total_pages: number
+          zoom_level?: number
+          view_mode?: ViewMode
+          cfi?: string
+          percentage?: number
+        } = {
+          current_page: currentPage,
+          total_pages: totalPages,
+          zoom_level: zoomLevel,
+          view_mode: viewMode
+        }
+
+        // Include CFI and percentage for EPUB documents
+        if (currentCfi) {
+          progress.cfi = currentCfi
+          progress.percentage = currentPercentage
+        }
+
+        // Try sendBeacon first (guaranteed delivery on page close)
+        const beaconSent = syncReadingProgressWithBeacon(
+          serverUrl,
+          mediaId,
+          progress
+        )
+
+        // Fall back to regular sync if beacon fails (might not complete)
+        if (!beaconSent) {
+          forceSave()
+        }
+      }
     }
 
     window.addEventListener("beforeunload", handleBeforeUnload)
     return () => {
       window.removeEventListener("beforeunload", handleBeforeUnload)
+      // On unmount (not page close), regular async sync is fine
       if (totalPages > 0) {
         forceSave()
       }
     }
-  }, [forceSave, totalPages])
+  }, [
+    forceSave,
+    totalPages,
+    mediaId,
+    currentPage,
+    zoomLevel,
+    viewMode,
+    currentCfi,
+    currentPercentage,
+    serverUrl
+  ])
 }

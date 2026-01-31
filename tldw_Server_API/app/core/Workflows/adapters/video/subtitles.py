@@ -8,8 +8,20 @@ This module includes adapters for subtitle operations:
 
 from __future__ import annotations
 
+import subprocess
+import time
+from pathlib import Path
 from typing import Any, Dict
 
+from loguru import logger
+
+from tldw_Server_API.app.core.Chat.prompt_template_manager import apply_template_to_string as _tmpl
+from tldw_Server_API.app.core.Workflows.adapters._common import (
+    format_time_srt,
+    format_time_vtt,
+    resolve_artifacts_dir,
+    resolve_workflow_file_path,
+)
 from tldw_Server_API.app.core.Workflows.adapters._registry import registry
 from tldw_Server_API.app.core.Workflows.adapters.video._config import (
     SubtitleGenerateConfig,
@@ -31,15 +43,77 @@ async def run_subtitle_generate_adapter(config: Dict[str, Any], context: Dict[st
 
     Config:
       - input_path: str (templated) - Input audio/video file path
-      - output_path: str (optional) - Output subtitle file path
-      - format: Literal["srt", "vtt", "ass"] = "srt" - Subtitle format
-      - language: str (optional) - Source language code
-      - model: str = "large-v3" - Whisper model name
+      - language: str - Language code (default: "en")
+      - format: str - Subtitle format: "srt", "vtt" (default: "srt")
     Output:
-      - {"output_path": str, "format": str, "segments": int}
+      - {"subtitle_path": str, "generated": bool, "segment_count": int}
     """
-    from tldw_Server_API.app.core.Workflows._adapters_legacy import run_subtitle_generate_adapter as _legacy
-    return await _legacy(config, context)
+    if callable(context.get("is_cancelled")) and context["is_cancelled"]():
+        return {"__status__": "cancelled"}
+
+    input_path = config.get("input_path") or ""
+    if isinstance(input_path, str):
+        input_path = _tmpl(input_path, context) or input_path
+
+    if not input_path:
+        prev = context.get("prev") or context.get("last") or {}
+        if isinstance(prev, dict):
+            input_path = prev.get("audio_path") or prev.get("video_path") or prev.get("output_path") or ""
+
+    if not input_path:
+        return {"error": "missing_input_path", "generated": False}
+
+    try:
+        resolved_input = resolve_workflow_file_path(input_path, context, config)
+    except Exception as e:
+        return {"error": f"input_path_error: {e}", "generated": False}
+
+    language = config.get("language", "en")
+    sub_format = config.get("format", "srt")
+
+    step_run_id = str(context.get("step_run_id") or f"subtitle_{int(time.time() * 1000)}")
+    art_dir = resolve_artifacts_dir(step_run_id)
+    art_dir.mkdir(parents=True, exist_ok=True)
+    output_path = str(art_dir / f"subtitles.{sub_format}")
+
+    try:
+        # Use the STT transcribe adapter to get transcript
+        from tldw_Server_API.app.core.Workflows.adapters import run_stt_transcribe_adapter
+
+        stt_result = await run_stt_transcribe_adapter({
+            "audio_path": str(resolved_input),
+            "language": language,
+            "word_timestamps": True,
+        }, context)
+
+        if stt_result.get("error"):
+            return {"error": stt_result.get("error"), "generated": False}
+
+        segments = stt_result.get("segments") or []
+
+        # Generate subtitle file
+        if sub_format == "vtt":
+            content = "WEBVTT\n\n"
+            for i, seg in enumerate(segments):
+                start = format_time_vtt(seg.get("start", 0))
+                end = format_time_vtt(seg.get("end", 0))
+                text = seg.get("text", "").strip()
+                content += f"{start} --> {end}\n{text}\n\n"
+        else:  # srt
+            content = ""
+            for i, seg in enumerate(segments):
+                start = format_time_srt(seg.get("start", 0))
+                end = format_time_srt(seg.get("end", 0))
+                text = seg.get("text", "").strip()
+                content += f"{i + 1}\n{start} --> {end}\n{text}\n\n"
+
+        Path(output_path).write_text(content, encoding="utf-8")
+
+        return {"subtitle_path": output_path, "generated": True, "segment_count": len(segments)}
+
+    except Exception as e:
+        logger.exception(f"Subtitle generate error: {e}")
+        return {"error": str(e), "generated": False}
 
 
 @registry.register(
@@ -54,17 +128,64 @@ async def run_subtitle_translate_adapter(config: Dict[str, Any], context: Dict[s
     """Translate subtitles to a different language.
 
     Config:
-      - input_path: str (templated) - Input subtitle file path
-      - output_path: str (optional) - Output subtitle file path
-      - source_lang: str (optional) - Source language code
-      - target_lang: str - Target language code (required)
-      - provider: str (optional) - Translation provider
-      - model: str (optional) - Model for LLM translation
+      - input_path: str (templated) - Input subtitle file path (srt or vtt)
+      - target_language: str - Target language (default: "es")
+      - provider: str - LLM provider for translation (optional)
+      - model: str - Model to use (optional)
     Output:
-      - {"output_path": str, "source_lang": str, "target_lang": str}
+      - {"output_path": str, "translated": bool, "target_language": str}
     """
-    from tldw_Server_API.app.core.Workflows._adapters_legacy import run_subtitle_translate_adapter as _legacy
-    return await _legacy(config, context)
+    if callable(context.get("is_cancelled")) and context["is_cancelled"]():
+        return {"__status__": "cancelled"}
+
+    input_path = config.get("input_path") or ""
+    if isinstance(input_path, str):
+        input_path = _tmpl(input_path, context) or input_path
+
+    if not input_path:
+        prev = context.get("prev") or context.get("last") or {}
+        if isinstance(prev, dict):
+            input_path = prev.get("subtitle_path") or prev.get("output_path") or ""
+
+    if not input_path:
+        return {"error": "missing_input_path", "translated": False}
+
+    try:
+        resolved_input = resolve_workflow_file_path(input_path, context, config)
+    except Exception as e:
+        return {"error": f"input_path_error: {e}", "translated": False}
+
+    target_language = config.get("target_language", "es")
+
+    step_run_id = str(context.get("step_run_id") or f"subtitle_translate_{int(time.time() * 1000)}")
+    art_dir = resolve_artifacts_dir(step_run_id)
+    art_dir.mkdir(parents=True, exist_ok=True)
+    output_path = str(art_dir / f"translated_{resolved_input.name}")
+
+    try:
+        content = resolved_input.read_text(encoding="utf-8")
+
+        # Use translate adapter for translation
+        from tldw_Server_API.app.core.Workflows.adapters import run_translate_adapter
+
+        translate_result = await run_translate_adapter({
+            "text": content,
+            "target_language": target_language,
+            "provider": config.get("provider"),
+            "model": config.get("model"),
+        }, context)
+
+        if translate_result.get("error"):
+            return {"error": translate_result.get("error"), "translated": False}
+
+        translated_content = translate_result.get("translated_text") or translate_result.get("text") or ""
+        Path(output_path).write_text(translated_content, encoding="utf-8")
+
+        return {"output_path": output_path, "translated": True, "target_language": target_language}
+
+    except Exception as e:
+        logger.exception(f"Subtitle translate error: {e}")
+        return {"error": str(e), "translated": False}
 
 
 @registry.register(
@@ -80,13 +201,62 @@ async def run_subtitle_burn_adapter(config: Dict[str, Any], context: Dict[str, A
 
     Config:
       - video_path: str (templated) - Input video file path
-      - subtitle_path: str (templated) - Input subtitle file path
-      - output_path: str (optional) - Output video file path
-      - font_size: int = 24 - Subtitle font size
-      - font_color: str = "white" - Subtitle font color
-      - position: Literal["bottom", "top"] = "bottom" - Subtitle position
+      - subtitle_path: str (templated) - Input subtitle file path (srt or vtt)
+      - font_size: int - Subtitle font size (default: 24)
+      - position: str - "bottom", "top" (default: "bottom")
     Output:
-      - {"output_path": str}
+      - {"output_path": str, "burned": bool}
     """
-    from tldw_Server_API.app.core.Workflows._adapters_legacy import run_subtitle_burn_adapter as _legacy
-    return await _legacy(config, context)
+    if callable(context.get("is_cancelled")) and context["is_cancelled"]():
+        return {"__status__": "cancelled"}
+
+    video_path = config.get("video_path") or ""
+    subtitle_path = config.get("subtitle_path") or ""
+
+    if isinstance(video_path, str):
+        video_path = _tmpl(video_path, context) or video_path
+    if isinstance(subtitle_path, str):
+        subtitle_path = _tmpl(subtitle_path, context) or subtitle_path
+
+    if not video_path:
+        prev = context.get("prev") or context.get("last") or {}
+        if isinstance(prev, dict):
+            video_path = prev.get("video_path") or prev.get("output_path") or ""
+
+    if not video_path or not subtitle_path:
+        return {"error": "missing_video_or_subtitle_path", "burned": False}
+
+    try:
+        resolved_video = resolve_workflow_file_path(video_path, context, config)
+        resolved_subtitle = resolve_workflow_file_path(subtitle_path, context, config)
+    except Exception as e:
+        return {"error": f"path_error: {e}", "burned": False}
+
+    font_size = int(config.get("font_size", 24))
+    position = config.get("position", "bottom")
+
+    step_run_id = str(context.get("step_run_id") or f"subtitle_burn_{int(time.time() * 1000)}")
+    art_dir = resolve_artifacts_dir(step_run_id)
+    art_dir.mkdir(parents=True, exist_ok=True)
+    output_path = str(art_dir / f"subtitled_{resolved_video.name}")
+
+    try:
+        # Escape path for ffmpeg filter
+        sub_path_escaped = str(resolved_subtitle).replace(":", r"\:").replace("'", r"\'")
+
+        margin_v = 10 if position == "bottom" else 50
+        force_style = f"FontSize={font_size},MarginV={margin_v}"
+
+        cmd = [
+            "ffmpeg", "-y", "-i", str(resolved_video),
+            "-vf", f"subtitles='{sub_path_escaped}':force_style='{force_style}'",
+            "-c:a", "copy",
+            str(output_path)
+        ]
+        subprocess.run(cmd, check=True, capture_output=True, timeout=1800)
+
+        return {"output_path": output_path, "burned": True}
+
+    except Exception as e:
+        logger.exception(f"Subtitle burn error: {e}")
+        return {"error": str(e), "burned": False}
