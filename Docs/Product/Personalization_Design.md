@@ -15,13 +15,14 @@ Provide opt-in, explainable personalization that leverages a per-user topic prof
 - Feature flags: loaded from config; endpoints are gated when disabled.
   - Config: `[personalization] enabled=true` in `tldw_Server_API/Config_Files/config.txt`.
   - Exposed at runtime via `GET /api/v1/config/docs-info` under `capabilities.personalization`.
-- Storage: per-user SQLite `Personalization.db` with `usage_events`, `topic_profiles`, `semantic_memories` (episodic stub present).
+- Storage: per-user SQLite `Personalization.db` with `usage_events`, `topic_profiles`, `semantic_memories` (episodic stub present); unified `memories` table is planned.
 - Event logging: best-effort `UsageEventLogger` integrated into chat, TTS, audio transcription, media processing (videos, audios, ebooks, documents, pdfs), and web scraping endpoints.
 - API endpoints (scaffolded and functional): opt-in, purge, profile, preferences, memories list/add/delete; explanations placeholder.
 - Consolidation service: background loop + admin trigger; current implementation upserts topic scores from recent event tags. In-memory last-tick status is available.
 - RAG integration: scorer/context builder stubs exist; current weights map to vector/personal/recency with BM25 as a base term.
 - WebUI: Personalization tab (preview) for viewing profile/weights and adding/listing memories; tab visibility follows server capabilities.
 - Tests: basic endpoint CRUD, feature flag presence, and usage-event logging across relevant media/audio/web endpoints.
+- Note: Expanded memory taxonomy, sessions, suggestions, import/export, and proactive features are design-stage only unless explicitly marked implemented.
 
 ## Changelog
 
@@ -49,7 +50,7 @@ Provide opt-in, explainable personalization that leverages a per-user topic prof
 - Cross-user modeling or global recommendations (future, opt-in only).
 - On-device encryption/federated learning (future consideration).
 - Intrusive UI nudges; personalization is subtle and explainable.
-- Push notifications (proactive features are pull-based via API).
+- Push notifications are deferred to Stage 4; earlier stages use pull-based suggestions via API.
 
 ## User Stories
 
@@ -177,6 +178,10 @@ CREATE TABLE IF NOT EXISTS profiles (
   response_style TEXT DEFAULT 'balanced',  -- concise, balanced, detailed
   preferred_format TEXT DEFAULT 'auto',  -- prose, bullets, code, auto
 
+  -- Session continuity preferences
+  session_continuity_enabled INTEGER NOT NULL DEFAULT 1,
+  session_summaries_enabled INTEGER NOT NULL DEFAULT 1,
+
   purged_at TEXT,  -- ISO timestamp; prevents re-creation after purge
   updated_at TEXT NOT NULL
 );
@@ -241,6 +246,11 @@ The enhanced memory model distinguishes six types of memories, each with differe
 └─────────────────────────────────────────────────────────────┘
 ```
 
+Inference policy (decision pending):
+- Identity/constraint memories may be inferred, but must be labeled `source=inferred` and low confidence.
+- By default, inferred identity/constraint memories are **not injected** into context until the user validates or pins them.
+- UI should surface a lightweight validation flow (e.g., "Is this still accurate?") before promotion.
+
 #### memories (unified table with type taxonomy)
 
 ```sql
@@ -283,6 +293,10 @@ CREATE INDEX IF NOT EXISTS idx_memories_recency ON memories(user_id, last_access
 CREATE INDEX IF NOT EXISTS idx_memories_expires ON memories(expires_at) WHERE expires_at IS NOT NULL;
 ```
 
+`last_accessed` is updated whenever a memory is injected into context or explicitly viewed in the UI.
+
+Expired working memories are excluded from retrieval by default and deleted by a periodic cleanup task (aligned with consolidation interval).
+
 #### Legacy Tables (backwards compatibility)
 
 The following tables are retained for backwards compatibility during migration:
@@ -324,6 +338,12 @@ CREATE TABLE IF NOT EXISTS topic_profiles (
 CREATE INDEX IF NOT EXISTS idx_topics_user ON topic_profiles(user_id);
 CREATE INDEX IF NOT EXISTS idx_topics_score ON topic_profiles(user_id, score DESC);
 ```
+
+### Integration & Migration
+
+- **Chat history**: reuse existing chat storage; `conversation_messages` should be a view or reference to existing chat logs (avoid duplicating full transcripts).
+- **Legacy personalization**: if `rag_personalization.json` priors exist, do not apply both boosts; prefer the new personalization scorer when enabled and deprecate the legacy store.
+- **Legacy tables**: migrate `semantic_memories` and `episodic_memories` into `memories` with type mapping; keep legacy tables read-only during transition.
 
 ### Conversation Continuity Tables
 
@@ -676,6 +696,8 @@ GET /memories/export:
 
 ### Conversation Sessions API
 
+All endpoints below are relative to `/api/v1/personalization`.
+
 ```yaml
 GET /sessions:
   description: List conversation sessions
@@ -718,6 +740,8 @@ PATCH /sessions/{id}:
 
 ### Suggestions API
 
+All endpoints below are relative to `/api/v1/personalization`.
+
 ```yaml
 GET /suggestions:
   description: Get pending suggestions for user
@@ -738,6 +762,8 @@ POST /suggestions/{id}/respond:
 ```
 
 ### Explanations API
+
+All endpoints below are relative to `/api/v1/personalization`.
 
 ```yaml
 GET /explanations:
@@ -837,6 +863,10 @@ Implementation notes:
 └──────────────┘     └──────────────┘     └──────────────┘
 ```
 
+Delivery modes:
+- Stage 2–3: API pull only (`GET /suggestions`).
+- Stage 4+: optional push notifications (email/webhook/desktop) with explicit user opt-in, quiet hours, and rate limits.
+
 ### User Preferences for Proactive Features
 
 Users control proactive features via the profile:
@@ -895,6 +925,7 @@ Users control proactive features via the profile:
    - LLM generates summary, key topics, decisions, action items
    - Summary is embedded for future retrieval
    - Working memories from session are migrated or expired
+   - Uses `session_summary_llm_provider` (separate from `personalization_llm_provider`); if summaries are disabled, skip LLM and store only minimal metadata.
 
 ### Context Injection for Continuity
 
@@ -1009,6 +1040,7 @@ suggestion_max_per_day = 5
 # Session continuity
 session_inactivity_timeout_minutes = 30
 session_auto_summarize = true
+session_summary_llm_provider = "local_only"  # separate from personalization_llm_provider
 max_recent_sessions_in_context = 5
 ```
 
@@ -1016,6 +1048,7 @@ Environment overrides supported via existing config loader.
 
 Runtime capability surface:
 - `GET /api/v1/config/docs-info` → includes `capabilities` and `supported_features` maps (for backward compatibility).
+  - Proposed sub-capabilities: `personalization.memories`, `personalization.sessions`, `personalization.suggestions`, `personalization.import_export`, `personalization.proactive_push`.
 
 ---
 
@@ -1024,10 +1057,12 @@ Runtime capability surface:
 - Default off per user; explicit opt-in.
 - Purge endpoint removes SQLite rows and Chroma collections.
 - If LLM summarization is enabled, it must use the configured provider; users can opt out of LLM summarization while keeping personalization on.
+- Session summaries use a separate provider and can be disabled independently of memory summarization.
 - Rate limits on consolidation; never log secret values.
 - Access control via existing AuthNZ user scopes.
 - Working memories auto-expire; no permanent storage of session-scoped data without explicit promotion.
 - Hidden memories are excluded from context injection but retained for user access.
+- Inferred identity/constraint memories are excluded from injection until validated or pinned.
 
 ---
 
@@ -1123,6 +1158,7 @@ Runtime capability surface:
 - Should we add a "Persona Action Log" that records actions taken and rationale?
 - How to handle conflicting memories (e.g., correction contradicts preference)?
 - Should session summaries be editable by the user?
+- What is the exact validation flow for inferred identity/constraint memories?
 
 ---
 

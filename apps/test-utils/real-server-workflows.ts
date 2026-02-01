@@ -4506,6 +4506,9 @@ test.describe("Real server end-to-end workflows", () => {
           await expect(insertQuick).toBeVisible({ timeout: 15000 })
           await insertQuick.click()
           await expect(insertQuick).toBeHidden({ timeout: 15000 })
+          await driver.goto(page, "/chat", {
+            waitUntil: "domcontentloaded"
+          })
           await waitForChatLanding(page, driver, 15000)
           logStep("prompt insert state", {
             selectedQuickPrompt: await page
