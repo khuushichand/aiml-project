@@ -17,6 +17,20 @@ and this project adheres to Some kind of Versioning
 - Workspace selector remove handler now uses the imported MouseEvent type instead of the React namespace.
 
 
+## [0.1.20] 2026-02-01
+
+### Added
+- 
+
+### Changed
+- 
+
+### Removed
+- 
+
+### Fixed
+- 
+
 ## [0.1.19] 2026-01-31
 
 ### Added
