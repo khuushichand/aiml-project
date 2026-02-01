@@ -31,14 +31,20 @@ export type KnowledgePanelProps = {
   isConnected?: boolean
   open?: boolean
   onOpenChange?: (nextOpen: boolean) => void
+  /** Request a specific tab to open (paired with openTabRequestId for repeat requests). */
+  openTab?: KnowledgeTab
+  /** Increment to force re-applying openTab even if it didn't change. */
+  openTabRequestId?: number
   autoFocus?: boolean
   showToggle?: boolean
   variant?: "card" | "embedded"
   currentMessage?: string
   showAttachedContext?: boolean
+  attachedImage?: string
   attachedTabs?: TabInfo[]
   availableTabs?: TabInfo[]
   attachedFiles?: UploadedFile[]
+  onRemoveImage?: () => void
   onRemoveTab?: (tabId: number) => void
   onAddTab?: (tab: TabInfo) => void
   onClearTabs?: () => void
@@ -46,6 +52,10 @@ export type KnowledgePanelProps = {
   onAddFile?: () => void
   onRemoveFile?: (fileId: string) => void
   onClearFiles?: () => void
+  /** Whether file retrieval (RAG) is enabled */
+  fileRetrievalEnabled?: boolean
+  /** Callback to toggle file retrieval */
+  onFileRetrievalChange?: (enabled: boolean) => void
 }
 
 const normalizeUrl = (value?: string) => value?.trim().toLowerCase()
@@ -65,26 +75,47 @@ export const KnowledgePanel: React.FC<KnowledgePanelProps> = ({
   isConnected = true,
   open,
   onOpenChange,
+  openTab,
+  openTabRequestId,
   autoFocus = true,
   showToggle = true,
   variant = "card",
   currentMessage,
   showAttachedContext = false,
+  attachedImage,
   attachedTabs = [],
   availableTabs = [],
   attachedFiles = [],
+  onRemoveImage,
   onRemoveTab,
   onAddTab,
   onClearTabs,
   onRefreshTabs,
   onAddFile,
   onRemoveFile,
-  onClearFiles
+  onClearFiles,
+  fileRetrievalEnabled = false,
+  onFileRetrievalChange
 }) => {
   const { t } = useTranslation(["sidepanel"])
 
-  // Tab state - default to search tab
-  const [activeTab, setActiveTab] = React.useState<KnowledgeTab>("search")
+  // Tab state - default to search tab (or requested tab)
+  const [activeTab, setActiveTab] = React.useState<KnowledgeTab>(
+    openTab ?? "search"
+  )
+  const lastOpenTabRequestRef = React.useRef<number | null>(null)
+
+  React.useEffect(() => {
+    if (!openTab) return
+    if (typeof openTabRequestId === "number") {
+      if (openTabRequestId !== lastOpenTabRequestRef.current) {
+        setActiveTab(openTab)
+        lastOpenTabRequestRef.current = openTabRequestId
+      }
+      return
+    }
+    setActiveTab(openTab)
+  }, [openTab, openTabRequestId])
 
   // Open/close state (controlled or uncontrolled)
   const [internalOpen, setInternalOpen] = React.useState(false)
@@ -142,7 +173,7 @@ export const KnowledgePanel: React.FC<KnowledgePanelProps> = ({
           title: t("sidepanel:rag.askConfirmTitle", "Ask about this item?"),
           content: t(
             "sidepanel:rag.askConfirmContent",
-            "Pinned results will be ignored for this Ask."
+            "Saved results will be ignored for this Ask."
           ),
           okText: t("common:continue", "Continue"),
           cancelText: t("common:cancel", "Cancel"),
@@ -158,9 +189,13 @@ export const KnowledgePanel: React.FC<KnowledgePanelProps> = ({
     [onAsk, search.pinnedResults.length, t]
   )
 
-  // Context item count for badge (tabs + files + pinned results)
+  // Context item count for badge (image + tabs + files + pinned results)
   const contextCount = React.useMemo(() => {
     const seen = new Set<string>()
+
+    if (attachedImage) {
+      seen.add("image")
+    }
 
     attachedTabs.forEach((tab) => {
       const normalized = normalizeUrl(tab.url)
@@ -185,7 +220,7 @@ export const KnowledgePanel: React.FC<KnowledgePanelProps> = ({
     })
 
     return seen.size
-  }, [attachedTabs, attachedFiles, search.pinnedResults])
+  }, [attachedImage, attachedTabs, attachedFiles, search.pinnedResults])
 
   // Toggle handler for external events
   React.useEffect(() => {
@@ -266,13 +301,12 @@ export const KnowledgePanel: React.FC<KnowledgePanelProps> = ({
             highlightTerms={settings.draftSettings.highlight_query_terms}
             pinnedResults={search.pinnedResults}
             onPin={search.handlePin}
-            onUnpin={search.handleUnpin}
-            onClearPins={search.handleClearPins}
             onInsert={search.handleInsert}
             onAsk={handleAsk}
             onPreview={handlePreview}
             isConnected={isConnected}
             autoFocus={autoFocus}
+            onOpenContext={() => setActiveTab("context")}
           />
         )}
 
@@ -290,6 +324,8 @@ export const KnowledgePanel: React.FC<KnowledgePanelProps> = ({
 
         {activeTab === "context" && (
           <ContextTab
+            attachedImage={attachedImage}
+            onRemoveImage={onRemoveImage}
             attachedTabs={attachedTabs}
             availableTabs={availableTabs}
             onRemoveTab={onRemoveTab || noop}
@@ -303,6 +339,8 @@ export const KnowledgePanel: React.FC<KnowledgePanelProps> = ({
             pinnedResults={search.pinnedResults}
             onUnpinResult={search.handleUnpin}
             onClearPins={search.handleClearPins}
+            fileRetrievalEnabled={fileRetrievalEnabled}
+            onFileRetrievalChange={onFileRetrievalChange || noop}
           />
         )}
 

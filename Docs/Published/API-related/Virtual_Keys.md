@@ -18,7 +18,7 @@ Request body (application/json):
   "team_id": 5,
   "allowed_endpoints": ["chat.completions", "embeddings"],
   "allowed_providers": ["openai"],
-  "allowed_models": ["gpt-4o-mini", "text-embedding-3-small"],
+  "allowed_models": ["gpt-4o", "text-embedding-3-small"],
   "budget_day_tokens": 100000,
   "budget_month_tokens": 2000000,
   "budget_day_usd": 5.0,
@@ -53,7 +53,7 @@ curl -X POST http://127.0.0.1:8000/api/v1/admin/users/123/virtual-keys \
     "name": "lab-chat-key",
     "allowed_endpoints": ["chat.completions", "embeddings"],
     "allowed_providers": ["openai"],
-    "allowed_models": ["gpt-4o-mini"],
+    "allowed_models": ["gpt-4o"],
     "budget_day_tokens": 100000,
     "budget_month_usd": 50.0
   }'
@@ -131,7 +131,7 @@ curl -X POST http://127.0.0.1:8000/api/v1/chat/completions \
   -H "X-API-KEY: <VIRTUAL_KEY>" \
   -H "X-LLM-Provider: openai" \
   -d '{
-    "model": "gpt-4o-mini",
+    "model": "gpt-4o",
     "messages": [{"role": "user", "content": "Hello"}]
   }'
 ```

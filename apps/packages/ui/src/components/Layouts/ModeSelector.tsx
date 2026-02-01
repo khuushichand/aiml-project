@@ -1,9 +1,6 @@
 import React from "react"
 import { useTranslation } from "react-i18next"
 import { Dropdown } from "antd"
-import { useQuery } from "@tanstack/react-query"
-import { useServerOnline } from "@/hooks/useServerOnline"
-import { hasPromptStudio } from "@/services/prompt-studio"
 import {
   useShortcutConfig,
   formatShortcut,
@@ -23,7 +20,6 @@ export type CoreMode =
   | "quiz"
   | "evaluations"
   | "speech"
-  | "promptStudio"
   | "flashcards"
   | "documentation"
   | "chunkingPlayground"
@@ -32,6 +28,7 @@ export type CoreMode =
   | "characters"
   | "watchlists"
   | "audiobookStudio"
+  // Note: "promptStudio" mode has been unified with "prompts"
 
 interface ModeSelectorProps {
   currentMode: CoreMode
@@ -44,15 +41,7 @@ interface ModeSelectorProps {
  */
 export function ModeSelector({ currentMode, onModeChange }: ModeSelectorProps) {
   const { t, i18n } = useTranslation(["option", "common", "settings"])
-  const isOnline = useServerOnline()
   const { shortcuts: shortcutConfig } = useShortcutConfig()
-
-  const promptStudioCapability = useQuery({
-    queryKey: ["prompt-studio", "capability-mode-selector"],
-    queryFn: hasPromptStudio,
-    enabled: isOnline,
-    staleTime: 60_000,
-  })
 
   const primaryModes: Array<{
     key: CoreMode
@@ -127,11 +116,7 @@ export function ModeSelector({ currentMode, onModeChange }: ModeSelectorProps) {
         label: t("option:header.modeSpeech", "Speech"),
         shortcut: undefined,
       },
-      {
-        key: "promptStudio",
-        label: t("option:header.modePromptStudio", "Prompt Studio"),
-        shortcut: undefined,
-      },
+      // Note: Prompt Studio is now unified with Prompts (accessible via /prompts)
       {
         key: "worldBooks",
         label: t("option:header.modeWorldBooks", "World Books"),
@@ -166,11 +151,8 @@ export function ModeSelector({ currentMode, onModeChange }: ModeSelectorProps) {
       secondaryModes.map((mode) => ({
         key: mode.key,
         label: mode.label,
-        disabled:
-          mode.key === "promptStudio" &&
-          promptStudioCapability.data === false,
       })),
-    [promptStudioCapability.data, secondaryModes]
+    [secondaryModes]
   )
 
   const handleDropdownClick = React.useCallback(
@@ -189,8 +171,6 @@ export function ModeSelector({ currentMode, onModeChange }: ModeSelectorProps) {
   )
 
   const renderModeButton = (mode: (typeof primaryModes)[0]) => {
-    const promptStudioUnavailable =
-      mode.key === "promptStudio" && promptStudioCapability.data === false
     const isSelected = currentMode === mode.key
 
     return (
@@ -199,12 +179,7 @@ export function ModeSelector({ currentMode, onModeChange }: ModeSelectorProps) {
         type="button"
         role="tab"
         aria-selected={isSelected}
-        onClick={() => {
-          if (promptStudioUnavailable) return
-          onModeChange(mode.key)
-        }}
-        disabled={promptStudioUnavailable}
-        aria-disabled={promptStudioUnavailable}
+        onClick={() => onModeChange(mode.key)}
         title={
           mode.shortcut
             ? (t("option:header.modeShortcutHint", "{{shortcut}} to switch", {
@@ -216,8 +191,7 @@ export function ModeSelector({ currentMode, onModeChange }: ModeSelectorProps) {
           "core-mode-button rounded-full px-3 py-1 text-xs font-medium transition focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus",
           isSelected
             ? "core-mode-button--active active bg-primary text-white shadow-sm"
-            : "bg-surface2 text-text-muted hover:bg-surface",
-          promptStudioUnavailable ? "opacity-60 cursor-not-allowed" : ""
+            : "bg-surface2 text-text-muted hover:bg-surface"
         )}
         data-active={isSelected ? "true" : undefined}
       >

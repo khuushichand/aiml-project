@@ -12,19 +12,25 @@ import {
   Select,
   Alert
 } from "antd"
-import { Computer, Zap, Star, UploadCloud, Download, Trash2, Pen } from "lucide-react"
+import { Computer, Zap, Star, StarOff, UploadCloud, Download, Trash2, Pen, Undo2, AlertTriangle, Layers, Cloud } from "lucide-react"
 import { PromptActionsMenu } from "./PromptActionsMenu"
 import { PromptDrawer } from "./PromptDrawer"
-import React, { useMemo, useRef, useState } from "react"
+import { SyncStatusBadge } from "./SyncStatusBadge"
+import { ProjectSelector } from "./ProjectSelector"
+import React, { useMemo, useRef, useState, useEffect } from "react"
 import { useTranslation } from "react-i18next"
-import { useNavigate } from "react-router-dom"
+import { useNavigate, useSearchParams } from "react-router-dom"
 import {
   deletePromptById,
   getAllPrompts,
   savePrompt,
   updatePrompt,
   exportPrompts,
-  importPromptsV2
+  importPromptsV2,
+  getDeletedPrompts,
+  restorePrompt,
+  permanentlyDeletePrompt,
+  emptyTrash
 } from "@/db/dexie/helpers"
 import {
   getAllCopilotPrompts,
@@ -37,9 +43,28 @@ import { useServerOnline } from "@/hooks/useServerOnline"
 import FeatureEmptyState from "@/components/Common/FeatureEmptyState"
 import ConnectFeatureBanner from "@/components/Common/ConnectFeatureBanner"
 import { useMessageOption } from "@/hooks/useMessageOption"
+import {
+  pushToStudio,
+  pullFromStudio,
+  unlinkPrompt as unlinkPromptFromServer
+} from "@/services/prompt-sync"
+import { hasPromptStudio } from "@/services/prompt-studio"
+import { StudioTabContainer } from "./Studio/StudioTabContainer"
+
+type SegmentType = "custom" | "copilot" | "studio" | "trash"
+
+const VALID_SEGMENTS: SegmentType[] = ["custom", "copilot", "studio", "trash"]
+
+const getSegmentFromParam = (param: string | null): SegmentType => {
+  if (param && VALID_SEGMENTS.includes(param as SegmentType)) {
+    return param as SegmentType
+  }
+  return "custom"
+}
 
 export const PromptBody = () => {
   const queryClient = useQueryClient()
+  const [searchParams, setSearchParams] = useSearchParams()
   const [drawerOpen, setDrawerOpen] = useState(false)
   const [drawerMode, setDrawerMode] = useState<"create" | "edit">("create")
   const [editId, setEditId] = useState("")
@@ -47,9 +72,34 @@ export const PromptBody = () => {
   const { t } = useTranslation(["settings", "common", "option"])
   const navigate = useNavigate()
   const isOnline = useServerOnline()
-  const [selectedSegment, setSelectedSegment] = useState<"custom" | "copilot">(
-    "custom"
-  )
+
+  // Get initial segment from URL param
+  const initialSegment = getSegmentFromParam(searchParams.get("tab"))
+  const [selectedSegment, setSelectedSegment] = useState<SegmentType>(initialSegment)
+
+  // Sync URL params with selected segment
+  useEffect(() => {
+    const currentTab = searchParams.get("tab")
+    const expectedTab = selectedSegment === "custom" ? null : selectedSegment
+
+    if (currentTab !== expectedTab) {
+      if (expectedTab) {
+        setSearchParams({ tab: expectedTab }, { replace: true })
+      } else {
+        // Remove tab param when on default (custom) tab
+        const newParams = new URLSearchParams(searchParams)
+        newParams.delete("tab")
+        setSearchParams(newParams, { replace: true })
+      }
+    }
+  }, [selectedSegment, searchParams, setSearchParams])
+
+  // Track if we've processed the initial prompt deep-link
+  const deepLinkProcessedRef = useRef(false)
+
+  // Handle ?project= filter for showing prompts from a specific project
+  const projectFilter = searchParams.get("project")
+
   const [searchText, setSearchText] = useState("")
   const [typeFilter, setTypeFilter] = useState<"all" | "system" | "quick">(
     "all"
@@ -64,6 +114,10 @@ export const PromptBody = () => {
     userText?: string
   } | null>(null)
   const confirmDanger = useConfirmDanger()
+
+  // Sync state
+  const [projectSelectorOpen, setProjectSelectorOpen] = useState(false)
+  const [promptToSync, setPromptToSync] = useState<string | null>(null)
 
   const [openCopilotEdit, setOpenCopilotEdit] = useState(false)
   const [editCopilotId, setEditCopilotId] = useState("")
@@ -81,6 +135,68 @@ export const PromptBody = () => {
     queryFn: getAllCopilotPrompts,
     enabled: isOnline
   })
+
+  const { data: trashData, status: trashStatus } = useQuery({
+    queryKey: ["fetchDeletedPrompts"],
+    queryFn: getDeletedPrompts
+  })
+
+  // Prompt Studio capability check
+  const { data: hasStudio } = useQuery({
+    queryKey: ["prompt-studio", "capability"],
+    queryFn: hasPromptStudio,
+    enabled: isOnline
+  })
+
+  // Handle ?prompt= deep-link for opening a specific prompt
+  useEffect(() => {
+    const promptId = searchParams.get("prompt")
+    if (!promptId || deepLinkProcessedRef.current) return
+    if (status !== "success" || !Array.isArray(data)) return
+
+    // Find the prompt in the data
+    const promptRecord = data.find((p: any) => p.id === promptId)
+    if (promptRecord) {
+      deepLinkProcessedRef.current = true
+      // Remove the prompt param from URL to avoid re-opening on navigation
+      const newParams = new URLSearchParams(searchParams)
+      newParams.delete("prompt")
+      setSearchParams(newParams, { replace: true })
+      // Open the edit drawer for this prompt
+      setEditId(promptRecord.id)
+      setDrawerMode("edit")
+      setDrawerInitialValues({
+        name: promptRecord?.name || promptRecord?.title,
+        author: promptRecord?.author,
+        details: promptRecord?.details,
+        system_prompt: promptRecord?.system_prompt || (promptRecord?.is_system ? promptRecord?.content : undefined),
+        user_prompt: promptRecord?.user_prompt || (!promptRecord?.is_system ? promptRecord?.content : undefined),
+        keywords: promptRecord?.keywords ?? promptRecord?.tags ?? [],
+        serverId: promptRecord?.serverId,
+        syncStatus: promptRecord?.syncStatus,
+        sourceSystem: promptRecord?.sourceSystem,
+        studioProjectId: promptRecord?.studioProjectId,
+        lastSyncedAt: promptRecord?.lastSyncedAt,
+        fewShotExamples: promptRecord?.fewShotExamples,
+        modulesConfig: promptRecord?.modulesConfig,
+        changeDescription: promptRecord?.changeDescription,
+        versionNumber: promptRecord?.versionNumber
+      })
+      setDrawerOpen(true)
+    } else {
+      // Prompt not found - show notification
+      deepLinkProcessedRef.current = true
+      const newParams = new URLSearchParams(searchParams)
+      newParams.delete("prompt")
+      setSearchParams(newParams, { replace: true })
+      notification.warning({
+        message: t("managePrompts.notification.promptNotFound", { defaultValue: "Prompt not found" }),
+        description: t("managePrompts.notification.promptNotFoundDesc", {
+          defaultValue: "The requested prompt could not be found. It may have been deleted."
+        })
+      })
+    }
+  }, [searchParams, data, status, setSearchParams, t])
 
   const promptLoadFailed = status === "error"
   const copilotLoadFailed = isOnline && copilotStatus === "error"
@@ -119,7 +235,8 @@ export const PromptBody = () => {
   }, [isFireFoxPrivateMode, t])
 
   React.useEffect(() => {
-    if (!isOnline && selectedSegment === "copilot") {
+    // Only redirect from copilot/studio tab when offline (trash is local-only so always available)
+    if (!isOnline && (selectedSegment === "copilot" || selectedSegment === "studio")) {
       setSelectedSegment("custom")
     }
   }, [isOnline, selectedSegment])
@@ -147,7 +264,7 @@ export const PromptBody = () => {
     if (hasSystem) return "system"
     if (hasUser) return "quick"
     return prompt?.is_system ? "system" : "quick"
-  }, [getPromptTexts])
+  }, []) // getPromptTexts has stable identity (empty deps), safe to omit
 
   const normalizePromptPayload = React.useCallback((values: any) => {
     const keywords = values?.keywords ?? values?.tags ?? []
@@ -180,14 +297,160 @@ export const PromptBody = () => {
       queryClient.invalidateQueries({
         queryKey: ["fetchAllPrompts"]
       })
+      queryClient.invalidateQueries({
+        queryKey: ["fetchDeletedPrompts"]
+      })
       notification.success({
         message: t("managePrompts.notification.deletedSuccess"),
-        description: t("managePrompts.notification.deletedSuccessDesc")
+        description: t("managePrompts.notification.movedToTrash", {
+          defaultValue: "The prompt has been moved to trash. You can restore it within 30 days."
+        })
       })
     },
     onError: (error) => {
       notification.error({
         message: t("managePrompts.notification.error"),
+        description: error?.message || t("managePrompts.notification.someError")
+      })
+    }
+  })
+
+  const { mutate: restorePromptMutation } = useMutation({
+    mutationFn: restorePrompt,
+    onSuccess: () => {
+      queryClient.invalidateQueries({
+        queryKey: ["fetchAllPrompts"]
+      })
+      queryClient.invalidateQueries({
+        queryKey: ["fetchDeletedPrompts"]
+      })
+      notification.success({
+        message: t("managePrompts.notification.restoredSuccess", { defaultValue: "Prompt restored" }),
+        description: t("managePrompts.notification.restoredSuccessDesc", { defaultValue: "The prompt has been restored from trash." })
+      })
+    },
+    onError: (error) => {
+      notification.error({
+        message: t("managePrompts.notification.error"),
+        description: error?.message || t("managePrompts.notification.someError")
+      })
+    }
+  })
+
+  const { mutate: permanentDeletePromptMutation } = useMutation({
+    mutationFn: permanentlyDeletePrompt,
+    onSuccess: () => {
+      queryClient.invalidateQueries({
+        queryKey: ["fetchDeletedPrompts"]
+      })
+      notification.success({
+        message: t("managePrompts.notification.permanentDeleteSuccess", { defaultValue: "Prompt permanently deleted" }),
+        description: t("managePrompts.notification.permanentDeleteSuccessDesc", { defaultValue: "The prompt has been permanently removed." })
+      })
+    },
+    onError: (error) => {
+      notification.error({
+        message: t("managePrompts.notification.error"),
+        description: error?.message || t("managePrompts.notification.someError")
+      })
+    }
+  })
+
+  const { mutate: emptyTrashMutation, isPending: isEmptyingTrash } = useMutation({
+    mutationFn: emptyTrash,
+    onSuccess: (count) => {
+      queryClient.invalidateQueries({
+        queryKey: ["fetchDeletedPrompts"]
+      })
+      notification.success({
+        message: t("managePrompts.notification.trashEmptied", { defaultValue: "Trash emptied" }),
+        description: t("managePrompts.notification.trashEmptiedDesc", {
+          defaultValue: "{{count}} prompts permanently deleted.",
+          count
+        })
+      })
+    },
+    onError: (error) => {
+      notification.error({
+        message: t("managePrompts.notification.error"),
+        description: error?.message || t("managePrompts.notification.someError")
+      })
+    }
+  })
+
+  // Sync mutations
+  const { mutate: pushToStudioMutation, isPending: isPushing } = useMutation({
+    mutationFn: async ({ localId, projectId }: { localId: string; projectId: number }) => {
+      return await pushToStudio(localId, projectId)
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["fetchAllPrompts"] })
+      setProjectSelectorOpen(false)
+      setPromptToSync(null)
+      notification.success({
+        message: t("managePrompts.sync.pushSuccess", { defaultValue: "Pushed to server" }),
+        description: t("managePrompts.sync.pushSuccessDesc", { defaultValue: "Prompt has been synced to Prompt Studio." })
+      })
+    },
+    onError: (error) => {
+      notification.error({
+        message: t("managePrompts.sync.pushError", { defaultValue: "Failed to push" }),
+        description: error?.message || t("managePrompts.notification.someError")
+      })
+    }
+  })
+
+  const { mutate: pullFromStudioMutation, isPending: isPulling } = useMutation({
+    mutationFn: async ({ serverId, localId }: { serverId: number; localId?: string }) => {
+      return await pullFromStudio(serverId, localId)
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["fetchAllPrompts"] })
+      notification.success({
+        message: t("managePrompts.sync.pullSuccess", { defaultValue: "Pulled from server" }),
+        description: t("managePrompts.sync.pullSuccessDesc", { defaultValue: "Prompt has been updated from Prompt Studio." })
+      })
+    },
+    onError: (error) => {
+      notification.error({
+        message: t("managePrompts.sync.pullError", { defaultValue: "Failed to pull" }),
+        description: error?.message || t("managePrompts.notification.someError")
+      })
+    }
+  })
+
+  const { mutate: unlinkPromptMutation } = useMutation({
+    mutationFn: unlinkPromptFromServer,
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["fetchAllPrompts"] })
+      notification.success({
+        message: t("managePrompts.sync.unlinkSuccess", { defaultValue: "Unlinked from server" }),
+        description: t("managePrompts.sync.unlinkSuccessDesc", { defaultValue: "Prompt is now local-only." })
+      })
+    },
+    onError: (error) => {
+      notification.error({
+        message: t("managePrompts.sync.unlinkError", { defaultValue: "Failed to unlink" }),
+        description: error?.message || t("managePrompts.notification.someError")
+      })
+    }
+  })
+
+  // Import a server prompt to local (from Studio tab)
+  const { mutate: importFromStudioMutation, isPending: isImporting } = useMutation({
+    mutationFn: async ({ serverId }: { serverId: number }) => {
+      return await pullFromStudio(serverId)
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["fetchAllPrompts"] })
+      notification.success({
+        message: t("managePrompts.studio.importSuccess", { defaultValue: "Prompt imported" }),
+        description: t("managePrompts.studio.importSuccessDesc", { defaultValue: "The prompt has been saved to your local prompts." })
+      })
+    },
+    onError: (error) => {
+      notification.error({
+        message: t("managePrompts.studio.importError", { defaultValue: "Failed to import" }),
         description: error?.message || t("managePrompts.notification.someError")
       })
     }
@@ -324,6 +587,13 @@ export const PromptBody = () => {
 
   const filteredData = useMemo(() => {
     let items = (data || []) as any[]
+    // Filter by linked project if ?project= query param is present
+    if (projectFilter) {
+      const projectId = parseInt(projectFilter, 10)
+      if (!isNaN(projectId)) {
+        items = items.filter((p) => p.studioProjectId === projectId)
+      }
+    }
     if (typeFilter !== "all") {
       items = items.filter((p) => {
         const promptType = getPromptType(p)
@@ -364,7 +634,7 @@ export const PromptBody = () => {
         (b.createdAt || 0) - (a.createdAt || 0)
     )
     return items
-  }, [data, typeFilter, tagFilter, searchText, getPromptKeywords, getPromptType])
+  }, [data, projectFilter, typeFilter, tagFilter, searchText, getPromptKeywords, getPromptType])
 
   React.useEffect(() => {
     // Only clear selection for items that are no longer visible
@@ -436,26 +706,66 @@ export const PromptBody = () => {
       const text = await file.text()
       const json = JSON.parse(text)
       const prompts = Array.isArray(json) ? json : json?.prompts || []
+
       if (importMode === "replace") {
+        // Get current prompts count for confirmation message
+        const currentPrompts = data || []
+        const currentCount = currentPrompts.length
+
         const ok = await confirmDanger({
-          title: t("common:confirmTitle", { defaultValue: "Please confirm" }),
-          content: t("managePrompts.importMode.replaceConfirm", {
+          title: t("managePrompts.importMode.replaceTitle", { defaultValue: "Replace all prompts?" }),
+          content: t("managePrompts.importMode.replaceConfirmWithCount", {
             defaultValue:
-              "Replace will overwrite all current prompts with the imported file. Continue?"
+              "This will delete {{currentCount}} existing prompts and import {{newCount}} new prompts. A backup will be downloaded automatically before replacing.",
+            currentCount,
+            newCount: prompts.length
           }),
-          okText: t("common:continue", { defaultValue: "Continue" }),
+          okText: t("managePrompts.importMode.replaceAndBackup", { defaultValue: "Backup & Replace" }),
           cancelText: t("common:cancel", { defaultValue: "Cancel" })
         })
         if (!ok) return
+
+        // Auto-backup current prompts before replacing
+        if (currentCount > 0) {
+          try {
+            const backupItems = await exportPrompts()
+            const blob = new Blob([JSON.stringify(backupItems, null, 2)], {
+              type: "application/json"
+            })
+            const url = URL.createObjectURL(blob)
+            const a = document.createElement("a")
+            a.href = url
+            const safeStamp = new Date().toISOString().replace(/[:]/g, "-")
+            a.download = `prompts_backup_before_replace_${safeStamp}.json`
+            a.click()
+            URL.revokeObjectURL(url)
+            // Small delay to ensure download starts
+            await new Promise(resolve => setTimeout(resolve, 100))
+          } catch (backupError) {
+            // If backup fails, warn user but continue
+            notification.warning({
+              message: t("managePrompts.notification.backupFailed", { defaultValue: "Backup failed" }),
+              description: t("managePrompts.notification.backupFailedDesc", {
+                defaultValue: "Could not create backup, but proceeding with import."
+              })
+            })
+          }
+        }
       }
+
       await importPromptsV2(prompts, {
         replaceExisting: importMode === "replace",
         mergeData: importMode === "merge"
       })
       queryClient.invalidateQueries({ queryKey: ["fetchAllPrompts"] })
+      queryClient.invalidateQueries({ queryKey: ["fetchDeletedPrompts"] })
       notification.success({
         message: t("managePrompts.notification.addSuccess"),
-        description: t("managePrompts.notification.addSuccessDesc")
+        description: importMode === "replace"
+          ? t("managePrompts.notification.replaceSuccessDesc", {
+              defaultValue: "Prompts replaced successfully. Check your downloads for the backup file."
+            })
+          : t("managePrompts.notification.addSuccessDesc")
       })
     } catch (e) {
       notification.error({
@@ -465,13 +775,23 @@ export const PromptBody = () => {
     }
   }
 
-  const handleInsertChoice = (choice: "system" | "quick") => {
+  const handleInsertChoice = (choice: "system" | "quick" | "both") => {
     if (!insertPrompt) return
     if (choice === "system") {
       setSelectedSystemPrompt(insertPrompt.id)
       setSelectedQuickPrompt(undefined)
       setInsertPrompt(null)
-      navigate("/")
+      navigate("/chat")
+      return
+    }
+    if (choice === "both") {
+      // Apply both system instruction and insert user template
+      setSelectedSystemPrompt(insertPrompt.id)
+      if (insertPrompt.userText) {
+        setSelectedQuickPrompt(insertPrompt.userText)
+      }
+      setInsertPrompt(null)
+      navigate("/chat")
       return
     }
     const quickContent = insertPrompt.userText ?? insertPrompt.systemText
@@ -479,7 +799,7 @@ export const PromptBody = () => {
       setSelectedQuickPrompt(quickContent)
       setSelectedSystemPrompt(undefined)
       setInsertPrompt(null)
-      navigate("/")
+      navigate("/chat")
     }
   }
 
@@ -502,7 +822,18 @@ export const PromptBody = () => {
       details: record?.details,
       system_prompt: systemText,
       user_prompt: userText,
-      keywords: getPromptKeywords(record)
+      keywords: getPromptKeywords(record),
+      // Sync fields for progressive disclosure
+      serverId: record?.serverId,
+      syncStatus: record?.syncStatus,
+      sourceSystem: record?.sourceSystem,
+      studioProjectId: record?.studioProjectId,
+      lastSyncedAt: record?.lastSyncedAt,
+      // Advanced fields
+      fewShotExamples: record?.fewShotExamples,
+      modulesConfig: record?.modulesConfig,
+      changeDescription: record?.changeDescription,
+      versionNumber: record?.versionNumber
     })
     setDrawerOpen(true)
   }
@@ -516,9 +847,40 @@ export const PromptBody = () => {
     }
   }
 
+  // Clear project filter
+  const clearProjectFilter = () => {
+    const newParams = new URLSearchParams(searchParams)
+    newParams.delete("project")
+    setSearchParams(newParams, { replace: true })
+  }
+
   function customPrompts() {
     return (
       <div data-testid="prompts-custom">
+        {/* Project filter banner - shown when filtering by project */}
+        {projectFilter && (
+          <Alert
+            type="info"
+            showIcon
+            className="mb-4"
+            message={t("managePrompts.projectFilter.active", {
+              defaultValue: "Filtering by project"
+            })}
+            description={t("managePrompts.projectFilter.description", {
+              defaultValue: "Showing prompts linked to Project #{{projectId}}. Clear the filter to see all prompts.",
+              projectId: projectFilter
+            })}
+            action={
+              <button
+                onClick={clearProjectFilter}
+                className="text-sm text-primary hover:underline"
+                data-testid="prompts-clear-project-filter"
+              >
+                {t("managePrompts.projectFilter.clear", { defaultValue: "Show all prompts" })}
+              </button>
+            }
+          />
+        )}
         <div className="mb-6 space-y-3">
           {/* Bulk action bar - shown when rows are selected */}
           {selectedRowKeys.length > 0 && (
@@ -595,10 +957,10 @@ export const PromptBody = () => {
                   data-testid="prompts-import-mode"
                   options={[
                     { label: t("managePrompts.importMode.merge", { defaultValue: "Merge" }), value: "merge" },
-                    { label: t("managePrompts.importMode.replace", { defaultValue: "Replace" }), value: "replace" }
+                    { label: t("managePrompts.importMode.replaceWithBackup", { defaultValue: "Replace (backup)" }), value: "replace" }
                   ]}
                   variant="borderless"
-                  style={{ width: 95 }}
+                  style={{ width: 130 }}
                   popupMatchSelectWidth={false}
                 />
               </div>
@@ -617,9 +979,7 @@ export const PromptBody = () => {
             </div>
             {/* Right: Filters */}
             <div className="flex flex-wrap items-center gap-2">
-              <Tooltip title={t("managePrompts.filterHelp", {
-                defaultValue: "Search matches name, author, details, prompt text, and keywords."
-              })}>
+              <div className="flex flex-col">
                 <Input
                   allowClear
                   placeholder={t("managePrompts.search", { defaultValue: "Search prompts..." })}
@@ -628,7 +988,12 @@ export const PromptBody = () => {
                   data-testid="prompts-search"
                   style={{ width: 220 }}
                 />
-              </Tooltip>
+                <span className="text-xs text-text-muted mt-0.5">
+                  {t("managePrompts.searchScope", {
+                    defaultValue: "Searches name, author, content, keywords"
+                  })}
+                </span>
+              </div>
               <Select
                 value={typeFilter}
                 onChange={(v) => setTypeFilter(v as any)}
@@ -705,11 +1070,17 @@ export const PromptBody = () => {
                         favorite: !record?.favorite
                       })
                     }
-                    className="text-warn"
+                    className={record?.favorite ? "text-warn" : "text-text-muted hover:text-warn"}
                     title={record?.favorite ? t("managePrompts.unfavorite", { defaultValue: "Unfavorite" }) : t("managePrompts.favorite", { defaultValue: "Favorite" })}
+                    aria-label={record?.favorite ? t("managePrompts.unfavorite", { defaultValue: "Unfavorite" }) : t("managePrompts.favorite", { defaultValue: "Favorite" })}
+                    aria-pressed={!!record?.favorite}
                     data-testid={`prompt-favorite-${record.id}`}
                   >
-                    <Star className={`size-4 ${record?.favorite ? '' : 'opacity-30'}`} />
+                    {record?.favorite ? (
+                      <Star className="size-4 fill-current" />
+                    ) : (
+                      <Star className="size-4" />
+                    )}
                   </button>
                 )
               },
@@ -792,29 +1163,61 @@ export const PromptBody = () => {
                   const promptType = getPromptType(record)
                   const hasSystem = promptType === "system" || promptType === "mixed"
                   const hasQuick = promptType === "quick" || promptType === "mixed"
+                  const typeDescription = hasSystem && hasQuick
+                    ? t("managePrompts.type.mixed", { defaultValue: "System and quick prompt" })
+                    : hasSystem
+                    ? t("managePrompts.type.system", { defaultValue: "System prompt" })
+                    : t("managePrompts.type.quick", { defaultValue: "Quick prompt" })
                   return (
-                    <div className="flex items-center gap-1">
+                    <div
+                      className="flex items-center gap-1"
+                      role="group"
+                      aria-label={t("managePrompts.type.ariaLabel", { defaultValue: "Prompt type: {{type}}", type: typeDescription })}
+                    >
                       <Tooltip title={systemPromptLabel}>
-                        <Computer
-                          className={`size-4 ${hasSystem ? "text-orange-500" : "opacity-20"}`}
-                        />
+                        <span>
+                          <Computer
+                            className={`size-4 ${hasSystem ? "text-orange-500" : "text-text-muted/30"}`}
+                            aria-hidden="true"
+                          />
+                        </span>
                       </Tooltip>
                       <Tooltip title={quickPromptLabel}>
-                        <Zap
-                          className={`size-4 ${hasQuick ? "text-blue-500" : "opacity-20"}`}
-                        />
+                        <span>
+                          <Zap
+                            className={`size-4 ${hasQuick ? "text-blue-500" : "text-text-muted/30"}`}
+                            aria-hidden="true"
+                          />
+                        </span>
                       </Tooltip>
                     </div>
                   )
                 }
               },
+              // Sync status column (only show when online)
+              ...(isOnline ? [{
+                title: t("managePrompts.columns.sync", { defaultValue: "Sync" }),
+                key: "syncStatus",
+                width: 100,
+                render: (_: any, record: any) => (
+                  <SyncStatusBadge
+                    syncStatus={record.syncStatus || "local"}
+                    sourceSystem={record.sourceSystem || "workspace"}
+                    serverId={record.serverId}
+                    lastSyncedAt={record.lastSyncedAt}
+                    compact
+                  />
+                )
+              }] : []),
               {
                 title: t("managePrompts.columns.actions"),
-                width: 120,
+                width: 140,
                 render: (_, record) => (
                   <PromptActionsMenu
                     promptId={record.id}
                     disabled={isFireFoxPrivateMode}
+                    syncStatus={record.syncStatus}
+                    serverId={record.serverId}
                     onEdit={() => openEditDrawer(record)}
                     onDuplicate={() => {
                       savePromptMutation({
@@ -853,7 +1256,7 @@ export const PromptBody = () => {
                       if (quickContent) {
                         setSelectedQuickPrompt(quickContent)
                         setSelectedSystemPrompt(undefined)
-                        navigate("/")
+                        navigate("/chat")
                       }
                     }}
                     onDelete={async () => {
@@ -866,6 +1269,17 @@ export const PromptBody = () => {
                       if (!ok) return
                       deletePrompt(record.id)
                     }}
+                    // Sync actions (only when online)
+                    onPushToServer={isOnline ? () => {
+                      setPromptToSync(record.id)
+                      setProjectSelectorOpen(true)
+                    } : undefined}
+                    onPullFromServer={isOnline && record.serverId ? () => {
+                      pullFromStudioMutation({ serverId: record.serverId, localId: record.id })
+                    } : undefined}
+                    onUnlink={isOnline && record.serverId ? () => {
+                      unlinkPromptMutation(record.id)
+                    } : undefined}
                   />
                 )
               }
@@ -875,7 +1289,17 @@ export const PromptBody = () => {
             rowKey={(record) => record.id}
             onRow={(record) =>
               ({
-                "data-testid": `prompt-row-${record.id}`
+                "data-testid": `prompt-row-${record.id}`,
+                tabIndex: 0,
+                role: "row",
+                onKeyDown: (e: React.KeyboardEvent) => {
+                  if (e.key === "Enter" || e.key === " ") {
+                    e.preventDefault()
+                    openEditDrawer(record)
+                  }
+                },
+                onDoubleClick: () => openEditDrawer(record),
+                className: "cursor-pointer focus:outline-none focus:ring-2 focus:ring-inset focus:ring-primary"
               } as React.HTMLAttributes<HTMLTableRowElement>)
             }
             rowSelection={{
@@ -997,8 +1421,171 @@ export const PromptBody = () => {
     )
   }
 
+  function trashPrompts() {
+    const trashCount = trashData?.length || 0
+    const formatDeletedAt = (timestamp: number | null | undefined) => {
+      if (!timestamp) return ""
+      const date = new Date(timestamp)
+      const now = new Date()
+      const diffMs = now.getTime() - date.getTime()
+      const diffDays = Math.floor(diffMs / (1000 * 60 * 60 * 24))
+      if (diffDays === 0) return t("managePrompts.trash.today", { defaultValue: "Today" })
+      if (diffDays === 1) return t("managePrompts.trash.yesterday", { defaultValue: "Yesterday" })
+      if (diffDays < 7) return t("managePrompts.trash.daysAgo", { defaultValue: "{{count}} days ago", count: diffDays })
+      return date.toLocaleDateString()
+    }
+
+    return (
+      <div data-testid="prompts-trash">
+        <div className="mb-6">
+          {trashCount > 0 && (
+            <div className="flex items-center justify-between p-3 bg-warn/10 rounded-md border border-warn/30 mb-4">
+              <div className="flex items-center gap-2">
+                <AlertTriangle className="size-4 text-warn" />
+                <span className="text-sm">
+                  {t("managePrompts.trash.autoDeleteWarning", {
+                    defaultValue: "Prompts in trash are automatically deleted after 30 days."
+                  })}
+                </span>
+              </div>
+              <button
+                onClick={async () => {
+                  const ok = await confirmDanger({
+                    title: t("managePrompts.trash.emptyConfirmTitle", { defaultValue: "Empty Trash?" }),
+                    content: t("managePrompts.trash.emptyConfirmContent", {
+                      defaultValue: "This will permanently delete {{count}} prompts. This action cannot be undone.",
+                      count: trashCount
+                    }),
+                    okText: t("managePrompts.trash.emptyTrash", { defaultValue: "Empty Trash" }),
+                    cancelText: t("common:cancel", { defaultValue: "Cancel" })
+                  })
+                  if (!ok) return
+                  emptyTrashMutation()
+                }}
+                disabled={isEmptyingTrash}
+                className="inline-flex items-center gap-1 px-2 py-1 text-sm rounded border border-danger/30 text-danger hover:bg-danger/10 disabled:opacity-50">
+                <Trash2 className="size-3" />
+                {t("managePrompts.trash.emptyTrash", { defaultValue: "Empty Trash" })}
+              </button>
+            </div>
+          )}
+        </div>
+
+        {trashStatus === "pending" && <Skeleton paragraph={{ rows: 8 }} />}
+
+        {trashStatus === "success" && trashCount === 0 && (
+          <FeatureEmptyState
+            title={t("managePrompts.trash.emptyTitle", { defaultValue: "Trash is empty" })}
+            description={t("managePrompts.trash.emptyDescription", {
+              defaultValue: "Deleted prompts will appear here for 30 days before being permanently removed."
+            })}
+            examples={[
+              t("managePrompts.trash.emptyExample1", {
+                defaultValue: "You can restore deleted prompts at any time while they're in the trash."
+              })
+            ]}
+          />
+        )}
+
+        {trashStatus === "success" && trashCount > 0 && (
+          <Table
+            data-testid="prompts-trash-table"
+            columns={[
+              {
+                title: t("managePrompts.columns.title"),
+                dataIndex: "title",
+                key: "title",
+                render: (_: any, record: any) => (
+                  <div className="flex max-w-64 flex-col">
+                    <span className="line-clamp-1 font-medium text-text-muted">
+                      {record?.name || record?.title}
+                    </span>
+                    {record?.author && (
+                      <span className="text-xs text-text-muted opacity-70">
+                        {t("managePrompts.form.author.label", { defaultValue: "Author" })}: {record.author}
+                      </span>
+                    )}
+                  </div>
+                )
+              },
+              {
+                title: t("managePrompts.trash.deletedAt", { defaultValue: "Deleted" }),
+                key: "deletedAt",
+                width: 140,
+                render: (_: any, record: any) => (
+                  <span className="text-sm text-text-muted">
+                    {formatDeletedAt(record.deletedAt)}
+                  </span>
+                )
+              },
+              {
+                title: t("managePrompts.columns.actions"),
+                width: 160,
+                render: (_: any, record: any) => (
+                  <div className="flex items-center gap-2">
+                    <Tooltip title={t("managePrompts.trash.restore", { defaultValue: "Restore" })}>
+                      <button
+                        onClick={() => restorePromptMutation(record.id)}
+                        className="inline-flex items-center gap-1 px-2 py-1 text-sm rounded border border-primary/30 text-primary hover:bg-primary/10">
+                        <Undo2 className="size-3" />
+                        {t("managePrompts.trash.restore", { defaultValue: "Restore" })}
+                      </button>
+                    </Tooltip>
+                    <Tooltip title={t("managePrompts.trash.deletePermanently", { defaultValue: "Delete permanently" })}>
+                      <button
+                        onClick={async () => {
+                          const ok = await confirmDanger({
+                            title: t("managePrompts.trash.permanentDeleteTitle", { defaultValue: "Delete permanently?" }),
+                            content: t("managePrompts.trash.permanentDeleteContent", {
+                              defaultValue: "This prompt will be permanently deleted. This action cannot be undone."
+                            }),
+                            okText: t("common:delete", { defaultValue: "Delete" }),
+                            cancelText: t("common:cancel", { defaultValue: "Cancel" })
+                          })
+                          if (!ok) return
+                          permanentDeletePromptMutation(record.id)
+                        }}
+                        className="text-text-muted hover:text-danger">
+                        <Trash2 className="size-4" />
+                      </button>
+                    </Tooltip>
+                  </div>
+                )
+              }
+            ]}
+            bordered
+            dataSource={trashData}
+            rowKey={(record) => record.id}
+          />
+        )}
+      </div>
+    )
+  }
+
   return (
     <div>
+      {/* Screen reader status announcements */}
+      <div
+        role="status"
+        aria-live="polite"
+        aria-atomic="true"
+        className="sr-only"
+        id="prompts-status-announcer"
+      />
+
+      {/* Firefox Private Mode Warning */}
+      {isFireFoxPrivateMode && (
+        <Alert
+          type="warning"
+          showIcon
+          icon={<AlertTriangle className="size-4" />}
+          className="mb-4"
+          message={t("managePrompts.privateMode.title", { defaultValue: "Limited functionality in Private Mode" })}
+          description={t("managePrompts.privateMode.description", {
+            defaultValue: "Firefox Private Mode doesn't support IndexedDB. You can view existing prompts, but creating, editing, or importing prompts is disabled. Use a normal window for full functionality."
+          })}
+        />
+      )}
       {(promptLoadFailed || copilotLoadFailed) && (
         <Alert
           type="error"
@@ -1006,7 +1593,7 @@ export const PromptBody = () => {
           className="mb-4"
           message={t(
             "managePrompts.partialLoad",
-            "Some prompt data isn’t available"
+            "Some prompt data isn't available"
           )}
           description={
             loadErrorDescription ||
@@ -1037,12 +1624,40 @@ export const PromptBody = () => {
               ),
               value: "copilot",
               disabled: !isOnline
+            },
+            {
+              label: (
+                <Tooltip title={t("managePrompts.segmented.studioTooltip", {
+                  defaultValue: "Browse and import prompts from Prompt Studio projects on the server"
+                })}>
+                  <span className="flex items-center gap-1">
+                    <Cloud className="size-3" />
+                    {t("managePrompts.segmented.studio", { defaultValue: "Studio" })}
+                  </span>
+                </Tooltip>
+              ),
+              value: "studio",
+              disabled: !isOnline || hasStudio === false
+            },
+            {
+              label: (
+                <span className="flex items-center gap-1">
+                  <Trash2 className="size-3" />
+                  {t("managePrompts.segmented.trash", { defaultValue: "Trash" })}
+                  {(trashData?.length || 0) > 0 && (
+                    <span className="text-xs bg-text-muted/20 px-1.5 py-0.5 rounded-full">
+                      {trashData?.length}
+                    </span>
+                  )}
+                </span>
+              ),
+              value: "trash"
             }
           ]}
           data-testid="prompts-segmented"
           value={selectedSegment}
           onChange={(value) => {
-            setSelectedSegment(value as "custom" | "copilot")
+            setSelectedSegment(value as SegmentType)
           }}
         />
         <p className="text-xs text-text-muted ">
@@ -1051,14 +1666,26 @@ export const PromptBody = () => {
                 defaultValue:
                   "Create and manage reusable prompts you can insert into chat."
               })
-            : t("managePrompts.segmented.helpCopilot", {
+            : selectedSegment === "copilot"
+            ? t("managePrompts.segmented.helpCopilot", {
                 defaultValue:
                   "View and tweak predefined Copilot prompts provided by your server."
+              })
+            : selectedSegment === "studio"
+            ? t("managePrompts.segmented.helpStudio", {
+                defaultValue:
+                  "Full Prompt Studio: manage projects, prompts, test cases, evaluations, and optimizations."
+              })
+            : t("managePrompts.segmented.helpTrash", {
+                defaultValue:
+                  "Restore or permanently delete prompts. Items auto-delete after 30 days."
               })}
         </p>
       </div>
       {selectedSegment === "custom" && customPrompts()}
       {selectedSegment === "copilot" && copilotPrompts()}
+      {selectedSegment === "studio" && <StudioTabContainer />}
+      {selectedSegment === "trash" && trashPrompts()}
 
       <PromptDrawer
         open={drawerOpen}
@@ -1186,8 +1813,46 @@ export const PromptBody = () => {
               </div>
             </button>
           )}
+
+          {/* Use Both option - shown when prompt has both system and user */}
+          {insertPrompt?.systemText && insertPrompt?.userText && (
+            <button
+              type="button"
+              onClick={() => handleInsertChoice("both")}
+              data-testid="prompt-insert-both"
+              className="w-full text-left p-4 rounded-lg border-2 border-primary/50 bg-primary/5 hover:border-primary hover:bg-primary/10 transition-colors">
+              <div className="flex items-center gap-2 mb-2">
+                <Layers className="size-5 text-primary" />
+                <span className="font-medium text-primary">
+                  {t("option:promptInsert.useBoth", {
+                    defaultValue: "Use Both (Recommended)"
+                  })}
+                </span>
+              </div>
+              <p className="text-xs text-text-muted mb-2">
+                {t("option:promptInsert.bothDescription", {
+                  defaultValue: "Sets the system instruction AND inserts the message template. Best for prompts designed to work together."
+                })}
+              </p>
+            </button>
+          )}
         </div>
       </Modal>
+
+      {/* Project Selector for Push to Server */}
+      <ProjectSelector
+        open={projectSelectorOpen}
+        onClose={() => {
+          setProjectSelectorOpen(false)
+          setPromptToSync(null)
+        }}
+        onSelect={(projectId) => {
+          if (promptToSync) {
+            pushToStudioMutation({ localId: promptToSync, projectId })
+          }
+        }}
+        loading={isPushing}
+      />
     </div>
   )
 }

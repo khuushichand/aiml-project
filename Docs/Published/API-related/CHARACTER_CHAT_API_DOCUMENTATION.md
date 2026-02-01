@@ -496,7 +496,7 @@ curl -X POST "http://localhost:8000/api/v1/chat/completions" \
   -H "X-API-KEY: your-api-key" \
   -H "Content-Type: application/json" \
   -d '{
-    "model": "gpt-4o-mini",
+    "model": "gpt-4o",
     "messages": [messages from step 1],
     "save_to_db": true
   }'

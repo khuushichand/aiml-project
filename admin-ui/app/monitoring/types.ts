@@ -67,6 +67,19 @@ export interface NotificationSettings {
   digest_frequency: 'hourly' | 'daily' | 'weekly';
 }
 
+export interface NotificationSettingsApi {
+  enabled?: boolean;
+  min_severity?: string;
+  file?: string;
+  webhook_url?: string | null;
+  email_to?: string | null;
+  smtp_host?: string | null;
+  smtp_port?: number | null;
+  smtp_starttls?: boolean | null;
+  smtp_user?: string | null;
+  email_from?: string | null;
+}
+
 export interface RecentNotification {
   id: string;
   channel: string;

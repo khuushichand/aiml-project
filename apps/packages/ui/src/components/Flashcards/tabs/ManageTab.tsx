@@ -21,7 +21,7 @@ import {
   Tooltip,
   Typography
 } from "antd"
-import { Filter, Plus, LayoutList, List as ListIcon } from "lucide-react"
+import { Filter, Plus, LayoutList, List as ListIcon, Keyboard, Check, CheckCheck } from "lucide-react"
 import dayjs from "dayjs"
 import relativeTime from "dayjs/plugin/relativeTime"
 import { useTranslation } from "react-i18next"
@@ -776,29 +776,40 @@ export const ManageTab: React.FC<ManageTabProps> = ({
     <>
       <div>
         <div className="mb-3 flex items-center justify-between gap-2">
-          <Segmented
-            value={viewMode}
-            onChange={(value) => {
-              setViewMode(value as "cards" | "trash")
-            }}
-            options={[
-              {
-                label: t("option:flashcards.cards", { defaultValue: "Cards" }),
-                value: "cards"
-              },
-              {
-                label: (
-                  <span className="inline-flex items-center gap-2">
-                    {t("option:flashcards.trash", { defaultValue: "Trash" })}
-                    {pendingDeletionCount > 0 && (
-                      <Badge count={pendingDeletionCount} size="small" />
-                    )}
-                  </span>
-                ),
-                value: "trash"
-              }
-            ]}
-          />
+          <div className="flex items-center gap-3">
+            <Segmented
+              value={viewMode}
+              onChange={(value) => {
+                setViewMode(value as "cards" | "trash")
+              }}
+              options={[
+                {
+                  label: t("option:flashcards.cards", { defaultValue: "Cards" }),
+                  value: "cards"
+                },
+                {
+                  label: (
+                    <span className="inline-flex items-center gap-2">
+                      {t("option:flashcards.trash", { defaultValue: "Trash" })}
+                      {pendingDeletionCount > 0 && (
+                        <Badge count={pendingDeletionCount} size="small" />
+                      )}
+                    </span>
+                  ),
+                  value: "trash"
+                }
+              ]}
+            />
+            {/* Keyboard shortcut hint */}
+            {viewMode === "cards" && (
+              <Tooltip title={t("option:flashcards.keyboardShortcutsHint", { defaultValue: "Press ? for keyboard shortcuts" })}>
+                <span className="inline-flex items-center gap-1 text-xs text-text-muted cursor-help">
+                  <Keyboard className="size-3.5" aria-hidden="true" />
+                  <span className="hidden sm:inline">?</span>
+                </span>
+              </Tooltip>
+            )}
+          </div>
           {viewMode === "trash" && pendingDeletionCount > 0 && (
             <Button size="small" onClick={undoAllPendingDeletions}>
               {t("option:flashcards.trashUndoAll", { defaultValue: "Undo all" })}
@@ -930,14 +941,18 @@ export const ManageTab: React.FC<ManageTabProps> = ({
         {/* Selection Summary Bar - simplified to two modes */}
         {viewMode === "cards" && (
         <div className="mb-2 flex items-center gap-3">
-          <Checkbox
-            indeterminate={someOnPageSelected}
-            checked={allOnPageSelected}
-            onChange={(e) => {
-              if (e.target.checked) selectAllOnPage()
-              else clearSelection()
-            }}
-          />
+          {/* 44px touch target wrapper for checkbox */}
+          <span className="inline-flex items-center justify-center min-w-11 min-h-11">
+            <Checkbox
+              indeterminate={someOnPageSelected}
+              checked={allOnPageSelected}
+              onChange={(e) => {
+                if (e.target.checked) selectAllOnPage()
+                else clearSelection()
+              }}
+              aria-label={t("option:flashcards.selectAllOnPage", { defaultValue: "Select all cards on this page" })}
+            />
+          </span>
           <Text>
             {selectedCount === 0 ? (
               <span className="text-text-muted">
@@ -946,12 +961,23 @@ export const ManageTab: React.FC<ManageTabProps> = ({
             ) : (
               <span className="flex items-center gap-2">
                 <Badge
-                  count={selectedCount}
+                  count={
+                    <span className="flex items-center gap-1">
+                      {/* Icon indicator for colorblind differentiation */}
+                      {selectAllAcross ? (
+                        <CheckCheck className="size-3" aria-hidden="true" />
+                      ) : (
+                        <Check className="size-3" aria-hidden="true" />
+                      )}
+                      {selectedCount}
+                    </span>
+                  }
                   showZero={false}
                   className="mr-1"
                   style={{ backgroundColor: selectAllAcross ? "#1890ff" : "#52c41a" }}
+                  title={selectAllAcross ? t("option:flashcards.allResults", { defaultValue: "All results" }) : t("option:flashcards.thisPage", { defaultValue: "This page" })}
                 />
-                <span className="text-text-muted">
+                <span className="text-text-muted flex items-center gap-1">
                   {selectAllAcross
                     ? t("option:flashcards.selectedAcrossAll", {
                         defaultValue: "selected across all results"
@@ -1051,18 +1077,22 @@ export const ManageTab: React.FC<ManageTabProps> = ({
                 togglePreview(item.uuid)
               }}
               actions={[
-                <Checkbox
+                <span
                   key="sel"
-                  checked={selectAllAcross ? true : selectedIds.has(item.uuid)}
-                  disabled={selectAllAcross}
-                  onChange={(e) => {
-                    e.stopPropagation()
-                    toggleSelect(item.uuid, e.target.checked)
-                  }}
+                  className="inline-flex items-center justify-center min-w-11 min-h-11"
                   onClick={(e) => e.stopPropagation()}
-                  aria-label={`Select card: ${item.front.slice(0, 80)}`}
-                  data-testid={`flashcard-item-${item.uuid}-select`}
-                />,
+                >
+                  <Checkbox
+                    checked={selectAllAcross ? true : selectedIds.has(item.uuid)}
+                    disabled={selectAllAcross}
+                    onChange={(e) => {
+                      e.stopPropagation()
+                      toggleSelect(item.uuid, e.target.checked)
+                    }}
+                    aria-label={`Select card: ${item.front.slice(0, 80)}`}
+                    data-testid={`flashcard-item-${item.uuid}-select`}
+                  />
+                </span>,
                 <FlashcardActionsMenu
                   key="actions"
                   card={item}
@@ -1182,12 +1212,21 @@ export const ManageTab: React.FC<ManageTabProps> = ({
                   actions={[
                     <Button
                       key="undo"
-                      size="small"
+                      className="min-h-11 min-w-11"
                       onClick={() => undoSinglePendingDeletion(item.card.uuid)}
                     >
                       {t("option:flashcards.trashUndo", { defaultValue: "Undo" })}
                     </Button>,
-                    <Tag key="expires" color="volcano">
+                    <Tag
+                      key="expires"
+                      color="volcano"
+                      role="timer"
+                      aria-live={remainingSeconds <= 10 ? "assertive" : "off"}
+                      aria-label={t("option:flashcards.trashExpiresInAria", {
+                        defaultValue: "Permanently deletes in {{seconds}} seconds",
+                        seconds: remainingSeconds
+                      })}
+                    >
                       {t("option:flashcards.trashExpiresIn", {
                         defaultValue: "Deletes in {{seconds}}s",
                         seconds: remainingSeconds
@@ -1233,7 +1272,17 @@ export const ManageTab: React.FC<ManageTabProps> = ({
       {viewMode === "cards" && anySelection && (
         <div className="fixed bottom-4 left-1/2 -translate-x-1/2 z-50 bg-surface border border-border rounded-lg shadow-lg px-4 py-3 flex items-center gap-4">
           <Badge
-            count={selectedCount}
+            count={
+              <span className="flex items-center gap-1">
+                {/* Icon indicator for colorblind differentiation */}
+                {selectAllAcross ? (
+                  <CheckCheck className="size-3" aria-hidden="true" />
+                ) : (
+                  <Check className="size-3" aria-hidden="true" />
+                )}
+                {selectedCount}
+              </span>
+            }
             showZero={false}
             style={{ backgroundColor: selectAllAcross ? "#1890ff" : "#52c41a" }}
           />

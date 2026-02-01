@@ -68,6 +68,16 @@ export const getHistoryByServerChatId = async (serverChatId: string) => {
   const db = new PageAssistDatabase()
   return await db.getHistoryByServerChatId(serverChatId)
 }
+
+export const getHistoryByDocId = async (docId: string) => {
+  const db = new PageAssistDatabase()
+  return await db.getHistoryByDocId(docId)
+}
+
+export const getAllHistoriesByDocId = async (docId: string) => {
+  const db = new PageAssistDatabase()
+  return await db.getAllHistoriesByDocId(docId)
+}
 export const updateChatHistoryCreatedAt = async (history_id: string) => {
   const createdAt = Date.now()
   const db = new PageAssistDatabase()
@@ -91,6 +101,14 @@ export const updateMessage = async (
   await db.updateMessage(history_id, message_id, content)
 }
 
+export const updateMessageDiscoSkillComment = async (
+  message_id: string,
+  discoSkillComment: Message["discoSkillComment"] | null
+) => {
+  const db = new PageAssistDatabase()
+  await db.updateMessageDiscoSkillComment(message_id, discoSkillComment)
+}
+
 export const saveMessage = async ({
   id,
   content,
@@ -99,6 +117,7 @@ export const saveMessage = async ({
   role,
   images,
   source,
+  discoSkillComment,
   generationInfo,
   message_type,
   clusterId,
@@ -120,6 +139,7 @@ export const saveMessage = async ({
   source?: any[]
   time?: number
   message_type?: string
+  discoSkillComment?: Message["discoSkillComment"]
   clusterId?: string
   modelId?: string
   generationInfo?: any
@@ -155,7 +175,8 @@ export const saveMessage = async ({
     modelName,
     modelImage,
     parent_message_id: parent_message_id ?? null,
-    documents
+    documents,
+    discoSkillComment
   }
   const db = new PageAssistDatabase()
   await db.addMessage(message)
@@ -258,7 +279,8 @@ export const formatToMessage = (messages: MessageHistory): MessageType[] => {
       modelImage: message?.modelImage,
       createdAt: message?.createdAt,
       id: message.id,
-      documents: message?.documents
+      documents: message?.documents,
+      discoSkillComment: message?.discoSkillComment
     }
     if (shouldGroupVariants(message)) {
       const parentId = message.parent_message_id || ""
@@ -442,13 +464,17 @@ export const savePrompt = async ({
     content: resolvedContent,
     is_system: !!is_system,
     createdAt,
+    updatedAt: createdAt,
     tags: resolvedKeywords,
     keywords: resolvedKeywords,
     favorite,
     author,
     details,
     system_prompt: system_prompt ?? (is_system ? resolvedContent : undefined),
-    user_prompt: user_prompt ?? (!is_system ? resolvedContent : undefined)
+    user_prompt: user_prompt ?? (!is_system ? resolvedContent : undefined),
+    // Default sync values for new prompts
+    syncStatus: 'local' as const,
+    sourceSystem: 'workspace' as const
   }
   await db.addPrompt(prompt)
   await savePromptFB(prompt)
@@ -456,10 +482,62 @@ export const savePrompt = async ({
 }
 
 export const deletePromptById = async (id: string) => {
+  // Soft delete: moves prompt to trash
   const db = new PageAssistDatabase()
   await db.deletePrompt(id)
+  // Note: Firefox storage doesn't support soft delete, so we keep it there until permanent delete
+  return id
+}
+
+export const permanentlyDeletePrompt = async (id: string) => {
+  // Hard delete: removes from both Dexie and Firefox storage
+  const db = new PageAssistDatabase()
+  await db.permanentlyDeletePrompt(id)
   await deletePromptByIdFB(id)
   return id
+}
+
+export const restorePrompt = async (id: string) => {
+  // Restore from trash
+  const db = new PageAssistDatabase()
+  await db.restorePrompt(id)
+  return id
+}
+
+export const getDeletedPrompts = async () => {
+  try {
+    const db = new PageAssistDatabase()
+    return await db.getDeletedPrompts()
+  } catch (e) {
+    if (isDatabaseClosedError(e)) {
+      // Firefox storage doesn't support soft delete tracking
+      return []
+    }
+    return []
+  }
+}
+
+export const emptyTrash = async () => {
+  const db = new PageAssistDatabase()
+  const deletedPrompts = await db.getDeletedPrompts()
+  // Also remove from Firefox storage
+  for (const prompt of deletedPrompts) {
+    await deletePromptByIdFB(prompt.id)
+  }
+  return await db.emptyTrash()
+}
+
+export const autoCleanupTrash = async (maxAgeDays: number = 30) => {
+  const db = new PageAssistDatabase()
+  // Get prompts that will be deleted
+  const cutoff = Date.now() - (maxAgeDays * 24 * 60 * 60 * 1000)
+  const deletedPrompts = await db.getDeletedPrompts()
+  const expiredPrompts = deletedPrompts.filter(p => p.deletedAt && p.deletedAt < cutoff)
+  // Remove from Firefox storage
+  for (const prompt of expiredPrompts) {
+    await deletePromptByIdFB(prompt.id)
+  }
+  return await db.autoCleanupTrash(maxAgeDays)
 }
 
 export const updatePrompt = async ({
@@ -601,13 +679,13 @@ export const importChatHistory = async (
     messages: MessageHistory
   }[]
 ) => {
+  // Use bulk operations to reduce storage quota pressure (especially for Firefox fallback)
+  const histories = data.map(d => d.history)
+  const allMessages = data.flatMap(d => d.messages)
+
+  // Dexie path: use bulk operations via importChatHistoryV2
   const db = new PageAssistDatabase()
-  for (const { history, messages } of data) {
-    await db.addChatHistory(history)
-    for (const message of messages) {
-      await db.addMessage(message)
-    }
-  }
+  await db.importChatHistoryV2(data, { mergeData: true })
 }
 
 export const exportPrompts = async () => {
@@ -655,10 +733,9 @@ export const importModelsV2 = async (
 }
 
 export const importPrompts = async (prompts: Prompts) => {
+  // Use bulk operations to reduce storage quota pressure
   const db = new PageAssistDatabase()
-  for (const prompt of prompts) {
-    await db.addPrompt(prompt)
-  }
+  await db.importPromptsV2(prompts, { mergeData: true })
 }
 
 export const importOAIConfigs = async (configs: any[]) => {

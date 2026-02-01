@@ -122,6 +122,7 @@ def run_geval(
     api_name: str = None,
     save: bool = False,
     user_identifier: Optional[str] = None,
+    model: Optional[str] = None,
 ):
     # Check for test mode - if api_key starts with "test_", return mock data
     if api_key and api_key.startswith("test_"):
@@ -290,6 +291,7 @@ def run_geval(
                 api_name,
                 api_key,
                 user_identifier=user_identifier,
+                model=model,
             )
             scores[metric] = score
             explanations[metric] = "Score based on the evaluation criteria."
@@ -367,8 +369,9 @@ def geval_summarization(
     api_endpoint: str,
     api_key: str,
     user_identifier: Optional[str] = None,
+    model: Optional[str] = None,
 ) -> float:
-    model = get_model_from_config(api_endpoint)
+    model = model or get_model_from_config(api_endpoint)
 
     try:
         for attempt in Retrying(

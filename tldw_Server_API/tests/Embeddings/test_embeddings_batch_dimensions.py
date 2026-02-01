@@ -16,7 +16,32 @@ def _override_user():
 
 
 @pytest.mark.unit
-def test_batch_dimensions_rejected_for_non_openai(test_client, monkeypatch):
+def test_batch_dimensions_allowed_for_non_openai(test_client, monkeypatch):
+    import tldw_Server_API.app.api.v1.endpoints.embeddings_v5_production_enhanced as emb_mod
+
+    monkeypatch.setattr(emb_mod, "_should_enforce_policy", lambda _user=None: False)
+
+    async def fake_batch_async(texts, provider, model_id=None, dimensions=None, api_key=None, api_url=None, metadata=None):
+        return [[float(i) for i in range(256)] for _ in texts]
+
+    monkeypatch.setattr(emb_mod, "create_embeddings_batch_async", fake_batch_async, raising=True)
+
+    resp = test_client.post(
+        "/api/v1/embeddings/batch",
+        json={
+            "texts": ["hello"],
+            "model": "sentence-transformers/all-MiniLM-L6-v2",
+            "provider": "huggingface",
+            "dimensions": 128,
+        },
+    )
+    assert resp.status_code == 200
+    body = resp.json()
+    assert len(body["embeddings"][0]) == 128
+
+
+@pytest.mark.unit
+def test_batch_dimensions_rejected_for_non_openai_over_max(test_client, monkeypatch):
     import tldw_Server_API.app.api.v1.endpoints.embeddings_v5_production_enhanced as emb_mod
 
     monkeypatch.setattr(emb_mod, "_should_enforce_policy", lambda _user=None: False)
@@ -27,7 +52,7 @@ def test_batch_dimensions_rejected_for_non_openai(test_client, monkeypatch):
             "texts": ["hello"],
             "model": "sentence-transformers/all-MiniLM-L6-v2",
             "provider": "huggingface",
-            "dimensions": 128,
+            "dimensions": 5000,
         },
     )
     assert resp.status_code == 400

@@ -245,6 +245,7 @@ export const ModelPlaygroundChat: React.FC = () => {
               }}
               documents={msg?.documents}
               messageId={msg.id}
+              discoSkillComment={msg.discoSkillComment}
               conversationInstanceId={historyId || "workspace"}
             />
           )
@@ -292,6 +293,7 @@ export const ModelPlaygroundChat: React.FC = () => {
               onStopStreaming={stopStreamingRequest}
               documents={userMessage?.documents}
               messageId={userMessage.id}
+              discoSkillComment={userMessage.discoSkillComment}
               conversationInstanceId={historyId || "workspace"}
             />
 
@@ -346,6 +348,7 @@ export const ModelPlaygroundChat: React.FC = () => {
                       onStopStreaming={stopStreamingRequest}
                       documents={replyMsg?.documents}
                       messageId={replyMsg.id}
+                      discoSkillComment={replyMsg.discoSkillComment}
                       conversationInstanceId={historyId || "workspace"}
                     />
                   </div>

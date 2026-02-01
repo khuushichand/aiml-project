@@ -17,6 +17,35 @@ and this project adheres to Some kind of Versioning
 - Workspace selector remove handler now uses the imported MouseEvent type instead of the React namespace.
 
 
+## [0.1.19] 2026-01-31
+
+### Added
+- Soft delete support for notes/character cards
+- Qwen3-STT
+- JSON validation utilities with detailed error positioning (line/column information)
+- [WebUI] Character generation prompt templates for full and single-field generation 
+- [WebUI] Flashcard undo functionality with Ctrl/Cmd+Z shortcut
+- [WebUI] Media review selection and focus settings
+- [WebUI] TldwApiClient methods for character export, restore, and bulk world book operations
+- Comprehensive test coverage for Qwen3-ASR, Gemini tools, and character generation
+- [WebUI] Documentation updates including PRD for Characters Playground UX improvements, healthcare-focused UX review prompts, and Qwen3-ASR setup guide
+- README restructuring with improved formatting and version 0.1.18 release notes
+- 70+ new adapters for workflows module
+- [WebUI] Added Document Workspace
+- [WebUI] Added Writing Playground
+
+### Changed
+- Implemented httpx/aiohttp transport adapters with centralized policy enforcement in http_client.
+- Added httpx client caching and shutdown cleanup to align with aiohttp lifecycle handling.
+- Formalized streaming behavior with first‑byte/idle timeouts and mid‑stream retry support.
+- Expanded http_client tests for adapters, cache reuse, and streaming timeout coverage.
+- [WebUI] e2e test work
+
+### Removed
+
+### Fixed
+- Workspace selector remove handler now uses the imported MouseEvent type instead of the React namespace.
+
 
 ## [0.1.18] 2026-01-29
 

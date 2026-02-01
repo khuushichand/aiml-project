@@ -20,7 +20,7 @@ import {
   Tag,
   Typography
 } from "antd"
-import { BugOutlined, HistoryOutlined, PlayCircleOutlined } from "@ant-design/icons"
+import { BugOutlined, HistoryOutlined, PlayCircleOutlined, SyncOutlined } from "@ant-design/icons"
 import { useTranslation } from "react-i18next"
 
 import { useServerOnline } from "@/hooks/useServerOnline"
@@ -48,16 +48,26 @@ import {
   type PromptStudioEvaluation
 } from "@/services/prompt-studio"
 import { getPromptStudioDefaults } from "@/services/prompt-studio-settings"
+import {
+  validateJson,
+  parseJsonSafe,
+  createJsonFieldValidator,
+  formatJsonError
+} from "@/utils/json-validation"
 
 const { Title, Paragraph, Text } = Typography
 
+/**
+ * Parse JSON with detailed error reporting.
+ * Throws an error with line/column info if parsing fails.
+ */
 const parseJson = (value: string | undefined, fallback: any = {}) => {
-  if (!value) return fallback
-  try {
-    return JSON.parse(value)
-  } catch (e: any) {
-    throw new Error(e?.message || "Invalid JSON")
+  if (!value || value.trim() === '') return fallback
+  const result = validateJson(value)
+  if ("error" in result) {
+    throw new Error(formatJsonError(result.error))
   }
+  return result.data
 }
 
 type PromptFormFields = {
@@ -809,8 +819,9 @@ export const PromptStudioPlaygroundPage: React.FC = () => {
                               <Form.Item
                                 label={t("option:promptStudio.changeDescription", "Change description")}
                                 name="change_description"
-                                rules={[{ required: true }]}>
-                                <Input placeholder="What changed?" />
+                                rules={[{ required: true, message: t("option:promptStudio.changeDescriptionRequired", "Brief description of changes required") }]}
+                                help={t("option:promptStudio.changeDescriptionHelp", "e.g., \"Added examples\", \"Improved tone\", \"Fixed formatting\"")}>
+                                <Input placeholder={t("option:promptStudio.changeDescriptionPlaceholder", "Describe what changed...")} />
                               </Form.Item>
                             </div>
                             <Form.Item
@@ -826,12 +837,16 @@ export const PromptStudioPlaygroundPage: React.FC = () => {
                             <div className="grid gap-4 md:grid-cols-2">
                               <Form.Item
                                 label={t("option:promptStudio.fewShot", "Few-shot examples (JSON)")}
-                                name="few_shot_examples">
+                                name="few_shot_examples"
+                                rules={[{ validator: createJsonFieldValidator("Few-shot examples", false) }]}
+                                help={t("option:promptStudio.fewShotHelp", "Array of example input/output pairs")}>
                                 <Input.TextArea rows={4} placeholder='[{"inputs":{},"outputs":{}}]' />
                               </Form.Item>
                               <Form.Item
                                 label={t("option:promptStudio.modulesConfig", "Modules config (JSON)")}
-                                name="modules_config">
+                                name="modules_config"
+                                rules={[{ validator: createJsonFieldValidator("Modules config", false) }]}
+                                help={t("option:promptStudio.modulesConfigHelp", "Array of module configurations")}>
                                 <Input.TextArea rows={4} placeholder='[{"type":"cot","enabled":true}]' />
                               </Form.Item>
                             </div>
@@ -920,7 +935,10 @@ export const PromptStudioPlaygroundPage: React.FC = () => {
                           <Form.Item label={t("option:promptStudio.model", "Model")} name="model">
                             <Input placeholder="gpt-3.5-turbo" />
                           </Form.Item>
-                          <Form.Item label="Inputs (JSON)" name="inputs">
+                          <Form.Item
+                            label={t("option:promptStudio.inputsJson", "Inputs (JSON)")}
+                            name="inputs"
+                            rules={[{ validator: createJsonFieldValidator("Inputs", false) }]}>
                             <Input.TextArea rows={3} placeholder='{"text":"hello"}' />
                           </Form.Item>
                         </div>
@@ -1155,8 +1173,18 @@ export const PromptStudioPlaygroundPage: React.FC = () => {
                             <Card size="small" type="inner" className="mt-3" title={evaluationDetail.name || "Evaluation"}>
                               <div className="flex flex-wrap items-center gap-2 text-sm">
                                 <Tag color={statusColor(evaluationDetail.status)}>
+                                  {(evaluationDetail.status?.toLowerCase() === "running" ||
+                                    evaluationDetail.status?.toLowerCase() === "pending") && (
+                                    <SyncOutlined spin className="mr-1" />
+                                  )}
                                   {evaluationDetail.status}
                                 </Tag>
+                                {(evaluationDetail.status?.toLowerCase() === "running" ||
+                                  evaluationDetail.status?.toLowerCase() === "pending") && (
+                                  <Text type="secondary" className="text-xs">
+                                    {t("option:promptStudio.autoRefreshing", "Auto-refreshing every 4s")}
+                                  </Text>
+                                )}
                                 {evaluationDetail.completed_at && (
                                   <Text type="secondary">
                                     {`${t("common:completed", "Completed")}: ${evaluationDetail.completed_at}`}
@@ -1298,13 +1326,17 @@ export const PromptStudioPlaygroundPage: React.FC = () => {
           <Form.Item
             name="inputs"
             label={t("option:promptStudio.inputsJson", "Inputs (JSON)")}
-            rules={[{ required: true }]}>
-            <Input.TextArea rows={3} />
+            rules={[
+              { required: true, message: t("option:promptStudio.inputsRequired", "Inputs are required") },
+              { validator: createJsonFieldValidator("Inputs", true) }
+            ]}>
+            <Input.TextArea rows={3} placeholder='{"text":"sample input"}' />
           </Form.Item>
           <Form.Item
             name="expected_outputs"
-            label={t("option:promptStudio.expectedJson", "Expected outputs (JSON)")}>
-            <Input.TextArea rows={3} />
+            label={t("option:promptStudio.expectedJson", "Expected outputs (JSON)")}
+            rules={[{ validator: createJsonFieldValidator("Expected outputs", false) }]}>
+            <Input.TextArea rows={3} placeholder='{"response":"expected response"}' />
           </Form.Item>
           <Form.Item name="tags" label={t("common:tags", "Tags")}>
             <Input placeholder="comma,separated,tags" />
@@ -1343,7 +1375,11 @@ export const PromptStudioPlaygroundPage: React.FC = () => {
           <Form.Item
             name="json"
             label={t("option:promptStudio.bulkJson", "JSON array of test cases")}
-            rules={[{ required: true }]}>
+            rules={[
+              { required: true, message: t("option:promptStudio.jsonRequired", "JSON is required") },
+              { validator: createJsonFieldValidator("Test cases", true) }
+            ]}
+            help={t("option:promptStudio.bulkJsonHelp", "Array of objects with name, inputs, and optional expected_outputs")}>
             <Input.TextArea rows={8} placeholder='[{"name":"Case","inputs":{},"expected_outputs":{}}]' />
           </Form.Item>
           <Space>

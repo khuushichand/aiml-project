@@ -59,6 +59,11 @@ type OptionsTabProps = {
   checkOnce?: () => Promise<void> | void
   onClose: () => void
   isActive?: boolean
+  // Chunking template props (optional for backwards compatibility)
+  chunkingTemplateName?: string
+  setChunkingTemplateName?: (value: string | undefined) => void
+  autoApplyTemplate?: boolean
+  setAutoApplyTemplate?: (value: boolean) => void
 }
 
 export const OptionsTab: React.FC<OptionsTabProps> = ({

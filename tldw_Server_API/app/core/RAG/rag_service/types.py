@@ -29,6 +29,47 @@ class CitationType(Enum):
     KEYWORD = "keyword"      # Keyword/FTS5 match
 
 
+class ClaimType(Enum):
+    """Classification of claim types for structured verification."""
+    STATISTIC = "statistic"      # "Revenue grew 15%"
+    COMPARATIVE = "comparative"  # "X is larger than Y"
+    TEMPORAL = "temporal"        # "In 2023, ..."
+    ATTRIBUTION = "attribution"  # "According to Smith, ..."
+    CAUSAL = "causal"           # "X caused Y"
+    EXISTENCE = "existence"      # "There exists..."
+    RANKING = "ranking"         # "X is the largest"
+    QUOTE = "quote"             # Direct quotation
+    GENERAL = "general"         # Unclassified
+
+
+class VerificationStatus(Enum):
+    """Rich verification status for deterministic claim checking."""
+    VERIFIED = "verified"                    # Claim is supported by evidence
+    CITATION_NOT_FOUND = "citation_not_found"  # Referenced source not in corpus
+    MISQUOTED = "misquoted"                  # Quote doesn't match source
+    MISLEADING = "misleading"                # Technically true but deceptive
+    HALLUCINATION = "hallucination"          # No evidence supports claim
+    UNVERIFIED = "unverified"                # Insufficient evidence (NEI)
+    NUMERICAL_ERROR = "numerical_error"      # Numbers don't match source
+    REFUTED = "refuted"                      # Evidence contradicts claim
+
+
+class MatchLevel(Enum):
+    """Classification of match confidence between claim and evidence."""
+    EXACT = "exact"              # Verbatim match
+    PARAPHRASE = "paraphrase"    # Same meaning, different words
+    INTERPRETATION = "interpretation"  # Inference from source
+
+
+class SourceAuthority(Enum):
+    """Source authority ranking for evidence weighting."""
+    PRIMARY = 5        # Original research, primary sources
+    GOVERNMENT = 4     # .gov, official statistics
+    PEER_REVIEWED = 3  # DOI, academic journals
+    INDUSTRY = 2       # Whitepapers, industry reports
+    SECONDARY = 1      # News, Wikipedia, blogs
+
+
 @dataclass
 class Citation:
     """

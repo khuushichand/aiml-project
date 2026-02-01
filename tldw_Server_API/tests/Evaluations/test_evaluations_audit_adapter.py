@@ -4,8 +4,10 @@ import pytest
 
 from tldw_Server_API.app.core.Audit.unified_audit_service import AuditEventType, UnifiedAuditService
 from tldw_Server_API.app.core.DB_Management.db_path_utils import DatabasePaths
+import tldw_Server_API.app.core.Evaluations.audit_adapter as eval_adapter
 from tldw_Server_API.app.core.Evaluations.audit_adapter import (
     log_evaluation_created,
+    log_evaluation_created_async,
     _in_test_mode,
     _parse_cache_size,
     shutdown_evaluations_audit_services,
@@ -46,6 +48,22 @@ async def test_evaluation_created_threadpool_fallback(tmp_path, monkeypatch):
     finally:
         await svc.stop()
         await shutdown_evaluations_audit_services()
+
+
+@pytest.mark.asyncio
+async def test_evaluation_adapter_propagates_failures(monkeypatch):
+    async def _boom(_user_id):
+        raise RuntimeError("audit boom")
+
+    monkeypatch.setattr(eval_adapter, "get_or_create_audit_service_for_user_id_optional", _boom)
+
+    with pytest.raises(RuntimeError):
+        await log_evaluation_created_async(
+            user_id="user-x",
+            eval_id="eval-fail",
+            name="Failing Eval",
+            eval_type="unit",
+        )
 
 
 def test_evaluations_audit_cache_size_clamped(monkeypatch):

@@ -127,7 +127,7 @@ from tldw_Server_API.app.api.v1.schemas.world_book_schemas import (
 )
 from tldw_Server_API.app.core.Character_Chat.Character_Chat_Lib_facade import import_and_save_character_from_file, \
     search_characters_by_query_text, delete_character_from_db, get_character_details, update_existing_character_details, \
-    create_new_character_from_data
+    create_new_character_from_data, restore_character_from_db
 from tldw_Server_API.app.core.Character_Chat.world_book_manager import WorldBookService
 from tldw_Server_API.app.core.DB_Management.ChaChaNotes_DB import CharactersRAGDB
 from tldw_Server_API.app.core.DB_Management.ChaChaNotes_DB import ConflictError, InputError, CharactersRAGDBError
@@ -655,6 +655,49 @@ async def delete_character_endpoint(  # Renamed from delete_character
         raise
     except Exception as e:
         logger.error(f"Unexpected error deleting character {character_id}: {e}", exc_info=True)
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="An unexpected error occurred.")
+
+
+@router.post("/{character_id}/restore", response_model=CharacterResponse, summary="Restore deleted character", tags=["characters"])
+async def restore_character_endpoint(
+        character_id: int = FastAPIPath(..., description="ID of the character to restore.", gt=0),
+        expected_version: int = Query(...,
+                                      description="Expected current version of the character for optimistic locking."),
+        db: CharactersRAGDB = Depends(get_chacha_db_for_user)
+):
+    """
+    Restore a soft-deleted character.
+
+    This endpoint undoes a soft delete, making the character visible and usable again.
+    The expected_version must match the current version of the soft-deleted character.
+    """
+    try:
+        success = restore_character_from_db(db, character_id, expected_version)
+
+        if not success:
+            raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                                detail="Failed to restore character (unexpected boolean failure).")
+
+        # Retrieve the restored character to return full details
+        restored_char = get_character_details(db, character_id)
+        if not restored_char:
+            raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                                detail="Character restored but could not be retrieved.")
+
+        logger.info(f"Character '{restored_char.get('name', 'Unknown')}' (ID: {character_id}) restored successfully")
+
+        return _convert_db_char_to_response_model(restored_char)
+
+    except ConflictError as e:
+        logger.warning(f"Conflict error restoring character {character_id}: {e}")
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(e))
+    except CharactersRAGDBError as e:
+        logger.error(f"DB error restoring character {character_id}: {e}", exc_info=True)
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(e))
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Unexpected error restoring character {character_id}: {e}", exc_info=True)
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="An unexpected error occurred.")
 
 

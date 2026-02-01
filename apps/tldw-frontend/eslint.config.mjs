@@ -29,7 +29,8 @@ export default [
   {
     ignores: [
       ".next/**",
-      "node_modules/**"
+      "node_modules/**",
+      "public/**"
     ]
   },
   {
@@ -109,6 +110,13 @@ export default [
     files: cjsFiles,
     languageOptions: {
       parserOptions: { sourceType: "script" }
+    }
+  },
+  {
+    files: ["e2e/**/*.ts"],
+    rules: {
+      "react-hooks/rules-of-hooks": "off",
+      "no-empty-pattern": "off"
     }
   }
 ]

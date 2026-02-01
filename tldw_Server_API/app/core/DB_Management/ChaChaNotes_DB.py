@@ -5591,6 +5591,102 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
                 exc_info=True)
             raise
 
+    def restore_character_card(self, character_id: int, expected_version: int) -> bool | None:
+        """
+        Restores a soft-deleted character card using optimistic locking.
+
+        Sets the `deleted` flag to 0, updates `last_modified`, increments `version`,
+        and sets `client_id`. The operation succeeds only if `expected_version` matches
+        the current database version and the card is currently deleted.
+
+        If the card is already active (not deleted), the method considers
+        this a success and returns True (idempotency).
+
+        Args:
+            character_id: The ID of the character card to restore.
+            expected_version: The version number the client expects the record to have.
+
+        Returns:
+            True if the restore was successful or if the card was already active.
+
+        Raises:
+            ConflictError: If the card is not found, or if `expected_version` does
+                           not match, or if a concurrent modification prevents the update.
+            CharactersRAGDBError: For other database-related errors.
+        """
+        now = self._get_current_utc_timestamp_iso()
+        next_version_val = expected_version + 1
+
+        query = "UPDATE character_cards SET deleted = 0, last_modified = ?, version = ?, client_id = ? WHERE id = ? AND version = ? AND deleted = 1"
+        params = (now, next_version_val, self.client_id, character_id, expected_version)
+
+        try:
+            with self.transaction() as conn:
+                # First check if record exists at all
+                check_cursor = conn.execute("SELECT deleted, version FROM character_cards WHERE id = ?",
+                                           (character_id,))
+                record_status = check_cursor.fetchone()
+
+                if not record_status:
+                    raise ConflictError(
+                        f"Character card ID {character_id} not found.",
+                        entity="character_cards", entity_id=character_id
+                    )
+
+                # If already active, return success (idempotent)
+                if not record_status['deleted']:
+                    logger.info(
+                        f"Character card ID {character_id} already active. Restore successful (idempotent).")
+                    return True
+
+                # Check version matches
+                current_db_version = record_status['version']
+                if current_db_version != expected_version:
+                    raise ConflictError(
+                        f"Restore for Character ID {character_id} failed: version mismatch (db has {current_db_version}, client expected {expected_version}).",
+                        entity="character_cards", entity_id=character_id
+                    )
+
+                cursor = conn.execute(query, params)
+
+                if cursor.rowcount == 0:
+                    # Race condition: Record changed between pre-check and UPDATE.
+                    check_again_cursor = conn.execute("SELECT version, deleted FROM character_cards WHERE id = ?",
+                                                      (character_id,))
+                    final_state = check_again_cursor.fetchone()
+                    msg = f"Restore for Character ID {character_id} (expected v{expected_version}) affected 0 rows."
+                    if not final_state:
+                        msg = f"Character card ID {character_id} disappeared before restore (expected deleted version {expected_version})."
+                    elif not final_state['deleted']:
+                        # If it got restored by another process. Consider this success.
+                        logger.info(
+                            f"Character card ID {character_id} was restored concurrently to version {final_state['version']}. Restore successful.")
+                        return True
+                    elif final_state['version'] != expected_version:
+                        msg = f"Restore for Character ID {character_id} failed: version changed to {final_state['version']} concurrently (expected {expected_version})."
+                    else:
+                        msg = f"Restore for Character ID {character_id} (expected version {expected_version}) affected 0 rows for an unknown reason after passing initial checks."
+                    raise ConflictError(msg, entity="character_cards", entity_id=character_id)
+
+                logger.info(
+                    f"Restored character card ID {character_id} (was version {expected_version}), new version {next_version_val}.")
+                return True
+        except ConflictError:
+            raise
+        except BackendDatabaseError as e:
+            logger.error(
+                "Backend error restoring character card ID %s (expected v%s): %s",
+                character_id,
+                expected_version,
+                e,
+            )
+            raise CharactersRAGDBError(f"Backend error during restore: {e}") from e
+        except CharactersRAGDBError as e:
+            logger.error(
+                f"Database error restoring character card ID {character_id} (expected v{expected_version}): {e}",
+                exc_info=True)
+            raise
+
     def search_character_cards(self, search_term: str, limit: int = 10) -> List[Dict[str, Any]]:
         """
         Searches character cards using Full-Text Search (FTS).
@@ -8670,10 +8766,115 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
         except sqlite3.Error as e:
             raise CharactersRAGDBError(f"Failed to delete note: {e}") from e
 
+    def restore_note(self, note_id: str, expected_version: int) -> bool | None:
+        """
+        Restores a soft-deleted note using optimistic locking.
+
+        Sets the `deleted` flag to 0, updates `last_modified`, increments `version`,
+        and sets `client_id`. The operation succeeds only if `expected_version` matches
+        the current database version and the note is currently deleted.
+
+        If the note is already active (not deleted), the method considers
+        this a success and returns True (idempotency).
+
+        Args:
+            note_id: The ID of the note to restore.
+            expected_version: The version number the client expects the record to have.
+
+        Returns:
+            True if the restore was successful or if the note was already active.
+
+        Raises:
+            ConflictError: If the note is not found, or if `expected_version` does
+                           not match, or if a concurrent modification prevents the update.
+            CharactersRAGDBError: For other database-related errors.
+        """
+        now = self._get_current_utc_timestamp_iso()
+        next_version_val = expected_version + 1
+
+        query = "UPDATE notes SET deleted = 0, last_modified = ?, version = ?, client_id = ? WHERE id = ? AND version = ? AND deleted = 1"
+        params = (now, next_version_val, self.client_id, note_id, expected_version)
+
+        try:
+            with self.transaction() as conn:
+                # First check if record exists at all
+                check_cursor = conn.execute("SELECT deleted, version FROM notes WHERE id = ?", (note_id,))
+                record_status = check_cursor.fetchone()
+
+                if not record_status:
+                    raise ConflictError(
+                        f"Note ID {note_id} not found.",
+                        entity="notes", entity_id=note_id
+                    )
+
+                # If already active, return success (idempotent)
+                if not record_status['deleted']:
+                    logger.info(f"Note ID {note_id} already active. Restore successful (idempotent).")
+                    return True
+
+                # Check version matches
+                current_db_version = record_status['version']
+                if current_db_version != expected_version:
+                    raise ConflictError(
+                        f"Restore for Note ID {note_id} failed: version mismatch (db has {current_db_version}, client expected {expected_version}).",
+                        entity="notes", entity_id=note_id
+                    )
+
+                cursor = conn.execute(query, params)
+
+                if cursor.rowcount == 0:
+                    # Race condition: Record changed between pre-check and UPDATE.
+                    check_again_cursor = conn.execute("SELECT version, deleted FROM notes WHERE id = ?", (note_id,))
+                    final_state = check_again_cursor.fetchone()
+                    msg = f"Restore for Note ID {note_id} (expected v{expected_version}) affected 0 rows."
+                    if not final_state:
+                        msg = f"Note ID {note_id} disappeared before restore (expected deleted version {expected_version})."
+                    elif not final_state['deleted']:
+                        # If it got restored by another process. Consider this success.
+                        logger.info(
+                            f"Note ID {note_id} was restored concurrently to version {final_state['version']}. Restore successful.")
+                        return True
+                    elif final_state['version'] != expected_version:
+                        msg = f"Restore for Note ID {note_id} failed: version changed to {final_state['version']} concurrently (expected {expected_version})."
+                    else:
+                        msg = f"Restore for Note ID {note_id} (expected version {expected_version}) affected 0 rows for an unknown reason after passing initial checks."
+                    raise ConflictError(msg, entity="notes", entity_id=note_id)
+
+                logger.info(
+                    f"Restored note ID {note_id} (was version {expected_version}), new version {next_version_val}.")
+                return True
+        except ConflictError:
+            raise
+        except BackendDatabaseError as e:
+            logger.error(
+                "Backend error restoring note ID %s (expected v%s): %s",
+                note_id,
+                expected_version,
+                e,
+            )
+            raise CharactersRAGDBError(f"Backend error during restore: {e}") from e
+        except CharactersRAGDBError as e:
+            logger.error(
+                f"Database error restoring note ID {note_id} (expected v{expected_version}): {e}",
+                exc_info=True)
+            raise
+
     def search_notes(self, search_term: str, limit: int = 10, offset: int = 0) -> List[Dict[str, Any]]:
         """Searches notes_fts (title and content) with optional pagination."""
         # FTS5 requires wrapping terms with special characters in double quotes
         # to be treated as a literal phrase.
+
+        # Debug: Log FTS table state to help diagnose E2E test failures
+        try:
+            fts_count = self.execute_query("SELECT COUNT(*) as cnt FROM notes_fts").fetchone()
+            notes_count = self.execute_query("SELECT COUNT(*) as cnt FROM notes WHERE deleted = 0").fetchone()
+            logger.debug(
+                f"search_notes: term='{search_term[:50] if search_term else ''}' notes_fts_count={fts_count['cnt'] if fts_count else 0} "
+                f"notes_count={notes_count['cnt'] if notes_count else 0}"
+            )
+        except Exception as diag_err:
+            logger.debug(f"search_notes diagnostic query failed: {diag_err}")
+
         if self.backend_type == BackendType.POSTGRESQL:
             tsquery = FTSQueryTranslator.normalize_query(search_term, 'postgresql')
             if not tsquery:

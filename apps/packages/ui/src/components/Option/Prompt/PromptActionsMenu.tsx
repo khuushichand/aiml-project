@@ -1,28 +1,68 @@
 import { Dropdown, MenuProps, Tooltip } from "antd"
-import { MoreHorizontal, Pen, MessageCircle, CopyIcon, Trash2 } from "lucide-react"
+import { MoreHorizontal, Pen, MessageCircle, CopyIcon, Trash2, CloudUpload, CloudDownload, Unlink } from "lucide-react"
 import React from "react"
 import { useTranslation } from "react-i18next"
+import type { PromptSyncStatus } from "@/db/dexie/types"
 
 interface PromptActionsMenuProps {
   promptId: string
   disabled?: boolean
+  syncStatus?: PromptSyncStatus
+  serverId?: number | null
   onEdit: () => void
   onDuplicate: () => void
   onUseInChat: () => void
   onDelete: () => void
+  onPushToServer?: () => void
+  onPullFromServer?: () => void
+  onUnlink?: () => void
 }
 
 export const PromptActionsMenu: React.FC<PromptActionsMenuProps> = ({
   promptId,
   disabled = false,
+  syncStatus,
+  serverId,
   onEdit,
   onDuplicate,
   onUseInChat,
-  onDelete
+  onDelete,
+  onPushToServer,
+  onPullFromServer,
+  onUnlink
 }) => {
   const { t } = useTranslation(["settings", "common", "option"])
 
+  const isSynced = !!serverId || syncStatus === "synced"
+  const canSync = !disabled && (onPushToServer || onPullFromServer)
+
+  const syncItems: MenuProps["items"] = canSync ? [
+    // Push to server option (for local or pending prompts)
+    ...(onPushToServer && !isSynced ? [{
+      key: "push",
+      label: t("managePrompts.sync.pushToServer", { defaultValue: "Push to Server" }),
+      icon: <CloudUpload className="size-4" />,
+      onClick: onPushToServer
+    }] : []),
+    // Pull from server (for synced prompts)
+    ...(onPullFromServer && isSynced ? [{
+      key: "pull",
+      label: t("managePrompts.sync.pullFromServer", { defaultValue: "Pull from Server" }),
+      icon: <CloudDownload className="size-4" />,
+      onClick: onPullFromServer
+    }] : []),
+    // Unlink option (for synced prompts)
+    ...(onUnlink && isSynced ? [{
+      key: "unlink",
+      label: t("managePrompts.sync.unlink", { defaultValue: "Unlink from Server" }),
+      icon: <Unlink className="size-4" />,
+      onClick: onUnlink
+    }] : []),
+    ...(canSync ? [{ type: "divider" as const }] : [])
+  ] : []
+
   const overflowItems: MenuProps["items"] = [
+    ...syncItems,
     {
       key: "duplicate",
       label: t("managePrompts.tooltip.duplicate", { defaultValue: "Duplicate" }),

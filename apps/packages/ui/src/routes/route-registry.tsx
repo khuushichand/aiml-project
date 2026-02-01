@@ -7,6 +7,7 @@ import {
   BookMarked,
   BookOpen,
   BookText,
+  Bot,
   BrainCircuitIcon,
   CombineIcon,
   CpuIcon,
@@ -30,12 +31,14 @@ import {
   Headphones,
   SquarePen,
   ImageIcon,
-  SlidersHorizontal
+  SlidersHorizontal,
+  FileText
 } from "lucide-react"
 import { ALL_TARGETS, type PlatformTarget } from "@/config/platform"
 import OptionLayout from "~/components/Layouts/Layout"
 import { OnboardingWizard } from "@/components/Option/Onboarding/OnboardingWizard"
 import { createSettingsRoute } from "./settings-route"
+import { Navigate } from "react-router-dom"
 
 // Eagerly loaded routes for instant navigation on frequently visited pages
 import OptionIndex from "./option-index"
@@ -142,7 +145,8 @@ const OptionImageGenerationSettings = createSettingsRoute(
   () => import("~/components/Option/Settings/ImageGenerationSettings"),
   "ImageGenerationSettings"
 )
-const OptionPromptStudio = lazy(() => import("./option-prompt-studio"))
+// Note: OptionPromptStudio has been unified with OptionPromptsWorkspace (/prompts)
+// The /prompt-studio route now redirects to /prompts?tab=studio
 const OptionSettingsPromptStudio = createSettingsRoute(
   () => import("~/components/Option/Settings/prompt-studio"),
   "PromptStudioSettings"
@@ -168,6 +172,7 @@ const OptionChunkingPlayground = lazy(() => import("./option-chunking-playground
 const OptionDocumentation = lazy(() => import("./option-documentation"))
 const OptionQuiz = lazy(() => import("./option-quiz"))
 const OptionWritingPlayground = lazy(() => import("./option-writing-playground"))
+const OptionDocumentWorkspace = lazy(() => import("./option-document-workspace"))
 const OptionModelPlayground = lazy(() => import("./option-model-playground"))
 const OptionModerationPlayground = lazy(() => import("./option-moderation-playground"))
 const OptionChatbooksPlayground = lazy(() => import("./option-chatbooks-playground"))
@@ -177,6 +182,7 @@ const OptionDataTables = lazy(() => import("./option-data-tables"))
 const OptionCollections = lazy(() => import("./option-collections"))
 const OptionAudiobookStudio = lazy(() => import("./option-audiobook-studio"))
 const OptionWorkflowEditor = lazy(() => import("./option-workflow-editor"))
+const OptionACPPlayground = lazy(() => import("./option-acp-playground"))
 const OptionSetup = lazy(() => import("./option-setup"))
 // OptionWorkspacePlayground and OptionChat are eagerly imported above
 
@@ -555,7 +561,8 @@ export const ROUTE_DEFINITIONS: RouteDefinition[] = [
   { kind: "options", path: "/dictionaries", element: <OptionDictionariesWorkspace /> },
   { kind: "options", path: "/characters", element: <OptionCharactersWorkspace /> },
   { kind: "options", path: "/prompts", element: <OptionPromptsWorkspace /> },
-  { kind: "options", path: "/prompt-studio", element: <OptionPromptStudio /> },
+  // Legacy route - redirect to unified Prompts page
+  { kind: "options", path: "/prompt-studio", element: <Navigate to="/prompts?tab=studio" replace /> },
   { kind: "options", path: "/tts", element: <OptionTts /> },
   { kind: "options", path: "/stt", element: <OptionStt /> },
   { kind: "options", path: "/speech", element: <OptionSpeech /> },
@@ -586,6 +593,18 @@ export const ROUTE_DEFINITIONS: RouteDefinition[] = [
   },
   {
     kind: "options",
+    path: "/acp-playground",
+    element: <OptionACPPlayground />,
+    nav: {
+      group: "workspace",
+      labelToken: "option:header.acpPlayground",
+      icon: Bot,
+      order: 12,
+      beta: true
+    }
+  },
+  {
+    kind: "options",
     path: "/workspace-playground",
     element: <OptionWorkspacePlayground />,
     nav: {
@@ -593,6 +612,18 @@ export const ROUTE_DEFINITIONS: RouteDefinition[] = [
       labelToken: "option:header.modelPlayground",
       icon: FlaskConical,
       order: 0,
+      beta: true
+    }
+  },
+  {
+    kind: "options",
+    path: "/document-workspace",
+    element: <OptionDocumentWorkspace />,
+    nav: {
+      group: "workspace",
+      labelToken: "option:header.documentWorkspace",
+      icon: FileText,
+      order: 1,
       beta: true
     }
   },

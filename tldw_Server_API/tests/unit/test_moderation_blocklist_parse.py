@@ -167,6 +167,16 @@ def test_invalid_and_dangerous_regex_lines_are_skipped():
 
 
 @pytest.mark.unit
+def test_lint_warns_on_invalid_regex_flags():
+    svc = ModerationService()
+    res = svc.lint_blocklist_lines(["/foo/z"])
+    item = res["items"][0]
+    assert item["ok"] is True
+    assert item["pattern_type"] == "literal"
+    assert "invalid regex flags" in (item.get("warning") or "")
+
+
+@pytest.mark.unit
 def test_replacement_limits_are_enforced():
     svc = ModerationService()
     # Create a simple redact rule

@@ -179,7 +179,7 @@ Replace the example content with your own:
 ## ⚡ Quick Tips
 
 1. **Start Simple**: Try one evaluation before batch processing
-2. **Use Appropriate Models**: GPT-3.5 for testing, GPT-4 for production
+2. **Use Appropriate Models**: mini tiers for testing, flagship tiers for production
 3. **Check Rate Limits**: 10 requests/minute for standard endpoints
 4. **Monitor Costs**: Each evaluation costs ~$0.001-0.01 depending on model
 

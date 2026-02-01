@@ -209,7 +209,7 @@ Starts an asynchronous evaluation run.
 **Request:**
 ```json
 {
-  "target_model": "gpt-3.5-turbo",
+  "target_model": "gpt-4o",
   "dataset_override": null,
   "config": {
     "temperature": 0.7,
@@ -226,7 +226,7 @@ Starts an asynchronous evaluation run.
   "id": "run_def456",
   "eval_id": "eval_abc123",
   "status": "pending",
-  "target_model": "gpt-3.5-turbo",
+  "target_model": "gpt-4o",
   "created_at": 1234567890,
   "progress": {
     "completed_samples": 0,

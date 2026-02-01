@@ -37,6 +37,10 @@ export const KeyboardShortcutsModal: React.FC<KeyboardShortcutsModalProps> = ({
       {
         keys: ["1", "2", "3", "4"],
         description: t("option:flashcards.shortcutRateKeys", { defaultValue: "Rate card" })
+      },
+      {
+        keys: ["Ctrl+Z", "⌘Z"],
+        description: t("option:flashcards.shortcutUndo", { defaultValue: "Undo last rating" })
       }
     ]
   }

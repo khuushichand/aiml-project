@@ -10,7 +10,7 @@
  */
 import { test, expect, skipIfServerUnavailable, assertNoCriticalErrors } from "../utils/fixtures"
 import { SettingsPage } from "../utils/page-objects"
-import { seedAuth, TEST_CONFIG, generateTestId, waitForConnection } from "../utils/helpers"
+import { seedAuth, TEST_CONFIG, waitForConnection } from "../utils/helpers"
 
 test.describe("Settings Workflow", () => {
   test.beforeEach(async ({ page }) => {
@@ -165,7 +165,7 @@ test.describe("Settings Workflow", () => {
       await apiKeyInput.fill(TEST_CONFIG.apiKey)
 
       // Test connection
-      const connected = await settingsPage.testConnection()
+      const _connected = await settingsPage.testConnection()
       // Connection test may or may not be available
 
       await assertNoCriticalErrors(diagnostics)
@@ -248,7 +248,7 @@ test.describe("Settings Workflow", () => {
 
       // Check for validation errors
       await authedPage.waitForTimeout(500)
-      const hasErrors = await settingsPage.hasValidationErrors()
+      const _hasErrors = await settingsPage.hasValidationErrors()
       // Validation behavior depends on implementation
 
       await assertNoCriticalErrors(diagnostics)
@@ -292,7 +292,7 @@ test.describe("Settings Workflow", () => {
 
       await authedPage.waitForTimeout(500)
 
-      const errors = await settingsPage.getValidationErrors()
+      const _errors = await settingsPage.getValidationErrors()
       // Errors may or may not appear based on validation rules
 
       await assertNoCriticalErrors(diagnostics)
@@ -322,7 +322,7 @@ test.describe("Settings Workflow", () => {
       await settingsPage.waitForReady()
 
       // Look for provider selection
-      const providerSelect = authedPage.locator(
+      const _providerSelect = authedPage.locator(
         "[data-testid='provider-select'], select, .provider-dropdown"
       )
 
@@ -335,7 +335,7 @@ test.describe("Settings Workflow", () => {
       diagnostics
     }) => {
       const settingsPage = new SettingsPage(authedPage)
-      const providers = await settingsPage.getAvailableProviders()
+      const _providers = await settingsPage.getAvailableProviders()
 
       // Some providers may be listed
       await assertNoCriticalErrors(diagnostics)
@@ -364,7 +364,7 @@ test.describe("Settings Workflow", () => {
       await settingsPage.gotoSection("chat")
       await settingsPage.waitForReady()
 
-      const tempInput = authedPage.getByLabel(/temperature/i)
+      const _tempInput = authedPage.getByLabel(/temperature/i)
       // Temperature setting may exist
 
       await assertNoCriticalErrors(diagnostics)
@@ -378,7 +378,7 @@ test.describe("Settings Workflow", () => {
       await settingsPage.gotoSection("chat")
       await settingsPage.waitForReady()
 
-      const systemPrompt = authedPage.getByLabel(/system prompt/i)
+      const _systemPrompt = authedPage.getByLabel(/system prompt/i)
       // System prompt setting may exist
 
       await assertNoCriticalErrors(diagnostics)
@@ -431,7 +431,7 @@ test.describe("Settings Workflow", () => {
       await settingsPage.gotoSection("chat")
       await settingsPage.waitForReady()
 
-      const breadcrumbs = await settingsPage.getBreadcrumbs()
+      const _breadcrumbs = await settingsPage.getBreadcrumbs()
       // Breadcrumbs may or may not be present
 
       await assertNoCriticalErrors(diagnostics)
@@ -454,7 +454,7 @@ test.describe("Settings Workflow", () => {
         await settingsPage.navigateViaMenu("Model")
 
         // Check for unsaved changes warning
-        const hasWarning = await settingsPage.hasUnsavedChangesWarning()
+        const _hasWarning = await settingsPage.hasUnsavedChangesWarning()
         // Warning may or may not appear based on implementation
       } catch {
         // Navigation may proceed without warning
@@ -552,7 +552,7 @@ test.describe("Settings Workflow", () => {
       await waitForConnection(authedPage)
 
       // Look for version info
-      const versionInfo = authedPage.locator(
+      const _versionInfo = authedPage.locator(
         "[data-testid='version'], .version-info, .about-version"
       )
 

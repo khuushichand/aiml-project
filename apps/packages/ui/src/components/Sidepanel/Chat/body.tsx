@@ -263,6 +263,7 @@ export const SidePanelBody = ({
                   serverChatId={serverChatId}
                   serverMessageId={message.serverMessageId}
                   messageId={message.id}
+                  discoSkillComment={message.discoSkillComment}
                   historyId={stableHistoryId ?? undefined}
                   conversationInstanceId={conversationInstanceId}
                   feedbackQuery={previousUserMessage?.message ?? null}

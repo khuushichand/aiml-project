@@ -632,6 +632,10 @@ async def get_or_create_audit_service_for_user_id_optional(
     user_id: Optional[Union[int, str]]
 ) -> UnifiedAuditService:
     """Get an audit service for a user id or fall back to the default service."""
+    storage_mode = _resolve_audit_storage_mode()
+    if storage_mode == "shared":
+        # Shared mode uses a single DB; accept any user_id (including non-numeric).
+        return await get_or_create_default_audit_service()
     if user_id is None:
         return await get_or_create_default_audit_service()
     try:
@@ -639,6 +643,10 @@ async def get_or_create_audit_service_for_user_id_optional(
             raise TypeError("bool is not a valid user id")
         uid_int = int(user_id)
     except (TypeError, ValueError):
+        raw_id = str(user_id).strip().lower()
+        if raw_id in {"system", "unidentified_user"}:
+            logger.warning("Non-numeric system user_id {!r}; routing to default audit service.", user_id)
+            return await get_or_create_default_audit_service()
         if _is_test_context():
             # In tests we allow non-numeric ids to map to per-user storage paths.
             return await _get_or_create_audit_service_for_key(str(user_id))

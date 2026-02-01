@@ -498,6 +498,9 @@ async def unified_rag_pipeline(
     claims_max: int = 25,
     nli_model: Optional[str] = None,
     claims_concurrency: int = 8,
+    numeric_precision_mode: Literal["standard", "strict", "academic"] = "standard",
+    doc_only_verification: bool = False,
+    generate_verification_report: bool = False,
 
     # ========== BATCH PROCESSING ==========
     enable_batch: bool = False,
@@ -3070,6 +3073,8 @@ async def unified_rag_pipeline(
                                     mode=(claim_verifier or "hybrid").strip().lower(),
                                     budget=job_budget,
                                     job_context=job_context,
+                                    doc_only_mode=doc_only_verification,
+                                    numeric_precision_mode=numeric_precision_mode,
                                 )
                                 verifications.append(cv)
                             supported = sum(1 for v in verifications if v.label == "supported")
@@ -3078,14 +3083,28 @@ async def unified_rag_pipeline(
                             total = max(1, len(verifications))
                             precision = supported / total
                             coverage = (supported + refuted) / total
+                            # Enhanced claim output with new fields
                             claims_payload = [
                                 {
                                     "id": v.claim.id,
                                     "text": v.claim.text,
                                     "span": list(v.claim.span) if v.claim.span else None,
+                                    "claim_type": v.claim.claim_type.value if hasattr(v.claim, "claim_type") else "general",
+                                    "status": v.status.value if hasattr(v, "status") else v.label,
                                     "label": v.label,
                                     "confidence": v.confidence,
-                                    "evidence": [{"doc_id": e.doc_id, "snippet": e.snippet, "score": e.score} for e in v.evidence],
+                                    "match_level": v.match_level.value if hasattr(v, "match_level") else "interpretation",
+                                    "source_authority": v.source_authority.value if hasattr(v, "source_authority") else 1,
+                                    "requires_external_knowledge": getattr(v, "requires_external_knowledge", False),
+                                    "evidence": [
+                                        {
+                                            "doc_id": e.doc_id,
+                                            "snippet": e.snippet,
+                                            "score": e.score,
+                                            "authority": e.authority.value if hasattr(e, "authority") else 1,
+                                        }
+                                        for e in v.evidence
+                                    ],
                                     "citations": v.citations,
                                     "rationale": v.rationale,
                                 }
@@ -3117,6 +3136,7 @@ async def unified_rag_pipeline(
                             )
                             claims_payload = claims_run.get("claims")
                             factuality_payload = claims_run.get("summary")
+                            verifications = claims_run.get("verifications", [])
                     except Exception as _eclaims:
                         logger.debug(f"Pre-extracted claims path failed: {_eclaims}")
                         claims_run = await engine.run(
@@ -3136,9 +3156,27 @@ async def unified_rag_pipeline(
                         )
                         claims_payload = claims_run.get("claims")
                         factuality_payload = claims_run.get("summary")
+                        verifications = claims_run.get("verifications", [])
                     # Also store in metadata for debugging/analytics
                     result.metadata["claims"] = claims_payload
                     result.metadata["factuality"] = factuality_payload
+
+                    # Generate verification report if requested
+                    if generate_verification_report and verifications:
+                        try:
+                            from tldw_Server_API.app.core.Claims_Extraction.verification_report import (
+                                generate_verification_report as gen_report,
+                            )
+                            # Use the full VerificationReport class with raw verification objects
+                            report = gen_report(
+                                verifications=verifications,
+                                query=query,
+                                answer_text=result.generated_answer,
+                                metadata={"source": "unified_pipeline"},
+                            )
+                            result.metadata["verification_report"] = report.to_dict()
+                        except Exception as _ereport:
+                            logger.debug(f"Verification report generation failed: {_ereport}")
             except Exception as e:
                 result.errors.append(f"Claims analysis failed: {str(e)}")
                 logger.error(f"Claims analysis error: {e}")

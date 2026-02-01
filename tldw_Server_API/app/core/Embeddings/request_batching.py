@@ -20,6 +20,14 @@ from tldw_Server_API.app.core.Embeddings.rate_limiter import get_async_rate_limi
 from tldw_Server_API.app.core.Utils.tokenizer import count_tokens as _count_tokens
 
 
+class EmbeddingsRateLimitError(RuntimeError):
+    """Raised when the embeddings rate limiter rejects a request."""
+
+    def __init__(self, message: str, retry_after: Optional[int] = None):
+        super().__init__(message)
+        self.retry_after = retry_after
+
+
 def _get_spec_value(spec: Any, key: str) -> Optional[Any]:
     """Fetch a value from a model spec dict or object."""
     if spec is None:
@@ -196,8 +204,9 @@ class RequestBatcher:
                 except Exception:
                     pass
                 retry_after_msg = f" Retry after {retry_after}s." if retry_after else ""
-                raise RuntimeError(
-                    f"Rate limit exceeded for user '{user_id}'.{retry_after_msg}"
+                raise EmbeddingsRateLimitError(
+                    f"Rate limit exceeded for user '{user_id}'.{retry_after_msg}",
+                    retry_after=retry_after,
                 )
             rate_limit_applied = True
 

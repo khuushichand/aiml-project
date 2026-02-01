@@ -29,6 +29,7 @@ from tldw_Server_API.app.core.AuthNZ.orgs_teams import (
     list_memberships_for_user,
     list_org_memberships_for_user,
 )
+from tldw_Server_API.app.core.AuthNZ.org_rbac import apply_scoped_permissions
 from tldw_Server_API.app.core.AuthNZ.principal_model import AuthContext, AuthPrincipal
 from tldw_Server_API.app.core.AuthNZ.repos.rbac_repo import AuthnzRbacRepo
 from tldw_Server_API.app.core.exceptions import InactiveUserError
@@ -769,23 +770,29 @@ async def verify_jwt_and_fetch_user(request: Request, token: str = Depends(oauth
 
         active_team_id = _normalize_active_id(token_active_team_id, team_ids)
         active_org_id = _normalize_active_id(token_active_org_id, org_ids)
-        try:
-            request.state.team_ids = team_ids
-            request.state.org_ids = org_ids
-            if active_team_id is not None:
-                request.state.active_team_id = active_team_id
-            if active_org_id is not None:
-                request.state.active_org_id = active_org_id
-        except Exception:
-            pass
     except HTTPException:
         raise
     except Exception:
-        try:
-            request.state.team_ids = []
-            request.state.org_ids = []
-        except Exception:
-            pass
+        pass
+
+    scoped_result = await apply_scoped_permissions(
+        user_id=user.id_int,
+        base_permissions=list(user.permissions or []),
+        org_ids=org_ids,
+        team_ids=team_ids,
+        active_org_id=active_org_id,
+        active_team_id=active_team_id,
+    )
+    user.permissions = list(scoped_result.permissions or [])
+    active_org_id = scoped_result.active_org_id
+    active_team_id = scoped_result.active_team_id
+    try:
+        request.state.team_ids = team_ids
+        request.state.org_ids = org_ids
+        request.state.active_team_id = active_team_id
+        request.state.active_org_id = active_org_id
+    except Exception:
+        pass
 
     try:
         set_scope(
@@ -1148,13 +1155,23 @@ async def authenticate_api_key_user(request: Request, api_key: str) -> User:
 
         active_team_id = _normalize_active_id(None, team_ids)
         active_org_id = _normalize_active_id(None, org_ids)
+        scoped_result = await apply_scoped_permissions(
+            user_id=user_obj.id_int,
+            base_permissions=list(user_obj.permissions or []),
+            org_ids=org_ids,
+            team_ids=team_ids,
+            active_org_id=active_org_id,
+            active_team_id=active_team_id,
+        )
+        user_obj.permissions = list(scoped_result.permissions or [])
+        active_org_id = scoped_result.active_org_id
+        active_team_id = scoped_result.active_team_id
+
         try:
             request.state.team_ids = team_ids
             request.state.org_ids = org_ids
-            if active_team_id is not None:
-                request.state.active_team_id = active_team_id
-            if active_org_id is not None:
-                request.state.active_org_id = active_org_id
+            request.state.active_team_id = active_team_id
+            request.state.active_org_id = active_org_id
             if org_ids:
                 request.state.org_id = org_ids[0]
             if team_ids:

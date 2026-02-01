@@ -711,10 +711,11 @@ class EvaluationsDatabase:
         description: Optional[str] = None,
         dataset_id: Optional[str] = None,
         created_by: Optional[str] = None,
-        metadata: Optional[Dict[str, Any]] = None
+        metadata: Optional[Dict[str, Any]] = None,
+        eval_id: Optional[str] = None,
     ) -> str:
         """Create a new evaluation definition"""
-        eval_id = f"eval_{uuid.uuid4().hex[:12]}"
+        eval_id = eval_id or f"eval_{uuid.uuid4().hex[:12]}"
 
         with self.get_connection() as conn:
             cursor = conn.cursor()

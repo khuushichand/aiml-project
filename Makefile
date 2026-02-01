@@ -1,3 +1,34 @@
+# -----------------------------------------------------------------------------
+# Quickstart targets (first-time setup)
+# -----------------------------------------------------------------------------
+.PHONY: quickstart quickstart-docker verify
+
+quickstart:
+	@echo "[quickstart] Setting up tldw_server for first-time use..."
+	@test -f .env || (cp tldw_Server_API/Config_Files/.env.quickstart .env && echo "[quickstart] Created .env from template - edit SINGLE_USER_API_KEY!")
+	@echo "[quickstart] Initializing auth (non-interactive)..."
+	python -m tldw_Server_API.app.core.AuthNZ.initialize --non-interactive
+	@echo "[quickstart] Starting server on http://127.0.0.1:8000"
+	@echo "[quickstart] Verify with: curl http://localhost:8000/health"
+	@echo "[quickstart] API docs at: http://127.0.0.1:8000/docs"
+	uvicorn tldw_Server_API.app.main:app --host 127.0.0.1 --port 8000
+
+quickstart-docker:
+	@echo "[quickstart-docker] Starting tldw_server via Docker Compose..."
+	docker compose -f Dockerfiles/docker-compose.yml up -d --build
+	@echo "[quickstart-docker] Initializing auth..."
+	docker compose -f Dockerfiles/docker-compose.yml exec app python -m tldw_Server_API.app.core.AuthNZ.initialize --non-interactive
+	@echo "[quickstart-docker] Server running at http://localhost:8000"
+	@echo "[quickstart-docker] Verify with: curl http://localhost:8000/health"
+	@echo "[quickstart-docker] API docs at: http://localhost:8000/docs"
+
+verify:
+	@echo "[verify] Checking server health..."
+	@curl -sf http://localhost:8000/health > /dev/null && echo "[verify] Health check PASSED" || (echo "[verify] Health check FAILED - is the server running?" && exit 1)
+
+# -----------------------------------------------------------------------------
+# PostgreSQL backup/restore
+# -----------------------------------------------------------------------------
 .PHONY: pg-backup pg-restore
 
 # Defaults (override on command line)

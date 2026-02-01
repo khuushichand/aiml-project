@@ -127,7 +127,7 @@ function loadExistingResults(outputPath: string): ReviewSession | null {
       const content = fs.readFileSync(outputPath, "utf-8")
       return JSON.parse(content)
     }
-  } catch (e) {
+  } catch {
     console.log("Could not load existing results, starting fresh")
   }
   return null

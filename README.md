@@ -1,35 +1,33 @@
 <div align="center">
+  <h1>tldw Server</h1>
+  <p>Too Long; Didn't Watch - API-first media analysis and research platform</p>
 
-<h1>tldw Server</h1>
-<p>Too Long; Didn't Watch - API-first media analysis & research platform</p>
+  <p>
+    <a href="https://github.com/rmusser01/tldw_server">
+      <img alt="Made with love" src="https://img.shields.io/badge/made_with-love-red?style=for-the-badge&labelColor=orange" />
+    </a>
+    <a href="https://www.gnu.org/licenses/old-licenses/gpl-3.0.en.html">
+      <img alt="License: GPLv3" src="https://img.shields.io/badge/license-GPLv3-blue.svg" />
+    </a>
+    <a href="https://github.com/rmusser01/tldw_server/actions/workflows/e2e-smoke.yml">
+      <img alt="E2E Critical Smoke" src="https://github.com/rmusser01/tldw_server/actions/workflows/e2e-smoke.yml/badge.svg" />
+    </a>
+  </p>
 
-<a href="https://www.gnu.org/licenses/old-licenses/gpl-3.0.en.html">[![madewithlove](https://img.shields.io/badge/made_with-%E2%9D%A4-red?style=for-the-badge&labelColor=orange)](https://github.com/rmusser01/tldw_server)
-<img alt="License: GPLv3" src="https://img.shields.io/badge/license-GPLv3-blue.svg" />
-  </a>
-
-<p>
-  <a href="https://github.com/rmusser01/tldw_server/actions/workflows/e2e-smoke.yml">
-    <img alt="E2E Critical Smoke" src="https://github.com/rmusser01/tldw_server/actions/workflows/e2e-smoke.yml/badge.svg" />
-  </a>
-</p>
-
-<h3>Process Media and more with 16+ LLM providers + OpenAI-compatible APIs for Chat, Embeddings and Evals</h3>
-
-<h3>Hosted SaaS + Browser Extension coming soon.</h3>
-
-## Your Own Local Open-Source Platform for Media Analysis, Knowledge Work and LLM-Backed (Creative) Efforts
+  <p>Process media with 16+ LLM providers and OpenAI-compatible APIs for Chat, Embeddings, and Evals.</p>
+  <p>Hosted SaaS and browser extension coming soon.</p>
+  <p><strong>Your local open-source platform for media analysis, knowledge work, and LLM-backed creation.</strong></p>
 </div>
 
 ---
 
 ## Table of Contents
-
 <details>
-<summary>Table of Contents</summary>
+<summary>Expand table of contents</summary>
 
 - [Overview](#overview)
 - [Current Status](#current-status)
-- [What's New](#whats-new)
+- [What's New (compared to Gradio)](#whats-new-compared-to-gradio)
 - [Privacy & Security](#privacy--security)
 - [Highlights](#highlights)
 - [Feature Status](#feature-status)
@@ -56,33 +54,32 @@
 - [Contributing & Support](#contributing--support)
 - [Developer Guides](#developer-guides)
   - [Ingestion & Media Processing Docs](#ingestion--media-processing-docs)
-- [More Detailed Explanation & Background](#more-detailed-explanation--background)
-- [Local Models I recommend](#local-models-i-recommend)
-- [License](#license)
-- [Credits](#credits)
 - [About](#about)
   - [Getting Help](#getting-help)
   - [Security Disclosures](#security-disclosures)
   - [Project Guidelines](#project-guidelines)
+- [Appendix (Optional)](#appendix-optional)
+- [License](#license)
+- [Credits](#credits)
 </details>
 
 ## Overview
-**tldw_server** is an open-source research assistant and media analysis backend for ingesting, transcribing, analyzing, and retrieving knowledge from video, audio, documents, websites, and more.
-It runs a FastAPI server with OpenAI-compatible Chat, Audio, Embeddings, and Evals APIs, plus a unified RAG pipeline, knowledge tools, and integrations with local or hosted LLM providers.
-The long-term vision is a personal research assistant inspired by "The Young Lady's Illustrated Primer" that helps people learn, reason about, and retain what they watch or read.
+**tldw_server** is an open-source, API-first platform for ingesting media, transcribing, analyzing, and retrieving knowledge from video, audio, documents, websites, and more.
+It runs a FastAPI server with OpenAI-compatible Chat, Audio, Embeddings, and Evals APIs, a unified RAG pipeline, and integrations with local or hosted LLM providers.
+The primary client is the Next.js WebUI (WIP) plus an Admin UI.
+Long-term vision: a personal research assistant inspired by "The Young Lady's Illustrated Primer" that helps people learn, reason about, and retain what they watch or read.
 
-Great for:
+Good fit for:
 - Turning videos, podcasts, and documents into searchable, citable knowledge.
 - Running local or hosted LLMs behind a consistent OpenAI-compatible API.
 - Building research workflows with RAG, evaluation, and prompt tooling.
 
-New here? Start with the Quickstart section below.
-If you're looking for a one line non-jargon explanation: Monolithic FastAPI server with a modular internal architecture, exposing different functionality via REST endpoints for each core module (loosely coupled where possible).
+**New here?** Jump to [Quickstart](#quickstart) or try `make quickstart` after cloning.
 
 
 ## Current Status
 
-Version 0.1.13 (beta). Expect bugs and rough edges; please report issues.
+Latest release: 0.1.18 (2026-01-29). Beta. Expect rough edges; please report issues. See `CHANGELOG.md` for release history.
 
 <details>
 <summary>Current focus and migration notes</summary>
@@ -91,7 +88,7 @@ Version 0.1.13 (beta). Expect bugs and rough edges; please report issues.
 - Workflows
 - Browser extension ([tldw_Browser_Assistant](https://github.com/rmusser01/tldw_browser_assistant))
 - Unified Admin Dashboard ([admin-ui](./admin-ui))
-- front-end webapp ([apps/tldw-frontend](./apps/tldw-frontend))
+- frontend web app ([apps/tldw-frontend](./apps/tldw-frontend))
 - Watchlists
 - Collections (read-it-later)
 - Documentation
@@ -111,7 +108,7 @@ Version 0.1.13 (beta). Expect bugs and rough edges; please report issues.
     - Use FastAPI routes; see http://127.0.0.1:8000/docs. OpenAI-compatible endpoints are available (e.g., `/api/v1/chat/completions`).
 - Frontend:
     - Next.js WebUI: `apps/tldw-frontend/` (run separately)
-    - Or integrate directly against the API;
+    - Or integrate directly against the API
 </details>
 
 ## What's New (compared to Gradio)
@@ -137,6 +134,16 @@ See: `Docs/Published/RELEASE_NOTES.md` for detailed release notes.
 
 ## Highlights
 
+- Ingest and process media (video, audio, docs, web) with OCR and chunking.
+- OpenAI-compatible APIs for Chat, Audio (STT/TTS), Embeddings, and Evals.
+- Hybrid search + RAG (BM25 + vector + rerank) with ChromaDB or pgvector.
+- Multi-provider LLM and TTS/STT support, including local models.
+- MCP server with JWT/RBAC, tool execution, WebSockets, and metrics.
+- Next.js WebUI and Admin UI (both in active development).
+
+<details>
+<summary>Full highlights (expanded)</summary>
+
 - Media ingestion & processing: video, audio, PDFs, EPUB, DOCX, HTML, Markdown, XML, MediaWiki dumps; OCR for PDFs/images; metadata extraction; configurable chunking.
 - Custom-built Chunking library, tldw_Chunker, supporting token, word, sentence, paragraph, semantic, hierarchical and template chunking approaches.
 - Audio & speech: real-time and file STT via faster_whisper, NVIDIA NeMo (Canary/Parakeet), Qwen2Audio; diarization/VAD; TTS backends — commercial: OpenAI, ElevenLabs; local: Kokoro, PocketTTS, LuxTTS, Higgs, Chatterbox, Dia, VibeVoice, VibeVoice Realtime, NeuTTS, IndexTTS2, Supertonic, Supertonic2, Qwen3-TTS, EchoTTS; voice catalog + audio jobs queue.
@@ -152,6 +159,8 @@ See: `Docs/Published/RELEASE_NOTES.md` for detailed release notes.
 - MCP Server: production MCP with JWT/RBAC, tool execution, WebSockets, metrics, and health endpoints. Use existing tools or add your own using a handy guide. Setup tool categories and collections, allowing for easier context management.
 - Admin/Ops: orgs/teams/roles, API key management, audit logging, usage/LLM cost reporting, Prometheus metrics + Grafana dashboards, PostgreSQL content mode + backup/restore helpers.
 
+</details>
+
 
 ## Feature Status
 
@@ -159,63 +168,82 @@ See the full [Feature Status Matrix at `Docs/Published/Overview/Feature_Status.m
 
 ## Quickstart
 
-Prefer a guided setup? Use the wizard: [`Docs/Development/Wizard.md`](./Docs/Development/Wizard.md)
+### Fastest Path (One Command)
 
-### Run the API
-
-Prerequisites
-- Python 3.11+ (3.12/3.13 supported)
-- ffmpeg (for audio/video pipelines)
-
-1) Create environment and install dependencies (via pyproject.toml)
 ```bash
-python3 -m venv .venv
-source .venv/bin/activate  # Windows: .venv\Scripts\activate
-# Core server
-pip install -e .
-
-# Optional extras (choose as needed)
-# pip install -e ".[multiplayer]"   # multi-user/PostgreSQL features
-# pip install -e ".[dev]"           # tests, linters, tooling
-# pip install -e ".[otel]"          # OpenTelemetry metrics/tracing exporters
-
-# Install pyaudio - needed for audio processing
-# Linux
-sudo apt install python3-pyaudio
-
-# macOS
-brew install portaudio
-pip install pyaudio
+git clone https://github.com/rmusser01/tldw_server.git && cd tldw_server
+make quickstart
 ```
-2) Configure authentication and providers
+
+This creates a minimal `.env`, initializes auth, and starts the server. Verify with:
 ```bash
-# Create .env with at least:
+curl http://localhost:8000/health  # No auth needed!
+```
+
+### Manual Setup
+
+Prerequisites: Python 3.11+ and ffmpeg (`brew install ffmpeg` or `apt install ffmpeg`)
+
+1) **Install**
+```bash
+python3 -m venv .venv && source .venv/bin/activate
+pip install -e .
+```
+
+2) **Configure** (minimal .env)
+```bash
 cat > .env << 'EOF'
 AUTH_MODE=single_user
-SINGLE_USER_API_KEY=CHANGE_ME_TO_SECURE_API_KEY
+SINGLE_USER_API_KEY=my-secure-key-at-least-16-chars
 DATABASE_URL=sqlite:///./Databases/users.db
-# MCP Unified secrets (required in production; initializer can generate if missing for quickstart only)
-# MCP_JWT_SECRET=change-me-to-secure-mcp-jwt-secret
-# MCP_API_KEY_SALT=change-me-to-secure-mcp-salt
 EOF
-
-# First-time initialization (validates config, sets up DBs)
-python -m tldw_Server_API.app.core.AuthNZ.initialize
-# This will also auto-generate MCP_JWT_SECRET and MCP_API_KEY_SALT if they are missing,
-# using Python's secrets.token_urlsafe(32) for quickstart-only defaults.
-# These auto-generated values must be replaced and managed securely before production
-# deployment (rotate regularly and store in a secret manager such as Vault or AWS Secrets Manager).
-# Example: set MCP_JWT_SECRET and MCP_API_KEY_SALT to your own values and manage them
-# following secure secret-management practices.
-# Add provider API keys in .env or tldw_Server_API/Config_Files/config.txt
 ```
-3) Run the API
+
+3) **Initialize auth** (use `--non-interactive` to skip prompts)
+```bash
+python -m tldw_Server_API.app.core.AuthNZ.initialize --non-interactive
+```
+
+4) **Start the server**
 ```bash
 python -m uvicorn tldw_Server_API.app.main:app --reload
 ```
+
+5) **Verify it works**
+```bash
+curl http://localhost:8000/health
+# Expected: {"status":"ok",...}
+```
+
 - API docs: http://127.0.0.1:8000/docs
-- Quickstart: http://127.0.0.1:8000/api/v1/config/quickstart
-- Setup UI (if required): http://127.0.0.1:8000/setup
+- Quickstart redirect: http://127.0.0.1:8000/api/v1/config/quickstart
+
+<details>
+<summary>Optional extras and pyaudio setup</summary>
+
+```bash
+# Optional pip extras
+pip install -e ".[multiplayer]"   # multi-user/PostgreSQL features
+pip install -e ".[dev]"           # tests, linters, tooling
+pip install -e ".[otel]"          # OpenTelemetry metrics/tracing
+
+# pyaudio (needed for audio processing)
+# Linux: sudo apt install python3-pyaudio
+# macOS: brew install portaudio && pip install pyaudio
+```
+
+MCP secrets (`MCP_JWT_SECRET`, `MCP_API_KEY_SALT`) are auto-generated for quickstart.
+For production, set these explicitly and rotate regularly.
+</details>
+
+### Next Steps by Goal
+
+| I want to... | Guide |
+|--------------|-------|
+| Try it in 5 minutes with hand-holding | [Tire Kicker Guide](Docs/Getting_Started/Tire_Kicker.md) |
+| Build apps against the API locally | [Local Development Guide](Docs/Getting_Started/Local_Development.md) |
+| Run on my home server with Docker | [Docker Self-Host Guide](Docs/Getting_Started/Docker_Self_Host.md) |
+| Deploy for a team with proper security | [Production Guide](Docs/Getting_Started/Production.md) |
 
 ### Sidecar workers (optional)
 
@@ -262,40 +290,45 @@ Tip: http://127.0.0.1:8000/api/v1/config/quickstart redirects to your configured
 
 ### Docker Compose
 
-Optional path for running the API + services with Docker.
+Quick start with Docker:
 ```bash
-# Run from repo root
+make quickstart-docker
+curl http://localhost:8000/health  # Verify
+```
 
-# Option A) Single-user (SQLite users DB)
+Or manually:
+```bash
+# Single-user mode (simplest)
 docker compose -f Dockerfiles/docker-compose.yml up -d --build
+docker compose -f Dockerfiles/docker-compose.yml exec app \
+  python -m tldw_Server_API.app.core.AuthNZ.initialize --non-interactive
+curl http://localhost:8000/health  # Verify
+```
 
-# Option B) Multi-user (Postgres users DB)
+<details>
+<summary>More Docker options (multi-user, overlays)</summary>
+
+```bash
+# Multi-user (Postgres users DB)
 export AUTH_MODE=multi_user
 export DATABASE_URL=postgresql://tldw_user:TestPassword123!@postgres:5432/tldw_users
-# Optional: route Jobs module to Postgres as well
-export JOBS_DB_URL=postgresql://tldw_user:TestPassword123!@postgres:5432/tldw_users
 docker compose -f Dockerfiles/docker-compose.postgres.yml up -d
 
-# Option C) Dev overlay — enable unified streaming (non-prod)
-# This turns on the SSE/WS unified streams (STREAMS_UNIFIED=1) for pilot endpoints.
-# Keep disabled in production until validated in your environment.
+# Dev overlay — unified streaming (non-prod)
 docker compose -f Dockerfiles/docker-compose.yml -f Dockerfiles/docker-compose.dev.yml up -d --build
 
 # Check status
 docker compose -f Dockerfiles/docker-compose.yml ps
 docker compose -f Dockerfiles/docker-compose.yml logs -f app
 
-# First-time AuthNZ initialization (inside the running app container)
-docker compose -f Dockerfiles/docker-compose.yml exec app \
-  python -m tldw_Server_API.app.core.AuthNZ.initialize
+# Proxy overlays
+#   - Dockerfiles/docker-compose.proxy.yml (Caddy)
+#   - Dockerfiles/docker-compose.proxy-nginx.yml (Nginx)
 
-# Optional: proxy overlays
-#   - Dockerfiles/docker-compose.proxy.yml
-#   - Dockerfiles/docker-compose.proxy-nginx.yml
-
-# Optional: use pgvector + pgbouncer for Postgres
+# pgvector + pgbouncer for Postgres
 docker compose -f Dockerfiles/docker-compose.yml -f Dockerfiles/docker-compose.pg.yml up -d --build
 ```
+</details>
 
 Notes
 - Run compose commands from the repository root. The base compose file at `Dockerfiles/docker-compose.yml` builds with context at the repo root and includes Postgres and Redis services.
@@ -732,9 +765,15 @@ Run locally
 <details>
 <summary>Documentation and resources</summary>
 
+**Getting Started Guides:**
+- [Tire Kicker Guide](Docs/Getting_Started/Tire_Kicker.md) - 5-minute setup with hand-holding
+- [Local Development Guide](Docs/Getting_Started/Local_Development.md) - building against the API
+- [Docker Self-Host Guide](Docs/Getting_Started/Docker_Self_Host.md) - running on your server
+- [Production Guide](Docs/Getting_Started/Production.md) - team deployment with security
+
+**Reference:**
 - `Docs/Documentation.md` - documentation index and developer guide links
 - `Docs/About.md` - project background and philosophy
-- `New-User-Guide.md` - guided walkthrough for first-time setup and usage
 - Module deep dives: `Docs/Development/AuthNZ-Developer-Guide.md`, `Docs/Development/RAG-Developer-Guide.md`, `Docs/MCP/Unified/Developer_Guide.md`
 - API references: `Docs/API-related/RAG-API-Guide.md`, `Docs/API-related/OCR_API_Documentation.md`, `Docs/API-related/Prompt_Studio_API.md`
 - Deployment/Monitoring: `Docs/Published/Deployment/First_Time_Production_Setup.md`, `Docs/Published/Deployment/Reverse_Proxy_Examples.md`, `Docs/Deployment/Monitoring/`
@@ -749,6 +788,11 @@ For complete Resource Governor setup and examples (env, DB store bootstrap, YAML
 
 Some self-hosted OpenAI-compatible servers reject unknown fields (like `top_k`). For local providers you can enable a strict mode that filters non-standard keys from chat payloads.
 
+- Set `strict_openai_compat: true` in the relevant provider section (`local_llm`, `llama_api`, `ooba_api`, `tabby_api`, `vllm_api`, `aphrodite_api`, `ollama_api`).
+- For `local_llm`, you can also use `LOCAL_LLM_STRICT_OPENAI_COMPAT=1`.
+- When enabled, only standard OpenAI Chat Completions parameters are sent:
+  `messages, model, temperature, top_p, max_tokens, n, stop, presence_penalty, frequency_penalty, logit_bias, seed, response_format, tools, tool_choice, logprobs, top_logprobs, user, stream`.
+
 ### Chatbook Tools Guide
 
 - Getting started: `Docs/User_Guides/Chatbook_Tools_Getting_Started.md`
@@ -756,11 +800,6 @@ Some self-hosted OpenAI-compatible servers reject unknown fields (like `top_k`).
 - Related endpoints (also listed above under Key Endpoints):
   - `GET /api/v1/chat/commands` — list slash commands (RBAC-filtered when enabled; returns empty list when disabled)
   - `POST /api/v1/chat/dictionaries/validate` — validate chat dictionaries (schema, regex, templates)
-
-- Set `strict_openai_compat: true` in the relevant provider section (`local_llm`, `llama_api`, `ooba_api`, `tabby_api`, `vllm_api`, `aphrodite_api`, `ollama_api`).
-- For `local_llm`, you can also use `LOCAL_LLM_STRICT_OPENAI_COMPAT=1`.
-- When enabled, only standard OpenAI Chat Completions parameters are sent:
-  `messages, model, temperature, top_p, max_tokens, n, stop, presence_penalty, frequency_penalty, logit_bias, seed, response_format, tools, tool_choice, logprobs, top_logprobs, user, stream`.
 
 </details>
 
@@ -793,11 +832,18 @@ Some self-hosted OpenAI-compatible servers reject unknown fields (like `top_k`).
 
 ## Troubleshooting
 
-- ffmpeg missing: ensure `ffmpeg -version` works; install via your package manager.
-- Torch/CUDA mismatch: install a CUDA-compatible PyTorch or use CPU wheels.
-- SQLite locks: prefer short-lived transactions and context managers; consider Postgres for concurrency.
-- OpenAI strict mode: enable strict compatibility for local providers that reject unknown fields.
-- Docker: inspect with `docker compose ps` and `docker compose logs -f`.
+| Issue | Solution |
+|-------|----------|
+| `Connection refused` | Server not running - check `uvicorn` or `docker compose ps` |
+| `401 Unauthorized` | API key mismatch - verify `.env` matches your `X-API-KEY` header |
+| `API key too short` | Key must be at least 16 characters |
+| `ffmpeg not found` | Install: `brew install ffmpeg` (macOS) or `apt install ffmpeg` (Linux) |
+| `ModuleNotFoundError` | Activate venv: `source .venv/bin/activate` |
+| Torch/CUDA mismatch | Install CUDA-compatible PyTorch or use CPU wheels |
+| SQLite locks | Use short-lived transactions; consider Postgres for concurrency |
+| Docker issues | Check `docker compose ps` and `docker compose logs -f` |
+
+Quick verify: `curl http://localhost:8000/health` (no auth needed)
 
 ## Contributing & Support
 
@@ -830,12 +876,26 @@ Some self-hosted OpenAI-compatible servers reject unknown fields (like `top_k`).
 
 </details>
 
--------------------
+## About
 
+tldw_server started as a tool to transcribe and summarize YouTube videos and has evolved into a comprehensive media analysis and knowledge management platform for researchers, students, and professionals.
+For extended background and vision, see `Docs/About.md`.
 
-### More Detailed Explanation & Background
+### Getting Help
+- API Documentation: `http://localhost:8000/docs`
+- GitHub Issues: [Report bugs or request features](https://github.com/rmusser01/tldw_server/issues)
+- Discussions: [Community forum](https://github.com/rmusser01/tldw_server/discussions)
+
+### Security Disclosures
+See `SECURITY.md` for reporting guidelines and disclosures.
+
+### Project Guidelines
+See [Project_Guidelines.md](Project_Guidelines.md) for development philosophy and contribution guidelines.
+
+## Appendix (Optional)
+
 <details>
-<summary>More Detailed Explanation & Background</summary>
+<summary>Background and reading list</summary>
 
 Optional background reading for deeper context; not required to use the project.
 
@@ -903,13 +963,8 @@ Optional background reading for deeper context; not required to use the project.
 
 </details>
 
-
-----------------------
-
-### Local Models I recommend
-
 <details>
-<summary>Local Models I Can Recommend</summary>
+<summary>Local model recommendations (opinionated)</summary>
 
 Personal recommendations; optional reading.
 
@@ -945,6 +1000,16 @@ None of these companies exist to provide AI services in 2024. They’re only doi
 
 </details>
 
+<details>
+<summary>Quotes</summary>
+
+- `I like the lies-to-children motif, because it underlies the way we run our society and resonates nicely with Discworld. Like the reason for Unseen being a storehouse of knowledge - you arrive knowing everything and leave realising that you know practically nothing, therefore all the knowledge you had must be stored in the university. But it's like that in "real Science", too. You arrive with your sparkling A-levels all agleam, and the first job of the tutors is to reveal that what you thought was true is only true for a given value of "truth". Most of us need just "enough" knowledge of the sciences, and it's delivered to us in metaphors and analogies that bite us in the bum if we think they're the same as the truth.`
+    * Terry Pratchett
+- `The first principle is that you must not fool yourself - and you are the easiest person to fool.`
+    * Richard Feynman
+
+</details>
+
 ---
 
 ## License
@@ -955,7 +1020,6 @@ GNU General Public License v3.0 - see `LICENSE` for details.
 
 ## Credits
 
-### <a name="credits"></a>Credits
 - [The original version of tldw by @the-crypt-keeper](https://github.com/the-crypt-keeper/tldw/tree/main/tldw-original-scripts)
 - [yt-dlp](https://github.com/yt-dlp/yt-dlp)
 - [ffmpeg](https://github.com/FFmpeg/FFmpeg)
@@ -966,34 +1030,3 @@ GNU General Public License v3.0 - see `LICENSE` for details.
 - [Llamafile](https://github.com/Mozilla-Ocho/llamafile) - For the local LLM inference engine
 - [Mikupad](https://github.com/lmg-anon/mikupad) - Because I'm not going to write a whole new frontend for non-chat writing.
 - The people who have helped me get to this point(SC & CS), and especially for those not around to see it(DT & CC).
-
----
-
-## About
-
-tldw_server started as a tool to transcribe and summarize YouTube videos but has evolved into a comprehensive media analysis and knowledge management platform. The goal is to help researchers, students, and professionals manage and analyze their media consumption effectively.
-
-Long-term vision: Building towards a personal AI research assistant inspired by "The Young Lady's Illustrated Primer" from Neal Stephenson's "The Diamond Age" - a tool that helps you learn and research at your own pace.
-
-### Getting Help
-- API Documentation: `http://localhost:8000/docs`
-- GitHub Issues: [Report bugs or request features](https://github.com/rmusser01/tldw_server/issues)
-- Discussions: [Community forum](https://github.com/rmusser01/tldw_server/discussions)
-
-
-### Security Disclosures
-See `SECURITY.md` for reporting guidelines and disclosures.
-
-
-### Project Guidelines
-See [Project_Guidelines.md](Project_Guidelines.md) for development philosophy and contribution guidelines.
-
-
----
-
-
-#### And because Who doesn't love a good quote or two? (Particularly relevant to this material/LLMs)
-- `I like the lies-to-children motif, because it underlies the way we run our society and resonates nicely with Discworld. Like the reason for Unseen being a storehouse of knowledge - you arrive knowing everything and leave realising that you know practically nothing, therefore all the knowledge you had must be stored in the university. But it's like that in "real Science", too. You arrive with your sparkling A-levels all agleam, and the first job of the tutors is to reveal that what you thought was true is only true for a given value of "truth". Most of us need just "enough" knowledge of the sciences, and it's delivered to us in metaphors and analogies that bite us in the bum if we think they're the same as the truth.`
-    * Terry Pratchett
-- `The first principle is that you must not fool yourself - and you are the easiest person to fool.`
-    * Richard Feynman

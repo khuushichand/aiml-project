@@ -4,7 +4,8 @@ import path from 'path'
 
 export default async function globalSetup() {
   // If a built chrome extension already exists, skip rebuilding.
-  const builtChromePath = path.resolve('build/chrome-mv3')
+  const projectRoot = path.resolve(__dirname, '..', '..', '..')
+  const builtChromePath = path.resolve(projectRoot, 'build/chrome-mv3')
   const forceBuildChrome =
     process.env.FORCE_BUILD_CHROME === '1' ||
     process.env.FORCE_BUILD_CHROME === 'true'
@@ -55,13 +56,15 @@ export default async function globalSetup() {
     const buildStamp = path.join(builtChromePath, 'manifest.json')
     const buildMtime = getFileMtime(buildStamp)
     const latestSourceMtime = Math.max(
-      getLatestMtime(path.resolve('src')),
-      getFileMtime(path.resolve('wxt.config.ts')),
-      getFileMtime(path.resolve('package.json')),
-      getFileMtime(path.resolve('tailwind.config.js')),
-      getFileMtime(path.resolve('tsconfig.json'))
+      getLatestMtime(path.resolve(projectRoot, 'src')),
+      getFileMtime(path.resolve(projectRoot, 'wxt.config.ts')),
+      getFileMtime(path.resolve(projectRoot, 'package.json')),
+      getFileMtime(path.resolve(projectRoot, 'tailwind.config.js')),
+      getFileMtime(path.resolve(projectRoot, 'tsconfig.json'))
     )
     if (buildMtime && latestSourceMtime <= buildMtime) {
+      // Still apply test-only host permissions if configured.
+      applyTestHostPermissions(projectRoot)
       return
     }
   }
@@ -69,14 +72,56 @@ export default async function globalSetup() {
   // Build the extension once before running tests
   // Prefer npm (bun may be unavailable in some environments)
   try {
-    execSync('npm run build:chrome', { stdio: 'inherit' })
+    execSync('npm run build:chrome', {
+      stdio: 'inherit',
+      cwd: projectRoot
+    })
   } catch {
     try {
       // Fallback: use wxt directly
-      execSync('cross-env TARGET=chrome wxt build', { stdio: 'inherit' })
+      execSync('cross-env TARGET=chrome wxt build', {
+        stdio: 'inherit',
+        cwd: projectRoot
+      })
     } catch {
       // Last resort: bun (if present)
-      execSync('bun run build:chrome', { stdio: 'inherit' })
+      execSync('bun run build:chrome', {
+        stdio: 'inherit',
+        cwd: projectRoot
+      })
+    }
+  }
+
+  applyTestHostPermissions(projectRoot)
+}
+
+function applyTestHostPermissions(projectRoot: string) {
+  const rawUrl = process.env.TLDW_E2E_SERVER_URL
+  if (!rawUrl) return
+  let originPattern = ''
+  try {
+    const url = new URL(rawUrl)
+    originPattern = `${url.origin}/*`
+  } catch {
+    return
+  }
+
+  const candidates = [
+    path.resolve(projectRoot, 'build/chrome-mv3/manifest.json'),
+    path.resolve(projectRoot, '.output/chrome-mv3/manifest.json')
+  ]
+  for (const manifestPath of candidates) {
+    if (!fs.existsSync(manifestPath)) continue
+    try {
+      const manifest = JSON.parse(fs.readFileSync(manifestPath, 'utf8'))
+      const hostPerms = new Set<string>(
+        Array.isArray(manifest.host_permissions) ? manifest.host_permissions : []
+      )
+      hostPerms.add(originPattern)
+      manifest.host_permissions = Array.from(hostPerms)
+      fs.writeFileSync(manifestPath, JSON.stringify(manifest))
+    } catch {
+      // ignore manifest patch failures
     }
   }
 }

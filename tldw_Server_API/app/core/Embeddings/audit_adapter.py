@@ -2,8 +2,9 @@
 Embeddings audit adapter
 
 Bridges legacy Embeddings audit calls to the unified audit service without
-requiring FastAPI dependency injection at call sites. Exposes small, sync-friendly
-wrappers that schedule async logging tasks on the running event loop.
+requiring FastAPI dependency injection at call sites. Exposes sync-friendly
+wrappers that execute audit logging on a dedicated background loop and block
+until completion to enforce mandatory auditing.
 """
 
 from __future__ import annotations
@@ -49,6 +50,7 @@ _SYNC_LOOP: Optional[asyncio.AbstractEventLoop] = None
 _SYNC_LOOP_THREAD: Optional[threading.Thread] = None
 _SYNC_LOOP_LOCK = threading.Lock()
 _SYNC_LOOP_READY = threading.Event()
+_MANDATORY_TIMEOUT_S = 5.0
 
 
 def _env_truthy(key: str) -> bool:
@@ -139,78 +141,54 @@ async def _emit(
     endpoint: Optional[str] = None,
     method: Optional[str] = None,
 ) -> None:
-    try:
-        svc = await _get_service_for_user(user_id)
-        ctx = AuditContext(
-            user_id=str(user_id) if user_id is not None else None,
-            ip_address=ip_address,
-            endpoint=endpoint,
-            method=method,
-        )
-        await svc.log_event(
-            event_type=event_type,
-            context=ctx,
-            action=action,
-            resource_type=resource_type,
-            resource_id=resource_id,
-            result=result,
-            metadata=metadata,
-        )
-        # In test environments, flush immediately to make events visible to queries
-        # without relying on background flush loops.
-        try:
-            if _in_test_mode():
-                await svc.flush()
-        except Exception:
-            pass
-    except Exception as e:
-        logger.warning(f"Embeddings audit emit failed: {e}")
+    svc = await _get_service_for_user(user_id)
+    ctx = AuditContext(
+        user_id=str(user_id) if user_id is not None else None,
+        ip_address=ip_address,
+        endpoint=endpoint,
+        method=method,
+    )
+    await svc.log_event(
+        event_type=event_type,
+        context=ctx,
+        action=action,
+        resource_type=resource_type,
+        resource_id=resource_id,
+        result=result,
+        metadata=metadata,
+    )
+    # Mandatory audit: flush immediately and surface failures.
+    await svc.flush(raise_on_failure=True)
 
 
 def _schedule(coro) -> None:
-    try:
-        loop = asyncio.get_running_loop()
-        loop.create_task(coro)
-        return
-    except RuntimeError:
-        pass
-
     loop = _ensure_sync_loop()
     if loop is None:
-        # No loop available; suppress "coroutine never awaited" warning and close
+        # No loop available; close coroutine and surface the failure.
         with warnings.catch_warnings():
             warnings.filterwarnings("ignore", message="coroutine.*was never awaited")
             try:
                 coro.close()  # type: ignore[attr-defined]
             except Exception:
                 pass
-        return
+        raise RuntimeError("Embeddings audit adapter unavailable: no event loop")
 
     try:
         fut = asyncio.run_coroutine_threadsafe(coro, loop)
-    except Exception:
+    except Exception as exc:
         with warnings.catch_warnings():
             warnings.filterwarnings("ignore", message="coroutine.*was never awaited")
             try:
                 coro.close()  # type: ignore[attr-defined]
             except Exception:
                 pass
-        return
+        raise RuntimeError("Embeddings audit adapter failed to schedule") from exc
 
-    def _log_failure(done_fut) -> None:
-        try:
-            exc = done_fut.exception()
-            if exc:
-                logger.warning(f"Embeddings audit sync task failed: {exc}")
-        except Exception:
-            pass
-
-    fut.add_done_callback(_log_failure)
-    if _in_test_mode():
-        try:
-            fut.result(timeout=5)
-        except Exception as e:
-            logger.warning(f"Embeddings audit sync task timed out: {e}")
+    try:
+        fut.result(timeout=_MANDATORY_TIMEOUT_S)
+    except Exception as exc:
+        logger.error(f"Embeddings audit sync task failed: {exc}")
+        raise
 
 
 def log_security_violation(
@@ -238,7 +216,7 @@ def log_memory_limit_exceeded(
     _schedule(_emit(None, UEvent.SYSTEM_ERROR, action="embeddings_memory_limit_exceeded", resource_type="embedding_model", resource_id=model_id, result="failure", metadata=meta))
 
 
-# Async variants for tests
+# Async variants (use when already in an async context)
 async def emit_security_violation_async(user_id: Optional[str], action: str, metadata: Optional[Dict[str, Any]] = None) -> None:
     await _emit(user_id, UEvent.SECURITY_VIOLATION, action=action, result="failure", metadata=metadata)
 

@@ -1205,6 +1205,72 @@ def migration_051_create_storage_quotas_table(conn: sqlite3.Connection) -> None:
     logger.info("Migration 051: Created storage_quotas table with indexes")
 
 
+def migration_052_create_org_team_role_permissions(conn: sqlite3.Connection) -> None:
+    """Create org/team role-to-permission mapping tables."""
+    logger.info("Migration 052: START org/team role permission tables")
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS org_role_permissions (
+            org_role TEXT NOT NULL,
+            permission_id INTEGER NOT NULL,
+            PRIMARY KEY (org_role, permission_id),
+            FOREIGN KEY (permission_id) REFERENCES permissions(id) ON DELETE CASCADE,
+            CHECK (org_role IN ('owner', 'admin', 'lead', 'member'))
+        )
+        """
+    )
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_org_role_permissions_permission_id "
+        "ON org_role_permissions(permission_id)"
+    )
+
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS team_role_permissions (
+            team_role TEXT NOT NULL,
+            permission_id INTEGER NOT NULL,
+            PRIMARY KEY (team_role, permission_id),
+            FOREIGN KEY (permission_id) REFERENCES permissions(id) ON DELETE CASCADE,
+            CHECK (team_role IN ('owner', 'admin', 'lead', 'member'))
+        )
+        """
+    )
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_team_role_permissions_permission_id "
+        "ON team_role_permissions(permission_id)"
+    )
+
+    def _seed(role_name: str, scoped_role: str) -> None:
+        conn.execute(
+            """
+            INSERT OR IGNORE INTO org_role_permissions (org_role, permission_id)
+            SELECT ?, rp.permission_id
+            FROM role_permissions rp
+            JOIN roles r ON r.id = rp.role_id
+            WHERE r.name = ?
+            """,
+            (scoped_role, role_name),
+        )
+        conn.execute(
+            """
+            INSERT OR IGNORE INTO team_role_permissions (team_role, permission_id)
+            SELECT ?, rp.permission_id
+            FROM role_permissions rp
+            JOIN roles r ON r.id = rp.role_id
+            WHERE r.name = ?
+            """,
+            (scoped_role, role_name),
+        )
+
+    _seed("admin", "owner")
+    _seed("admin", "admin")
+    _seed("reviewer", "lead")
+    _seed("user", "member")
+
+    conn.commit()
+    logger.info("Migration 052: Created org/team role permission tables and seeded defaults")
+
+
 def rollback_051_drop_storage_quotas_table(conn: sqlite3.Connection) -> None:
     """Rollback migration 051 by dropping storage_quotas table."""
     conn.execute("DROP TABLE IF EXISTS storage_quotas")
@@ -2613,6 +2679,11 @@ def get_authnz_migrations() -> List[Migration]:
             "Create storage_quotas table",
             migration_051_create_storage_quotas_table,
             rollback_051_drop_storage_quotas_table,
+        ),
+        Migration(
+            52,
+            "Create org/team role permission tables",
+            migration_052_create_org_team_role_permissions,
         ),
     ]
 

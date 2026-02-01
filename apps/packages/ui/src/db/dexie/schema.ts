@@ -202,6 +202,64 @@ export class PageAssistDexieDB extends Dexie {
       audiobookChapterAssets: 'id, projectId, chapterId, createdAt',
       ttsClips: 'id, createdAt, historyId, serverChatId, messageId, serverMessageId, provider'
     });
+
+    // Version 9: Prompt soft delete support with deletedAt field
+    this.version(9).stores({
+      chatHistories: 'id, title, is_rag, message_source, is_pinned, createdAt, doc_id, last_used_prompt, model_id, root_id, parent_conversation_id, server_chat_id',
+      messages: 'id, history_id, name, role, content, createdAt, messageType, modelName, clusterId, modelId, parent_message_id',
+      prompts: 'id, title, content, is_system, createdBy, createdAt, deletedAt',
+      webshares: 'id, title, url, api_url, share_id, createdAt',
+      sessionFiles: 'sessionId, retrievalEnabled, createdAt',
+      userSettings: 'id, user_id',
+      customModels: 'id, model_id, name, model_name, model_image, provider_id, lookup, model_type, db_type',
+      modelNickname: 'id, model_id, model_name, model_avatar',
+      processedMedia: 'id, url, createdAt',
+      folders: 'id, name, parent_id, deleted',
+      keywords: 'id, keyword, deleted',
+      folderKeywordLinks: '[folder_id+keyword_id], folder_id, keyword_id',
+      conversationKeywordLinks: '[conversation_id+keyword_id], conversation_id, keyword_id',
+      compareStates: 'history_id',
+      contentDrafts: 'id, batchId, status, mediaType, createdAt, updatedAt, expiresAt',
+      draftBatches: 'id, createdAt, updatedAt',
+      draftAssets: 'id, draftId, createdAt',
+      audiobookProjects: 'id, title, status, createdAt, updatedAt, lastOpenedAt',
+      audiobookChapterAssets: 'id, projectId, chapterId, createdAt',
+      ttsClips: 'id, createdAt, historyId, serverChatId, messageId, serverMessageId, provider'
+    });
+
+    // Version 10: Unified Prompt schema with server sync support
+    this.version(10).stores({
+      chatHistories: 'id, title, is_rag, message_source, is_pinned, createdAt, doc_id, last_used_prompt, model_id, root_id, parent_conversation_id, server_chat_id',
+      messages: 'id, history_id, name, role, content, createdAt, messageType, modelName, clusterId, modelId, parent_message_id',
+      prompts: 'id, title, content, is_system, createdBy, createdAt, deletedAt, serverId, studioProjectId, syncStatus, sourceSystem',
+      webshares: 'id, title, url, api_url, share_id, createdAt',
+      sessionFiles: 'sessionId, retrievalEnabled, createdAt',
+      userSettings: 'id, user_id',
+      customModels: 'id, model_id, name, model_name, model_image, provider_id, lookup, model_type, db_type',
+      modelNickname: 'id, model_id, model_name, model_avatar',
+      processedMedia: 'id, url, createdAt',
+      folders: 'id, name, parent_id, deleted',
+      keywords: 'id, keyword, deleted',
+      folderKeywordLinks: '[folder_id+keyword_id], folder_id, keyword_id',
+      conversationKeywordLinks: '[conversation_id+keyword_id], conversation_id, keyword_id',
+      compareStates: 'history_id',
+      contentDrafts: 'id, batchId, status, mediaType, createdAt, updatedAt, expiresAt',
+      draftBatches: 'id, createdAt, updatedAt',
+      draftAssets: 'id, draftId, createdAt',
+      audiobookProjects: 'id, title, status, createdAt, updatedAt, lastOpenedAt',
+      audiobookChapterAssets: 'id, projectId, chapterId, createdAt',
+      ttsClips: 'id, createdAt, historyId, serverChatId, messageId, serverMessageId, provider'
+    }).upgrade(tx => {
+      // Migrate existing prompts to set default sync fields
+      return tx.table('prompts').toCollection().modify(prompt => {
+        if (prompt.syncStatus === undefined) {
+          prompt.syncStatus = 'local';
+        }
+        if (prompt.sourceSystem === undefined) {
+          prompt.sourceSystem = 'workspace';
+        }
+      });
+    });
   }
 }
 

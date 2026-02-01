@@ -1,7 +1,7 @@
 /**
  * Common test helpers for E2E tests
  */
-import { type Page, expect } from "@playwright/test"
+import { type Page } from "@playwright/test"
 
 /**
  * Environment configuration for tests

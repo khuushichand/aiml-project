@@ -251,7 +251,7 @@ except Exception:  # pragma: no cover - keep unified path working when core modu
 @dataclass
 class UnifiedStreamingConfig(StreamingConfig):
     """Extended configuration for unified streaming."""
-    model: str = 'parakeet'  # 'parakeet', 'canary', or 'whisper'
+    model: str = 'parakeet'  # 'parakeet', 'canary', 'whisper', or 'qwen3-asr'
     model_variant: str = 'standard'  # For Parakeet: 'standard', 'onnx', 'mlx'
     language: Optional[str] = None  # Language code for transcription
     auto_detect_language: bool = False  # Auto-detect language
@@ -1850,6 +1850,228 @@ class WhisperStreamingTranscriber(BaseStreamingTranscriber):
             return ""
 
 
+class Qwen3ASRStreamingTranscriber(BaseStreamingTranscriber):
+    """
+    Qwen3-ASR streaming transcriber using vLLM HTTP backend.
+
+    Buffers audio chunks and sends them to an external vLLM server
+    for transcription when chunk_duration is reached. Supports 30 languages
+    with automatic language detection.
+    """
+
+    def __init__(self, config: UnifiedStreamingConfig):
+        """Initialize Qwen3-ASR streaming transcriber."""
+        super().__init__(config)
+        self._vllm_base_url: str = ""
+        self._httpx_client = None
+        self._accumulated_audio: List[np.ndarray] = []
+
+    def initialize(self):
+        """Initialize the Qwen3-ASR transcriber with vLLM backend."""
+        logger.info("Qwen3ASRStreamingTranscriber.initialize() called")
+
+        # Get vLLM base URL from STT config
+        try:
+            from tldw_Server_API.app.core.config import get_stt_config
+            stt_cfg = get_stt_config() or {}
+        except Exception:
+            stt_cfg = {}
+
+        self._vllm_base_url = str(stt_cfg.get("qwen3_asr_vllm_base_url", "")).strip()
+
+        if not self._vllm_base_url:
+            raise RuntimeError(
+                "Qwen3-ASR streaming requires qwen3_asr_vllm_base_url to be configured. "
+                "Set [STT-Settings].qwen3_asr_vllm_base_url in config.txt."
+            )
+
+        # Verify httpx is available
+        try:
+            import httpx
+            self._httpx = httpx
+        except ImportError:
+            raise RuntimeError(
+                "httpx is required for Qwen3-ASR streaming. Install with: pip install httpx"
+            )
+
+        logger.info(f"Qwen3-ASR streaming initialized with vLLM at {self._vllm_base_url}")
+        self.model = "qwen3-asr"  # Placeholder to indicate model is ready
+
+    def reset(self):
+        """Reset transcriber state and clear accumulated audio."""
+        super().reset()
+        self._accumulated_audio.clear()
+
+    def cleanup(self):
+        """Clean up resources."""
+        self._accumulated_audio.clear()
+        self._httpx_client = None
+        super().cleanup()
+
+    async def process_audio_chunk(self, audio_data: bytes) -> Optional[Dict[str, Any]]:
+        """
+        Process audio chunk with Qwen3-ASR via vLLM HTTP.
+
+        Buffers audio locally and sends to vLLM when chunk_duration is reached.
+
+        Args:
+            audio_data: Raw audio bytes (float32)
+
+        Returns:
+            Transcription result dict or None if not enough audio yet
+        """
+        # Convert bytes to numpy array
+        audio_np = np.frombuffer(audio_data, dtype=np.float32)
+
+        # Add to our buffer and accumulated audio
+        self.buffer.add(audio_np)
+        self._accumulated_audio.append(audio_np.copy())
+
+        current_time = time.time()
+        buffer_duration = self.buffer.get_duration()
+
+        # Check for partial results (send accumulated audio for transcription)
+        if (
+            self.config.enable_partial
+            and current_time - self.last_partial_time > self.config.partial_interval
+            and buffer_duration >= self.config.min_partial_duration
+        ):
+            # Combine accumulated audio
+            if self._accumulated_audio:
+                combined_audio = np.concatenate(self._accumulated_audio)
+                text = await self._transcribe_via_vllm(combined_audio)
+
+                self.last_partial_time = current_time
+
+                if text:
+                    metadata = self._prepare_partial_metadata(buffer_duration)
+                    result = {
+                        "type": "partial",
+                        "text": text,
+                        "timestamp": current_time,
+                        "is_final": False,
+                        "model": "qwen3-asr",
+                    }
+                    result.update(metadata)
+                    return result
+
+        # Check if we have enough audio for a final chunk
+        if buffer_duration >= self.config.chunk_duration:
+            # Get chunk from buffer
+            audio_chunk = self.buffer.get_audio(self.config.chunk_duration)
+
+            if audio_chunk is not None:
+                # Transcribe using vLLM
+                text = await self._transcribe_via_vllm(audio_chunk)
+
+                # Consume the buffer, keeping overlap
+                self.buffer.consume(
+                    self.config.chunk_duration,
+                    self.config.overlap_duration,
+                )
+
+                # Clear accumulated audio after successful final transcription
+                # (keep overlap worth of audio for context)
+                overlap_samples = int(self.config.overlap_duration * self.config.sample_rate)
+                if overlap_samples > 0 and len(audio_chunk) > overlap_samples:
+                    self._accumulated_audio = [audio_chunk[-overlap_samples:].copy()]
+                else:
+                    self._accumulated_audio.clear()
+
+                if text:
+                    self.transcription_history.append(text)
+                    chunk_duration = float(len(audio_chunk)) / float(self.config.sample_rate or 1)
+                    metadata = self._prepare_final_metadata(chunk_duration)
+                    result = {
+                        "type": "final",
+                        "text": text,
+                        "timestamp": current_time,
+                        "is_final": True,
+                        "model": "qwen3-asr",
+                        "language": self.config.language if self.config.language else "auto",
+                    }
+                    result.update(metadata)
+                    result["_audio_chunk"] = np.array(audio_chunk, copy=True)
+                    return result
+
+        return None
+
+    async def _transcribe_via_vllm(self, audio_np: np.ndarray) -> str:
+        """
+        Transcribe audio by sending to vLLM HTTP endpoint.
+
+        Args:
+            audio_np: Audio data as numpy array (float32)
+
+        Returns:
+            Transcribed text
+        """
+        if not self._vllm_base_url:
+            logger.error("vLLM base URL not configured")
+            return ""
+
+        try:
+            import tempfile
+            import asyncio
+
+            # Write audio to temporary WAV file for HTTP upload
+            with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as tmp:
+                tmp_path = Path(tmp.name)
+
+            # Write WAV using soundfile or fallback
+            try:
+                import soundfile as sf
+                sf.write(str(tmp_path), audio_np, self.config.sample_rate)
+            except Exception:
+                # Fallback to wave module
+                import wave
+                pcm16 = np.clip(audio_np, -1.0, 1.0)
+                pcm16 = (pcm16 * 32767.0).astype(np.int16)
+                with wave.open(str(tmp_path), 'wb') as wf:
+                    wf.setnchannels(1)
+                    wf.setsampwidth(2)
+                    wf.setframerate(self.config.sample_rate)
+                    wf.writeframes(pcm16.tobytes())
+
+            url = f"{self._vllm_base_url.rstrip('/')}/v1/audio/transcriptions"
+
+            # Use asyncio.to_thread for sync httpx client to avoid blocking
+            def _do_http_request():
+                with open(tmp_path, "rb") as f:
+                    files = {"file": (tmp_path.name, f, "audio/wav")}
+                    data = {"model": "qwen3-asr"}
+                    if self.config.language:
+                        data["language"] = self.config.language
+
+                    with self._httpx.Client(timeout=60.0) as client:
+                        response = client.post(url, files=files, data=data)
+                        response.raise_for_status()
+                        return response.json()
+
+            result = await asyncio.to_thread(_do_http_request)
+
+            # Clean up temp file
+            try:
+                tmp_path.unlink(missing_ok=True)
+            except Exception:
+                pass
+
+            text = str(result.get("text", "")).strip()
+
+            # Apply custom vocabulary post-processing if enabled
+            try:
+                from .Audio_Custom_Vocabulary import postprocess_text_if_enabled
+                text = postprocess_text_if_enabled(text)
+            except Exception:
+                pass
+
+            return text
+
+        except Exception as exc:
+            logger.error(f"Qwen3-ASR vLLM transcription failed: {exc}")
+            return ""
+
+
 class UnifiedStreamingTranscriber:
     """
     Factory and unified interface for streaming transcribers.
@@ -1874,7 +2096,9 @@ class UnifiedStreamingTranscriber:
             self.transcriber = CanaryStreamingTranscriber(self.config)
         elif model_lower == 'whisper':
             self.transcriber = WhisperStreamingTranscriber(self.config)
-        else:  # Parakeet
+        elif model_lower in ('qwen3-asr', 'qwen3_asr', 'qwen3asr'):
+            self.transcriber = Qwen3ASRStreamingTranscriber(self.config)
+        else:  # Parakeet (default)
             # Prefer the core adapter when available; fall back to legacy transcriber
             if _ParakeetCoreAdapter is not None:
                 self.transcriber = _ParakeetCoreAdapter(self.config)  # type: ignore
@@ -1914,6 +2138,7 @@ __all__ = [
     'WhisperStreamingTranscriber',
     'CanaryStreamingTranscriber',
     'ParakeetStreamingTranscriber',
+    'Qwen3ASRStreamingTranscriber',
     'UnifiedStreamingTranscriber',
     'SileroTurnDetector',
 ]
@@ -1942,7 +2167,7 @@ async def handle_unified_websocket(
     on_heartbeat: Optional[Callable[[], Awaitable[None]]] = None,
 ):
     """
-    Handle a WebSocket connection to perform unified real-time transcription across Parakeet, Canary, and Whisper models.
+    Handle a WebSocket connection to perform unified real-time transcription across Parakeet, Canary, Whisper, and Qwen3-ASR models.
 
     This handler waits for an optional client configuration message, initializes a model-specific transcriber (with runtime fallback logic), and processes incoming base64-encoded audio messages into partial and final transcription results sent to the client as JSON frames. It optionally integrates streaming diarization and live insights, emits structured status/warning/error frames, supports a commit/reset/stop control messages, and ensures proper cleanup of transcriber, diarizer, and insights resources on exit.
 
@@ -2617,6 +2842,7 @@ __all__ = [
     'ParakeetStreamingTranscriber',
     'CanaryStreamingTranscriber',
     'WhisperStreamingTranscriber',
+    'Qwen3ASRStreamingTranscriber',
     'UnifiedStreamingTranscriber',
     'SileroTurnDetector',
     'handle_unified_websocket'

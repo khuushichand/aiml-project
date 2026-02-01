@@ -17,7 +17,7 @@ https://www.dogesec.com/blog/full_text_rss_atom_blog_feeds/
 https://engineering.fyi/?utm_source=www.hivefive.community&utm_medium=newsletter&utm_campaign=hive-five-237-different-kinds-of-smart
 https://medium.engineering/engineering-stories-behind-the-medium-daily-digest-algorithm-part-2-c977ad0b134f?gi=7b2dc9e4c917
 https://github.com/volotat/Anagnorisis
-
+https://theneuralmaze.substack.com/p/how-to-build-production-ready-recommender
 https://arxiv.org/abs/2411.19352
 <https://buttondown.com/blog/ringo-email-as-an-ai-interface>
 <https://www.gnoosic.com/faves.php>

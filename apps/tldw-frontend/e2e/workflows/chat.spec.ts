@@ -11,7 +11,7 @@
  */
 import { test, expect, skipIfServerUnavailable, skipIfNoModels, assertNoCriticalErrors } from "../utils/fixtures"
 import { ChatPage } from "../utils/page-objects"
-import { seedAuth, TEST_CONFIG, generateTestId, waitForConnection } from "../utils/helpers"
+import { seedAuth, generateTestId } from "../utils/helpers"
 
 test.describe("Chat Workflow", () => {
   test.beforeEach(async ({ page }) => {
@@ -147,7 +147,7 @@ test.describe("Chat Workflow", () => {
       await chatPage.waitForResponse()
 
       // Check sidebar for conversation
-      const conversations = await chatPage.getConversationHistory()
+      const _conversations = await chatPage.getConversationHistory()
       // Conversation may appear in sidebar
       // Note: This depends on UI implementation
 
@@ -227,7 +227,7 @@ test.describe("Chat Workflow", () => {
 
     test("should display user-friendly error messages", async ({
       authedPage,
-      diagnostics
+      diagnostics: _diagnostics
     }) => {
       // Navigate to chat with intentionally bad config to trigger error
       await authedPage.addInitScript(() => {
@@ -245,7 +245,7 @@ test.describe("Chat Workflow", () => {
       await authedPage.goto("/chat", { waitUntil: "domcontentloaded" })
 
       // Wait for error state
-      const errorState = authedPage.locator(
+      const _errorState = authedPage.locator(
         ".connection-error, .error-boundary, [data-testid='connection-error']"
       )
 
@@ -303,7 +303,7 @@ test.describe("Chat Workflow", () => {
       await chatPage.waitForStreamingComplete()
 
       // Check for code block rendering
-      const hasCodeBlock = await chatPage.hasCodeBlock()
+      const _hasCodeBlock = await chatPage.hasCodeBlock()
       // Note: This depends on LLM response actually including code
 
       await assertNoCriticalErrors(diagnostics)
@@ -328,7 +328,7 @@ test.describe("Chat Workflow", () => {
       await chatPage.waitForStreamingComplete()
 
       // Check for markdown rendering
-      const hasMarkdown = await chatPage.hasRenderedMarkdown()
+      const _hasMarkdown = await chatPage.hasRenderedMarkdown()
       // Note: This depends on LLM response
 
       await assertNoCriticalErrors(diagnostics)
@@ -357,7 +357,7 @@ test.describe("Chat Workflow", () => {
       if ((await copyButton.count()) > 0) {
         await copyButton.last().click()
         // Verify copy feedback (toast, button state change, etc.)
-        const copyFeedback = authedPage.locator(
+        const _copyFeedback = authedPage.locator(
           ".ant-message-success, [data-copied='true'], .copy-success"
         )
         // Copy feedback is optional

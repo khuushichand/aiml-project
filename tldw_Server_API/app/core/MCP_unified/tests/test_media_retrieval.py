@@ -264,6 +264,7 @@ def test_media_access_missing_owner_fails_closed_multi_user(monkeypatch):
     from tldw_Server_API.app.core.AuthNZ.settings import reset_settings
 
     monkeypatch.setenv("AUTH_MODE", "multi_user")
+    monkeypatch.setenv("JWT_SECRET_KEY", "x" * 64)
     reset_settings()
     try:
         mod = MediaModule(ModuleConfig(name="media"))
@@ -283,6 +284,7 @@ def test_media_access_lookup_error_fails_closed_multi_user(monkeypatch):
     from tldw_Server_API.app.core.AuthNZ.settings import reset_settings
 
     monkeypatch.setenv("AUTH_MODE", "multi_user")
+    monkeypatch.setenv("JWT_SECRET_KEY", "x" * 64)
     reset_settings()
     try:
         mod = MediaModule(ModuleConfig(name="media"))

@@ -10,7 +10,7 @@
  */
 import { test, expect, skipIfServerUnavailable, assertNoCriticalErrors } from "../utils/fixtures"
 import { SearchPage } from "../utils/page-objects"
-import { seedAuth, TEST_CONFIG, generateTestId, waitForConnection } from "../utils/helpers"
+import { seedAuth, generateTestId, waitForConnection } from "../utils/helpers"
 
 test.describe("Search Workflow", () => {
   test.beforeEach(async ({ page }) => {
@@ -46,7 +46,7 @@ test.describe("Search Workflow", () => {
       await expect(input).toBeVisible()
 
       // Search button may also be present
-      const searchBtn = authedPage.getByRole("button", { name: /search/i })
+      const _searchBtn = authedPage.getByRole("button", { name: /search/i })
       // Button is optional if Enter key works
 
       await assertNoCriticalErrors(diagnostics)
@@ -72,7 +72,7 @@ test.describe("Search Workflow", () => {
       await searchPage.waitForResults()
 
       // Verify search was performed (results or empty state shown)
-      const hasResults = !(await searchPage.hasNoResults())
+      const _hasResults = !(await searchPage.hasNoResults())
 
       await assertNoCriticalErrors(diagnostics)
     })
@@ -117,7 +117,7 @@ test.describe("Search Workflow", () => {
       await searchPage.waitForResults()
 
       // Check for highlighted text
-      const highlights = await searchPage.getHighlightedText()
+      const _highlights = await searchPage.getHighlightedText()
       // Highlighting is optional feature
 
       await assertNoCriticalErrors(diagnostics)
@@ -165,7 +165,7 @@ test.describe("Search Workflow", () => {
       await searchPage.search(uniqueQuery)
       await searchPage.waitForResults()
 
-      const message = await searchPage.getNoResultsMessage()
+      const _message = await searchPage.getNoResultsMessage()
       // Message content varies by implementation
 
       await assertNoCriticalErrors(diagnostics)
@@ -182,7 +182,7 @@ test.describe("Search Workflow", () => {
       await searchPage.waitForReady()
 
       // Look for filter elements
-      const filters = authedPage.locator(
+      const _filters = authedPage.locator(
         "[data-testid='search-filters'], .search-filters, .filter-panel"
       )
 
@@ -383,7 +383,7 @@ test.describe("Search Workflow", () => {
       await searchPage.waitForReady()
 
       // Check search mode
-      const mode = await searchPage.getSearchMode()
+      const _mode = await searchPage.getSearchMode()
       // Mode may be unknown if not explicitly shown
 
       await assertNoCriticalErrors(diagnostics)
@@ -408,7 +408,7 @@ test.describe("Search Workflow", () => {
       await input.press("Enter")
 
       // Look for loading indicator
-      const loading = authedPage.locator(
+      const _loading = authedPage.locator(
         ".loading, .searching, [data-loading='true'], .ant-spin"
       )
 
@@ -470,7 +470,7 @@ test.describe("Search Workflow", () => {
       await waitForConnection(authedPage)
 
       // Look for knowledge content
-      const knowledgeContainer = authedPage.locator(
+      const _knowledgeContainer = authedPage.locator(
         "[data-testid='knowledge-container'], .knowledge-page, .knowledge-base"
       )
 
@@ -493,7 +493,7 @@ test.describe("Search Workflow", () => {
       await input.fill("test")
 
       // Look for suggestions dropdown
-      const suggestions = authedPage.locator(
+      const _suggestions = authedPage.locator(
         "[data-testid='search-suggestions'], .autocomplete-dropdown, .suggestions"
       )
 
@@ -515,7 +515,7 @@ test.describe("Search Workflow", () => {
       await searchPage.waitForReady()
 
       // Look for recent searches
-      const recentSearches = authedPage.locator(
+      const _recentSearches = authedPage.locator(
         "[data-testid='recent-searches'], .recent-searches, .search-history"
       )
 

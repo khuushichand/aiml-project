@@ -62,6 +62,15 @@ For comprehensive documentation, see:
 - [RAG API Consumer Guide](RAG-API-Guide.md) - Complete API reference with examples
 - [RAG Developer Guide](../Development/RAG-Developer-Guide.md) - Architecture and implementation details
 
+#### Feedback - `/api/v1/feedback` and `/api/v1/rag/feedback/implicit`
+
+Explicit feedback for chat/RAG and implicit feedback signals from the WebUI.
+
+- `POST /api/v1/feedback/explicit` - explicit feedback (helpful/relevance/report)
+- `POST /api/v1/rag/feedback/implicit` - implicit events (click/expand/copy/dwell)
+
+See: [Feedback API](Feedback_API.md)
+
 #### Media Ingestion - `/api/v1/media`
 
 - `POST /api/v1/media/add` - ingest and persist media (synchronous)
@@ -99,3 +108,96 @@ Collections Feeds wraps Watchlists sources/jobs to ingest RSS/Atom into Collecti
 - `DELETE /api/v1/collections/feeds/{feed_id}` - delete a feed subscription
 
 See: [Collections Feeds API](Collections_Feeds_API.md)
+
+#### Items - `/api/v1/items`
+
+Unified list across collections (reading list, watchlists, feeds) and Media DB fallback.
+
+- `GET /api/v1/items` - list/search items
+- `GET /api/v1/items/{item_id}` - item detail
+- `POST /api/v1/items/bulk` - bulk update status/tags/favorite/delete
+
+See: [Items API](Items_API.md)
+
+#### Notes Graph - `/api/v1/notes`
+
+Graph view over notes/tags/sources (stub responses for graph fetches).
+
+- `GET /api/v1/notes/graph` - graph query
+- `GET /api/v1/notes/{note_id}/neighbors` - neighbors
+- `POST /api/v1/notes/{note_id}/links` - create manual link
+- `DELETE /api/v1/notes/links/{edge_id}` - delete manual link
+
+See: [Notes Graph API](Notes_Graph_API.md)
+
+#### Data Tables - `/api/v1/data-tables`
+
+Data Tables provide async LLM-generated tables with export support.
+
+- `POST /api/v1/data-tables/generate` - submit a generation job
+- `GET /api/v1/data-tables` - list tables
+- `GET /api/v1/data-tables/{table_uuid}` - detail (columns/rows/sources)
+- `GET /api/v1/data-tables/{table_uuid}/export` - export CSV/JSON/XLSX
+- `GET /api/v1/data-tables/jobs/{job_id}` - job status
+
+See: [Data Tables API](Data_Tables_API.md)
+
+#### File Artifacts - `/api/v1/files`
+
+Create structured files (tables, calendars, images) with optional server-side exports.
+
+- `POST /api/v1/files/create` - create an artifact
+- `GET /api/v1/files/{file_id}` - artifact metadata
+- `GET /api/v1/files/{file_id}/export?format=...` - one-time download
+
+See: [File Artifacts API](File_Artifacts_API.md)
+
+#### Storage - `/api/v1/storage`
+
+Manage generated files, folders, trash/restore, and quotas.
+
+- `GET /api/v1/storage/files` - list files
+- `GET /api/v1/storage/files/{file_id}/download` - download
+- `GET /api/v1/storage/usage` - quota/usage summary
+
+See: [Storage API](Storage_API_Documentation.md)
+
+#### Sync - `/api/v1/sync`
+
+Change-log based sync between clients and the server.
+
+- `POST /api/v1/sync/send` - send client changes
+- `GET /api/v1/sync/get` - fetch server changes
+
+See: [Sync API](Sync_API.md)
+
+#### Slides - `/api/v1/slides`
+
+Create, generate, version, and export slide decks.
+
+- `POST /api/v1/slides/generate` - generate from prompt/source
+- `GET /api/v1/slides/presentations` - list presentations
+- `GET /api/v1/slides/presentations/{id}/export` - export (zip/pdf/md/json)
+
+See: [Slides API](../API/Slides.md)
+
+#### Voice Assistant - `/api/v1/voice`
+
+Voice commands and real-time sessions (REST + WebSocket).
+
+- `POST /api/v1/voice/command` - process a text command
+- `WS /api/v1/voice/assistant` - streaming voice assistant
+
+See: [Voice Assistant API](../API/Voice_Assistant.md)
+
+#### Quizzes - `/api/v1/quizzes`
+
+Quizzes, questions, attempts, and generation from media.
+
+See: [Quizzes API](Quizzes_API.md)
+
+#### Writing Playground - `/api/v1/writing`
+
+Sessions, templates, themes, tokenization, and wordclouds for writing tools.
+
+See: [Writing API](Writing_API.md)

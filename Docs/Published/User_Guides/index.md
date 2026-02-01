@@ -27,34 +27,62 @@ python -m uvicorn tldw_Server_API.app.main:app --reload
 
 ## Start Here
 
-- Installation & Setup: Installation-Setup-Guide.md
-- Authentication: Authentication_Setup.md
-- Using the app (WebUI + API basics): User_Guide.md
+- [Installation & Setup](Installation-Setup-Guide.md)
+- [Authentication Setup](Authentication_Setup.md)
+- [User Guide](User_Guide.md) - Using the app (WebUI + API basics)
+- [CLI Reference](CLI_Reference.md)
 
-## Core Guides
+## Content & Media
 
-- RAG Deployment: RAG_Deployment_Guide.md
-- RAG Production Configuration: RAG_Production_Configuration_Guide.md
-- Evaluations (End-User): Evaluations_User_Guide.md
-- Evaluations (Deployment): Evaluations_Deployment_Guide.md
-- Evaluations (Production): Evaluations_Production_Deployment_Guide.md
-- Chunking Templates: Chunking_Templates_User_Guide.md
-- Web Scraping & Ingestion: Web_Scraping_Ingestion_Guide.md
-- Chatbooks (export/import): Chatbook_User_Guide.md
-- Bring Your Own Keys (BYOK): BYOK_User_Guide.md
+- [Media→Embeddings→RAG→Evals Workflow](Media_to_RAG_Evals_Workflow.md)
+- [Web Scraping & Ingestion](Web_Scraping_Ingestion_Guide.md)
+- [EPUB Reader Guide](EPUB_Reader_Guide.md)
+- [Chatbook User Guide](Chatbook_User_Guide.md) - Export/import content
+- [Chatbook Tools Getting Started](Chatbook_Tools_Getting_Started.md)
+- [Chunking Templates User Guide](Chunking_Templates_User_Guide.md)
+- [Templated Chunking HowTo](Templated_Chunking_Incoming_Documents_HowTo.md)
 
-## Organizations & Collaboration
+## RAG & Evaluations
 
-- Organizations and Sharing: Organizations_and_Sharing.md - Joining orgs, content visibility, sharing
-- Organization Administration: Organization_Administration.md - Managing orgs, teams, billing
+- [RAG Deployment Guide](RAG_Deployment_Guide.md)
+- [RAG Production Configuration](RAG_Production_Configuration_Guide.md)
+- [Evaluations User Guide](Evaluations_User_Guide.md)
+- [Evaluations Deployment Guide](Evaluations_Deployment_Guide.md)
+- [Evaluations End User Guide](Evaluations_End_User_Guide.md)
+- [Evaluations Production Deployment](Evaluations_Production_Deployment_Guide.md)
 
-## Operations & Admin
+## Chat & AI
 
-- Multi-User Deployment: Multi-User_Deployment_Guide.md
-- Production Hardening Checklist: Production_Hardening_Checklist.md
-- Backups with Litestream (SQLite): Backups_Using_Litestream.md
-- CLI Reference: CLI_Reference.md
-- Prompt Engineering Notes: Prompt_Engineering_Notes.md
-- Local LLM Setup: Setting_up_a_local_LLM.md
+- [Chat Pages](Chat_Pages.md)
+- [Setting up a local LLM](Setting_up_a_local_LLM.md)
+- [Prompt Engineering Notes](Prompt_Engineering_Notes.md)
+- [Context MCP Search](context_mcp_search.md)
+
+## Audio & TTS
+
+- [TTS Getting Started](TTS_Getting_Started.md) - Text-to-speech setup and usage
+
+## Organizations & Admin
+
+- [Organizations and Sharing](Organizations_and_Sharing.md) - Joining orgs, content visibility, sharing
+- [Organization Administration](Organization_Administration.md) - Managing orgs, teams, billing
+- [Multi-User Deployment Guide](Multi-User_Deployment_Guide.md)
+- [Production Hardening Checklist](Production_Hardening_Checklist.md)
+- [Usage Module](Usage_Module.md)
+
+## Keys & Backups
+
+- [BYOK User Guide](BYOK_User_Guide.md) - Bring Your Own Keys
+- [Backups with Litestream](Backups_Using_Litestream.md) - SQLite backup strategy
+
+## Examples & Tutorials
+
+- [Workflows Examples](Workflows_Examples.md)
+- [Project2025 RAG Guide](Project2025-RAG-Guide.md)
+- [Kanban Board Guide](Kanban_Board_Guide.md)
+- [Setup Supertonic](Setup-Supertonic.md)
+- [Setup Supertonic 2](Setup-Supertonic2.md)
+
+---
 
 Tip: Use `/api/v1/config/quickstart` to reach the configured UI/docs target. The OpenAPI docs at `/docs` include an Authorize button that supports both auth modes: use `X-API-KEY` for single-user or `Bearer` JWT for multi-user.

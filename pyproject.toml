@@ -10,7 +10,7 @@ build-backend = "setuptools.build_meta"
 ###########################
 [project]
 name = "tldw-server"
-version = "0.1.18"
+version = "0.1.19"
 description = "A comprehensive research assistant and media analysis platform - Too Long; Didn't Watch Server"
 requires-python = ">=3.10"
 readme = "README.md"
@@ -89,6 +89,7 @@ dependencies = [
 
   # Security
   "cryptography>=41.0.0",
+  "regex>=2024.0.0",
   "keyring>=24.0.0",
   "puremagic>=1.15",
   "pycryptodomex>=3.18.0",

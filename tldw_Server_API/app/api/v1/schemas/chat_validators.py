@@ -143,12 +143,32 @@ def validate_character_id(character_id: Optional[str]) -> Optional[str]:
     return character_id
 
 
-def validate_tool_definitions(tools: Optional[list]) -> Optional[list]:
+def _is_gemini_native_tool(tool: dict) -> bool:
+    if not isinstance(tool, dict):
+        return False
+    if "function_declarations" in tool or "functionDeclarations" in tool:
+        return True
+    tool_type = str(tool.get("type") or "").strip().lower()
+    return tool_type in {"gemini_native", "gemini-native", "gemini"}
+
+
+def _validate_gemini_native_tool(tool: dict, idx: int) -> None:
+    decls = tool.get("function_declarations")
+    if decls is None:
+        decls = tool.get("functionDeclarations")
+    if decls is None:
+        raise ValueError(f"Tool at index {idx} missing 'function_declarations' field")
+    if not isinstance(decls, list):
+        raise ValueError(f"Tool at index {idx} function_declarations must be a list")
+
+
+def validate_tool_definitions(tools: Optional[list], provider: Optional[str] = None) -> Optional[list]:
     """
     Validate tool definitions for function calling.
 
     Args:
         tools: List of tool definitions
+        provider: Optional provider name to allow provider-specific tool shapes
 
     Returns:
         Validated tools or None
@@ -165,9 +185,21 @@ def validate_tool_definitions(tools: Optional[list]) -> Optional[list]:
     if len(tools) > 128:
         raise ValueError(f"Too many tools defined (max 128, got {len(tools)})")
 
+    provider_key = (provider or "").strip().lower()
+
     for idx, tool in enumerate(tools):
         if not isinstance(tool, dict):
             raise ValueError(f"Tool at index {idx} must be a dictionary")
+
+        if provider_key == "google" and _is_gemini_native_tool(tool):
+            _validate_gemini_native_tool(tool, idx)
+            tool_json = json.dumps(tool)
+            if len(tool_json) > MAX_TOOL_DEFINITION_SIZE:
+                raise ValueError(
+                    f"Tool at index {idx} definition too large "
+                    f"(max {MAX_TOOL_DEFINITION_SIZE} chars, got {len(tool_json)})"
+                )
+            continue
 
         # Check required fields
         if 'type' not in tool:

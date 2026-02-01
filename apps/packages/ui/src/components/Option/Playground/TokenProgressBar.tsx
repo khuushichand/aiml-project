@@ -82,7 +82,7 @@ export const TokenProgressBar: React.FC<TokenProgressBarProps> = ({
             />
           </div>
           <span className={`text-xs sm:text-[10px] font-medium ${textColor}`}>
-            {percentage}%
+            {t("playground:tokens.memoryUsage", "Memory: {{percentage}}% full", { percentage })}
           </span>
         </div>
       </Tooltip>

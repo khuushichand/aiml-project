@@ -3,9 +3,11 @@ import {
   BookMarked,
   BookOpen,
   BookText,
+  Bot,
   ClipboardList,
   CogIcon,
   CombineIcon,
+  FileSearch,
   FileText,
   FlaskConical,
   Gauge,
@@ -106,6 +108,13 @@ export const HEADER_SHORTCUT_GROUPS: HeaderShortcutGroup[] = [
         icon: BookText,
         labelKey: "option:header.media",
         labelDefault: "Media"
+      },
+      {
+        id: "document-workspace",
+        to: "/document-workspace",
+        icon: FileSearch,
+        labelKey: "option:header.documentWorkspace",
+        labelDefault: "Document Workspace"
       },
       {
         id: "multi-item-review",
@@ -219,19 +228,20 @@ export const HEADER_SHORTCUT_GROUPS: HeaderShortcutGroup[] = [
         labelKey: "option:header.dataTables",
         labelDefault: "Data Tables"
       },
-      {
-        id: "prompt-studio",
-        to: "/prompt-studio",
-        icon: NotebookPen,
-        labelKey: "option:header.modePromptStudio",
-        labelDefault: "Prompt Studio"
-      },
+      // Prompt Studio is now unified with Prompts (/prompts)
       {
         id: "audiobook-studio",
         to: "/audiobook-studio",
         icon: Headphones,
         labelKey: "option:header.audiobookStudio",
         labelDefault: "Audiobook Studio"
+      },
+      {
+        id: "acp-playground",
+        to: "/acp-playground",
+        icon: Bot,
+        labelKey: "option:header.acpPlayground",
+        labelDefault: "ACP Playground"
       }
     ]
   },

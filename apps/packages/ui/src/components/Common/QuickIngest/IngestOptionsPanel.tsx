@@ -12,6 +12,12 @@ import {
 } from "antd"
 import type { TFunction } from "i18next"
 import { AlertTriangle } from "lucide-react"
+import { useQuery } from "@tanstack/react-query"
+
+import {
+  listChunkingTemplates,
+  type ChunkingTemplateListResponse
+} from "@/services/chunking"
 
 type CommonOptions = {
   perform_analysis: boolean
@@ -76,6 +82,11 @@ type IngestOptionsPanelProps = {
     | "unknown"
   checkOnce?: () => Promise<void> | void
   onClose: () => void
+  // Chunking template props (optional for backwards compatibility)
+  chunkingTemplateName?: string
+  setChunkingTemplateName?: (value: string | undefined) => void
+  autoApplyTemplate?: boolean
+  setAutoApplyTemplate?: (value: boolean) => void
 }
 
 export const IngestOptionsPanel: React.FC<IngestOptionsPanelProps> = ({
@@ -113,7 +124,11 @@ export const IngestOptionsPanel: React.FC<IngestOptionsPanelProps> = ({
   missingFileCount,
   ingestConnectionStatus,
   checkOnce,
-  onClose
+  onClose,
+  chunkingTemplateName,
+  setChunkingTemplateName,
+  autoApplyTemplate,
+  setAutoApplyTemplate
 }) => {
   const done = doneCount || 0
   const total = totalCount || 0
@@ -263,6 +278,69 @@ export const IngestOptionsPanel: React.FC<IngestOptionsPanelProps> = ({
     return options
   }, [transcriptionModelOptions, transcriptionModelValue])
   const hasTranscriptionItems = hasAudioItems || hasVideoItems
+
+  // Fetch chunking templates when chunking is enabled
+  const {
+    data: templateList,
+    isLoading: templatesLoading
+  } = useQuery<ChunkingTemplateListResponse>({
+    queryKey: ["chunking-templates", "ingest-options"],
+    queryFn: () =>
+      listChunkingTemplates({ includeBuiltin: true, includeCustom: true }),
+    staleTime: 60 * 1000,
+    enabled: common.perform_chunking && !!setChunkingTemplateName
+  })
+
+  // Group templates into built-in and custom
+  const templateOptions = React.useMemo(() => {
+    if (!templateList?.templates) return []
+    const builtinTemplates = templateList.templates.filter((t) => t.is_builtin)
+    const customTemplates = templateList.templates.filter((t) => !t.is_builtin)
+
+    const options: { label: string; options: { value: string; label: string; title?: string }[] }[] = []
+
+    if (builtinTemplates.length > 0) {
+      options.push({
+        label: qi("chunkingTemplates.builtinGroup", "Built-in"),
+        options: builtinTemplates.map((t) => ({
+          value: t.name,
+          label: t.name,
+          title: t.description || undefined
+        }))
+      })
+    }
+
+    if (customTemplates.length > 0) {
+      options.push({
+        label: qi("chunkingTemplates.customGroup", "Custom"),
+        options: customTemplates.map((t) => ({
+          value: t.name,
+          label: t.name,
+          title: t.description || undefined
+        }))
+      })
+    }
+
+    return options
+  }, [templateList, qi])
+
+  const handleChunkingTemplateChange = React.useCallback(
+    (value: string | undefined) => {
+      setChunkingTemplateName?.(value)
+    },
+    [setChunkingTemplateName]
+  )
+
+  const handleAutoApplyChange = React.useCallback(
+    (checked: boolean) => {
+      setAutoApplyTemplate?.(checked)
+      // Clear selected template when enabling auto-apply
+      if (checked) {
+        setChunkingTemplateName?.(undefined)
+      }
+    },
+    [setAutoApplyTemplate, setChunkingTemplateName]
+  )
   return (
     <div className="rounded-md border border-border bg-surface p-3 space-y-3">
       <Typography.Title level={5} className="!mb-2">
@@ -317,6 +395,74 @@ export const IngestOptionsPanel: React.FC<IngestOptionsPanelProps> = ({
           </Space>
         </Tooltip>
       </Space>
+
+      {/* Chunking template selector - visible when chunking is enabled */}
+      {common.perform_chunking && setChunkingTemplateName && (
+        <div className="mt-2 pt-2 border-t border-border space-y-2">
+          <div className="flex items-center gap-2">
+            <span className="min-w-32 text-sm">
+              {qi("chunkingTemplates.label", "Chunking template")}
+            </span>
+            <Select
+              className="flex-1 min-w-40"
+              allowClear
+              showSearch
+              loading={templatesLoading}
+              value={chunkingTemplateName || undefined}
+              placeholder={qi(
+                "chunkingTemplates.placeholder",
+                "Select template (optional)"
+              )}
+              aria-label={qi("chunkingTemplates.label", "Chunking template")}
+              onChange={handleChunkingTemplateChange}
+              options={templateOptions}
+              disabled={running || autoApplyTemplate}
+              filterOption={(input, option) =>
+                (option?.label ?? "")
+                  .toString()
+                  .toLowerCase()
+                  .includes(input.toLowerCase())
+              }
+            />
+          </div>
+          {setAutoApplyTemplate && (
+            <div className="flex items-center gap-2">
+              <Tooltip
+                title={qi(
+                  "chunkingTemplates.autoApplyTooltip",
+                  "Automatically select the best matching template based on content type and patterns"
+                )}
+              >
+                <Space align="center" size="small">
+                  <Switch
+                    checked={autoApplyTemplate}
+                    onChange={handleAutoApplyChange}
+                    disabled={running}
+                    aria-label={qi(
+                      "chunkingTemplates.autoApplyLabel",
+                      "Auto-detect template"
+                    )}
+                  />
+                  <span className="text-sm">
+                    {qi("chunkingTemplates.autoApplyLabel", "Auto-detect template")}
+                  </span>
+                </Space>
+              </Tooltip>
+            </div>
+          )}
+          <Typography.Text type="secondary" className="text-xs block">
+            {autoApplyTemplate
+              ? qi(
+                  "chunkingTemplates.autoApplyHint",
+                  "Template will be selected automatically based on content type."
+                )
+              : qi(
+                  "chunkingTemplates.hint",
+                  "Apply a saved template's chunking settings. Leave empty to use defaults."
+                )}
+          </Typography.Text>
+        </div>
+      )}
 
       {ragEmbeddingLabel && (
         <div className="mt-2 flex flex-wrap items-center gap-2 text-xs text-text-subtle">

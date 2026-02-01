@@ -1,71 +1,180 @@
 # CLI Reference
 
-Last updated ?
+This guide covers command-line tools and commands for working with tldw_server.
 
+## Architecture Note
+
+As of v0.1.0+, tldw_server uses a **FastAPI-first architecture**. The primary interface is the REST API, accessible at `http://127.0.0.1:8000/docs` when the server is running. The legacy Gradio UI and `summarize.py` CLI have been deprecated.
+
+**Primary interfaces:**
+- **REST API**: Full-featured API with OpenAPI documentation at `/docs`
+- **Next.js WebUI**: Modern web interface at `apps/tldw-frontend/`
+
+## Starting the Server
+
+```bash
+# Basic development server with auto-reload
+python -m uvicorn tldw_Server_API.app.main:app --reload
+
+# Specify host and port
+python -m uvicorn tldw_Server_API.app.main:app --host 0.0.0.0 --port 8000 --reload
+
+# Production mode (no reload, multiple workers)
+python -m uvicorn tldw_Server_API.app.main:app --host 0.0.0.0 --port 8000 --workers 4
 ```
-usage: summarize.py [-h] [-v] [-api API_NAME] [-key API_KEY] [-ns NUM_SPEAKERS] [-wm WHISPER_MODEL] [-off OFFSET] [-vad] [-log {DEBUG,INFO,WARNING,ERROR,CRITICAL}] [-gui] [-demo] [-prompt CUSTOM_PROMPT] [-overwrite] [-roll] [-detail DETAIL_LEVEL] [-model LLM_MODEL]
-                    [-k KEYWORDS [KEYWORDS ...]] [--log_file LOG_FILE] [--local_llm] [--server_mode] [--share_public SHARE_PUBLIC] [--port PORT] [--ingest_text_file] [--text_title TEXT_TITLE] [--text_author TEXT_AUTHOR] [--diarize]
-                    [input_path]
 
-positional arguments:
-  input_path            Path or URL of the video
+**Useful URLs after startup:**
+- API Documentation: `http://127.0.0.1:8000/docs`
+- Quickstart Guide: `http://127.0.0.1:8000/api/v1/config/quickstart`
+- Setup Wizard (if needed): `http://127.0.0.1:8000/setup`
 
-options:
-  -h, --help            show this help message and exit
-  -v, --video           Download the video instead of just the audio
-  -api API_NAME, --api_name API_NAME
-                        API name for summarization (optional)
-  -key API_KEY, --api_key API_KEY
-                        API key for summarization (optional)
-  -ns NUM_SPEAKERS, --num_speakers NUM_SPEAKERS
-                        Number of speakers (default: 2)
-  -wm WHISPER_MODEL, --whisper_model WHISPER_MODEL
-                        Whisper model (default: small)| Options: tiny.en, tiny, base.en, base, small.en, small, medium.en, medium, large-v1, large-v2, large-v3, large, distil-large-v2, distil-medium.en, distil-small.en
-  -off OFFSET, --offset OFFSET
-                        Offset in seconds (default: 0)
-  -vad, --vad_filter    Enable VAD filter
-  -log {DEBUG,INFO,WARNING,ERROR,CRITICAL}, --log_level {DEBUG,INFO,WARNING,ERROR,CRITICAL}
-                        Log level (default: INFO)
-  -gui, --user_interface
-                        Launch the Gradio user interface
-  -demo, --demo_mode    Enable demo mode
-  -prompt CUSTOM_PROMPT, --custom_prompt CUSTOM_PROMPT
-                        Pass in a custom prompt to be used in place of the existing one.
-                         (Probably should just modify the script itself...)
-  -overwrite, --overwrite
-                        Overwrite existing files
-  -roll, --rolling_summarization
-                        Enable rolling summarization
-  -detail DETAIL_LEVEL, --detail_level DETAIL_LEVEL
-                        Mandatory if rolling summarization is enabled, defines the chunk  size.
-                         Default is 0.01(lots of chunks) -> 1.00 (few chunks)
-                         Currently only OpenAI works.
-  -k KEYWORDS [KEYWORDS ...], --keywords KEYWORDS [KEYWORDS ...]
-                        Keywords for tagging the media, can use multiple separated by spaces (default: cli_ingest_no_tag)
-  --log_file LOG_FILE   Where to save logfile (non-default)
-  --local_llm           Use a local LLM from the script(Downloads llamafile from github and 'mistral-7b-instruct-v0.2.Q8' - 8GB model from Huggingface)
-  --server_mode         Run in server mode (This exposes the GUI/Server to the network)
-  --share_public SHARE_PUBLIC
-                        This will use Gradio's built-in ngrok tunneling to share the server publicly on the internet. Specify the port to use (default: 7860)
-  --port PORT           Port to run the server on
-  --ingest_text_file    Ingest .txt files as content instead of treating them as URL lists
-  --text_title TEXT_TITLE
-                        Title for the text file being ingested
-  --text_author TEXT_AUTHOR
-                        Author of the text file being ingested
-  --diarize             Enable speaker diarization
+## Running Tests
 
+```bash
+# Run all tests
+python -m pytest -v
 
-Sample commands:
-    1. Simple Sample command structure:
-        summarize.py <path_to_video> -api openai -k tag_one tag_two tag_three
+# Run with coverage report
+python -m pytest --cov=tldw_Server_API --cov-report=term-missing
 
-    2. Rolling Summary Sample command structure:
-        summarize.py <path_to_video> -api openai -prompt "custom_prompt_goes_here-is-appended-after-transcription" -roll -detail 0.01 -k tag_one tag_two tag_three
+# Run specific test categories
+python -m pytest -m "unit" -v        # Unit tests only
+python -m pytest -m "integration" -v # Integration tests only
 
-    3. FULL Sample command structure:
-        summarize.py <path_to_video> -api openai -ns 2 -wm small.en -off 0 -vad -log INFO -prompt "custom_prompt" -overwrite -roll -detail 0.01 -k tag_one tag_two tag_three
-
-    4. Sample command structure for UI debug logging printed to console:
-        summarize.py -gui -log DEBUG
+# Run tests for a specific module
+python -m pytest tldw_Server_API/tests/TTS/ -v
+python -m pytest tldw_Server_API/tests/AuthNZ/ -v
 ```
+
+## Helper Scripts
+
+Several helper scripts are available in `Helper_Scripts/`:
+
+### Documentation
+
+```bash
+# Refresh published documentation (copies to Docs/Published/)
+bash Helper_Scripts/refresh_docs_published.sh
+```
+
+### TTS Installers
+
+```bash
+# Install TTS backends with their dependencies and models
+python Helper_Scripts/TTS_Installers/install_tts_kokoro.py
+python Helper_Scripts/TTS_Installers/install_tts_chatterbox.py
+python Helper_Scripts/TTS_Installers/install_tts_vibevoice.py --variant 1.5B
+python Helper_Scripts/TTS_Installers/install_tts_neutts.py --prefetch
+
+# Download Kokoro assets separately
+python Helper_Scripts/download_kokoro_assets.py \
+  --repo-id onnx-community/Kokoro-82M-v1.0-ONNX-timestamped \
+  --model-path models/kokoro/onnx/model.onnx \
+  --voices-dir models/kokoro/voices
+```
+
+### AuthNZ Initialization
+
+```bash
+# Initialize authentication database
+python -m tldw_Server_API.app.core.AuthNZ.initialize
+```
+
+## Environment Variables
+
+Key environment variables for CLI usage:
+
+| Variable | Purpose |
+|----------|---------|
+| `AUTH_MODE` | `single_user` or `multi_user` |
+| `SINGLE_USER_API_KEY` | API key for single-user mode |
+| `DATABASE_URL` | AuthNZ database URL |
+| `OPENAI_API_KEY` | OpenAI API key |
+| `ANTHROPIC_API_KEY` | Anthropic API key |
+
+See `Docs/Published/Env_Vars.md` for the complete list.
+
+## API Examples with curl
+
+Once the server is running, you can interact with it using curl:
+
+```bash
+# Set your API key
+export API_KEY="your-api-key-here"
+
+# Check server health
+curl -s http://127.0.0.1:8000/health
+
+# List LLM providers
+curl -s http://127.0.0.1:8000/api/v1/llm/providers \
+  -H "X-API-KEY: $API_KEY" | jq
+
+# Process media
+curl -X POST http://127.0.0.1:8000/api/v1/media/process \
+  -H "X-API-KEY: $API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{"url": "https://www.youtube.com/watch?v=VIDEO_ID"}'
+
+# Chat completion (OpenAI-compatible)
+curl -X POST http://127.0.0.1:8000/api/v1/chat/completions \
+  -H "X-API-KEY: $API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": "gpt-4",
+    "messages": [{"role": "user", "content": "Hello!"}]
+  }'
+
+# Text-to-speech
+curl -X POST http://127.0.0.1:8000/api/v1/audio/speech \
+  -H "X-API-KEY: $API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{"model":"kokoro","voice":"af_bella","input":"Hello from tldw_server"}' \
+  --output speech.mp3
+```
+
+## Git Commands
+
+Standard git operations for development:
+
+```bash
+# Check repository status
+git status
+
+# View recent commits
+git log --oneline -10
+
+# Create a feature branch
+git checkout -b feature/my-feature
+
+# Stage and commit changes
+git add specific_file.py
+git commit -m "Description of changes"
+```
+
+## Debugging
+
+### Log Levels
+
+The server uses Loguru for logging. Control verbosity through the config or environment:
+
+```bash
+# Set log level via environment
+export LOG_LEVEL=DEBUG
+python -m uvicorn tldw_Server_API.app.main:app --reload
+```
+
+### Common Issues
+
+| Issue | Solution |
+| ----- | -------- |
+| Port already in use | Change port: `--port 8001` |
+| Database locked | Ensure single connection or use proper context managers |
+| Missing API key | Check `.env` file or `Config_Files/config.txt` |
+| FFmpeg not found | Install: `brew install ffmpeg` or `apt install ffmpeg` |
+
+## See Also
+
+- [Installation & Setup Guide](Installation-Setup-Guide.md)
+- [Authentication Setup](Authentication_Setup.md)
+- [API Documentation](../API-related/API_README.md)
+- [TTS Getting Started](TTS_Getting_Started.md)

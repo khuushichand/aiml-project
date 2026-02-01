@@ -37,6 +37,7 @@ from .character_db import (
     get_character_details,
     update_existing_character_details,
     delete_character_from_db,
+    restore_character_from_db,
     search_characters_by_query_text,
     load_character_and_image,
     load_character_wrapper
@@ -100,6 +101,7 @@ __all__ = [
     'get_character_details',
     'update_existing_character_details',
     'delete_character_from_db',
+    'restore_character_from_db',
     'search_characters_by_query_text',
     'load_character_and_image',
     'load_character_wrapper',

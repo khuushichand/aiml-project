@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import os
 import re
+import regex
 import asyncio
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional, Sequence, Tuple
@@ -426,12 +427,16 @@ def _extract_regex_from_text(text: str, field: Dict[str, Any]) -> Optional[str]:
         return None
     flags = 0
     if field.get("ignore_case") is True:
-        flags |= re.IGNORECASE
+        flags |= regex.IGNORECASE
     try:
-        compiled = re.compile(pattern, flags)
+        compiled = regex.compile(pattern, flags)
     except Exception:
         return None
-    match = compiled.search(text)
+    try:
+        match = compiled.search(text, timeout=1.0)
+    except TimeoutError:
+        logger.warning(f"Regex timeout for pattern: {pattern[:50]}")
+        return None
     if not match:
         return None
     group = field.get("group")

@@ -7,6 +7,8 @@ import { browser } from "wxt/browser"
 import { useServerCapabilities } from "@/hooks/useServerCapabilities"
 import { tldwClient } from "@/services/tldw/TldwApiClient"
 import { useStoreMessageOption } from "@/store/option"
+import { QuickSwitchPanel } from "@/components/Common/QuickSwitchPanel"
+import { Settings2 } from "lucide-react"
 
 /**
  * Dictionary item from API. Supports multiple field name variations
@@ -75,7 +77,8 @@ export const CitationDictionarySettings = () => {
         []
     return list.map((dict) => ({
       value: String(dict.id ?? dict.dictionary_id ?? dict.dictionaryId),
-      label: dict.name || dict.title || `Dictionary ${dict.id}`
+      label: dict.name || dict.title || `Dictionary ${dict.id}`,
+      description: (dict as any).description || undefined
     }))
   }, [dictionariesData])
 
@@ -113,7 +116,7 @@ export const CitationDictionarySettings = () => {
           <div className="flex flex-col gap-3">
             <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2">
               <div>
-                <div className="text-text">
+                <div className="text-text font-medium">
                   {t(
                     "citationSettings.dictionariesLabel",
                     "Chat dictionaries"
@@ -128,40 +131,55 @@ export const CitationDictionarySettings = () => {
               </div>
               <Button
                 size="small"
+                icon={<Settings2 className="w-3.5 h-3.5" />}
                 onClick={() =>
                   window.open(
                     browser.runtime.getURL("/options.html#/dictionaries"),
                     "_blank"
                   )
                 }
+                aria-label={t("citationSettings.openWorkspace", "Open dictionary workspace")}
               >
-                {t("citationSettings.openWorkspace", "Open workspace")}
+                {t("citationSettings.manage", "Manage")}
               </Button>
             </div>
-            <Select
-              mode="multiple"
-              placeholder={t(
-                "citationSettings.dictionariesPlaceholder",
-                "Select dictionaries"
-              )}
-              options={dictionaryOptions}
-              value={activeChatDictionaries}
-              onChange={(values) =>
-                setActiveChatDictionaries(values as string[])
-              }
-              disabled={!dictionariesEnabled || dictionariesLoading}
-              loading={dictionariesLoading}
-              aria-label={t(
-                "citationSettings.dictionariesLabel",
-                "Chat dictionaries"
-              )}
-            />
+
+            {/* Quick Switch Panel for fast dictionary selection */}
+            {dictionariesEnabled && (
+              <QuickSwitchPanel
+                options={dictionaryOptions}
+                value={activeChatDictionaries}
+                onChange={(values) =>
+                  setActiveChatDictionaries(values as string[])
+                }
+                multiple={true}
+                loading={dictionariesLoading}
+                disabled={!dictionariesEnabled}
+                emptyText={t(
+                  "citationSettings.noDictionaries",
+                  "No dictionaries available. Create one in the workspace."
+                )}
+                maxHeight={180}
+              />
+            )}
+
             {!dictionariesEnabled && (
-              <div className="text-xs text-text-muted">
+              <div className="text-xs text-text-muted py-2">
                 {t(
                   "citationSettings.dictionariesUnavailable",
                   "Chat dictionaries are not available on this server."
                 )}
+              </div>
+            )}
+
+            {/* Show count of selected dictionaries */}
+            {dictionariesEnabled && activeChatDictionaries.length > 0 && (
+              <div className="text-xs text-text-muted">
+                {t("citationSettings.selectedCount", {
+                  defaultValue: "{{count}} dictionary selected",
+                  defaultValue_plural: "{{count}} dictionaries selected",
+                  count: activeChatDictionaries.length
+                })}
               </div>
             )}
           </div>

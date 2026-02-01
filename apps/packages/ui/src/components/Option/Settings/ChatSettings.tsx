@@ -5,6 +5,7 @@ import { DEFAULT_CHAT_SETTINGS } from "@/types/chat-settings"
 import { BetaTag } from "@/components/Common/Beta"
 import { SettingRow } from "@/components/Common/SettingRow"
 import { useChatSettings } from "@/hooks/useChatSettings"
+import { DiscoSkillsSettings } from "./DiscoSkillsSettings"
 
 const SELECT_CLASSNAME = "w-[200px]"
 
@@ -641,6 +642,10 @@ export const ChatSettings = () => {
           />
         }
       />
+
+      <div className="mt-8">
+        <DiscoSkillsSettings />
+      </div>
     </div>
   )
 }

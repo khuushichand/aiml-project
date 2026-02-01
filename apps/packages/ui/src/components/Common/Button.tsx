@@ -10,20 +10,24 @@ type ButtonVariant =
   | "outline"
 type ButtonSize = "sm" | "md" | "lg"
 type ButtonShape = "rounded" | "pill"
+type ButtonHtmlType = "button" | "submit" | "reset"
 
 type ButtonProps = {
   variant?: ButtonVariant
-  size?: ButtonSize
+  size?: ButtonSize | "small"
   shape?: ButtonShape
   iconOnly?: boolean
+  icon?: React.ReactNode
   children: React.ReactNode
   onClick?: React.MouseEventHandler<HTMLButtonElement>
   disabled?: boolean
   loading?: boolean
   className?: string
-  type?: "button" | "submit" | "reset"
+  type?: ButtonHtmlType | ButtonVariant
+  htmlType?: ButtonHtmlType
   ariaLabel?: string
   title?: string
+  "data-testid"?: string
 }
 
 const variantStyles: Record<ButtonVariant, string> = {
@@ -63,31 +67,44 @@ const baseStyles =
 export const Button = React.forwardRef<HTMLButtonElement, ButtonProps>(
   (
     {
-      variant = "secondary",
-      size = "md",
+      variant,
+      size,
       shape,
       iconOnly,
+      icon,
       children,
       onClick,
       disabled,
       loading,
       className,
-      type = "button",
+      type,
+      htmlType,
       ariaLabel,
-      title
+      title,
+      "data-testid": dataTestId
     },
     ref
   ) => {
+    const resolvedVariant =
+      variant ??
+      (type && Object.prototype.hasOwnProperty.call(variantStyles, type)
+        ? (type as ButtonVariant)
+        : "secondary")
+    const resolvedSize = size === "small" ? "sm" : size ?? "md"
+    const resolvedType =
+      htmlType ?? (type === "button" || type === "submit" || type === "reset"
+        ? type
+        : "button")
     const isDisabled = disabled || loading
 
     return (
       <button
         ref={ref}
-        type={type}
+        type={resolvedType}
         className={[
           baseStyles,
-          variantStyles[variant],
-          iconOnly ? iconOnlyStyles[size] : sizeStyles[size],
+          variantStyles[resolvedVariant],
+          iconOnly ? iconOnlyStyles[resolvedSize] : sizeStyles[resolvedSize],
           shape ? shapeStyles[shape] : null,
           className
         ]
@@ -98,8 +115,10 @@ export const Button = React.forwardRef<HTMLButtonElement, ButtonProps>(
         aria-label={ariaLabel}
         aria-busy={loading}
         title={title ?? ariaLabel}
+        data-testid={dataTestId}
       >
         {loading && <Loader2 className="h-4 w-4 animate-spin" />}
+        {icon}
         {children}
       </button>
     )

@@ -38,12 +38,19 @@ from tldw_Server_API.app.core.Evaluations.user_rate_limiter import user_rate_lim
 from tldw_Server_API.app.core.Evaluations.circuit_breaker import CircuitBreaker
 from tldw_Server_API.app.core.Evaluations.audit_adapter import (
     log_evaluation_created,
+    log_evaluation_created_async,
     log_evaluation_updated,
+    log_evaluation_updated_async,
     log_evaluation_deleted,
+    log_evaluation_deleted_async,
     log_run_started,
+    log_run_started_async,
     log_run_cancelled,
+    log_run_cancelled_async,
     log_dataset_created,
+    log_dataset_created_async,
     log_dataset_deleted,
+    log_dataset_deleted_async,
 )
 from tldw_Server_API.app.core.Evaluations.webhook_manager import WebhookEvent
 from tldw_Server_API.app.core.Evaluations.webhook_identity import webhook_user_id_from_value
@@ -125,46 +132,25 @@ class UnifiedEvaluationService:
         # Audit logger shim for backward compatibility in tests
         class _AuditShim:
             def evaluation_created(self, *, user_id: str, eval_id: str, name: str, eval_type: str) -> None:
-                try:
-                    log_evaluation_created(user_id=user_id, eval_id=eval_id, name=name, eval_type=eval_type)
-                except Exception:
-                    pass
+                log_evaluation_created(user_id=user_id, eval_id=eval_id, name=name, eval_type=eval_type)
 
             def evaluation_updated(self, *, user_id: str, eval_id: str, updates: Dict[str, Any]) -> None:
-                try:
-                    log_evaluation_updated(user_id=user_id, eval_id=eval_id, updates=updates)
-                except Exception:
-                    pass
+                log_evaluation_updated(user_id=user_id, eval_id=eval_id, updates=updates)
 
             def evaluation_deleted(self, *, user_id: str, eval_id: str) -> None:
-                try:
-                    log_evaluation_deleted(user_id=user_id, eval_id=eval_id)
-                except Exception:
-                    pass
+                log_evaluation_deleted(user_id=user_id, eval_id=eval_id)
 
             def run_started(self, *, user_id: str, run_id: str, eval_id: str, target_model: str) -> None:
-                try:
-                    log_run_started(user_id=user_id, run_id=run_id, eval_id=eval_id, target_model=target_model)
-                except Exception:
-                    pass
+                log_run_started(user_id=user_id, run_id=run_id, eval_id=eval_id, target_model=target_model)
 
             def run_cancelled(self, *, user_id: str, run_id: str) -> None:
-                try:
-                    log_run_cancelled(user_id=user_id, run_id=run_id)
-                except Exception:
-                    pass
+                log_run_cancelled(user_id=user_id, run_id=run_id)
 
             def dataset_created(self, *, user_id: str, dataset_id: str, name: str, samples: int) -> None:
-                try:
-                    log_dataset_created(user_id=user_id, dataset_id=dataset_id, name=name, samples=samples)
-                except Exception:
-                    pass
+                log_dataset_created(user_id=user_id, dataset_id=dataset_id, name=name, samples=samples)
 
             def dataset_deleted(self, *, user_id: str, dataset_id: str) -> None:
-                try:
-                    log_dataset_deleted(user_id=user_id, dataset_id=dataset_id)
-                except Exception:
-                    pass
+                log_dataset_deleted(user_id=user_id, dataset_id=dataset_id)
 
         self.audit_logger = _AuditShim()
 
@@ -303,7 +289,7 @@ class UnifiedEvaluationService:
             )
 
             # Unified audit
-            log_evaluation_created(user_id=created_by, eval_id=eval_id, name=name, eval_type=eval_type_value)
+            await log_evaluation_created_async(user_id=created_by, eval_id=eval_id, name=name, eval_type=eval_type_value)
 
             # Get and return created evaluation
             evaluation = self.db.get_evaluation(eval_id)
@@ -373,12 +359,8 @@ class UnifiedEvaluationService:
             if not success:
                 return None
 
-            # Audit on success
-            try:
-                log_evaluation_updated(user_id=updated_by, eval_id=eval_id, updates=updates)
-            except Exception:
-                # Best-effort audit logging should not break the flow
-                pass
+            # Audit on success (mandatory)
+            await log_evaluation_updated_async(user_id=updated_by, eval_id=eval_id, updates=updates)
 
             # Return the updated evaluation
             updated = self.db.get_evaluation(eval_id, created_by=created_by)
@@ -399,7 +381,7 @@ class UnifiedEvaluationService:
             success = self.db.delete_evaluation(eval_id, created_by=created_by)
 
             if success:
-                log_evaluation_deleted(user_id=deleted_by, eval_id=eval_id)
+                await log_evaluation_deleted_async(user_id=deleted_by, eval_id=eval_id)
 
             return success
 
@@ -482,8 +464,8 @@ class UnifiedEvaluationService:
                 )
             )
 
-            # Unified audit
-            log_run_started(user_id=created_by, run_id=run_id, eval_id=eval_id, target_model=target_model)
+            # Unified audit (mandatory)
+            await log_run_started_async(user_id=created_by, run_id=run_id, eval_id=eval_id, target_model=target_model)
 
             # Return run info
             run = self.db.get_run(run_id)
@@ -608,7 +590,7 @@ class UnifiedEvaluationService:
                 # Update status directly if not in runner
                 self.db.update_run_status(run_id, "cancelled")
 
-            log_run_cancelled(user_id=cancelled_by, run_id=run_id)
+            await log_run_cancelled_async(user_id=cancelled_by, run_id=run_id)
 
             return True
 
@@ -1214,7 +1196,7 @@ class UnifiedEvaluationService:
                 metadata=metadata
             )
 
-            log_dataset_created(user_id=created_by, dataset_id=dataset_id, name=name, samples=len(samples))
+            await log_dataset_created_async(user_id=created_by, dataset_id=dataset_id, name=name, samples=len(samples))
 
             return dataset_id
 
@@ -1255,7 +1237,7 @@ class UnifiedEvaluationService:
             success = self.db.delete_dataset(dataset_id, created_by=created_by)
 
             if success:
-                log_dataset_deleted(user_id=deleted_by, dataset_id=dataset_id)
+                await log_dataset_deleted_async(user_id=deleted_by, dataset_id=dataset_id)
 
             return success
 
@@ -1429,31 +1411,49 @@ class UnifiedEvaluationService:
             # Generate evaluation ID
             eval_id = f"eval_{evaluation_type}_{uuid.uuid4().hex[:12]}"
 
-            # Store using unified method if available
+            # Store using unified method if available (best-effort)
             if hasattr(self.db, 'store_unified_evaluation'):
-                success = self.db.store_unified_evaluation(
-                    evaluation_id=eval_id,
-                    name=f"{evaluation_type}_{int(time.time())}",
-                    evaluation_type=evaluation_type,
-                    input_data=input_data,
-                    results=results if isinstance(results, dict) else {"result": results},
-                    status="completed",
-                    user_id=metadata.get("user_id", "system"),
-                    metadata=metadata,
-                    embedding_provider=metadata.get("embedding_provider"),
-                    embedding_model=metadata.get("embedding_model")
-                )
-                if success:
-                    logger.info(f"Stored evaluation {eval_id} in unified table")
-                    return eval_id
+                try:
+                    success = self.db.store_unified_evaluation(
+                        evaluation_id=eval_id,
+                        name=f"{evaluation_type}_{int(time.time())}",
+                        evaluation_type=evaluation_type,
+                        input_data=input_data,
+                        results=results if isinstance(results, dict) else {"result": results},
+                        status="completed",
+                        user_id=metadata.get("user_id", "system"),
+                        metadata=metadata,
+                        embedding_provider=metadata.get("embedding_provider"),
+                        embedding_model=metadata.get("embedding_model")
+                    )
+                    if success:
+                        logger.info(f"Stored evaluation {eval_id} in unified table")
+                except Exception:
+                    pass
 
-            # Fallback to standard approach
+            # Fallback to standard approach (ensure evals are runnable via CRUD)
+            eval_type_value = evaluation_type
+            eval_spec_payload = {"type": evaluation_type, "input": input_data}
+            if metadata.get("api_name"):
+                eval_spec_payload["api_name"] = metadata.get("api_name")
+            if metadata.get("model"):
+                eval_spec_payload["model"] = metadata.get("model")
+            if evaluation_type in {"geval", "rag", "response_quality"}:
+                sub_type_map = {
+                    "geval": "summarization",
+                    "rag": "rag",
+                    "response_quality": "response_quality",
+                }
+                eval_type_value = "model_graded"
+                eval_spec_payload.setdefault("sub_type", sub_type_map[evaluation_type])
+
             eval_id = self.db.create_evaluation(
                 name=f"{evaluation_type}_{int(time.time())}",
-                eval_type=evaluation_type,
-                eval_spec={"type": evaluation_type, "input": input_data},
+                eval_type=eval_type_value,
+                eval_spec=eval_spec_payload,
                 created_by=metadata.get("user_id", "system"),
-                metadata=metadata
+                metadata=metadata,
+                eval_id=eval_id,
             )
 
             # Create and complete a run with results

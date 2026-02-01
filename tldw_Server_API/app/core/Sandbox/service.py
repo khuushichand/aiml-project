@@ -16,14 +16,17 @@ from .models import (
     RuntimeType,
     Session,
     SessionSpec,
+    TrustLevel,
 )
 from .policy import SandboxPolicy, SandboxPolicyConfig, compute_policy_hash
 from .store import get_store_mode
 from .orchestrator import SandboxOrchestrator, IdempotencyConflict
 from .runners.docker_runner import docker_available
 from .runners.firecracker_runner import firecracker_available, firecracker_real_enabled
+from .runners.lima_runner import lima_available, lima_version, LimaRunner
 from .runners.docker_runner import DockerRunner
 from .runners.firecracker_runner import FirecrackerRunner
+from .snapshots import SnapshotManager
 from tldw_Server_API.app.core.config import settings as app_settings
 import threading
 import asyncio
@@ -52,6 +55,9 @@ class SandboxService:
         self.policy = policy or SandboxPolicy(cfg)
         self._orch = SandboxOrchestrator(self.policy)
         self._supported_specs = list(self.policy.cfg.supported_spec_versions or ["1.0"])
+        self._snapshots = SnapshotManager(
+            storage_path=os.getenv("SANDBOX_SNAPSHOT_PATH")
+        )
 
     class InvalidSpecVersion(Exception):
         def __init__(self, provided: str, supported: list[str]) -> None:
@@ -219,6 +225,24 @@ class SandboxService:
                     else "Allowlist enforcement uses deny-all fallback currently; granular Firecracker egress isolation planned"
                 ),
             },
+            {
+                "name": "lima",
+                "available": bool(lima_available()),
+                "default_images": ["ubuntu:24.04"],  # Lima uses distro images
+                "max_cpu": max_cpu,
+                "max_mem_mb": max_mem_mb,
+                "max_upload_mb": max_upload_mb,
+                "max_log_bytes": max_log_bytes,
+                "queue_max_length": queue_max_length,
+                "queue_ttl_sec": queue_ttl_sec,
+                "workspace_cap_mb": workspace_cap_mb,
+                "artifact_ttl_hours": artifact_ttl_hours,
+                "supported_spec_versions": supported_spec_versions,
+                "interactive_supported": False,  # Not implemented for Lima yet
+                "egress_allowlist_supported": False,  # Lima uses VM-level network isolation
+                "store_mode": store_mode,
+                "notes": "Full VM isolation via Lima; recommended for macOS",
+            },
         ]
 
     def _audit_run_completion(self, *, user_id: str | int | None, run_id: str, status: RunStatus, spec_version: str, session_id: str | None) -> None:
@@ -302,7 +326,8 @@ class SandboxService:
         # Validate requested spec version
         self._validate_spec_version(spec_version)
         fc_ok = firecracker_available()
-        spec = self.policy.apply_to_session(spec, firecracker_available=fc_ok)
+        lima_ok = lima_available()
+        spec = self.policy.apply_to_session(spec, firecracker_available=fc_ok, lima_available=lima_ok)
         # Validate Firecracker kernel/rootfs when real execution is enabled
         self._validate_firecracker_config(spec)
         # delegate to orchestrator (with idempotency)
@@ -335,7 +360,8 @@ class SandboxService:
         self._validate_spec_version(spec_version)
         # Apply policy then enqueue via orchestrator (idempotency-aware)
         fc_ok = firecracker_available()
-        spec = self.policy.apply_to_run(spec, firecracker_available=fc_ok)
+        lima_ok = lima_available()
+        spec = self.policy.apply_to_run(spec, firecracker_available=fc_ok, lima_available=lima_ok)
         # Validate Firecracker kernel/rootfs when real execution is enabled
         self._validate_firecracker_config(spec)
         status = self._orch.enqueue_run(user_id=user_id, spec=spec, spec_version=spec_version, idem_key=idem_key, body=raw_body)
@@ -565,6 +591,89 @@ class SandboxService:
                         pass
                 except Exception:
                     pass
+        elif execute_enabled and spec.runtime == RuntimeType.lima:
+            try:
+                env_bg = os.getenv("SANDBOX_BACKGROUND_EXECUTION")
+                if env_bg is not None:
+                    background = str(env_bg).strip().lower() in {"1", "true", "yes", "on", "y"}
+                else:
+                    background = bool(getattr(app_settings, "SANDBOX_BACKGROUND_EXECUTION", False))
+                if background:
+                    status.phase = RunPhase.starting
+                    try:
+                        self._orch.update_run(status.id, status)
+                    except Exception as _e:
+                        logger.debug(f"sandbox: update_run(starting) skipped: {_e}")
+                    try:
+                        get_hub().publish_event(status.id, "start", {"bg": True})
+                    except Exception:
+                        pass
+                    def _worker_lima():
+                        try:
+                            lr = LimaRunner()
+                            ws = self._orch.get_session_workspace_path(spec.session_id) if spec.session_id else None
+                            real = lr.start_run(status.id, spec, ws)
+                            real.id = status.id
+                            status.phase = real.phase
+                            status.exit_code = real.exit_code
+                            status.started_at = real.started_at
+                            status.finished_at = real.finished_at
+                            status.message = real.message
+                            status.image_digest = real.image_digest
+                            status.runtime_version = real.runtime_version
+                            try:
+                                if getattr(real, "resource_usage", None):
+                                    status.resource_usage = real.resource_usage
+                            except Exception:
+                                pass
+                            if real.artifacts:
+                                self._orch.store_artifacts(status.id, real.artifacts)
+                            self._orch.update_run(status.id, status)
+                            try:
+                                self._audit_run_completion(user_id=user_id, run_id=status.id, status=status, spec_version=spec_version, session_id=spec.session_id)
+                            except Exception:
+                                pass
+                        except Exception as e:
+                            logger.warning(f"Lima background execution failed: {e}")
+                    threading.Thread(target=_worker_lima, daemon=True).start()
+                else:
+                    # Foreground
+                    lr = LimaRunner()
+                    ws = self._orch.get_session_workspace_path(spec.session_id) if spec.session_id else None
+                    real = lr.start_run(status.id, spec, ws)
+                    real.id = status.id
+                    status.phase = real.phase
+                    status.exit_code = real.exit_code
+                    status.started_at = real.started_at
+                    status.finished_at = real.finished_at
+                    status.message = real.message
+                    status.image_digest = real.image_digest
+                    status.runtime_version = real.runtime_version
+                    try:
+                        if getattr(real, "resource_usage", None):
+                            status.resource_usage = real.resource_usage
+                    except Exception:
+                        pass
+                    if real.artifacts:
+                        self._orch.store_artifacts(status.id, real.artifacts)
+                    self._orch.update_run(status.id, status)
+                    try:
+                        self._audit_run_completion(user_id=user_id, run_id=status.id, status=status, spec_version=spec_version, session_id=spec.session_id)
+                    except Exception:
+                        pass
+            except Exception as e:
+                logger.warning(f"Lima execution failed; marking run failed. Error: {e}")
+                try:
+                    status.phase = RunPhase.failed
+                    status.message = "lima_failed"
+                    status.finished_at = datetime.utcnow()
+                    self._orch.update_run(status.id, status)
+                    try:
+                        get_hub().publish_event(status.id, "end", {"exit_code": status.exit_code, "reason": "lima_failed"})
+                    except Exception:
+                        pass
+                except Exception:
+                    pass
         else:
             # Stub artifacts even without execution
             artifacts: dict[str, bytes] = {}
@@ -606,6 +715,8 @@ class SandboxService:
         try:
             if st.runtime == RuntimeType.docker:
                 cancelled = DockerRunner.cancel_run(run_id)
+            elif st.runtime == RuntimeType.lima:
+                cancelled = LimaRunner.cancel_run(run_id)
         except Exception as e:
             logger.debug(f"cancel_run failed: {e}")
             cancelled = False
@@ -626,3 +737,132 @@ class SandboxService:
         except Exception:
             pass
         return bool(cancelled)
+
+    # -----------------
+    # Snapshot Operations
+    # -----------------
+
+    def create_snapshot(self, session_id: str) -> dict:
+        """Create a snapshot of a session's workspace.
+
+        Args:
+            session_id: The session to snapshot.
+
+        Returns:
+            Snapshot metadata including snapshot_id, created_at, and size_bytes.
+
+        Raises:
+            ValueError: If session not found or has no workspace.
+        """
+        ws = self._orch.get_session_workspace_path(session_id)
+        if not ws:
+            raise ValueError("Session not found or no workspace")
+        return self._snapshots.create_snapshot(session_id, ws)
+
+    def restore_snapshot(self, session_id: str, snapshot_id: str) -> bool:
+        """Restore a session's workspace from a snapshot.
+
+        Args:
+            session_id: The session to restore.
+            snapshot_id: The snapshot to restore from.
+
+        Returns:
+            True if restoration was successful.
+
+        Raises:
+            ValueError: If session or snapshot not found.
+        """
+        ws = self._orch.get_session_workspace_path(session_id)
+        if not ws:
+            raise ValueError("Session not found or no workspace")
+        return self._snapshots.restore_snapshot(session_id, snapshot_id, ws)
+
+    def clone_session(self, session_id: str, new_name: Optional[str] = None) -> Session:
+        """Clone a session including its workspace.
+
+        Args:
+            session_id: The source session to clone.
+            new_name: Optional name/label for the new session.
+
+        Returns:
+            The newly created session.
+
+        Raises:
+            ValueError: If source session not found.
+        """
+        # Get source session info
+        source_ws = self._orch.get_session_workspace_path(session_id)
+        if not source_ws:
+            raise ValueError("Source session not found or no workspace")
+
+        source_owner = self._orch.get_session_owner(session_id)
+        if not source_owner:
+            raise ValueError("Source session owner not found")
+
+        # Get source session details
+        with self._orch._lock:
+            source_sess = self._orch._sessions.get(session_id)
+
+        if not source_sess:
+            raise ValueError("Source session not found")
+
+        # Create new session with same spec
+        spec = SessionSpec(
+            runtime=source_sess.runtime,
+            base_image=source_sess.base_image,
+        )
+        new_sess = self._orch.create_session(
+            user_id=source_owner,
+            spec=spec,
+            spec_version="1.0",
+            idem_key=None,
+            body={"cloned_from": session_id},
+        )
+
+        # Copy workspace
+        new_ws = self._orch.get_session_workspace_path(new_sess.id)
+        if new_ws:
+            try:
+                self._snapshots.clone_session(session_id, source_ws, new_sess.id, new_ws)
+            except Exception as e:
+                logger.warning(f"Failed to clone workspace: {e}")
+                # Clean up on failure
+                self._orch.destroy_session(new_sess.id)
+                raise ValueError(f"Failed to clone workspace: {e}")
+
+        return new_sess
+
+    def list_snapshots(self, session_id: str) -> list[dict]:
+        """List all snapshots for a session.
+
+        Args:
+            session_id: The session to list snapshots for.
+
+        Returns:
+            List of snapshot metadata dictionaries.
+        """
+        return self._snapshots.list_snapshots(session_id)
+
+    def delete_snapshot(self, session_id: str, snapshot_id: str) -> bool:
+        """Delete a specific snapshot.
+
+        Args:
+            session_id: The session owning the snapshot.
+            snapshot_id: The snapshot to delete.
+
+        Returns:
+            True if deleted successfully.
+        """
+        return self._snapshots.delete_snapshot(session_id, snapshot_id)
+
+    def get_snapshot_info(self, session_id: str, snapshot_id: str) -> Optional[dict]:
+        """Get information about a specific snapshot.
+
+        Args:
+            session_id: The session owning the snapshot.
+            snapshot_id: The snapshot to get info for.
+
+        Returns:
+            Snapshot metadata or None if not found.
+        """
+        return self._snapshots.get_snapshot_info(session_id, snapshot_id)

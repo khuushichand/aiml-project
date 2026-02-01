@@ -43,7 +43,7 @@ from tldw_Server_API.app.core.DB_Management.DB_Manager import (
 from tldw_Server_API.app.core.DB_Management.Workflows_DB import WorkflowsDatabase
 from tldw_Server_API.app.core.Workflows import WorkflowEngine, RunMode, WorkflowScheduler
 from tldw_Server_API.app.core.Workflows.registry import StepTypeRegistry
-from tldw_Server_API.app.core.Workflows.constants import MAP_SUBSTEP_TYPES
+from tldw_Server_API.app.core.Workflows.adapters._registry import get_parallelizable
 from tldw_Server_API.app.core.MCP_unified.auth.jwt_manager import get_jwt_manager
 from tldw_Server_API.app.core.AuthNZ.permissions import (
     WORKFLOWS_RUNS_READ,
@@ -598,7 +598,7 @@ def _validate_definition_payload(defn: Dict[str, Any]) -> None:
             sub_type = str(sub.get("type") or "").strip()
             if not sub_type:
                 raise HTTPException(status_code=422, detail=f"Step '{sid}' requires map step type")
-            if sub_type not in MAP_SUBSTEP_TYPES:
+            if sub_type not in get_parallelizable():
                 raise HTTPException(status_code=422, detail=f"Step '{sid}' has unsupported map step type '{sub_type}'")
             sub_cfg = sub.get("config") or {}
             sub_id = f"{sid}.step"

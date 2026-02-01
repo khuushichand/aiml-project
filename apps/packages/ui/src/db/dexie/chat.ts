@@ -6,6 +6,7 @@ import {
   MessageHistory,
   Prompt,
   Prompts,
+  PromptSyncStatus,
   CompareState,
   SessionFiles,
   UploadedFile,
@@ -186,6 +187,26 @@ export class PageAssistDatabase {
     return history || null;
   }
 
+  async getHistoryByDocId(docId: string): Promise<HistoryInfo | null> {
+    if (!docId) return null;
+    // Get the most recent history for this document
+    const history = await db.chatHistories
+      .where('doc_id')
+      .equals(docId)
+      .reverse()
+      .sortBy('createdAt');
+    return history[0] || null;
+  }
+
+  async getAllHistoriesByDocId(docId: string): Promise<HistoryInfo[]> {
+    if (!docId) return [];
+    return await db.chatHistories
+      .where('doc_id')
+      .equals(docId)
+      .reverse()
+      .sortBy('createdAt');
+  }
+
   async getHistoryMetadata(historyId: string): Promise<{
     messageCount: number;
     lastMessage?: { content: string; role: string; createdAt: number };
@@ -280,6 +301,16 @@ export class PageAssistDatabase {
 
   async updateMessage(history_id: string, message_id: string, content: string) {
     await db.messages.where('id').equals(message_id).modify({ content });
+  }
+
+  async updateMessageDiscoSkillComment(
+    message_id: string,
+    discoSkillComment: Message["discoSkillComment"] | null
+  ) {
+    await db.messages
+      .where('id')
+      .equals(message_id)
+      .modify({ discoSkillComment: discoSkillComment ?? null });
   }
 
   async removeChatHistory(id: string) {
@@ -420,23 +451,70 @@ export class PageAssistDatabase {
 
   // Prompts Methods
   async getAllPrompts(): Promise<Prompts> {
-    return await db.prompts.orderBy('createdAt').reverse().toArray();
+    // Only return non-deleted prompts
+    return await db.prompts
+      .filter(p => !p.deletedAt)
+      .reverse()
+      .sortBy('createdAt');
+  }
+
+  async getDeletedPrompts(): Promise<Prompts> {
+    // Return soft-deleted prompts (trash)
+    return await db.prompts
+      .filter(p => !!p.deletedAt)
+      .reverse()
+      .sortBy('deletedAt');
   }
 
   async addPrompt(prompt: Prompt) {
     const mergedKeywords = prompt.keywords ?? prompt.tags;
+    const now = Date.now();
     const normalized: Prompt = {
       ...prompt,
       title: prompt.title || prompt.name,
       name: prompt.name ?? prompt.title,
       tags: mergedKeywords ?? prompt.tags,
-      keywords: mergedKeywords ?? prompt.keywords ?? prompt.tags
+      keywords: mergedKeywords ?? prompt.keywords ?? prompt.tags,
+      deletedAt: null,
+      updatedAt: now
     };
     await db.prompts.add(normalized);
   }
 
   async deletePrompt(id: string) {
+    // Soft delete: set deletedAt timestamp
+    const now = Date.now();
+    await db.prompts.update(id, { deletedAt: now, updatedAt: now });
+  }
+
+  async permanentlyDeletePrompt(id: string) {
+    // Hard delete: remove from database entirely
     await db.prompts.delete(id);
+  }
+
+  async restorePrompt(id: string) {
+    // Restore from trash: clear deletedAt
+    const now = Date.now();
+    await db.prompts.update(id, { deletedAt: null, updatedAt: now });
+  }
+
+  async emptyTrash(): Promise<number> {
+    // Permanently delete all trashed prompts
+    const deleted = await db.prompts.filter(p => !!p.deletedAt).toArray();
+    const ids = deleted.map(p => p.id);
+    await db.prompts.bulkDelete(ids);
+    return ids.length;
+  }
+
+  async autoCleanupTrash(maxAgeDays: number = 30): Promise<number> {
+    // Auto-purge prompts deleted more than maxAgeDays ago
+    const cutoff = Date.now() - (maxAgeDays * 24 * 60 * 60 * 1000);
+    const expired = await db.prompts
+      .filter(p => !!p.deletedAt && p.deletedAt < cutoff)
+      .toArray();
+    const ids = expired.map(p => p.id);
+    await db.prompts.bulkDelete(ids);
+    return ids.length;
   }
 
   async updatePrompt(
@@ -466,6 +544,60 @@ export class PageAssistDatabase {
 
   async getPromptById(id: string): Promise<Prompt | undefined> {
     return await db.prompts.get(id);
+  }
+
+  // ─── Prompt Sync Methods ───
+
+  async getPromptByServerId(serverId: number): Promise<Prompt | undefined> {
+    return await db.prompts
+      .where('serverId')
+      .equals(serverId)
+      .first();
+  }
+
+  async getPromptsBySyncStatus(status: PromptSyncStatus): Promise<Prompts> {
+    return await db.prompts
+      .where('syncStatus')
+      .equals(status)
+      .filter(p => !p.deletedAt)
+      .toArray();
+  }
+
+  async getPromptsByStudioProject(projectId: number): Promise<Prompts> {
+    return await db.prompts
+      .where('studioProjectId')
+      .equals(projectId)
+      .filter(p => !p.deletedAt)
+      .toArray();
+  }
+
+  async getSyncedPrompts(): Promise<Prompts> {
+    return await db.prompts
+      .filter(p => !p.deletedAt && !!p.serverId)
+      .toArray();
+  }
+
+  async getLocalOnlyPrompts(): Promise<Prompts> {
+    return await db.prompts
+      .filter(p => !p.deletedAt && !p.serverId && p.syncStatus !== 'synced')
+      .toArray();
+  }
+
+  async updatePromptSyncStatus(id: string, updates: {
+    syncStatus?: PromptSyncStatus;
+    serverId?: number | null;
+    studioProjectId?: number | null;
+    studioPromptId?: number | null;
+    lastSyncedAt?: number | null;
+    serverUpdatedAt?: string | null;
+  }) {
+    const existing = await db.prompts.get(id);
+    if (!existing) return;
+
+    await db.prompts.update(id, {
+      ...updates,
+      updatedAt: Date.now()
+    });
   }
 
   // Webshare Methods
@@ -507,23 +639,34 @@ export class PageAssistDatabase {
       await this.deleteAllChatHistory();
     }
 
-    for (const item of data) {
-      if (item.history) {
-        await db.chatHistories.put(item.history);
+    // Use transaction for atomic batch operations
+    await db.transaction('rw', [db.chatHistories, db.messages], async () => {
+      // Collect all histories and messages for bulk operations
+      const histories = data.filter(item => item.history).map(item => item.history);
+      const allMessages = data.flatMap(item => item.messages || []);
+
+      // Bulk put histories
+      if (histories.length > 0) {
+        await db.chatHistories.bulkPut(histories);
       }
 
-      if (item.messages) {
-        for (const message of item.messages) {
-          const existingMessage = await db.messages.get(message.id);
-
-          if (existingMessage && !replaceExisting) {
-            continue;
+      // For messages, check existing if not replacing
+      if (allMessages.length > 0) {
+        if (replaceExisting) {
+          await db.messages.bulkPut(allMessages);
+        } else {
+          // Filter out existing messages
+          const existingIds = new Set(
+            (await db.messages.where('id').anyOf(allMessages.map(m => m.id)).toArray())
+              .map(m => m.id)
+          );
+          const newMessages = allMessages.filter(m => !existingIds.has(m.id));
+          if (newMessages.length > 0) {
+            await db.messages.bulkPut(newMessages);
           }
-
-          await db.messages.put(message);
         }
       }
-    }
+    });
   }
 
   async importPromptsV2(data: Prompt[], options: {
@@ -536,24 +679,35 @@ export class PageAssistDatabase {
       await db.prompts.clear();
     }
 
-    for (const prompt of data) {
-      const existingPrompt = await db.prompts.get(prompt.id);
-
-      if (existingPrompt && !replaceExisting) {
-        continue;
-      }
-
+    // Normalize all prompts first
+    const normalizedPrompts = data.map(prompt => {
       const mergedKeywords = prompt.keywords ?? prompt.tags;
-      const normalizedPrompt: Prompt = {
+      return {
         ...prompt,
         title: prompt.title || prompt.name,
         name: prompt.name ?? prompt.title,
         tags: mergedKeywords ?? prompt.tags,
         keywords: mergedKeywords ?? prompt.keywords ?? prompt.tags
-      };
+      } as Prompt;
+    });
 
-      await db.prompts.put(normalizedPrompt);
-    }
+    // Use transaction for atomic batch operations
+    await db.transaction('rw', db.prompts, async () => {
+      if (replaceExisting) {
+        // Bulk put all prompts
+        await db.prompts.bulkPut(normalizedPrompts);
+      } else {
+        // Filter out existing prompts
+        const existingIds = new Set(
+          (await db.prompts.where('id').anyOf(normalizedPrompts.map(p => p.id)).toArray())
+            .map(p => p.id)
+        );
+        const newPrompts = normalizedPrompts.filter(p => !existingIds.has(p.id));
+        if (newPrompts.length > 0) {
+          await db.prompts.bulkPut(newPrompts);
+        }
+      }
+    });
   }
 
   async importSessionFilesV2(data: SessionFiles[], options: {

@@ -806,6 +806,119 @@ _CREATE_USAGE_TABLES = [
         "CREATE INDEX IF NOT EXISTS idx_llm_usage_daily_day_user_op_prov_model ON llm_usage_daily(day, user_id, operation, provider, model)",
         (),
     ),
+    # org/team role permissions (scoped RBAC)
+    (
+        """
+        CREATE TABLE IF NOT EXISTS org_role_permissions (
+            org_role TEXT NOT NULL,
+            permission_id INTEGER NOT NULL REFERENCES permissions(id) ON DELETE CASCADE,
+            PRIMARY KEY (org_role, permission_id),
+            CHECK (org_role IN ('owner', 'admin', 'lead', 'member'))
+        )
+        """,
+        (),
+    ),
+    ("CREATE INDEX IF NOT EXISTS idx_org_role_permissions_permission_id ON org_role_permissions(permission_id)", ()),
+    (
+        """
+        CREATE TABLE IF NOT EXISTS team_role_permissions (
+            team_role TEXT NOT NULL,
+            permission_id INTEGER NOT NULL REFERENCES permissions(id) ON DELETE CASCADE,
+            PRIMARY KEY (team_role, permission_id),
+            CHECK (team_role IN ('owner', 'admin', 'lead', 'member'))
+        )
+        """,
+        (),
+    ),
+    ("CREATE INDEX IF NOT EXISTS idx_team_role_permissions_permission_id ON team_role_permissions(permission_id)", ()),
+    (
+        """
+        INSERT INTO org_role_permissions (org_role, permission_id)
+        SELECT 'owner', rp.permission_id
+        FROM role_permissions rp
+        JOIN roles r ON r.id = rp.role_id
+        WHERE r.name = 'admin'
+        ON CONFLICT (org_role, permission_id) DO NOTHING
+        """,
+        (),
+    ),
+    (
+        """
+        INSERT INTO org_role_permissions (org_role, permission_id)
+        SELECT 'admin', rp.permission_id
+        FROM role_permissions rp
+        JOIN roles r ON r.id = rp.role_id
+        WHERE r.name = 'admin'
+        ON CONFLICT (org_role, permission_id) DO NOTHING
+        """,
+        (),
+    ),
+    (
+        """
+        INSERT INTO org_role_permissions (org_role, permission_id)
+        SELECT 'lead', rp.permission_id
+        FROM role_permissions rp
+        JOIN roles r ON r.id = rp.role_id
+        WHERE r.name = 'reviewer'
+        ON CONFLICT (org_role, permission_id) DO NOTHING
+        """,
+        (),
+    ),
+    (
+        """
+        INSERT INTO org_role_permissions (org_role, permission_id)
+        SELECT 'member', rp.permission_id
+        FROM role_permissions rp
+        JOIN roles r ON r.id = rp.role_id
+        WHERE r.name = 'user'
+        ON CONFLICT (org_role, permission_id) DO NOTHING
+        """,
+        (),
+    ),
+    (
+        """
+        INSERT INTO team_role_permissions (team_role, permission_id)
+        SELECT 'owner', rp.permission_id
+        FROM role_permissions rp
+        JOIN roles r ON r.id = rp.role_id
+        WHERE r.name = 'admin'
+        ON CONFLICT (team_role, permission_id) DO NOTHING
+        """,
+        (),
+    ),
+    (
+        """
+        INSERT INTO team_role_permissions (team_role, permission_id)
+        SELECT 'admin', rp.permission_id
+        FROM role_permissions rp
+        JOIN roles r ON r.id = rp.role_id
+        WHERE r.name = 'admin'
+        ON CONFLICT (team_role, permission_id) DO NOTHING
+        """,
+        (),
+    ),
+    (
+        """
+        INSERT INTO team_role_permissions (team_role, permission_id)
+        SELECT 'lead', rp.permission_id
+        FROM role_permissions rp
+        JOIN roles r ON r.id = rp.role_id
+        WHERE r.name = 'reviewer'
+        ON CONFLICT (team_role, permission_id) DO NOTHING
+        """,
+        (),
+    ),
+    (
+        """
+        INSERT INTO team_role_permissions (team_role, permission_id)
+        SELECT 'member', rp.permission_id
+        FROM role_permissions rp
+        JOIN roles r ON r.id = rp.role_id
+        WHERE r.name = 'user'
+        ON CONFLICT (team_role, permission_id) DO NOTHING
+        """,
+        (),
+    ),
 ]
 
 

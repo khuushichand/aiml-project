@@ -349,7 +349,7 @@ curl -X POST "http://localhost:8000/api/v1/prompt-studio/evaluations" \
         "prompt_id": 12,
         "name": "Baseline Eval",
         "test_case_ids": [1,2,3],
-        "config": {"model_name": "gpt-4o-mini", "temperature": 0.2, "max_tokens": 256}
+        "config": {"model_name": "gpt-4o", "temperature": 0.2, "max_tokens": 256}
       }'
 ```
 

@@ -323,6 +323,21 @@ class ToolDefinition(BaseModel):
     function: FunctionDefinition
 
 
+class GeminiNativeToolDefinition(BaseModel):
+    """Gemini-native tool definition (function declarations)."""
+
+    model_config = ConfigDict(extra="allow", populate_by_name=True)
+    function_declarations: List[Dict[str, Any]] = Field(
+        ...,
+        alias="functionDeclarations",
+        description="Gemini function declarations payload.",
+    )
+    type: Optional[str] = Field(
+        None,
+        description="Optional marker for Gemini-native tools (e.g., 'gemini_native').",
+    )
+
+
 class ToolChoiceFunction(BaseModel):
     """Specifies a specific function to be called."""
 
@@ -678,7 +693,7 @@ class ChatCompletionRequest(BaseModel):
     top_p: Optional[float] = Field(
         None, ge=0.0, le=1.0, description="Top-p (nucleus) sampling parameter (provider support varies)."
     )
-    tools: Optional[List[ToolDefinition]] = Field(
+    tools: Optional[List[Union[ToolDefinition, GeminiNativeToolDefinition]]] = Field(
         None, max_length=128, description="Tools the model may call (provider support varies)."
     )
     tool_choice: Optional[Union[Literal["none", "auto", "required"], ToolChoiceOption]] = Field(

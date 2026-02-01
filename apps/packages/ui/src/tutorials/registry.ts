@@ -1,0 +1,172 @@
+/**
+ * Tutorial Registry
+ * Central registry for all page tutorials using React Joyride
+ */
+
+import type { Placement } from "react-joyride"
+import type { LucideIcon } from "lucide-react"
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Type Definitions
+// ─────────────────────────────────────────────────────────────────────────────
+
+/**
+ * A single step in a tutorial
+ */
+export interface TutorialStep {
+  /** CSS selector or data-testid for the target element */
+  target: string
+  /** i18n key for the step title */
+  titleKey: string
+  /** Fallback title if i18n key not found */
+  titleFallback: string
+  /** i18n key for the step content */
+  contentKey: string
+  /** Fallback content if i18n key not found */
+  contentFallback: string
+  /** Placement of the tooltip relative to the target */
+  placement?: Placement
+  /** Whether to disable the beacon (pulsing dot) for this step */
+  disableBeacon?: boolean
+  /** Whether to allow clicks on the spotlight area */
+  spotlightClicks?: boolean
+  /** Whether the step target is fixed positioned */
+  isFixed?: boolean
+}
+
+/**
+ * A complete tutorial definition
+ */
+export interface TutorialDefinition {
+  /** Unique identifier for this tutorial */
+  id: string
+  /** Route pattern to match (supports wildcards like /options/*) */
+  routePattern: string
+  /** i18n key for the tutorial name displayed in the help modal */
+  labelKey: string
+  /** Fallback label if i18n key not found */
+  labelFallback: string
+  /** i18n key for the tutorial description */
+  descriptionKey: string
+  /** Fallback description if i18n key not found */
+  descriptionFallback: string
+  /** Optional icon to display in the tutorial list */
+  icon?: LucideIcon
+  /** The steps that make up this tutorial */
+  steps: TutorialStep[]
+  /** IDs of other tutorials that should be completed first (optional) */
+  prerequisites?: string[]
+  /** Priority for ordering in the tutorial list (lower = higher priority) */
+  priority?: number
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Tutorial Registry
+// ─────────────────────────────────────────────────────────────────────────────
+
+/**
+ * Import tutorial definitions from individual files
+ */
+import { playgroundTutorials } from "./definitions/playground"
+
+/**
+ * Central registry of all available tutorials
+ */
+export const TUTORIAL_REGISTRY: TutorialDefinition[] = [
+  ...playgroundTutorials
+  // Add more tutorial definitions here as they are created:
+  // ...promptStudioTutorials,
+  // ...mediaLibraryTutorials,
+  // ...flashcardsTutorials,
+]
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Helper Functions
+// ─────────────────────────────────────────────────────────────────────────────
+
+/**
+ * Match a route pattern against a pathname
+ * Supports:
+ * - Exact matches: "/options/playground" matches "/options/playground"
+ * - Wildcards: "/options/*" matches "/options/playground", "/options/media"
+ * - Partial wildcards: "/options/prompt/*" matches "/options/prompt/studio"
+ */
+function matchRoute(pattern: string, pathname: string): boolean {
+  // Exact match
+  if (pattern === pathname) {
+    return true
+  }
+
+  // Wildcard matching
+  if (pattern.includes("*")) {
+    const regexPattern = pattern
+      .replace(/[.*+?^${}()|[\]\\]/g, "\\$&") // Escape special regex chars
+      .replace(/\\\*/g, ".*") // Replace escaped * with .*
+    const regex = new RegExp(`^${regexPattern}$`)
+    return regex.test(pathname)
+  }
+
+  return false
+}
+
+/**
+ * Get all tutorials available for a given route
+ * @param pathname - The current route pathname (e.g., "/options/playground")
+ * @returns Array of tutorials matching the route, sorted by priority
+ */
+export function getTutorialsForRoute(pathname: string): TutorialDefinition[] {
+  const matches = TUTORIAL_REGISTRY.filter((tutorial) =>
+    matchRoute(tutorial.routePattern, pathname)
+  )
+
+  // Sort by priority (lower priority number = higher in list)
+  return matches.sort((a, b) => (a.priority ?? 100) - (b.priority ?? 100))
+}
+
+/**
+ * Get a specific tutorial by its ID
+ * @param tutorialId - The unique ID of the tutorial
+ * @returns The tutorial definition or undefined if not found
+ */
+export function getTutorialById(
+  tutorialId: string
+): TutorialDefinition | undefined {
+  return TUTORIAL_REGISTRY.find((tutorial) => tutorial.id === tutorialId)
+}
+
+/**
+ * Get the primary/basics tutorial for a route (for first-visit prompts)
+ * @param pathname - The current route pathname
+ * @returns The primary tutorial (first one with "basics" in ID, or first tutorial)
+ */
+export function getPrimaryTutorialForRoute(
+  pathname: string
+): TutorialDefinition | undefined {
+  const tutorials = getTutorialsForRoute(pathname)
+  if (tutorials.length === 0) return undefined
+
+  // Prefer tutorials with "basics" or "overview" in the ID
+  const basicsTutorial = tutorials.find(
+    (t) => t.id.includes("basics") || t.id.includes("overview")
+  )
+
+  return basicsTutorial || tutorials[0]
+}
+
+/**
+ * Check if any tutorials are available for a route
+ * @param pathname - The current route pathname
+ * @returns True if at least one tutorial is available
+ */
+export function hasTutorialsForRoute(pathname: string): boolean {
+  return getTutorialsForRoute(pathname).length > 0
+}
+
+/**
+ * Get count of tutorials for a route
+ * @param pathname - The current route pathname
+ * @returns Number of available tutorials
+ */
+export function getTutorialCountForRoute(pathname: string): number {
+  return getTutorialsForRoute(pathname).length
+}

@@ -31,7 +31,8 @@ const DOCUMENT_EXTENSIONS = [
   ".rtf",
   ".odt",
   ".txt",
-  ".md"
+  ".md",
+  ".markdown"
 ]
 
 const isSubdomainOf = (host: string, domain: string): boolean =>
@@ -94,6 +95,7 @@ export const inferMediaTypeFromMime = (raw: string): DetectedMediaType => {
   if (t.startsWith("video/")) return "video"
   if (t.includes("pdf")) return "pdf"
   if (t.includes("epub") || t.includes("mobi")) return "ebook"
+  if (t.includes("markdown")) return "document"
   if (t.includes("html")) return "html"
   return "auto"
 }

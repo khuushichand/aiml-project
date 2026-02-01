@@ -998,7 +998,9 @@ class SessionManager:
         refresh_token: str,
         ip_address: Optional[str] = None,
         user_agent: Optional[str] = None,
-        device_id: Optional[str] = None
+        device_id: Optional[str] = None,
+        expires_at_override: Optional[datetime] = None,
+        refresh_expires_at_override: Optional[datetime] = None,
     ) -> Dict[str, Any]:
         """
         Create a new session for a user
@@ -1010,6 +1012,8 @@ class SessionManager:
             ip_address: Client IP address
             user_agent: Client user agent string
             device_id: Optional device identifier
+            expires_at_override: Optional override for access token expiry
+            refresh_expires_at_override: Optional override for refresh token expiry
 
         Returns:
             Session information dictionary
@@ -1039,6 +1043,11 @@ class SessionManager:
         refresh_jti, refresh_exp_override = self._extract_token_metadata(refresh_token)
         if refresh_exp_override:
             refresh_expires_at = refresh_exp_override
+        # Explicit overrides win when supplied (e.g., MFA pending sessions).
+        if expires_at_override:
+            expires_at = expires_at_override
+        if refresh_expires_at_override:
+            refresh_expires_at = refresh_expires_at_override
 
         try:
             db_pool = await self._ensure_db_pool()

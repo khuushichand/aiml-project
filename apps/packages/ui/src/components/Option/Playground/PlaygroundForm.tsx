@@ -16,7 +16,6 @@ import {
   Modal,
   Button
 } from "antd"
-import { Image } from "antd"
 import { useWebUI } from "~/store/webui"
 import { defaultEmbeddingModelForRag } from "~/services/tldw-server"
 import {
@@ -37,7 +36,10 @@ import {
   PaperclipIcon,
   Gauge,
   Search,
-  CornerUpLeft
+  CornerUpLeft,
+  Settings2,
+  HelpCircle,
+  ArrowRight
 } from "lucide-react"
 import { getVariable } from "@/utils/select-variable"
 import { useTranslation } from "react-i18next"
@@ -50,6 +52,7 @@ import { formatPinnedResults } from "@/utils/rag-format"
 import { useStorage } from "@plasmohq/storage/hook"
 import { useTabMentions } from "~/hooks/useTabMentions"
 import { useFocusShortcuts } from "~/hooks/keyboard"
+import { isMac } from "@/hooks/useKeyboardShortcuts"
 import { useDraftPersistence } from "@/hooks/useDraftPersistence"
 import { useSelectedCharacter } from "@/hooks/useSelectedCharacter"
 import { useVoiceChatSettings } from "@/hooks/useVoiceChatSettings"
@@ -78,7 +81,7 @@ import { tldwClient, type ConversationState } from "@/services/tldw/TldwApiClien
 import { CharacterSelect } from "@/components/Common/CharacterSelect"
 import { ProviderIcons } from "@/components/Common/ProviderIcon"
 import type { Character } from "@/types/character"
-import { KnowledgePanel } from "@/components/Knowledge"
+import { KnowledgePanel, type KnowledgeTab } from "@/components/Knowledge"
 import { BetaTag } from "@/components/Common/Beta"
 import {
   SlashCommandMenu,
@@ -89,6 +92,9 @@ import { useUiModeStore } from "@/store/ui-mode"
 import { useStoreChatModelSettings } from "@/store/model"
 import { TokenProgressBar } from "./TokenProgressBar"
 import { AttachmentsSummary } from "./AttachmentsSummary"
+import { VoiceChatIndicator } from "./VoiceChatIndicator"
+import { VoiceModeSelector } from "./VoiceModeSelector"
+import { PlaygroundTour, usePlaygroundTour } from "./PlaygroundTour"
 import {
   ParameterPresets,
   SystemPromptTemplatesButton,
@@ -309,6 +315,7 @@ export const PlaygroundForm = ({ droppedFiles }: Props) => {
   const [showQueuedBanner, setShowQueuedBanner] = React.useState(true)
   const [documentGeneratorOpen, setDocumentGeneratorOpen] =
     React.useState(false)
+  const [voiceModeSelectorOpen, setVoiceModeSelectorOpen] = React.useState(false)
   const [promptInsertOpen, setPromptInsertOpen] = React.useState(false)
   const [promptInsertChoice, setPromptInsertChoice] =
     React.useState<PromptInsertItem | null>(null)
@@ -351,10 +358,15 @@ export const PlaygroundForm = ({ droppedFiles }: Props) => {
   const serverSaveInFlightRef = React.useRef(false)
   const uiMode = useUiModeStore((state) => state.mode)
   const isProMode = uiMode === "pro"
+  const { runTour, completeTour } = usePlaygroundTour()
   const [contextToolsOpen, setContextToolsOpen] = useStorage(
     "playgroundKnowledgeSearchOpen",
     false
   )
+  const [knowledgePanelTab, setKnowledgePanelTab] =
+    React.useState<KnowledgeTab>("search")
+  const [knowledgePanelTabRequestId, setKnowledgePanelTabRequestId] =
+    React.useState(0)
   const replyLabel = replyTarget
     ? [
         t("common:replyingTo", "Replying to"),
@@ -443,6 +455,29 @@ export const PlaygroundForm = ({ droppedFiles }: Props) => {
     }
   }, [compareFeatureEnabled, compareMode, setCompareMode])
 
+  // Auto-select model on initial load when no model is selected
+  // Priority: 1) First favorite model, 2) First available model
+  React.useEffect(() => {
+    if (selectedModel || !composerModels?.length) return
+
+    // Try to find first favorite model
+    if (favoriteModels?.length) {
+      const firstFavorite = (composerModels as any[]).find(m =>
+        favoriteModels.includes(String(m.model))
+      )
+      if (firstFavorite) {
+        setSelectedModel(firstFavorite.model)
+        return
+      }
+    }
+
+    // Fall back to first available model
+    const firstModel = (composerModels as any[])[0]
+    if (firstModel?.model) {
+      setSelectedModel(firstModel.model)
+    }
+  }, [composerModels, selectedModel, favoriteModels, setSelectedModel])
+
   const compareModeActive = compareFeatureEnabled && compareMode
 
   const modelSummaryLabel = React.useMemo(() => {
@@ -525,12 +560,15 @@ export const PlaygroundForm = ({ droppedFiles }: Props) => {
   const apiModelLabel = React.useMemo(() => {
     if (!selectedModel) {
       return t(
-        "playground:composer.modelPlaceholder",
-        "API / model"
+        "playground:composer.selectModel",
+        "Select a model"
       )
     }
     return `${providerLabel} / ${modelSummaryLabel}`
   }, [modelSummaryLabel, providerLabel, selectedModel, t])
+
+  // Whether model selector should show warning state (no model selected)
+  const modelSelectorWarning = !selectedModel
 
   const favoriteModelSet = React.useMemo(
     () => new Set((favoriteModels || []).map((value) => String(value))),
@@ -642,42 +680,106 @@ export const PlaygroundForm = ({ droppedFiles }: Props) => {
       return aLabel.localeCompare(bLabel)
     }
 
+    // Find first favorite for "(Recommended)" tag
+    const firstFavoriteModel = favoriteModels?.length
+      ? models.find(m => favoriteModels.includes(String(m.model)))?.model
+      : null
+
+    // Generate a brief description for a model based on its capabilities
+    const getModelDescription = (model: any, capabilities: string[], contextLength: number | undefined) => {
+      const parts: string[] = []
+      const providerDisplay = getProviderDisplayName(toProviderKey(model.provider))
+
+      // Add provider context
+      parts.push(`${providerDisplay} model.`)
+
+      // Add capability descriptions
+      if (capabilities.includes("vision") || model.supportsVision) {
+        parts.push("Can analyze images.")
+      }
+      if (capabilities.includes("tools") || model.supportsTools) {
+        parts.push("Supports tool use and function calling.")
+      }
+      if (typeof contextLength === "number") {
+        if (contextLength > 100000) {
+          parts.push(`Long context (${Math.round(contextLength / 1000)}k tokens).`)
+        } else if (contextLength > 0) {
+          parts.push(`Context: ${Math.round(contextLength / 1000)}k tokens.`)
+        }
+      }
+      if (capabilities.includes("fast") || model.fast) {
+        parts.push("Optimized for speed.")
+      }
+
+      return parts.join(" ")
+    }
+
     const buildItem = (model: any) => {
       const providerRaw = toProviderKey(model.provider)
       const modelLabel = model.nickname || model.model
       const isFavorite = favoriteModelSet.has(String(model.model))
+      const isRecommended = firstFavoriteModel && String(model.model) === String(firstFavoriteModel)
       const favoriteTitle = isFavorite
         ? t("playground:composer.favoriteRemove", "Remove from favorites")
         : t("playground:composer.favoriteAdd", "Add to favorites")
 
+      // Build capability badges (max 2)
+      const capabilities = model.details?.capabilities || model.capabilities || []
+      const contextLength = model.context_length ?? model.contextLength ?? model.details?.context_length
+      const capabilityBadges: string[] = []
+      if (capabilities.includes("vision") || model.supportsVision) capabilityBadges.push("Vision")
+      if (capabilities.includes("fast") || model.fast) capabilityBadges.push("Fast")
+      if (typeof contextLength === "number" && contextLength > 100000) capabilityBadges.push("Long context")
+      if (capabilities.includes("tools") || model.supportsTools) capabilityBadges.push("Tools")
+
+      // Generate tooltip description
+      const modelDescription = getModelDescription(model, capabilities, contextLength)
+
       return {
         key: model.model,
         label: (
-          <div className="flex items-center gap-2 text-sm">
-            <ProviderIcons provider={providerRaw} className="h-3 w-3 text-text-subtle" />
-            <span className="truncate flex-1">{modelLabel}</span>
-            <button
-              type="button"
-              className="rounded p-0.5 text-text-subtle transition hover:bg-surface2"
-              onMouseDown={(event) => {
-                event.preventDefault()
-                event.stopPropagation()
-              }}
-              onClick={(event) => {
-                event.preventDefault()
-                event.stopPropagation()
-                toggleFavoriteModel(String(model.model))
-              }}
-              aria-label={favoriteTitle}
-              title={favoriteTitle}
-            >
-              <Star
-                className={`h-3.5 w-3.5 ${
-                  isFavorite ? "fill-warn text-warn" : "text-text-subtle"
-                }`}
-              />
-            </button>
-          </div>
+          <Tooltip
+            title={modelDescription}
+            placement="right"
+            mouseEnterDelay={0.5}
+            overlayStyle={{ maxWidth: 280 }}
+          >
+            <div className="flex items-center gap-2 text-sm">
+              <ProviderIcons provider={providerRaw} className="h-3 w-3 text-text-subtle" />
+              <span className="truncate flex-1">{modelLabel}</span>
+              {isRecommended && (
+                <span className="rounded-full bg-blue-100 dark:bg-blue-900/30 px-1.5 py-0.5 text-[10px] text-blue-600 dark:text-blue-400">
+                  {t("playground:composer.recommended", "Recommended")}
+                </span>
+              )}
+              {capabilityBadges.slice(0, 2).map(cap => (
+                <span key={cap} className="rounded bg-surface2 px-1 py-0.5 text-[9px] text-text-muted">
+                  {cap}
+                </span>
+              ))}
+              <button
+                type="button"
+                className="rounded p-0.5 text-text-subtle transition hover:bg-surface2"
+                onMouseDown={(event) => {
+                  event.preventDefault()
+                  event.stopPropagation()
+                }}
+                onClick={(event) => {
+                  event.preventDefault()
+                  event.stopPropagation()
+                  toggleFavoriteModel(String(model.model))
+                }}
+                aria-label={favoriteTitle}
+                title={favoriteTitle}
+              >
+                <Star
+                  className={`h-3.5 w-3.5 ${
+                    isFavorite ? "fill-warn text-warn" : "text-text-subtle"
+                  }`}
+                />
+              </button>
+            </div>
+          </Tooltip>
         ),
         onClick: () => setSelectedModel(model.model)
       }
@@ -738,6 +840,7 @@ export const PlaygroundForm = ({ droppedFiles }: Props) => {
     }))
   }, [
     composerModels,
+    favoriteModels,
     favoriteModelSet,
     filteredModels,
     modelSearchQuery,
@@ -1281,21 +1384,37 @@ export const PlaygroundForm = ({ droppedFiles }: Props) => {
               <div className="max-h-[400px] overflow-y-auto no-scrollbar">
                 {menu}
               </div>
+              <div className="p-2 border-t border-border">
+                <Link
+                  to="/docs/models"
+                  className="flex items-center gap-1.5 text-xs text-primary hover:text-primary/80 transition-colors"
+                  onClick={() => setModelDropdownOpen(false)}
+                >
+                  <HelpCircle className="h-3.5 w-3.5" />
+                  <span>{t("playground:composer.helpMeChoose", "Help me choose a model")}</span>
+                  <ArrowRight className="h-3 w-3" />
+                </Link>
+              </div>
             </div>
           )}
           trigger={["click"]}
           placement="topLeft"
         >
-          <Tooltip title={apiModelLabel} placement="top">
+          <Tooltip title={modelSelectorWarning ? t("playground:composer.selectModelTooltip", "Click to select a model") : apiModelLabel} placement="top">
             <button
               type="button"
               title={apiModelLabel}
               aria-label={apiModelLabel}
-              className="inline-flex min-w-0 items-center gap-1 rounded-full border border-border bg-surface px-2 h-9 text-[10px] cursor-pointer hover:bg-surface-hover transition-colors"
+              data-testid="model-selector"
+              className={`inline-flex min-w-0 items-center gap-1 rounded-full border px-2 h-9 text-[10px] cursor-pointer transition-colors ${
+                modelSelectorWarning
+                  ? "border-warn/50 bg-warn/10 text-warn hover:bg-warn/20"
+                  : "border-border bg-surface hover:bg-surface-hover"
+              }`}
             >
               <ProviderIcons
                 provider={resolvedProviderKey}
-                className="h-3 w-3 text-text-subtle"
+                className={`h-3 w-3 ${modelSelectorWarning ? "text-warn" : "text-text-subtle"}`}
               />
               <span className="truncate max-w-[120px]">
                 {apiModelLabel}
@@ -1359,6 +1478,17 @@ export const PlaygroundForm = ({ droppedFiles }: Props) => {
     window.addEventListener('tldw:focus-composer', handler)
     return () => window.removeEventListener('tldw:focus-composer', handler)
   }, [textAreaFocus])
+
+  // Allow other components (e.g., empty state) to set the composer message
+  React.useEffect(() => {
+    const handler = (event: CustomEvent<{ message: string }>) => {
+      if (event.detail?.message) {
+        form.setFieldValue("message", event.detail.message)
+      }
+    }
+    window.addEventListener('tldw:set-composer-message', handler as EventListener)
+    return () => window.removeEventListener('tldw:set-composer-message', handler as EventListener)
+  }, [form])
 
   const buildDiscussMediaHint = (payload: {
     mediaId?: string
@@ -1440,6 +1570,19 @@ export const PlaygroundForm = ({ droppedFiles }: Props) => {
     setShowQueuedBanner((prev) => (prev === next ? prev : next))
   }, [queuedMessages.length])
 
+  const notifyImageAttachmentDisabled = React.useCallback(() => {
+    notificationApi.warning({
+      message: t(
+        "playground:attachments.imageDisabledTitle",
+        "Image attachments disabled"
+      ),
+      description: t(
+        "playground:attachments.imageDisabledBody",
+        "Disable Knowledge Search to attach images."
+      )
+    })
+  }, [notificationApi, t])
+
   const onFileInputChange = React.useCallback(
     async (e: React.ChangeEvent<HTMLInputElement>) => {
       if (e.target.files && e.target.files[0]) {
@@ -1454,6 +1597,10 @@ export const PlaygroundForm = ({ droppedFiles }: Props) => {
 
         const isImage = file.type.startsWith("image/")
         if (isImage) {
+          if (chatMode === "rag") {
+            notifyImageAttachmentDisabled()
+            return
+          }
           const base64 = await toBase64(file)
           form.setFieldValue("image", base64)
         } else {
@@ -1461,7 +1608,14 @@ export const PlaygroundForm = ({ droppedFiles }: Props) => {
         }
       }
     },
-    [form, handleFileUpload, otherUnsupportedTypes, toBase64]
+    [
+      chatMode,
+      form,
+      handleFileUpload,
+      notifyImageAttachmentDisabled,
+      otherUnsupportedTypes,
+      toBase64
+    ]
   )
 
   const onInputChange = React.useCallback(
@@ -1476,6 +1630,10 @@ export const PlaygroundForm = ({ droppedFiles }: Props) => {
 
         const isImage = e.type.startsWith("image/")
         if (isImage) {
+          if (chatMode === "rag") {
+            notifyImageAttachmentDisabled()
+            return
+          }
           const base64 = await toBase64(e)
           form.setFieldValue("image", base64)
         } else {
@@ -1487,7 +1645,15 @@ export const PlaygroundForm = ({ droppedFiles }: Props) => {
         }
       }
     },
-    [form, handleFileUpload, onFileInputChange, otherUnsupportedTypes, toBase64]
+    [
+      chatMode,
+      form,
+      handleFileUpload,
+      notifyImageAttachmentDisabled,
+      onFileInputChange,
+      otherUnsupportedTypes,
+      toBase64
+    ]
   )
 
   const syncCollapsedCaret = React.useCallback(
@@ -2628,9 +2794,29 @@ export const PlaygroundForm = ({ droppedFiles }: Props) => {
     })
   }, [history.length, notificationApi, setHistory, t])
 
-  const handleToggleContextTools = React.useCallback(() => {
-    setContextToolsOpen(!contextToolsOpen)
-  }, [contextToolsOpen, setContextToolsOpen])
+  const requestKnowledgePanelTab = React.useCallback((tab: KnowledgeTab) => {
+    setKnowledgePanelTab(tab)
+    setKnowledgePanelTabRequestId((id) => id + 1)
+  }, [])
+
+  const openKnowledgePanel = React.useCallback(
+    (tab: KnowledgeTab) => {
+      requestKnowledgePanelTab(tab)
+      setContextToolsOpen(true)
+    },
+    [requestKnowledgePanelTab, setContextToolsOpen]
+  )
+
+  const toggleKnowledgePanel = React.useCallback(
+    (tab: KnowledgeTab = "search") => {
+      const nextOpen = !contextToolsOpen
+      if (nextOpen) {
+        requestKnowledgePanelTab(tab)
+      }
+      setContextToolsOpen(nextOpen)
+    },
+    [contextToolsOpen, requestKnowledgePanelTab, setContextToolsOpen]
+  )
 
   const handleImageUpload = React.useCallback(() => {
     inputRef.current?.click()
@@ -2917,6 +3103,28 @@ export const PlaygroundForm = ({ droppedFiles }: Props) => {
     }
   }, [t, voiceChat.state])
 
+  // Update window title when voice chat is active
+  React.useEffect(() => {
+    if (!voiceChatEnabled || voiceChat.state === "idle") return
+
+    const originalTitle = document.title
+    const emoji = {
+      connecting: "🔌",
+      listening: "🎤",
+      thinking: "💭",
+      speaking: "🔊",
+      error: "⚠️"
+    }[voiceChat.state] || ""
+
+    if (emoji) {
+      document.title = `${emoji} ${voiceChatStatusLabel} - Chat`
+    }
+
+    return () => {
+      document.title = originalTitle
+    }
+  }, [voiceChatEnabled, voiceChat.state, voiceChatStatusLabel])
+
   const handleVoiceChatToggle = React.useCallback(() => {
     if (!voiceChatAvailable) {
       notificationApi.error({
@@ -3190,7 +3398,7 @@ export const PlaygroundForm = ({ droppedFiles }: Props) => {
       </div>
       <div className="flex flex-col gap-1">
         <span className="text-[11px] text-text-muted">
-          {t("playground:voiceChat.ttsModeLabel", "TTS mode")}
+          {t("playground:voiceChat.ttsModeLabel", "Response audio")}
         </span>
         <Radio.Group
           size="small"
@@ -3208,7 +3416,7 @@ export const PlaygroundForm = ({ droppedFiles }: Props) => {
       </div>
       <div className="flex items-center justify-between gap-2">
         <span className="text-[11px] text-text-muted">
-          {t("playground:voiceChat.autoResume", "Auto resume")}
+          {t("playground:voiceChat.autoResume", "Continue listening after response")}
         </span>
         <Switch
           size="small"
@@ -3218,7 +3426,7 @@ export const PlaygroundForm = ({ droppedFiles }: Props) => {
       </div>
       <div className="flex items-center justify-between gap-2">
         <span className="text-[11px] text-text-muted">
-          {t("playground:voiceChat.bargeIn", "Barge-in")}
+          {t("playground:voiceChat.bargeIn", "Interrupt while speaking")}
         </span>
         <Switch
           size="small"
@@ -3235,240 +3443,197 @@ export const PlaygroundForm = ({ droppedFiles }: Props) => {
     }
   }, [contextToolsOpen, reloadTabs])
 
+  // State for collapsible advanced section in tools popover
+  const [advancedToolsExpanded, setAdvancedToolsExpanded] = React.useState(isProMode)
+
   const moreToolsContent = React.useMemo(
     () => (
-      <div className="flex w-64 flex-col gap-3">
-        <button
-          type="button"
-          onClick={handleToggleContextTools}
-          aria-pressed={contextToolsOpen}
-          title={
-            contextToolsOpen
-              ? (t(
-                  "playground:composer.contextKnowledgeClose",
-                  "Close Search & Context"
-                ) as string)
-              : (t(
-                  "playground:composer.contextKnowledge",
-                  "Search & Context"
-                ) as string)
-          }
-          className={`flex w-full items-center justify-between rounded-md px-2 py-1 text-sm transition ${
-            contextToolsOpen
-              ? "bg-surface2 text-accent"
-              : "text-text hover:bg-surface2"
-          }`}
-        >
-          <span>
-            {contextToolsOpen
-              ? t(
-                  "playground:composer.contextKnowledgeClose",
-                  "Close Search & Context"
-                )
-              : t(
-                  "playground:composer.contextKnowledge",
-                  "Search & Context"
-                )}
-          </span>
-          <Search className="h-4 w-4" />
-        </button>
-        <div className="flex items-center justify-between">
-          <span className="text-sm text-text">
-            {webSearch
-              ? t("playground:actions.webSearchOn")
-              : t("playground:actions.webSearchOff")}
-          </span>
-          <Switch
-            size="small"
-            checked={webSearch}
-            onChange={(value) => setWebSearch(value)}
-            checkedChildren={t("form.webSearch.on")}
-            unCheckedChildren={t("form.webSearch.off")}
-          />
-        </div>
-        <div className="panel-divider my-1" />
+      <div className="flex w-72 flex-col gap-2 p-1">
+        {/* SEARCH & CONTEXT Section */}
         <div className="flex flex-col gap-2">
-          <div className="text-xs font-semibold text-text-muted">
-            {t("playground:voiceChat.settingsTitle", "Voice chat settings")}
-          </div>
-          <Tooltip
+          <span className="text-[10px] font-semibold uppercase text-text-muted tracking-wider px-2">
+            {t("playground:tools.searchContext", "Search & Context")}
+          </span>
+          <button
+            type="button"
+            onClick={() => toggleKnowledgePanel("search")}
+            aria-pressed={contextToolsOpen}
             title={
-              voiceChatAvailable
-                ? voiceChatStatusLabel
-                : t("playground:voiceChat.unavailableTitle", "Voice chat unavailable")
+              contextToolsOpen
+                ? (t(
+                    "playground:composer.contextKnowledgeClose",
+                    "Close Search & Context"
+                  ) as string)
+                : (t(
+                    "playground:composer.contextKnowledge",
+                    "Knowledge Search"
+                  ) as string)
             }
-          >
-            <button
-              type="button"
-              onClick={handleVoiceChatToggle}
-              disabled={!voiceChatAvailable || isSending}
-              className={`flex w-full items-center justify-between rounded-md px-2 py-1 text-sm transition disabled:cursor-not-allowed disabled:opacity-50 ${
-                voiceChat.state === "error"
-                  ? "text-red-600"
-                  : voiceChatEnabled && voiceChat.state !== "idle"
-                    ? "bg-surface2 text-primaryStrong"
-                    : "text-text hover:bg-surface2"
-              }`}
-            >
-              <span>{voiceChatStatusLabel}</span>
-              <Headphones className="h-4 w-4" />
-            </button>
-          </Tooltip>
-          <div
-            className={`flex flex-col gap-2 text-xs ${
-              !voiceChatAvailable ? "pointer-events-none opacity-50" : ""
+            className={`flex w-full items-center justify-between rounded-md px-2 py-1.5 text-sm transition ${
+              contextToolsOpen
+                ? "bg-surface2 text-accent"
+                : "text-text hover:bg-surface2"
             }`}
           >
-            {voiceChatSettingsFields}
+            <span>
+              {t("playground:composer.contextKnowledge", "Knowledge Search")}
+            </span>
+            <Search className="h-4 w-4" />
+          </button>
+          <div className="flex items-center justify-between px-2">
+            <span className="text-sm text-text">
+              {t("playground:actions.webSearchOff", "Web search")}
+            </span>
+            <Switch
+              size="small"
+              checked={webSearch}
+              onChange={(value) => setWebSearch(value)}
+            />
           </div>
         </div>
-        {imageProviderControl}
-        <div className="panel-divider my-1" />
-        <div className="text-xs font-semibold text-text-muted">
-          {t("playground:composer.toolChoiceLabel", "Tool choice")}
-        </div>
-        <Tooltip
-          title={
-            !hasMcp
-              ? t(
-                  "playground:composer.mcpToolsUnavailable",
-                  "MCP tools unavailable"
-                )
-              : mcpHealthState === "unhealthy"
-                ? t("playground:composer.mcpToolsUnhealthy", "MCP tools are offline")
-                : mcpToolsLoading
-                  ? t("playground:composer.mcpToolsLoading", "Loading tools...")
-                  : mcpTools.length === 0
-                    ? t("playground:composer.mcpToolsEmpty", "No MCP tools available")
-                    : ""
-          }
-          open={
-            !hasMcp ||
-            mcpHealthState === "unhealthy" ||
-            mcpToolsLoading ||
-            mcpTools.length === 0
-              ? undefined
-              : false
-          }
-        >
-          <Radio.Group
-            size="small"
-            value={toolChoice}
-            onChange={(e) => setToolChoice(e.target.value as typeof toolChoice)}
-            className="flex flex-wrap gap-2"
-            aria-label={t("playground:composer.toolChoiceLabel", "Tool choice")}
-            disabled={
-              !hasMcp ||
-              mcpHealthState === "unhealthy" ||
-              mcpToolsLoading ||
-              mcpTools.length === 0
-            }
+
+        <div className="border-t border-border my-1" />
+
+        {/* ATTACHMENTS Section */}
+        <div className="flex flex-col gap-2">
+          <span className="text-[10px] font-semibold uppercase text-text-muted tracking-wider px-2">
+            {t("playground:tools.attachments", "Attachments")}
+          </span>
+          <button
+            type="button"
+            onClick={() => openKnowledgePanel("context")}
+            className="flex w-full items-center justify-between rounded-md px-2 py-1.5 text-sm text-text transition hover:bg-surface2"
           >
-            <Radio.Button value="auto">
-              {t("playground:composer.toolChoiceAuto", "Auto")}
-            </Radio.Button>
-            <Radio.Button value="required">
-              {t("playground:composer.toolChoiceRequired", "Required")}
-            </Radio.Button>
-            <Radio.Button value="none">
-              {t("playground:composer.toolChoiceNone", "None")}
-            </Radio.Button>
-          </Radio.Group>
-        </Tooltip>
-        <div className="text-xs font-semibold text-text-muted">
-          {t("playground:composer.mcpToolsLabel", "MCP tools")}
+            <span>{t("playground:attachments.manageContext", "Manage in Knowledge Panel")}</span>
+            <Settings2 className="h-4 w-4" />
+          </button>
         </div>
-        {mcpToolsLoading ? (
-          <div className="text-xs text-text-muted">
-            {t("playground:composer.mcpToolsLoading", "Loading tools...")}
-          </div>
-        ) : mcpTools.length === 0 ? (
-          <div className="text-xs text-text-muted">
-            {!hasMcp
-              ? t(
-                  "playground:composer.mcpToolsUnavailable",
-                  "MCP tools unavailable"
-                )
-              : mcpHealthState === "unhealthy"
-                ? t("playground:composer.mcpToolsUnhealthy", "MCP tools are offline")
-                : t("playground:composer.mcpToolsEmpty", "No MCP tools available")}
-          </div>
-        ) : (
-          <div className="flex flex-wrap gap-1">
-            {mcpTools.slice(0, 6).map((tool, index) => {
-              const toolFn = (tool as any)?.function
-              const name =
-                (typeof tool?.name === "string" && tool.name) ||
-                (typeof toolFn?.name === "string" && toolFn.name) ||
-                (typeof (tool as any)?.id === "string" && (tool as any).id) ||
-                `tool-${index + 1}`
-              const description =
-                (typeof tool?.description === "string" && tool.description) ||
-                (typeof toolFn?.description === "string" && toolFn.description) ||
-                ""
-              return (
-                <span
-                  key={`${name}-${index}`}
-                  title={description || name}
-                  className="rounded-full border border-border px-2 py-0.5 text-[11px] text-text"
+
+        <div className="border-t border-border my-1" />
+
+        {/* ADVANCED Section (collapsible) */}
+        <button
+          type="button"
+          onClick={() => setAdvancedToolsExpanded(!advancedToolsExpanded)}
+          className="flex items-center justify-between px-2 py-1 text-[10px] font-semibold uppercase text-text-muted tracking-wider hover:text-text transition"
+        >
+          <span>{t("playground:tools.advanced", "Advanced")}</span>
+          <ChevronRight className={`h-3 w-3 transition-transform ${advancedToolsExpanded ? "rotate-90" : ""}`} />
+        </button>
+
+        {advancedToolsExpanded && (
+          <div className="flex flex-col gap-2">
+            {/* Voice Settings */}
+            <div className="flex flex-col gap-2 px-2">
+              <Tooltip
+                title={
+                  voiceChatAvailable
+                    ? voiceChatStatusLabel
+                    : t("playground:voiceChat.unavailableTitle", "Voice chat unavailable")
+                }
+              >
+                <button
+                  type="button"
+                  onClick={handleVoiceChatToggle}
+                  disabled={!voiceChatAvailable || isSending}
+                  className={`flex w-full items-center justify-between rounded-md px-2 py-1.5 text-sm transition disabled:cursor-not-allowed disabled:opacity-50 ${
+                    voiceChat.state === "error"
+                      ? "text-red-600"
+                      : voiceChatEnabled && voiceChat.state !== "idle"
+                        ? "bg-surface2 text-primaryStrong"
+                        : "text-text hover:bg-surface2"
+                  }`}
                 >
-                  {name}
+                  <span>{t("playground:tools.voiceSettings", "Voice settings")}</span>
+                  <Headphones className="h-4 w-4" />
+                </button>
+              </Tooltip>
+              <div
+                className={`flex flex-col gap-2 text-xs ${
+                  !voiceChatAvailable ? "pointer-events-none opacity-50" : ""
+                }`}
+              >
+                {voiceChatSettingsFields}
+              </div>
+            </div>
+
+            {imageProviderControl}
+
+            {/* MCP Tools Summary */}
+            {hasMcp && (
+              <div className="px-2 py-1">
+                <div className="text-xs font-semibold text-text-muted mb-1">
+                  {t("playground:composer.mcpToolsLabel", "MCP tools")}
+                </div>
+                <span className="text-xs text-text-muted">
+                  {mcpToolsLoading
+                    ? t("playground:composer.mcpToolsLoading", "Loading tools...")
+                    : t("playground:tools.mcpSummary", "{{count}} tools available", { count: mcpTools.length })}
                 </span>
-              )
-            })}
-            {mcpTools.length > 6 && (
-              <span className="rounded-full border border-border px-2 py-0.5 text-[11px] text-text-muted">
-                +{mcpTools.length - 6}
-              </span>
+              </div>
             )}
+
+            {/* Tool Choice */}
+            <div className="px-2">
+              <div className="text-xs font-semibold text-text-muted mb-1">
+                {t("playground:composer.toolChoiceLabel", "Tool choice")}
+              </div>
+              <Radio.Group
+                size="small"
+                value={toolChoice}
+                onChange={(e) => setToolChoice(e.target.value as typeof toolChoice)}
+                className="flex flex-wrap gap-1"
+                aria-label={t("playground:composer.toolChoiceLabel", "Tool choice")}
+                disabled={
+                  !hasMcp ||
+                  mcpHealthState === "unhealthy" ||
+                  mcpToolsLoading ||
+                  mcpTools.length === 0
+                }
+              >
+                <Radio.Button value="auto">
+                  {t("playground:composer.toolChoiceAuto", "Auto")}
+                </Radio.Button>
+                <Radio.Button value="required">
+                  {t("playground:composer.toolChoiceRequired", "Required")}
+                </Radio.Button>
+                <Radio.Button value="none">
+                  {t("playground:composer.toolChoiceNone", "None")}
+                </Radio.Button>
+              </Radio.Group>
+            </div>
           </div>
         )}
+
+        <div className="border-t border-border my-1" />
+
+        {/* Footer Actions */}
         <Link
           to="/model-playground"
-          title={t("playground:actions.workspacePlayground", "Multi-model compare") as string}
-          className="flex w-full items-center justify-between rounded-md px-2 py-1 text-sm text-text transition hover:bg-surface2"
+          title={t("playground:actions.workspacePlayground", "Compare models") as string}
+          className="flex w-full items-center justify-between rounded-md px-2 py-1.5 text-sm text-text transition hover:bg-surface2"
         >
-          <span>{t("playground:actions.workspacePlayground", "Multi-model compare")}</span>
+          <span>{t("playground:actions.compareModels", "Compare models")}</span>
           <GitBranch className="h-4 w-4" />
         </Link>
-        <button
-          type="button"
-          onClick={handleImageUpload}
-          disabled={chatMode === "rag"}
-          title={t("playground:actions.upload", "Attach image") as string}
-          className="flex w-full items-center justify-between rounded-md px-2 py-1 text-sm text-text transition hover:bg-surface2 disabled:cursor-not-allowed disabled:opacity-40 disabled:text-text-muted"
-        >
-          <span>{t("playground:actions.upload", "Attach image")}</span>
-          <ImageIcon className="h-4 w-4" />
-        </button>
-        <button
-          type="button"
-          onClick={handleDocumentUpload}
-          title={t("tooltip.uploadDocuments") as string}
-          className="flex w-full items-center justify-between rounded-md px-2 py-1 text-sm text-text transition hover:bg-surface2"
-        >
-          <span>{t("tooltip.uploadDocuments")}</span>
-          <PaperclipIcon className="h-4 w-4" />
-        </button>
         <button
           type="button"
           onClick={handleClearContext}
           disabled={history.length === 0}
           title={t("tooltip.clearContext") as string}
-          className="flex w-full items-center justify-between rounded-md px-2 py-1 text-sm text-text transition hover:bg-surface2 disabled:cursor-not-allowed disabled:opacity-40 disabled:text-text-muted"
+          className="flex w-full items-center justify-between rounded-md px-2 py-1.5 text-sm text-red-600 transition hover:bg-red-50 dark:hover:bg-red-900/20 disabled:cursor-not-allowed disabled:opacity-40 disabled:text-text-muted disabled:hover:bg-transparent"
         >
-          <span>{t("tooltip.clearContext")}</span>
+          <span>{t("playground:actions.clearConversation", "Clear conversation")}</span>
           <EraserIcon className="h-4 w-4" />
         </button>
       </div>
     ),
     [
-      chatMode,
+      advancedToolsExpanded,
       contextToolsOpen,
       handleClearContext,
-      handleDocumentUpload,
-      handleImageUpload,
-      handleToggleContextTools,
+      openKnowledgePanel,
+      toggleKnowledgePanel,
       handleVoiceChatToggle,
       history.length,
       imageProviderControl,
@@ -3867,6 +4032,36 @@ export const PlaygroundForm = ({ droppedFiles }: Props) => {
     selectedDocuments.length > 0 ||
     uploadedFiles.length > 0
 
+  const voiceChatButton = voiceChatAvailable ? (
+    <Tooltip
+      title={
+        voiceChatEnabled
+          ? t("playground:voiceChat.toolbarStop", "Stop voice chat")
+          : t("playground:voiceChat.toolbarStart", "Start voice chat")
+      }
+    >
+      <button
+        type="button"
+        onClick={handleVoiceChatToggle}
+        disabled={isSending}
+        aria-label={voiceChatStatusLabel}
+        data-testid="voice-chat-button"
+        className={`flex items-center gap-1.5 rounded-full px-2 py-1.5 text-sm transition ${
+          voiceChat.state === "error"
+            ? "bg-red-100 text-red-600 dark:bg-red-900/30"
+            : voiceChatEnabled && voiceChat.state !== "idle"
+              ? "bg-primary/10 text-primary animate-pulse"
+              : "hover:bg-surface2 text-text-muted"
+        }`}
+      >
+        <Headphones className="h-4 w-4" />
+        {voiceChatEnabled && voiceChat.state !== "idle" && (
+          <span className="text-xs">{voiceChatStatusLabel}</span>
+        )}
+      </button>
+    </Tooltip>
+  ) : null
+
   const toolsButton = (
     <Popover
       trigger="click"
@@ -3879,7 +4074,8 @@ export const PlaygroundForm = ({ droppedFiles }: Props) => {
         shape={isProMode ? "rounded" : "pill"}
         iconOnly={!isProMode}
         ariaLabel={t("playground:composer.moreTools", "More tools") as string}
-        title={t("playground:composer.moreTools", "More tools") as string}>
+        title={t("playground:composer.moreTools", "More tools") as string}
+        data-testid="tools-button">
         {isProMode ? (
           <span>{t("playground:composer.toolsButton", "+Tools")}</span>
         ) : (
@@ -3887,6 +4083,110 @@ export const PlaygroundForm = ({ droppedFiles }: Props) => {
             <SlidersHorizontal className="h-4 w-4" aria-hidden="true" />
             <span className="sr-only">
               {t("playground:composer.moreTools", "More tools")}
+            </span>
+          </>
+        )}
+      </TldwButton>
+    </Popover>
+  )
+
+  const imageAttachmentDisabled =
+    chatMode === "rag"
+      ? t(
+          "playground:attachments.imageDisabledBody",
+          "Disable Knowledge Search to attach images."
+        )
+      : null
+
+  const attachmentMenu = React.useMemo(
+    () => (
+      <div className="flex w-56 flex-col gap-1 p-1">
+        <Tooltip title={imageAttachmentDisabled || undefined}>
+          <span className="block">
+            <button
+              type="button"
+              onClick={handleImageUpload}
+              disabled={chatMode === "rag"}
+              title={t("playground:actions.upload", "Attach image") as string}
+              className="flex w-full items-center justify-between rounded-md px-2 py-1.5 text-sm text-text transition hover:bg-surface2 disabled:cursor-not-allowed disabled:opacity-40 disabled:text-text-muted"
+            >
+              <span className="flex flex-col items-start">
+                <span>{t("playground:actions.attachImage", "Attach image")}</span>
+                <span className="text-[10px] text-text-muted">
+                  {t(
+                    "playground:actions.attachImageHint",
+                    "JPG/PNG (Vision)"
+                  )}
+                </span>
+              </span>
+              <ImageIcon className="h-4 w-4" />
+            </button>
+          </span>
+        </Tooltip>
+        <button
+          type="button"
+          onClick={handleDocumentUpload}
+          title={t("tooltip.uploadDocuments") as string}
+          className="flex w-full items-center justify-between rounded-md px-2 py-1.5 text-sm text-text transition hover:bg-surface2"
+        >
+          <span className="flex flex-col items-start">
+            <span>{t("playground:actions.attachDocument", "Attach document")}</span>
+            <span className="text-[10px] text-text-muted">
+              {t(
+                "playground:actions.attachDocumentHint",
+                "PDF/DOCX/TXT/CSV/MD"
+              )}
+            </span>
+          </span>
+          <PaperclipIcon className="h-4 w-4" />
+        </button>
+        <div className="border-t border-border my-1" />
+        <button
+          type="button"
+          onClick={() => openKnowledgePanel("context")}
+          className="flex w-full items-center justify-between rounded-md px-2 py-1.5 text-sm text-text transition hover:bg-surface2"
+        >
+          <span>{t("playground:attachments.manageContext", "Manage in Knowledge Panel")}</span>
+          <Settings2 className="h-4 w-4" />
+        </button>
+      </div>
+    ),
+    [
+      chatMode,
+      handleDocumentUpload,
+      handleImageUpload,
+      imageAttachmentDisabled,
+      openKnowledgePanel,
+      t
+    ]
+  )
+
+  const attachmentButton = (
+    <Popover
+      trigger="click"
+      placement="topRight"
+      content={attachmentMenu}
+      overlayClassName="playground-attachment-menu"
+    >
+      <TldwButton
+        variant="outline"
+        size="sm"
+        shape={isProMode ? "rounded" : "pill"}
+        iconOnly={!isProMode}
+        ariaLabel={t("playground:actions.attach", "Attach") as string}
+        title={t("playground:actions.attach", "Attach") as string}
+        data-testid="attachment-button"
+      >
+        {isProMode ? (
+          <span className="inline-flex items-center gap-1.5">
+            <PaperclipIcon className="h-4 w-4" aria-hidden="true" />
+            <span>{t("playground:actions.attach", "Attach")}</span>
+          </span>
+        ) : (
+          <>
+            <PaperclipIcon className="h-4 w-4" aria-hidden="true" />
+            <span className="sr-only">
+              {t("playground:actions.attach", "Attach")}
             </span>
           </>
         )}
@@ -3905,7 +4205,12 @@ export const PlaygroundForm = ({ droppedFiles }: Props) => {
               "playground:composer.connectToSend",
               "Connect to your tldw server to start chatting."
             ) as string)
-          : (t("playground:composer.submitAria", "Send message") as string)
+          : sendWhenEnter
+            ? (t("playground:composer.submitAriaEnter", "Send message (Enter)") as string)
+            : (t(
+                "playground:composer.submitAriaModEnter",
+                isMac ? "Send message (⌘+Enter)" : "Send message (Ctrl+Enter)"
+              ) as string)
       }
       aria-label={
         t("playground:composer.submitAria", "Send message") as string
@@ -4018,13 +4323,13 @@ export const PlaygroundForm = ({ droppedFiles }: Props) => {
               image={form.values.image}
               documents={selectedDocuments}
               files={uploadedFiles}
-              fileRetrievalEnabled={fileRetrievalEnabled}
-              onFileRetrievalChange={setFileRetrievalEnabled}
               onRemoveImage={() => form.setFieldValue("image", "")}
               onRemoveDocument={removeDocument}
               onClearDocuments={clearSelectedDocuments}
               onRemoveFile={removeUploadedFile}
               onClearFiles={clearUploadedFiles}
+              onOpenKnowledgePanel={() => openKnowledgePanel("context")}
+              readOnly
             />
             {/* Link to Model Playground for Compare mode */}
             <div>
@@ -4139,7 +4444,7 @@ export const PlaygroundForm = ({ droppedFiles }: Props) => {
                     type="file"
                     className="sr-only"
                     ref={fileInputRef}
-                    accept=".pdf,.doc,.docx,.txt,.csv"
+                    accept=".pdf,.doc,.docx,.txt,.csv,.md,.markdown,text/markdown"
                     multiple={false}
                     onChange={onFileInputChange}
                   />
@@ -4181,14 +4486,18 @@ export const PlaygroundForm = ({ droppedFiles }: Props) => {
                               isConnected={isConnectionReady}
                               open={contextToolsOpen}
                               onOpenChange={(nextOpen) => setContextToolsOpen(nextOpen)}
+                              openTab={knowledgePanelTab}
+                              openTabRequestId={knowledgePanelTabRequestId}
                               autoFocus
                               showToggle={false}
                               variant="embedded"
                               currentMessage={form.values.message}
                               showAttachedContext
+                              attachedImage={form.values.image}
                               attachedTabs={selectedDocuments}
                               availableTabs={availableTabs}
                               attachedFiles={uploadedFiles}
+                              onRemoveImage={() => form.setFieldValue("image", "")}
                               onRemoveTab={removeDocument}
                               onAddTab={addDocument}
                               onClearTabs={clearSelectedDocuments}
@@ -4196,6 +4505,8 @@ export const PlaygroundForm = ({ droppedFiles }: Props) => {
                               onAddFile={() => fileInputRef.current?.click()}
                               onRemoveFile={removeUploadedFile}
                               onClearFiles={clearUploadedFiles}
+                              fileRetrievalEnabled={fileRetrievalEnabled}
+                              onFileRetrievalChange={setFileRetrievalEnabled}
                             />
                           </div>
                         </div>
@@ -4298,7 +4609,7 @@ export const PlaygroundForm = ({ droppedFiles }: Props) => {
                           tabIndex={0}
                           placeholder={
                             isConnectionReady
-                              ? t("form.textarea.placeholder")
+                              ? t("playground:composer.placeholderWithSlash", "Type a message... (/ for commands)")
                               : t(
                                   "playground:composer.connectionPlaceholder",
                                   "Connect to tldw to start chatting."
@@ -4573,7 +4884,7 @@ export const PlaygroundForm = ({ droppedFiles }: Props) => {
                             <div className="flex flex-wrap items-center gap-2 text-[11px] text-text-muted">
                               <button
                                 type="button"
-                                onClick={handleToggleContextTools}
+                                onClick={() => toggleKnowledgePanel("search")}
                                 title={
                                   contextToolsOpen
                                     ? (t(
@@ -4789,6 +5100,8 @@ export const PlaygroundForm = ({ droppedFiles }: Props) => {
                                   </span>
                                 </button>
                               </Tooltip>
+                              {voiceChatButton}
+                              {attachmentButton}
                               {toolsButton}
                               {sendControl}
                             </div>
@@ -4834,7 +5147,7 @@ export const PlaygroundForm = ({ droppedFiles }: Props) => {
                           </Tooltip>
                           <button
                             type="button"
-                            onClick={handleToggleContextTools}
+                            onClick={() => toggleKnowledgePanel("search")}
                             title={
                               contextToolsOpen
                                 ? (t(
@@ -4969,6 +5282,8 @@ export const PlaygroundForm = ({ droppedFiles }: Props) => {
                               </span>
                             </TldwButton>
                           </Tooltip>
+                          {voiceChatButton}
+                          {attachmentButton}
                           {toolsButton}
                           {sendControl}
                         </div>
@@ -5167,6 +5482,28 @@ export const PlaygroundForm = ({ droppedFiles }: Props) => {
         seedMessage={documentGeneratorSeed?.message ?? null}
         seedMessageId={documentGeneratorSeed?.messageId ?? null}
       />
+      {voiceChatEnabled && voiceChat.state !== "idle" && (
+        <VoiceChatIndicator
+          state={voiceChat.state}
+          statusLabel={voiceChatStatusLabel}
+          onStop={handleVoiceChatToggle}
+        />
+      )}
+      <VoiceModeSelector
+        open={voiceModeSelectorOpen}
+        onClose={() => setVoiceModeSelectorOpen(false)}
+        onSelectDictation={() => {
+          if (speechUsesServer) {
+            handleServerDictationToggle()
+          } else {
+            handleSpeechToggle()
+          }
+        }}
+        onSelectConversation={handleVoiceChatToggle}
+        dictationAvailable={speechAvailable}
+        conversationAvailable={voiceChatAvailable}
+      />
+      <PlaygroundTour run={runTour} onComplete={completeTour} />
     </div>
   )
 }

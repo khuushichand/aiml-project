@@ -3,7 +3,6 @@
  */
 import { type Page, type Locator, expect } from "@playwright/test"
 import { waitForConnection } from "../helpers"
-import * as path from "path"
 
 export class MediaPage {
   readonly page: Page

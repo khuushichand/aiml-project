@@ -389,6 +389,7 @@ export const PlaygroundChat = () => {
                 serverChatId={serverChatId}
                 serverMessageId={message.serverMessageId}
                 messageId={message.id}
+                discoSkillComment={message.discoSkillComment}
                 historyId={stableHistoryId ?? undefined}
                 conversationInstanceId={conversationInstanceId}
                 feedbackQuery={previousUserMessage?.message ?? null}
@@ -617,6 +618,7 @@ export const PlaygroundChat = () => {
                 serverChatId={serverChatId}
                 serverMessageId={userMessage.serverMessageId}
                 messageId={userMessage.id}
+                discoSkillComment={userMessage.discoSkillComment}
                 historyId={stableHistoryId ?? undefined}
                 conversationInstanceId={conversationInstanceId}
                 feedbackQuery={previousUserMessage?.message ?? null}
@@ -946,6 +948,7 @@ export const PlaygroundChat = () => {
                         serverChatId={serverChatId}
                         serverMessageId={message.serverMessageId}
                         messageId={message.id}
+                        discoSkillComment={message.discoSkillComment}
                         historyId={stableHistoryId ?? undefined}
                         conversationInstanceId={conversationInstanceId}
                         feedbackQuery={previousUserMessage?.message ?? null}

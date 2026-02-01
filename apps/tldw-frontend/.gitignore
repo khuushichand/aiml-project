@@ -39,3 +39,7 @@ yarn-error.log*
 # typescript
 *.tsbuildinfo
 next-env.d.ts
+
+# Generated files
+# PDF.js worker is copied from node_modules during postinstall
+/public/pdf.worker.min.mjs

@@ -5,10 +5,43 @@ from typing import Optional, List
 
 from loguru import logger
 
-from .models import RuntimeType, RunSpec, SessionSpec
+from .models import RuntimeType, RunSpec, SessionSpec, TrustLevel
 from tldw_Server_API.app.core.config import settings as app_settings
 import json
 import hashlib
+
+
+# Trust-level presets define resource limits and security constraints
+# based on the trust level of the code being executed.
+TRUST_PROFILES: dict[TrustLevel, dict] = {
+    TrustLevel.trusted: {
+        "max_cpu": 8,
+        "max_mem_mb": 16384,
+        "timeout_sec": 600,
+        "network_policy": "allowlist",  # Can access configured egress
+        "workspace_cap_mb": 512,
+        "pids_limit": 512,
+        "ulimit_nofile": 4096,
+    },
+    TrustLevel.standard: {
+        "max_cpu": 4,
+        "max_mem_mb": 8192,
+        "timeout_sec": 300,
+        "network_policy": "deny_all",
+        "workspace_cap_mb": 256,
+        "pids_limit": 256,
+        "ulimit_nofile": 1024,
+    },
+    TrustLevel.untrusted: {
+        "max_cpu": 1,
+        "max_mem_mb": 1024,
+        "timeout_sec": 60,
+        "network_policy": "deny_all",
+        "workspace_cap_mb": 64,
+        "pids_limit": 64,
+        "ulimit_nofile": 256,
+    },
+}
 
 
 @dataclass
@@ -98,50 +131,119 @@ class SandboxPolicy:
             super().__init__(f"Requested runtime '{runtime.value}' is unavailable")
             self.runtime = runtime
 
-    def select_runtime(self, requested: Optional[RuntimeType], firecracker_available: bool) -> RuntimeType:
+    def select_runtime(
+        self,
+        requested: Optional[RuntimeType],
+        firecracker_available: bool,
+        lima_available: bool = False,
+    ) -> RuntimeType:
         if requested is not None:
             if requested == RuntimeType.firecracker and not firecracker_available:
                 # Do not silently fallback; surface unavailability to caller
+                raise SandboxPolicy.RuntimeUnavailable(requested)
+            if requested == RuntimeType.lima and not lima_available:
                 raise SandboxPolicy.RuntimeUnavailable(requested)
             return requested
         # No explicit request: honor default, but still enforce availability
         if self.cfg.default_runtime == RuntimeType.firecracker and not firecracker_available:
             raise SandboxPolicy.RuntimeUnavailable(self.cfg.default_runtime)
+        if self.cfg.default_runtime == RuntimeType.lima and not lima_available:
+            raise SandboxPolicy.RuntimeUnavailable(self.cfg.default_runtime)
         return self.cfg.default_runtime
 
-    def apply_to_session(self, spec: SessionSpec, firecracker_available: bool) -> SessionSpec:
-        spec.runtime = self.select_runtime(spec.runtime, firecracker_available)
+    def apply_to_session(
+        self,
+        spec: SessionSpec,
+        firecracker_available: bool,
+        lima_available: bool = False,
+    ) -> SessionSpec:
+        spec.runtime = self.select_runtime(spec.runtime, firecracker_available, lima_available)
+
+        # Apply trust-level profile constraints
+        trust = spec.trust_level or TrustLevel.standard
+        profile = TRUST_PROFILES.get(trust, TRUST_PROFILES[TrustLevel.standard])
+
         if not spec.network_policy:
-            spec.network_policy = self.cfg.network_default
-        # Clamp resources to policy maxima
+            spec.network_policy = profile.get("network_policy", self.cfg.network_default)
+
+        # Apply trust-level resource limits (more restrictive of trust profile and global policy)
+        profile_max_cpu = float(profile.get("max_cpu", self.cfg.max_cpu))
+        profile_max_mem = int(profile.get("max_mem_mb", self.cfg.max_mem_mb))
+        profile_max_timeout = int(profile.get("timeout_sec", 300))
+
+        # Effective max is the minimum of global policy and trust profile
+        effective_max_cpu = min(self.cfg.max_cpu, profile_max_cpu)
+        effective_max_mem = min(self.cfg.max_mem_mb, profile_max_mem)
+
+        # Clamp resources to effective maxima
         try:
-            if spec.cpu_limit is not None and spec.cpu_limit > self.cfg.max_cpu:
-                spec.cpu_limit = float(self.cfg.max_cpu)
+            if spec.cpu_limit is None:
+                spec.cpu_limit = effective_max_cpu
+            elif spec.cpu_limit > effective_max_cpu:
+                spec.cpu_limit = float(effective_max_cpu)
         except Exception:
             pass
         try:
-            if spec.memory_mb is not None and spec.memory_mb > self.cfg.max_mem_mb:
-                spec.memory_mb = int(self.cfg.max_mem_mb)
+            if spec.memory_mb is None:
+                spec.memory_mb = effective_max_mem
+            elif spec.memory_mb > effective_max_mem:
+                spec.memory_mb = int(effective_max_mem)
         except Exception:
             pass
+        try:
+            if spec.timeout_sec > profile_max_timeout:
+                spec.timeout_sec = profile_max_timeout
+        except Exception:
+            pass
+
         return spec
 
-    def apply_to_run(self, spec: RunSpec, firecracker_available: bool) -> RunSpec:
+    def apply_to_run(
+        self,
+        spec: RunSpec,
+        firecracker_available: bool,
+        lima_available: bool = False,
+    ) -> RunSpec:
         # Always go through selection to enforce availability on defaults
-        spec.runtime = self.select_runtime(spec.runtime, firecracker_available)
+        spec.runtime = self.select_runtime(spec.runtime, firecracker_available, lima_available)
+
+        # Apply trust-level profile constraints
+        trust = spec.trust_level or TrustLevel.standard
+        profile = TRUST_PROFILES.get(trust, TRUST_PROFILES[TrustLevel.standard])
+
         if not spec.network_policy:
-            spec.network_policy = self.cfg.network_default
-        # Clamp resources to policy maxima
+            spec.network_policy = profile.get("network_policy", self.cfg.network_default)
+
+        # Apply trust-level resource limits (more restrictive of trust profile and global policy)
+        profile_max_cpu = float(profile.get("max_cpu", self.cfg.max_cpu))
+        profile_max_mem = int(profile.get("max_mem_mb", self.cfg.max_mem_mb))
+        profile_max_timeout = int(profile.get("timeout_sec", 300))
+
+        # Effective max is the minimum of global policy and trust profile
+        effective_max_cpu = min(self.cfg.max_cpu, profile_max_cpu)
+        effective_max_mem = min(self.cfg.max_mem_mb, profile_max_mem)
+
+        # Clamp resources to effective maxima
         try:
-            if spec.cpu is not None and spec.cpu > self.cfg.max_cpu:
-                spec.cpu = float(self.cfg.max_cpu)
+            if spec.cpu is None:
+                spec.cpu = effective_max_cpu
+            elif spec.cpu > effective_max_cpu:
+                spec.cpu = float(effective_max_cpu)
         except Exception:
             pass
         try:
-            if spec.memory_mb is not None and spec.memory_mb > self.cfg.max_mem_mb:
-                spec.memory_mb = int(self.cfg.max_mem_mb)
+            if spec.memory_mb is None:
+                spec.memory_mb = effective_max_mem
+            elif spec.memory_mb > effective_max_mem:
+                spec.memory_mb = int(effective_max_mem)
         except Exception:
             pass
+        try:
+            if spec.timeout_sec > profile_max_timeout:
+                spec.timeout_sec = profile_max_timeout
+        except Exception:
+            pass
+
         return spec
 
 

@@ -560,6 +560,9 @@ export const QuickIngestModal: React.FC<Props> = ({
     perform_chunking: true,
     overwrite_existing: false
   })
+  // Chunking template state for IngestOptionsPanel
+  const [chunkingTemplateName, setChunkingTemplateName] = React.useState<string | undefined>(undefined)
+  const [autoApplyTemplate, setAutoApplyTemplate] = React.useState<boolean>(false)
   const [running, setRunning] = React.useState<boolean>(false)
   const [results, setResults] = React.useState<ResultItem[]>([])
   const [localFiles, setLocalFiles] = React.useState<File[]>([])
@@ -1865,18 +1868,48 @@ export const QuickIngestModal: React.FC<Props> = ({
       lastFileLookupRef.current = fileLookup
       lastFileIdByInstanceIdRef.current = fileIdByInstanceId
 
-      const resp = (await browser.runtime.sendMessage({
-        type: "tldw:quick-ingest-batch",
-        payload: {
-          entries,
-          files: filesPayload,
-          storeRemote,
-          processOnly,
-          common,
-          advancedValues,
-          fileDefaults
+      console.log('[QI_MODAL] About to send tldw:quick-ingest-batch', {
+        entriesCount: entries.length,
+        filesCount: filesPayload.length,
+        storeRemote,
+        processOnly
+      })
+
+      let resp: { ok: boolean; error?: string; results?: ResultItem[] } | undefined
+
+      // Try extension messaging with timeout, then fall back to direct HTTP if it fails
+      // This handles cases where extension messaging doesn't work (e.g., in Playwright tests)
+      const EXTENSION_TIMEOUT_MS = 10000
+      try {
+        const extensionPromise = browser.runtime.sendMessage({
+          type: "tldw:quick-ingest-batch",
+          payload: {
+            entries,
+            files: filesPayload,
+            storeRemote,
+            processOnly,
+            common,
+            advancedValues,
+            fileDefaults,
+            // Chunking template options
+            chunkingTemplateName,
+            autoApplyTemplate
+          }
+        })
+        const timeoutPromise = new Promise<null>((resolve) => {
+          setTimeout(() => resolve(null), EXTENSION_TIMEOUT_MS)
+        })
+        const result = await Promise.race([extensionPromise, timeoutPromise])
+        if (result === null) {
+          console.warn('[QI_MODAL] Extension messaging timed out, cannot fall back for file uploads')
+          throw new Error('Extension messaging timed out. Please try again or reload the page.')
         }
-      })) as { ok: boolean; error?: string; results?: ResultItem[] } | undefined
+        resp = result as { ok: boolean; error?: string; results?: ResultItem[] } | undefined
+        console.log('[QI_MODAL] sendMessage returned', { ok: resp?.ok, error: resp?.error })
+      } catch (sendErr: any) {
+        console.error('[QI_MODAL] sendMessage error', sendErr?.message)
+        throw sendErr
+      }
 
       if (unmountedRef.current) {
         return
@@ -1966,6 +1999,8 @@ export const QuickIngestModal: React.FC<Props> = ({
     }
   }, [
     advancedValues,
+    autoApplyTemplate,
+    chunkingTemplateName,
     clearFailure,
     common,
     createDraftsFromResults,
@@ -4105,6 +4140,10 @@ export const QuickIngestModal: React.FC<Props> = ({
           ingestConnectionStatus={ingestConnectionStatus}
           checkOnce={checkOnce}
           onClose={onClose}
+          chunkingTemplateName={chunkingTemplateName}
+          setChunkingTemplateName={setChunkingTemplateName}
+          autoApplyTemplate={autoApplyTemplate}
+          setAutoApplyTemplate={setAutoApplyTemplate}
         />
 
         {/* Inspector drawer glow and drawer - visible when queue tab active */}

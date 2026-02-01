@@ -572,7 +572,7 @@ Request body (GenerateDocumentRequest):
   "conversation_id": 123,
   "document_type": "timeline",
   "provider": "openai",
-  "model": "gpt-4o-mini",
+  "model": "gpt-4o",
   "api_key": "...",
   "specific_message": null,
   "custom_prompt": "Focus on technical decisions",
@@ -590,7 +590,7 @@ Response (synchronous):
   "title": "Conversation Timeline",
   "content": "Timeline...",
   "provider": "openai",
-  "model": "gpt-4o-mini",
+  "model": "gpt-4o",
   "generation_time_ms": 2500,
   "created_at": "2024-01-01T00:00:00Z"
 }
@@ -646,7 +646,7 @@ Request body (BulkGenerateRequest):
   "conversation_ids": [123, 456],
   "document_types": ["timeline", "summary", "q_and_a"],
   "provider": "openai",
-  "model": "gpt-4o-mini",
+  "model": "gpt-4o",
   "api_key": "...",
   "async_generation": true
 }
@@ -663,7 +663,7 @@ Response body (JobStatusResponse):
   "conversation_id": 123,
   "document_type": "timeline",
   "provider": "openai",
-  "model": "gpt-4o-mini",
+  "model": "gpt-4o",
   "result_content": "...",
   "created_at": "2024-01-01T00:00:00Z",
   "started_at": "2024-01-01T00:00:01Z",

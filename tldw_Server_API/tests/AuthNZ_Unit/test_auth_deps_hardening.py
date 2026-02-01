@@ -304,3 +304,27 @@ async def test_admin_rate_limit_bypass_is_principal_first(
     )
     await func(request=request, rate_limiter=object())
     assert calls["count"] == 2
+
+
+@pytest.mark.asyncio
+async def test_check_rate_limit_falls_back_to_ip_for_non_int_user_id(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("TEST_MODE", "0")
+    request = _DummyRequest()
+    request.state.user_id = "not-an-int"
+
+    calls = {"user": 0, "ip": 0}
+
+    class _StubLimiter:
+        enabled = True
+
+        async def check_user_rate_limit(self, user_id, endpoint, **kwargs):
+            calls["user"] += 1
+            return True, {}
+
+        async def check_rate_limit(self, identifier, endpoint, **kwargs):
+            calls["ip"] += 1
+            return True, {}
+
+    await auth_deps.check_rate_limit(request=request, rate_limiter=_StubLimiter())
+    assert calls["user"] == 0
+    assert calls["ip"] == 1

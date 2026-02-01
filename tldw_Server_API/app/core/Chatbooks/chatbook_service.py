@@ -283,9 +283,6 @@ class ChatbookService:
 
         # In-process async task registry (best-effort cancellation)
         self._tasks: _Dict[str, asyncio.Task] = {}
-        # Worker loop control
-        self._shutdown_requested = False
-        self._max_consecutive_errors = 10  # Maximum consecutive errors before worker stops
         self._prompts_db: Optional["PromptsDatabase"] = None
         self._media_db: Optional["MediaDatabase"] = None
         self._evaluations_db: Optional["EvaluationsDatabase"] = None
@@ -2017,224 +2014,6 @@ class ChatbookService:
             sig = hmac.new(secret.encode("utf-8"), msg, hashlib.sha256).hexdigest()
             return f"{base}?exp={exp}&token={sig}"
         return base
-
-    def request_shutdown(self):
-        """Request graceful shutdown of the worker loop."""
-        self._shutdown_requested = True
-        logger.info(f"Shutdown requested for chatbooks worker (user={self.user_id})")
-
-    async def _core_worker_loop(self):
-        """Background loop to process Chatbooks jobs from core Jobs manager for this user.
-
-        The worker loop:
-        - Checks for shutdown requests between iterations
-        - Tracks consecutive errors and stops if max threshold is exceeded
-        - Sleeps between iterations to avoid tight loops
-        """
-        try:
-            from tldw_Server_API.app.core.Jobs.manager import JobManager
-        except Exception:
-            logger.debug("Core Jobs manager unavailable; worker not started")
-            return
-        jm = getattr(self, "_core_jobs", None)
-        if jm is None:
-            jm = JobManager()
-            self._core_jobs = jm
-        worker_id = f"cb-worker-{self.user_id}"
-        consecutive_errors = 0
-
-        while not self._shutdown_requested:
-            try:
-                job = jm.acquire_next_job(
-                    domain="chatbooks", queue="default", lease_seconds=60, worker_id=worker_id, owner_user_id=self.user_id
-                )
-                if not job:
-                    await asyncio.sleep(1)
-                    continue
-                lease_id = str(job.get("lease_id")) if job.get("lease_id") else None
-                payload = job.get("payload") or {}
-                action = payload.get("action")
-                chatbooks_job_id = payload.get("chatbooks_job_id")
-                if action == "export":
-                    # Atomically claim the job to prevent race conditions
-                    if not self._claim_export_job(chatbooks_job_id):
-                        # Job was already claimed by another worker, skip
-                        logger.debug(f"Export job {chatbooks_job_id} already claimed, skipping")
-                        try:
-                            jm.complete_job(
-                                int(job["id"]),
-                                result={"skipped": True, "reason": "already_claimed"},
-                                worker_id=worker_id,
-                                lease_id=lease_id,
-                                completion_token=lease_id,
-                            )
-                        except Exception as exc:
-                            logger.debug(f"Failed to complete already-claimed export job: {exc}")
-                        continue
-                    # run export
-                    cs = {}
-                    for k, v in (payload.get("content_selections") or {}).items():
-                        try:
-                            cs[ContentType(k)] = v
-                        except Exception:
-                            pass
-                    ok, msg, file_path = await self._create_chatbook_sync_wrapper(
-                        name=payload.get("name"),
-                        description=payload.get("description"),
-                        content_selections=cs,
-                        author=payload.get("author"),
-                        include_media=bool(payload.get("include_media")),
-                        media_quality=str(payload.get("media_quality", "compressed")),
-                        include_embeddings=bool(payload.get("include_embeddings")),
-                        include_generated_content=bool(payload.get("include_generated_content", True)),
-                        tags=payload.get("tags") or [],
-                        categories=payload.get("categories") or [],
-                    )
-                    if ok:
-                        ej = self._get_export_job(chatbooks_job_id)
-                        if ej and ej.status != ExportStatus.CANCELLED:
-                            ej.status = ExportStatus.COMPLETED
-                            ej.completed_at = datetime.now(timezone.utc)
-                            ej.output_path = file_path
-                            try:
-                                ej.file_size_bytes = Path(file_path).stat().st_size if file_path else None
-                            except Exception:
-                                pass
-                            now_utc = datetime.now(timezone.utc)
-                            ej.expires_at = self._get_export_expiry(now_utc)
-                            download_expires_at = self._get_download_expiry(now_utc, ej.expires_at)
-                            ej.download_url = self._build_download_url(ej.job_id, download_expires_at)
-                            self._save_export_job(ej)
-                        jm.complete_job(
-                            int(job["id"]),
-                            result={"path": file_path},
-                            worker_id=worker_id,
-                            lease_id=lease_id,
-                            completion_token=lease_id,
-                        )
-                    else:
-                        ej = self._get_export_job(chatbooks_job_id)
-                        if ej:
-                            ej.status = ExportStatus.FAILED
-                            ej.completed_at = datetime.now(timezone.utc)
-                            ej.error_message = msg
-                            self._save_export_job(ej)
-                        jm.fail_job(
-                            int(job["id"]),
-                            error=str(msg),
-                            retryable=False,
-                            worker_id=worker_id,
-                            lease_id=lease_id,
-                            completion_token=lease_id,
-                        )
-                elif action == "import":
-                    # Atomically claim the job to prevent race conditions
-                    if not self._claim_import_job(chatbooks_job_id):
-                        # Job was already claimed by another worker, skip
-                        logger.debug(f"Import job {chatbooks_job_id} already claimed, skipping")
-                        try:
-                            jm.complete_job(
-                                int(job["id"]),
-                                result={"skipped": True, "reason": "already_claimed"},
-                                worker_id=worker_id,
-                                lease_id=lease_id,
-                                completion_token=lease_id,
-                            )
-                        except Exception as exc:
-                            logger.debug(f"Failed to complete already-claimed import job: {exc}")
-                        continue
-                    # reconstruct selections
-                    cs = {}
-                    for k, v in (payload.get("content_selections") or {}).items():
-                        try:
-                            cs[ContentType(k)] = v
-                        except Exception:
-                            pass
-                    conflict_raw = payload.get("conflict_resolution", "skip")
-                    try:
-                        conflict_res = ConflictResolution(conflict_raw)
-                    except Exception:
-                        conflict_res = ConflictResolution.SKIP
-
-                    import_media = bool(payload.get("import_media", False))
-                    import_embeddings = bool(payload.get("import_embeddings", False))
-
-                    unsupported_conflicts = {ConflictResolution.OVERWRITE, ConflictResolution.MERGE, ConflictResolution.ASK}
-                    if conflict_res in unsupported_conflicts:
-                        ok = False
-                        msg = (
-                            f"Conflict resolution '{conflict_res.value}' is not supported yet. "
-                            "Use 'skip' or 'rename'."
-                        )
-                    elif import_media or import_embeddings:
-                        ok = False
-                        msg = (
-                            "Media/embedding imports are not supported yet. "
-                            "Set import_media=false and import_embeddings=false."
-                        )
-                    else:
-                        ok, msg, _ = await asyncio.to_thread(
-                            self._import_chatbook_sync,
-                            (payload.get("file_token") or payload.get("file_path")), cs,
-                            conflict_res,
-                            bool(payload.get("prefix_imported", False)),
-                            import_media,
-                            import_embeddings,
-                        )
-                    import_archive = payload.get("file_token") or payload.get("file_path")
-                    ij = self._get_import_job(chatbooks_job_id)
-                    if ok:
-                        if ij and ij.status != ImportStatus.CANCELLED:
-                            ij.status = ImportStatus.COMPLETED
-                            ij.completed_at = datetime.now(timezone.utc)
-                            self._save_import_job(ij)
-                        jm.complete_job(
-                            int(job["id"]),
-                            worker_id=worker_id,
-                            lease_id=lease_id,
-                            completion_token=lease_id,
-                        )
-                    else:
-                        if ij:
-                            ij.status = ImportStatus.FAILED
-                            ij.completed_at = datetime.now(timezone.utc)
-                            ij.error_message = msg
-                            self._save_import_job(ij)
-                        jm.fail_job(
-                            int(job["id"]),
-                            error=str(msg),
-                            retryable=False,
-                            worker_id=worker_id,
-                            lease_id=lease_id,
-                            completion_token=lease_id,
-                        )
-                    if import_archive:
-                        try:
-                            archive_path = self._resolve_import_archive_path(import_archive)
-                            if archive_path.exists() and archive_path.is_file():
-                                archive_path.unlink()
-                        except Exception as exc:
-                            logger.debug(f"Failed to remove import archive {import_archive}: {exc}")
-                else:
-                    jm.fail_job(
-                        int(job["id"]),
-                        error="unknown action",
-                        retryable=False,
-                        worker_id=worker_id,
-                        lease_id=lease_id,
-                        completion_token=lease_id,
-                    )
-                # Reset consecutive error counter on successful iteration
-                consecutive_errors = 0
-            except Exception as e:
-                consecutive_errors += 1
-                logger.error(f"Core worker error ({consecutive_errors}/{self._max_consecutive_errors}): {e}")
-                if consecutive_errors >= self._max_consecutive_errors:
-                    logger.error(f"Core worker for user {self.user_id} stopping after {consecutive_errors} consecutive errors")
-                    break
-                await asyncio.sleep(1)
-
-        logger.info(f"Core worker loop exited for user {self.user_id}")
 
     def get_export_job(self, job_id: str) -> Optional[ExportJob]:
         """Get export job status."""
@@ -4314,7 +4093,7 @@ class ChatbookService:
         if not job:
             raise JobError(f"Export job {job_id} not found", job_id=job_id)
 
-        allowed_statuses = {ExportStatus.COMPLETED, ExportStatus.CANCELLED, ExportStatus.EXPIRED}
+        allowed_statuses = {ExportStatus.COMPLETED, ExportStatus.CANCELLED, ExportStatus.EXPIRED, ExportStatus.FAILED}
         if job.status not in allowed_statuses:
             return False
 
@@ -4347,7 +4126,7 @@ class ChatbookService:
         if not job:
             raise JobError(f"Import job {job_id} not found", job_id=job_id)
 
-        allowed_statuses = {ImportStatus.COMPLETED, ImportStatus.CANCELLED}
+        allowed_statuses = {ImportStatus.COMPLETED, ImportStatus.CANCELLED, ImportStatus.FAILED}
         if job.status not in allowed_statuses:
             return False
 

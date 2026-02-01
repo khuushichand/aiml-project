@@ -193,6 +193,18 @@ def get_transcription_models_payload() -> Dict[str, Any]:
                 "description": "Hugging Face model id (local or vLLM HTTP)",
             },
         ],
+        "Qwen3-ASR": [
+            {
+                "value": "qwen3-asr-1.7b",
+                "label": "Qwen3-ASR 1.7B",
+                "description": "Production quality, 30 languages + Chinese dialects",
+            },
+            {
+                "value": "qwen3-asr-0.6b",
+                "label": "Qwen3-ASR 0.6B",
+                "description": "High-throughput, resource-constrained",
+            },
+        ],
     }
 
     flat_values: List[str] = []

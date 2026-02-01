@@ -7,9 +7,10 @@ import {
   FileText,
   Globe,
   X,
-  Trash2
+  Trash2,
+  Settings2
 } from "lucide-react"
-import { Image, Switch, Tooltip } from "antd"
+import { Image, Tooltip } from "antd"
 import { DocumentChip } from "@/components/Common/Playground/DocumentChip"
 
 interface Document {
@@ -32,10 +33,6 @@ interface AttachmentsSummaryProps {
   documents: Document[]
   /** Uploaded files */
   files: UploadedFile[]
-  /** Whether file retrieval (RAG) is enabled */
-  fileRetrievalEnabled: boolean
-  /** Callback to toggle file retrieval */
-  onFileRetrievalChange: (enabled: boolean) => void
   /** Callback to remove the image */
   onRemoveImage: () => void
   /** Callback to remove a document */
@@ -46,19 +43,23 @@ interface AttachmentsSummaryProps {
   onRemoveFile: (id: string) => void
   /** Callback to clear all files */
   onClearFiles: () => void
+  /** Callback to open Knowledge Panel for managing context */
+  onOpenKnowledgePanel?: () => void
+  /** Render as read-only summary (no remove actions). */
+  readOnly?: boolean
 }
 
 export const AttachmentsSummary: React.FC<AttachmentsSummaryProps> = ({
   image,
   documents,
   files,
-  fileRetrievalEnabled,
-  onFileRetrievalChange,
   onRemoveImage,
   onRemoveDocument,
   onClearDocuments,
   onRemoveFile,
-  onClearFiles
+  onClearFiles,
+  onOpenKnowledgePanel,
+  readOnly = false
 }) => {
   const { t } = useTranslation(["playground", "common", "option"])
   const [expanded, setExpanded] = React.useState(false)
@@ -123,20 +124,22 @@ export const AttachmentsSummary: React.FC<AttachmentsSummaryProps> = ({
           </div>
         </div>
         <div className="flex items-center gap-2">
-          <Tooltip title={t("playground:attachments.clearAll", "Clear all")}>
-            <button
-              type="button"
-              onClick={(e) => {
-                e.stopPropagation()
-                handleClearAll()
-              }}
-              className="rounded p-1 text-text-subtle hover:bg-surface2 hover:text-text"
-              aria-label={t("playground:attachments.clearAll", "Clear all") as string}
-              title={t("playground:attachments.clearAll", "Clear all") as string}
-            >
-              <Trash2 className="h-3.5 w-3.5" />
-            </button>
-          </Tooltip>
+          {!readOnly && (
+            <Tooltip title={t("playground:attachments.clearAll", "Clear all")}>
+              <button
+                type="button"
+                onClick={(e) => {
+                  e.stopPropagation()
+                  handleClearAll()
+                }}
+                className="rounded p-1 text-text-subtle hover:bg-surface2 hover:text-text"
+                aria-label={t("playground:attachments.clearAll", "Clear all") as string}
+                title={t("playground:attachments.clearAll", "Clear all") as string}
+              >
+                <Trash2 className="h-3.5 w-3.5" />
+              </button>
+            </Tooltip>
+          )}
           {expanded ? (
             <ChevronUp className="h-4 w-4 text-text-subtle" />
           ) : (
@@ -158,26 +161,30 @@ export const AttachmentsSummary: React.FC<AttachmentsSummaryProps> = ({
                 <span className="font-medium">
                   {t("playground:attachments.image", "Image")}
                 </span>
-                <button
-                  type="button"
-                  onClick={onRemoveImage}
-                  className="text-text-subtle hover:text-text"
-                  aria-label={t("common:remove", "Remove") as string}
-                  title={t("common:remove", "Remove") as string}
-                >
-                  {t("common:remove", "Remove")}
-                </button>
+                {!readOnly && (
+                  <button
+                    type="button"
+                    onClick={onRemoveImage}
+                    className="text-text-subtle hover:text-text"
+                    aria-label={t("common:remove", "Remove") as string}
+                    title={t("common:remove", "Remove") as string}
+                  >
+                    {t("common:remove", "Remove")}
+                  </button>
+                )}
               </div>
               <div className="relative inline-block">
-                <button
-                  type="button"
-                  onClick={onRemoveImage}
-                  className="absolute -top-1 -left-1 z-10 flex items-center justify-center rounded-full border border-border bg-surface p-0.5 text-text hover:bg-surface2"
-                  aria-label={t("common:remove", "Remove") as string}
-                  title={t("common:remove", "Remove") as string}
-                >
-                  <X className="h-3 w-3" />
-                </button>
+                {!readOnly && (
+                  <button
+                    type="button"
+                    onClick={onRemoveImage}
+                    className="absolute -top-1 -left-1 z-10 flex items-center justify-center rounded-full border border-border bg-surface p-0.5 text-text hover:bg-surface2"
+                    aria-label={t("common:remove", "Remove") as string}
+                    title={t("common:remove", "Remove") as string}
+                  >
+                    <X className="h-3 w-3" />
+                  </button>
+                )}
                 <Image
                   src={image}
                   alt="Attached image"
@@ -193,16 +200,18 @@ export const AttachmentsSummary: React.FC<AttachmentsSummaryProps> = ({
             <div className="space-y-2">
               <div className="flex items-center justify-between text-[11px] text-text-muted">
                 <span className="font-medium">
-                  {t("playground:attachments.tabs", "Browser tabs")} ({documents.length})
+                  {t("playground:attachments.tabs", "Web pages")} ({documents.length})
                 </span>
-                <button
-                  type="button"
-                  onClick={onClearDocuments}
-                  className="text-text-subtle hover:text-text"
-                  title={t("playground:composer.clearTabs", "Remove all") as string}
-                >
-                  {t("playground:composer.clearTabs", "Remove all")}
-                </button>
+                {!readOnly && (
+                  <button
+                    type="button"
+                    onClick={onClearDocuments}
+                    className="text-text-subtle hover:text-text"
+                    title={t("playground:composer.clearTabs", "Remove all") as string}
+                  >
+                    {t("playground:composer.clearTabs", "Remove all")}
+                  </button>
+                )}
               </div>
               <div className="flex flex-wrap gap-2">
                 {documents.map((doc) => (
@@ -210,7 +219,7 @@ export const AttachmentsSummary: React.FC<AttachmentsSummaryProps> = ({
                     key={doc.id}
                     document={doc}
                     variant="compact"
-                    onRemove={onRemoveDocument}
+                    onRemove={readOnly ? undefined : onRemoveDocument}
                     removeLabel={t("option:remove", "Remove") as string}
                   />
                 ))}
@@ -222,32 +231,19 @@ export const AttachmentsSummary: React.FC<AttachmentsSummaryProps> = ({
           {files.length > 0 && (
             <div className="space-y-2">
               <div className="flex items-center justify-between text-[11px] text-text-muted">
-                <div className="flex items-center gap-3">
-                  <span className="font-medium">
-                    {t("playground:attachments.files", "Files")} ({files.length})
-                  </span>
-                  <Tooltip title={t("fileRetrievalEnabled", "Enable Knowledge Search for Documents")}>
-                    <div className="inline-flex items-center gap-1.5">
-                      <Switch
-                        size="small"
-                        checked={fileRetrievalEnabled}
-                        onChange={onFileRetrievalChange}
-                        aria-label={t("fileRetrievalEnabled") as string}
-                      />
-                      <span className="text-[10px]">
-                        {t("playground:attachments.rag", "RAG")}
-                      </span>
-                    </div>
-                  </Tooltip>
-                </div>
-                <button
-                  type="button"
-                  onClick={onClearFiles}
-                  className="text-text-subtle hover:text-text"
-                  title={t("playground:composer.clearFiles", "Remove all") as string}
-                >
-                  {t("playground:composer.clearFiles", "Remove all")}
-                </button>
+                <span className="font-medium">
+                  {t("playground:attachments.files", "Uploaded files")} ({files.length})
+                </span>
+                {!readOnly && (
+                  <button
+                    type="button"
+                    onClick={onClearFiles}
+                    className="text-text-subtle hover:text-text"
+                    title={t("playground:composer.clearFiles", "Remove all") as string}
+                  >
+                    {t("playground:composer.clearFiles", "Remove all")}
+                  </button>
+                )}
               </div>
               <div className="flex flex-wrap gap-2">
                 {files.map((file) => (
@@ -264,18 +260,35 @@ export const AttachmentsSummary: React.FC<AttachmentsSummaryProps> = ({
                         {formatFileSize(file.size)}
                       </span>
                     </div>
-                    <button
-                      type="button"
-                      onClick={() => onRemoveFile(file.id)}
-                      className="absolute -top-1 -right-1 invisible rounded-full border border-border bg-surface p-0.5 text-text shadow-sm group-hover:visible hover:bg-surface2"
-                      aria-label={t("common:remove", "Remove") as string}
-                      title={t("common:remove", "Remove") as string}
-                    >
-                      <X className="h-3 w-3" />
-                    </button>
+                    {!readOnly && (
+                      <button
+                        type="button"
+                        onClick={() => onRemoveFile(file.id)}
+                        className="absolute -top-1 -right-1 invisible rounded-full border border-border bg-surface p-0.5 text-text shadow-sm group-hover:visible hover:bg-surface2"
+                        aria-label={t("common:remove", "Remove") as string}
+                        title={t("common:remove", "Remove") as string}
+                      >
+                        <X className="h-3 w-3" />
+                      </button>
+                    )}
                   </div>
                 ))}
               </div>
+            </div>
+          )}
+
+          {/* Manage in Knowledge Panel link */}
+          {onOpenKnowledgePanel && (
+            <div className="pt-2 border-t border-border/50">
+              <button
+                type="button"
+                onClick={onOpenKnowledgePanel}
+                className="flex items-center gap-1.5 text-[11px] text-accent hover:text-accent/80 transition-colors"
+                title={t("playground:attachments.manageContext", "Manage in Knowledge Panel") as string}
+              >
+                <Settings2 className="h-3.5 w-3.5" />
+                <span>{t("playground:attachments.manageContext", "Manage in Knowledge Panel")}</span>
+              </button>
             </div>
           )}
         </div>

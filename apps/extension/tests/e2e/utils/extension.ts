@@ -14,8 +14,15 @@ async function waitForStorageSeed(page: Page) {
           return
         }
 
-        chrome.storage.local.get('__e2eSeeded', (items) => {
-          resolve(!!items.__e2eSeeded)
+        // Check both local and sync for the sentinel since we seed both
+        chrome.storage.local.get('__e2eSeeded', (localItems) => {
+          if (localItems?.__e2eSeeded) {
+            chrome.storage.sync.get('__e2eSeeded', (syncItems) => {
+              resolve(!!syncItems?.__e2eSeeded)
+            })
+          } else {
+            resolve(false)
+          }
         })
       }),
     undefined,
@@ -43,8 +50,9 @@ export interface LaunchWithExtensionResult {
 export async function launchWithExtension(
   extensionPath: string,
   {
-    seedConfig
-  }: { seedConfig?: Record<string, any> } = {}
+    seedConfig,
+    seedLocalStorage
+  }: { seedConfig?: Record<string, any>; seedLocalStorage?: Record<string, any> } = {}
 ): Promise<LaunchWithExtensionResult> {
   const isDevBuild = (dir: string) => {
     const optionsPath = path.join(dir, 'options.html')
@@ -114,13 +122,116 @@ export async function launchWithExtension(
   }
   await waitForTargets()
 
+  // Log service worker status for debugging
+  const sw = context.serviceWorkers()[0]
+  if (sw) {
+    console.log('[E2E_DEBUG] Service worker found:', sw.url())
+    // Attach console logging to service worker
+    sw.on('console', (msg) => {
+      console.log('[SW_CONSOLE]', msg.type(), msg.text())
+    })
+
+    // Add a second test listener in the service worker to verify message dispatching
+    try {
+      const listenerResult = await sw.evaluate(() => {
+        const w = globalThis as any
+        let testListenerCalled = false
+        let testListenerMessage: any = null
+
+        // Add a test listener using chrome.runtime directly
+        if (w.chrome?.runtime?.onMessage?.addListener) {
+          w.chrome.runtime.onMessage.addListener((message: any, sender: any, sendResponse: any) => {
+            console.log('[TEST_LISTENER] Received message in test listener:', message?.type)
+            if (message?.type === 'e2e:test-listener') {
+              testListenerCalled = true
+              testListenerMessage = message
+              sendResponse({ ok: true, source: 'test-listener' })
+              return true
+            }
+            return false
+          })
+          return { ok: true, listenerAdded: true }
+        }
+        return { ok: false, error: 'no chrome.runtime.onMessage.addListener' }
+      })
+      console.log('[E2E_DEBUG] Test listener added:', JSON.stringify(listenerResult))
+
+      // Now try sending a message to the test listener
+      const testResult = await sw.evaluate(async () => {
+        const w = globalThis as any
+        return new Promise((resolve) => {
+          const timeout = setTimeout(() => resolve({ ok: false, error: 'test-listener timeout' }), 3000)
+          try {
+            w.chrome.runtime.sendMessage({ type: 'e2e:test-listener', data: 'test' }, (response: any) => {
+              clearTimeout(timeout)
+              if (w.chrome.runtime.lastError) {
+                resolve({ ok: false, error: w.chrome.runtime.lastError.message, lastError: true })
+              } else {
+                resolve(response || { ok: false, error: 'no response' })
+              }
+            })
+          } catch (err: any) {
+            clearTimeout(timeout)
+            resolve({ ok: false, error: err?.message })
+          }
+        })
+      })
+      console.log('[E2E_DEBUG] Test listener ping result:', JSON.stringify(testResult))
+    } catch (err) {
+      console.log('[E2E_DEBUG] Test listener error:', err)
+    }
+  } else {
+    console.log('[E2E_DEBUG] No service worker found after waiting')
+  }
+
   const extensionId = await resolveExtensionId(context)
   const optionsUrl = `chrome-extension://${extensionId}/options.html`
   const sidepanelUrl = `chrome-extension://${extensionId}/sidepanel.html`
 
+  // --- CRITICAL FIX: Seed storage via service worker BEFORE page loads ---
+  // This ensures the connection check (which runs early in page load) finds config.
+  // The addInitScript approach below runs too late - after React mounts and checks.
+  if (seedConfig && sw) {
+    await sw.evaluate((cfg) => {
+      return new Promise<void>((resolve) => {
+        chrome.storage.local.clear(() => {
+          chrome.storage.sync.clear(() => {
+            chrome.storage.sync.set(cfg, () => {
+              chrome.storage.local.set(cfg, () => {
+                chrome.storage.sync.set({ __e2eSeeded: true }, () => {
+                  chrome.storage.local.set({ __e2eSeeded: true }, () => {
+                    resolve()
+                  })
+                })
+              })
+            })
+          })
+        })
+      })
+    }, seedConfig)
+  } else if (sw) {
+    // Clear storage when no seedConfig provided
+    await sw.evaluate(() => {
+      return new Promise<void>((resolve) => {
+        chrome.storage.local.clear(() => {
+          chrome.storage.sync.clear(() => {
+            chrome.storage.local.set({ __e2eSeeded: true }, () => {
+              chrome.storage.sync.set({ __e2eSeeded: true }, () => {
+                resolve()
+              })
+            })
+          })
+        })
+      })
+    })
+  }
+
   // Ensure each test run starts from a clean extension storage state so
   // first-run onboarding and connection flows behave deterministically.
   // Only clear once per browser context to avoid races when opening extra tabs.
+  // IMPORTANT: Seed both chrome.storage.local AND chrome.storage.sync because
+  // @plasmohq/storage defaults to sync, but some code explicitly uses local.
+  // NOTE: This addInitScript is kept for subsequent page loads within the same context.
   if (seedConfig) {
     await context.addInitScript((cfg) => {
       if (typeof chrome === 'undefined' || !chrome.storage?.local) {
@@ -129,10 +240,19 @@ export async function launchWithExtension(
 
       chrome.storage.local.get('__e2eSeeded', (items) => {
         if (items?.__e2eSeeded) return
+        // Clear and seed both storage areas
         chrome.storage.local.clear(() => {
-          chrome.storage.local.set(cfg, () => {
-            chrome.storage.local.set({ __e2eSeeded: true }, () => {
-              // Sentinel written after clear + seed complete
+          chrome.storage.sync.clear(() => {
+            // Seed local storage
+            chrome.storage.local.set(cfg, () => {
+              chrome.storage.local.set({ __e2eSeeded: true }, () => {
+                // Seed sync storage (used by @plasmohq/storage default)
+                chrome.storage.sync.set(cfg, () => {
+                  chrome.storage.sync.set({ __e2eSeeded: true }, () => {
+                    // Both storage areas seeded
+                  })
+                })
+              })
             })
           })
         })
@@ -146,13 +266,28 @@ export async function launchWithExtension(
 
       chrome.storage.local.get('__e2eSeeded', (items) => {
         if (items?.__e2eSeeded) return
+        // Clear both storage areas
         chrome.storage.local.clear(() => {
-          chrome.storage.local.set({ __e2eSeeded: true }, () => {
-            // Sentinel written after clear complete
+          chrome.storage.sync.clear(() => {
+            chrome.storage.local.set({ __e2eSeeded: true }, () => {
+              chrome.storage.sync.set({ __e2eSeeded: true }, () => {
+                // Both storage areas cleared
+              })
+            })
           })
         })
       })
     })
+  }
+
+  // Seed localStorage for tutorials and other non-extension storage
+  if (seedLocalStorage) {
+    await context.addInitScript((localStorageData) => {
+      if (typeof localStorage === 'undefined') return
+      for (const [key, value] of Object.entries(localStorageData)) {
+        localStorage.setItem(key, typeof value === 'string' ? value : JSON.stringify(value))
+      }
+    }, seedLocalStorage)
   }
 
   const page = await context.newPage()
@@ -161,6 +296,66 @@ export async function launchWithExtension(
   await page.goto(optionsUrl)
   // Wait until storage has been cleared/seeded (sentinel set)
   await waitForStorageSeed(page)
+
+  // If config was seeded, wait for the actual tldwConfig to be present in storage.
+  // This ensures the background service worker can read the config when it tries to.
+  if (seedConfig) {
+    await page.waitForFunction(
+      () =>
+        new Promise<boolean>((resolve) => {
+          if (typeof chrome === 'undefined' || !chrome.storage?.sync) {
+            resolve(false)
+            return
+          }
+          chrome.storage.sync.get('tldwConfig', (items) => {
+            resolve(!!items?.tldwConfig?.serverUrl)
+          })
+        }),
+      undefined,
+      { timeout: 5000 }
+    )
+
+    // --- Wait for React app and connection store to mount ---
+    // The store is exposed on window when the React app mounts. We must wait
+    // for it to exist before we can call checkOnce() or wait for connected state.
+    await page.waitForFunction(
+      () => {
+        const root = document.querySelector('#root')
+        if (!root) return false
+        const store = (window as any).__tldw_useConnectionStore
+        return !!store?.getState
+      },
+      undefined,
+      { timeout: 15000 }
+    )
+
+    // --- CRITICAL FIX: Force connection re-check after storage is seeded ---
+    // The connection store may have already run checkOnce() before storage was seeded.
+    // Even though we seed via SW first, there can still be timing issues where the
+    // React app mounts and checks before the SW seeding completes. Force a re-check.
+    await page.evaluate(async () => {
+      const store = (window as any).__tldw_useConnectionStore
+      if (store?.getState?.()?.checkOnce) {
+        await store.getState().checkOnce()
+      }
+    })
+
+    // --- CRITICAL FIX: Wait for actual connected state, not just storage presence ---
+    // This ensures the connection check has completed and succeeded before tests proceed.
+    // Timeout must exceed CONNECTION_TIMEOUT_MS (20 seconds) in connection.tsx to avoid
+    // race conditions when the server health check takes the full timeout duration.
+    await page.waitForFunction(
+      () => {
+        const store = (window as any).__tldw_useConnectionStore
+        if (!store) return false
+        const state = store.getState()?.state
+        // Allow connected OR offlineBypass (demo mode)
+        return state?.isConnected === true || state?.offlineBypass === true
+      },
+      undefined,
+      { timeout: 25000 }
+    )
+  }
 
   async function openSidepanel() {
     const p = await context.newPage()

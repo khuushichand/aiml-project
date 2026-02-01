@@ -62,6 +62,10 @@ from tldw_Server_API.app.services.registration_service import RegistrationServic
 from tldw_Server_API.app.core.AuthNZ.auth_governor import get_auth_governor
 from tldw_Server_API.app.core.AuthNZ.settings import Settings, get_settings, get_profile
 from tldw_Server_API.app.core.AuthNZ.api_key_manager import get_api_key_manager
+from tldw_Server_API.app.core.AuthNZ.ip_allowlist import (
+    is_single_user_ip_allowed,
+    resolve_client_ip,
+)
 from tldw_Server_API.app.core.Audit.unified_audit_service import (
     AuditEventType,
     AuditContext
@@ -95,6 +99,18 @@ router = APIRouter(
     tags=["authentication"],
     responses={404: {"description": "Not found"}}
 )
+
+def _extract_bearer_token(auth_header: Optional[str]) -> str:
+    """Parse Authorization header and return Bearer token (case-insensitive)."""
+    if not auth_header:
+        return ""
+    try:
+        scheme, _, credential = auth_header.strip().partition(" ")
+        if scheme.lower() != "bearer" or not credential.strip():
+            return ""
+        return credential.strip()
+    except Exception:
+        return ""
 
 def _build_deprecation_headers(successor: str) -> Dict[str, str]:
     try:
@@ -842,13 +858,20 @@ async def login(
             # Use unique placeholders to avoid duplicate token hash constraints
             temp_access = f"temp_access_{secrets.token_urlsafe(16)}"
             temp_refresh = f"temp_refresh_{secrets.token_urlsafe(16)}"
+            mfa_expires_at = None
+            mfa_ttl_seconds = None
+            if mfa_required:
+                mfa_ttl_seconds = _get_mfa_login_ttl_seconds()
+                mfa_expires_at = datetime.now(timezone.utc) + timedelta(seconds=mfa_ttl_seconds)
 
             temp_session_info = await session_manager.create_session(
                 user_id=user['id'],
                 access_token=temp_access,  # Will update with actual token
                 refresh_token=temp_refresh,  # Will update with actual token
                 ip_address=client_ip,
-                user_agent=user_agent
+                user_agent=user_agent,
+                expires_at_override=mfa_expires_at,
+                refresh_expires_at_override=mfa_expires_at,
             )
 
             session_id = temp_session_info['session_id']
@@ -856,7 +879,7 @@ async def login(
             if mfa_required:
                 await _ensure_mfa_cache_available(session_manager, settings)
                 session_token = secrets.token_urlsafe(32)
-                ttl_seconds = _get_mfa_login_ttl_seconds()
+                ttl_seconds = mfa_ttl_seconds or _get_mfa_login_ttl_seconds()
                 payload = {
                     "user_id": int(user["id"]),
                     "session_id": int(session_id),
@@ -1012,7 +1035,7 @@ async def logout(
 
         # Attempt to revoke tokens based on the Authorization header.
         auth_header = request.headers.get("Authorization", "") if request is not None else ""
-        token = auth_header[7:] if auth_header.startswith("Bearer ") else ""
+        token = _extract_bearer_token(auth_header)
         blacklist = get_token_blacklist()
         payload = {}
         if token:
@@ -1226,8 +1249,9 @@ async def revoke_all_sessions(
 
 @router.post("/refresh", response_model=TokenResponse)
 async def refresh_token(
-    request: RefreshTokenRequest,
+    payload: RefreshTokenRequest,
     response: Response,
+    http_request: Request,
     jwt_service: JWTService = Depends(get_jwt_service_dep),
     session_manager: SessionManager = Depends(get_session_manager_dep),
     db=Depends(get_db_transaction),
@@ -1237,7 +1261,8 @@ async def refresh_token(
     Refresh access token using refresh token
 
     Args:
-        request: RefreshTokenRequest with refresh token
+        payload: RefreshTokenRequest with refresh token
+        http_request: FastAPI request (for IP allowlist and CSRF binding)
 
     Returns:
         TokenResponse with new access_token
@@ -1268,7 +1293,10 @@ async def refresh_token(
                 or os.getenv("SINGLE_USER_API_KEY")
                 or os.getenv("API_KEY")
             )
-            if single_user_key and request.refresh_token == single_user_key:
+            if single_user_key and payload.refresh_token == single_user_key:
+                client_ip = resolve_client_ip(http_request, settings)
+                if not is_single_user_ip_allowed(client_ip, settings):
+                    raise InvalidTokenError("Invalid refresh token format")
                 user_id = int(getattr(settings, "SINGLE_USER_FIXED_ID", 1))
             else:
                 if os.getenv("TEST_MODE", "").lower() in ("1","true","yes"):
@@ -1281,7 +1309,7 @@ async def refresh_token(
         else:
             # JWT validation for multi-user mode
             try:
-                payload = jwt_service.decode_refresh_token(request.refresh_token)
+                token_payload = jwt_service.decode_refresh_token(payload.refresh_token)
             except Exception as _e:
                 if os.getenv("TEST_MODE", "").lower() in ("1","true","yes"):
                     try:
@@ -1292,7 +1320,7 @@ async def refresh_token(
                 raise
 
             # Check if token is blacklisted
-            if await session_manager.is_token_blacklisted(request.refresh_token, payload.get("jti")):
+            if await session_manager.is_token_blacklisted(payload.refresh_token, token_payload.get("jti")):
                 if os.getenv("TEST_MODE", "").lower() in ("1","true","yes"):
                     try:
                         response.headers["X-TLDW-Refresh-Stage"] = "blacklist"
@@ -1302,7 +1330,7 @@ async def refresh_token(
                 raise InvalidTokenError("Refresh token has been revoked")
 
             # JWT standard uses 'sub' for subject (user ID)
-            user_id = payload.get("sub") or payload.get("user_id")
+            user_id = token_payload.get("sub") or token_payload.get("user_id")
             if not user_id:
                 if os.getenv("TEST_MODE", "").lower() in ("1","true","yes"):
                     try:
@@ -1324,7 +1352,7 @@ async def refresh_token(
                         pass
                 raise InvalidTokenError("Invalid user ID in refresh token")
             # Capture session association when present
-            session_id = payload.get("session_id")
+            session_id = token_payload.get("session_id")
 
         # Fetch user
         user = await fetch_active_user_by_id(db, user_id)
@@ -1348,7 +1376,7 @@ async def refresh_token(
 
         # Attach user_id for middleware that binds CSRF tokens on refresh responses.
         try:
-            request.state.user_id = int(user.get("id")) if isinstance(user, dict) else None
+            http_request.state.user_id = int(user.get("id")) if isinstance(user, dict) else None
         except Exception as exc:
             logger.debug("Failed to set request.state.user_id during refresh: {}", exc)
 
@@ -1378,7 +1406,7 @@ async def refresh_token(
                 additional_claims=add_claims
             )
             # Rotate refresh token if enabled
-            new_refresh_token = request.refresh_token
+            new_refresh_token = payload.refresh_token
             if getattr(settings, "ROTATE_REFRESH_TOKENS", False):
                 new_refresh_token = jwt_service.create_refresh_token(
                     user_id=user['id'],
@@ -1388,9 +1416,9 @@ async def refresh_token(
             # Update backing session to reflect new token(s)
             try:
                 await session_manager.refresh_session(
-                    refresh_token=request.refresh_token,
+                    refresh_token=payload.refresh_token,
                     new_access_token=new_access_token,
-                    new_refresh_token=(new_refresh_token if new_refresh_token != request.refresh_token else None)
+                    new_refresh_token=(new_refresh_token if new_refresh_token != payload.refresh_token else None)
                 )
             except Exception as _sess_e:
                 # Treat missing/invalid session mapping as invalid token usage
@@ -1406,9 +1434,9 @@ async def refresh_token(
             try:
                 from datetime import datetime as _dt
                 from tldw_Server_API.app.core.AuthNZ.token_blacklist import get_token_blacklist as _get_bl
-                old_jti = payload.get("jti") if isinstance(payload, dict) else None
-                old_exp = payload.get("exp") if isinstance(payload, dict) else None
-                if old_jti and isinstance(old_exp, (int, float)) and new_refresh_token != request.refresh_token:
+                old_jti = token_payload.get("jti") if isinstance(token_payload, dict) else None
+                old_exp = token_payload.get("exp") if isinstance(token_payload, dict) else None
+                if old_jti and isinstance(old_exp, (int, float)) and new_refresh_token != payload.refresh_token:
                     expires_at = _dt.utcfromtimestamp(old_exp)
                     bl = _get_bl()
                     # Best-effort revoke; do not fail refresh if blacklist write fails
@@ -1419,7 +1447,7 @@ async def refresh_token(
                         token_type="refresh",
                         reason="refresh-rotated",
                         revoked_by=None,
-                        ip_address=(request.client.host if request and getattr(request, 'client', None) else None),
+                        ip_address=(http_request.client.host if http_request and getattr(http_request, 'client', None) else None),
                     )
             except Exception as _bl_e:
                 try:

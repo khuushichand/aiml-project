@@ -1354,7 +1354,8 @@ async def create_chat_completion(
                 # Convert ToolDefinition objects to dictionaries for validation
                 tools_as_dicts = [tool.model_dump(exclude_none=True) if hasattr(tool, 'model_dump') else tool
                                   for tool in request_data.tools]
-                validated_tools = validate_tool_definitions(tools_as_dicts)
+                provider_hint = request_data.api_provider or _get_default_provider()
+                validated_tools = validate_tool_definitions(tools_as_dicts, provider=provider_hint)
                 # Keep the validated tools as dicts since that's what the LLM API expects
                 request_data.tools = validated_tools
             if request_data.temperature is not None:

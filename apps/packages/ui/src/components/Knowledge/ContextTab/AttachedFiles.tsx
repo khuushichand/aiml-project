@@ -54,7 +54,7 @@ export const AttachedFiles: React.FC<AttachedFilesProps> = ({
       {/* Header */}
       <div className="flex items-center justify-between px-3 py-2 bg-surface2/50">
         <span className="text-xs font-semibold text-text">
-          {t("sidepanel:rag.files", "Files")}
+          {t("sidepanel:rag.files", "Uploaded Files")}
           {files.length > 0 && (
             <span className="ml-1.5 text-text-muted">({files.length})</span>
           )}

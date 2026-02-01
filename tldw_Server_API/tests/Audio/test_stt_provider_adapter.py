@@ -193,6 +193,64 @@ def test_capabilities_exposed_for_known_providers():
     assert vibe_caps.supports_streaming is False
     assert vibe_caps.supports_diarization is True
 
+    qwen3_caps = registry.get_capabilities("qwen3-asr")
+    assert qwen3_caps.supports_batch is True
+    assert qwen3_caps.supports_streaming is False
+    assert qwen3_caps.supports_diarization is False
+    assert "word timestamps" in (qwen3_caps.notes or "").lower()
+
+
+@pytest.mark.unit
+def test_resolve_provider_for_model_qwen3_asr_variants(monkeypatch):
+    spa = _import_module()
+
+    # Test qwen3-asr-1.7b
+    registry = spa.SttProviderRegistry()
+    provider, model, variant = registry.resolve_provider_for_model("qwen3-asr-1.7b")
+    assert provider == "qwen3-asr"
+    assert model == "Qwen/Qwen3-ASR-1.7B"
+    assert variant is None
+
+    # Test qwen3-asr-0.6b
+    provider, model, variant = registry.resolve_provider_for_model("qwen3-asr-0.6b")
+    assert provider == "qwen3-asr"
+    assert model == "Qwen/Qwen3-ASR-0.6B"
+    assert variant is None
+
+    # Test bare qwen3-asr defaults to 1.7B
+    provider, model, variant = registry.resolve_provider_for_model("qwen3-asr")
+    assert provider == "qwen3-asr"
+    assert model == "Qwen/Qwen3-ASR-1.7B"
+    assert variant is None
+
+
+@pytest.mark.unit
+def test_resolve_provider_for_model_qwen3_asr_aliases(monkeypatch):
+    spa = _import_module()
+
+    registry = spa.SttProviderRegistry()
+
+    # Test underscore variant
+    provider, model, variant = registry.resolve_provider_for_model("qwen3_asr_1.7b")
+    assert provider == "qwen3-asr"
+    assert model == "Qwen/Qwen3-ASR-1.7B"
+
+    # Test mixed case
+    provider, model, variant = registry.resolve_provider_for_model("Qwen3-ASR-0.6B")
+    assert provider == "qwen3-asr"
+    assert model == "Qwen/Qwen3-ASR-0.6B"
+
+
+@pytest.mark.unit
+def test_normalize_provider_name_qwen3_asr():
+    spa = _import_module()
+
+    # Test various aliases
+    assert spa._normalize_provider_name("qwen3-asr") == "qwen3-asr"
+    assert spa._normalize_provider_name("qwen3_asr") == "qwen3-asr"
+    assert spa._normalize_provider_name("qwen3asr") == "qwen3-asr"
+    assert spa._normalize_provider_name("Qwen3-ASR") == "qwen3-asr"
+
 
 @pytest.mark.unit
 def test_transcribe_batch_whisper_normalizes_artifact(monkeypatch, tmp_path):
@@ -424,3 +482,162 @@ def test_transcribe_batch_external_passes_base_dir(monkeypatch, tmp_path):
     assert artifact["text"] == "external ok"
     assert captured["path"] == str(audio_file)
     assert captured["base_dir"] == base_dir
+
+
+@pytest.mark.unit
+def test_transcribe_batch_qwen3_asr_normalizes_artifact(monkeypatch, tmp_path):
+    spa = _import_module()
+
+    audio_file = tmp_path / "sample_qwen3.wav"
+    audio_file.write_bytes(b"\x00" * 2048)
+
+    import sys
+
+    fake_qwen3_mod = types.ModuleType(
+        "tldw_Server_API.app.core.Ingestion_Media_Processing.Audio.Audio_Transcription_Qwen3ASR"
+    )
+
+    def fake_transcribe_with_qwen3_asr(
+        audio_path,
+        *,
+        model_path=None,
+        language=None,
+        word_timestamps=False,
+        base_dir=None,
+        cancel_check=None,
+    ):
+        return {
+            "text": "qwen3 transcript",
+            "language": language or "en",
+            "segments": [
+                {"start_seconds": 0.0, "end_seconds": 1.0, "Text": "qwen3 transcript"}
+            ],
+            "diarization": {"enabled": False, "speakers": None},
+            "usage": {"duration_ms": 1000, "tokens": None},
+            "metadata": {
+                "provider": "qwen3-asr",
+                "model": model_path or "./models/qwen3_asr/1.7B",
+                "source": "local",
+            },
+        }
+
+    fake_qwen3_mod.transcribe_with_qwen3_asr = fake_transcribe_with_qwen3_asr
+    sys.modules[
+        "tldw_Server_API.app.core.Ingestion_Media_Processing.Audio.Audio_Transcription_Qwen3ASR"
+    ] = fake_qwen3_mod
+
+    def fake_get_stt_config():
+        return {
+            "qwen3_asr_enabled": True,
+            "qwen3_asr_model_path": "./models/qwen3_asr/1.7B",
+        }
+
+    monkeypatch.setattr(spa, "get_stt_config", fake_get_stt_config)
+
+    adapter = spa.Qwen3ASRAdapter()
+    artifact = adapter.transcribe_batch(
+        str(audio_file),
+        model="./models/qwen3_asr/1.7B",
+        language="en",
+    )
+
+    assert artifact["text"] == "qwen3 transcript"
+    assert artifact["language"] == "en"
+    assert isinstance(artifact["segments"], list)
+    assert artifact["segments"][0]["Text"] == "qwen3 transcript"
+    assert artifact["metadata"]["provider"] == "qwen3-asr"
+    assert artifact["diarization"]["enabled"] is False
+
+
+@pytest.mark.unit
+def test_transcribe_batch_qwen3_asr_with_word_timestamps(monkeypatch, tmp_path):
+    spa = _import_module()
+
+    audio_file = tmp_path / "sample_qwen3_timestamps.wav"
+    audio_file.write_bytes(b"\x00" * 2048)
+
+    import sys
+
+    fake_qwen3_mod = types.ModuleType(
+        "tldw_Server_API.app.core.Ingestion_Media_Processing.Audio.Audio_Transcription_Qwen3ASR"
+    )
+
+    captured = {}
+
+    def fake_transcribe_with_qwen3_asr(
+        audio_path,
+        *,
+        model_path=None,
+        language=None,
+        word_timestamps=False,
+        base_dir=None,
+        cancel_check=None,
+    ):
+        captured["word_timestamps"] = word_timestamps
+        artifact = {
+            "text": "hello world",
+            "language": "en",
+            "segments": [
+                {"start_seconds": 0.0, "end_seconds": 1.0, "Text": "hello world"}
+            ],
+            "diarization": {"enabled": False, "speakers": None},
+            "usage": {"duration_ms": 1000, "tokens": None},
+            "metadata": {
+                "provider": "qwen3-asr",
+                "model": model_path or "./models/qwen3_asr/1.7B",
+                "source": "local",
+            },
+        }
+        if word_timestamps:
+            artifact["words"] = [
+                {"word": "hello", "start": 0.0, "end": 0.4},
+                {"word": "world", "start": 0.5, "end": 1.0},
+            ]
+        return artifact
+
+    fake_qwen3_mod.transcribe_with_qwen3_asr = fake_transcribe_with_qwen3_asr
+    sys.modules[
+        "tldw_Server_API.app.core.Ingestion_Media_Processing.Audio.Audio_Transcription_Qwen3ASR"
+    ] = fake_qwen3_mod
+
+    def fake_get_stt_config():
+        return {
+            "qwen3_asr_enabled": True,
+            "qwen3_asr_model_path": "./models/qwen3_asr/1.7B",
+            "qwen3_asr_aligner_enabled": True,
+        }
+
+    monkeypatch.setattr(spa, "get_stt_config", fake_get_stt_config)
+
+    adapter = spa.Qwen3ASRAdapter()
+    artifact = adapter.transcribe_batch(
+        str(audio_file),
+        model="./models/qwen3_asr/1.7B",
+        language="en",
+        word_timestamps=True,
+    )
+
+    assert captured["word_timestamps"] is True
+    assert "words" in artifact
+    assert len(artifact["words"]) == 2
+    assert artifact["words"][0]["word"] == "hello"
+
+
+@pytest.mark.unit
+def test_qwen3_asr_adapter_uses_config_default(monkeypatch):
+    spa = _import_module()
+
+    def fake_get_stt_config():
+        return {
+            "default_transcriber": "qwen3-asr",
+            "qwen3_asr_model_path": "./custom/model/path",
+        }
+
+    monkeypatch.setattr(spa, "get_stt_config", fake_get_stt_config)
+
+    registry = spa.SttProviderRegistry()
+    provider, model, variant = registry.resolve_provider_for_model(None)
+
+    assert provider == "qwen3-asr"
+    assert model == "./custom/model/path"
+    assert variant is None

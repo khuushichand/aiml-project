@@ -42,13 +42,7 @@ except Exception:  # pragma: no cover - safety
 
 from tldw_Server_API.app.core.DB_Management.Workflows_DB import WorkflowsDatabase
 from tldw_Server_API.app.core.DB_Management.DB_Manager import create_workflows_database, get_content_backend_instance
-from tldw_Server_API.app.core.Workflows.adapters import (
-    run_prompt_adapter,
-    run_rag_search_adapter,
-    run_media_ingest_adapter,
-    run_mcp_tool_adapter,
-    run_webhook_adapter,
-)
+from tldw_Server_API.app.core.Workflows.adapters import get_adapter
 from tldw_Server_API.app.core.Workflows import metrics as _wf_metrics  # ensure metrics registered
 
 
@@ -1197,61 +1191,7 @@ class WorkflowEngine:
                     pass
             ctx["add_artifact"] = _add_artifact
 
-        if step_type == "llm":
-            from tldw_Server_API.app.core.Workflows.adapters import run_llm_adapter
-            return await run_llm_adapter(step_cfg, ctx)
-        if step_type == "prompt":
-            return await run_prompt_adapter(step_cfg, ctx)
-        if step_type == "rag_search":
-            return await run_rag_search_adapter(step_cfg, ctx)
-        if step_type == "media_ingest":
-            return await run_media_ingest_adapter(step_cfg, ctx)
-        if step_type == "kanban":
-            from tldw_Server_API.app.core.Workflows.adapters import run_kanban_adapter
-            return await run_kanban_adapter(step_cfg, ctx)
-        if step_type == "mcp_tool":
-            return await run_mcp_tool_adapter(step_cfg, ctx)
-        if step_type == "tts":
-            from tldw_Server_API.app.core.Workflows.adapters import run_tts_adapter
-            return await run_tts_adapter(step_cfg, ctx)
-        if step_type == "process_media":
-            from tldw_Server_API.app.core.Workflows.adapters import run_process_media_adapter
-            return await run_process_media_adapter(step_cfg, ctx)
-        if step_type == "webhook":
-            return await run_webhook_adapter(step_cfg, ctx)
-        if step_type == "branch":
-            from tldw_Server_API.app.core.Workflows.adapters import run_branch_adapter
-            return await run_branch_adapter(step_cfg, ctx)
-        if step_type == "map":
-            from tldw_Server_API.app.core.Workflows.adapters import run_map_adapter
-            return await run_map_adapter(step_cfg, ctx)
-        if step_type == "delay":
-            from tldw_Server_API.app.core.Workflows.adapters import run_delay_adapter
-            return await run_delay_adapter(step_cfg, ctx)
-        if step_type == "log":
-            from tldw_Server_API.app.core.Workflows.adapters import run_log_adapter
-            return await run_log_adapter(step_cfg, ctx)
-        if step_type == "policy_check":
-            from tldw_Server_API.app.core.Workflows.adapters import run_policy_check_adapter
-            return await run_policy_check_adapter(step_cfg, ctx)
-        if step_type == "rss_fetch" or step_type == "atom_fetch":
-            from tldw_Server_API.app.core.Workflows.adapters import run_rss_fetch_adapter
-            return await run_rss_fetch_adapter(step_cfg, ctx)
-        if step_type == "embed":
-            from tldw_Server_API.app.core.Workflows.adapters import run_embed_adapter
-            return await run_embed_adapter(step_cfg, ctx)
-        if step_type == "translate":
-            from tldw_Server_API.app.core.Workflows.adapters import run_translate_adapter
-            return await run_translate_adapter(step_cfg, ctx)
-        if step_type == "stt_transcribe":
-            from tldw_Server_API.app.core.Workflows.adapters import run_stt_transcribe_adapter
-            return await run_stt_transcribe_adapter(step_cfg, ctx)
-        if step_type == "notify":
-            from tldw_Server_API.app.core.Workflows.adapters import run_notify_adapter
-            return await run_notify_adapter(step_cfg, ctx)
-        if step_type == "diff_change_detector":
-            from tldw_Server_API.app.core.Workflows.adapters import run_diff_change_adapter
-            return await run_diff_change_adapter(step_cfg, ctx)
+        # Handle special step types that require engine access (db, events)
         if step_type == "wait_for_human" or step_type == "wait_for_approval":
             assigned_to = self._resolve_assigned_to(step_type, step_cfg, ctx)
             if not assigned_to:
@@ -1261,8 +1201,12 @@ class WorkflowEngine:
             self.db.update_run_status(run_id, status=wait_status, status_reason="awaiting_review")
             self._append_event(run_id, wait_status, {"assigned_to": assigned_to})
             return {"__status__": wait_status, "assigned_to": assigned_to}
-        # Avoid f-string here to prevent any quoting issues across Python versions
-        raise RuntimeError("Unsupported step type: {}".format(step_type))
+
+        # Lookup adapter from registry
+        adapter = get_adapter(step_type)
+        if adapter is None:
+            raise RuntimeError("Unsupported step type: {}".format(step_type))
+        return await adapter(step_cfg, ctx)
 
     async def _reap_orphans(self) -> None:
         """Single pass to mark long-stale running steps as failed (orphaned) and requeue."""

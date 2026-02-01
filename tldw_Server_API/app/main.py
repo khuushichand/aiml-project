@@ -911,9 +911,10 @@ else:
     except Exception as _items_err:
         logger.warning(f"Items endpoints unavailable; skipping import: {_items_err}")
         _HAS_ITEMS = False
-    # Notes / Prompts
+    # Notes / Prompts / Translation
     from tldw_Server_API.app.api.v1.endpoints.notes import router as notes_router
     from tldw_Server_API.app.api.v1.endpoints.slides import router as slides_router
+    from tldw_Server_API.app.api.v1.endpoints.translate import router as translate_router
 
     # Notes Graph (stub, RBAC-wired)
     try:
@@ -4678,6 +4679,13 @@ elif _MINIMAL_TEST_APP:
         app.include_router(notes_router, prefix=f"{API_V1_PREFIX}/notes", tags=["notes"])
     except Exception as _notes_min_err:
         logger.debug(f"Skipping notes router in minimal test app: {_notes_min_err}")
+    # Translation endpoints
+    try:
+        from tldw_Server_API.app.api.v1.endpoints.translate import router as translate_router
+
+        app.include_router(translate_router, prefix=f"{API_V1_PREFIX}", tags=["translation"])
+    except Exception as _translate_min_err:
+        logger.debug(f"Skipping translate router in minimal test app: {_translate_min_err}")
     # Slides endpoints
     try:
         from tldw_Server_API.app.api.v1.endpoints.slides import router as slides_router
@@ -5164,6 +5172,7 @@ else:
             "notes", notes_graph_router, prefix=f"{API_V1_PREFIX}/notes", tags=["notes"]
         )  # /api/v1/notes/graph
     _include_if_enabled("notes", notes_router, prefix=f"{API_V1_PREFIX}/notes", tags=["notes"])
+    _include_if_enabled("translation", translate_router, prefix=f"{API_V1_PREFIX}", tags=["translation"])
     _include_if_enabled("slides", slides_router, prefix=f"{API_V1_PREFIX}", tags=["slides"])
     _include_if_enabled("prompts", prompt_router, prefix=f"{API_V1_PREFIX}/prompts", tags=["prompts"])
     # Kanban Board endpoints

@@ -1,0 +1,419 @@
+"""
+Tests for ACP WebSocket endpoint.
+
+These tests verify the WebSocket-based real-time ACP session streaming,
+including connection, message handling, and permission flows.
+"""
+
+import asyncio
+import json
+from typing import Any, Dict, List, Optional
+from unittest.mock import AsyncMock, MagicMock, patch
+
+import pytest
+from fastapi.testclient import TestClient
+from starlette.testclient import WebSocketTestSession
+
+from tldw_Server_API.app.core.Agent_Client_Protocol.runner_client import (
+    ACPRunnerClient,
+    PendingPermission,
+    SessionWebSocketRegistry,
+)
+
+pytestmark = pytest.mark.unit
+
+
+class MockRunnerClient:
+    """Mock ACP runner client for testing WebSocket interactions."""
+
+    def __init__(self) -> None:
+        self.agent_capabilities = {"promptCapabilities": {"image": False}}
+        self._ws_registry: Dict[str, SessionWebSocketRegistry] = {}
+        self._ws_callbacks: Dict[str, List[Any]] = {}
+        self.prompt_calls: List[tuple] = []
+        self.cancel_calls: List[str] = []
+        self._pending_permissions: Dict[str, Dict[str, PendingPermission]] = {}
+
+    async def register_websocket(self, session_id: str, send_callback) -> None:
+        if session_id not in self._ws_callbacks:
+            self._ws_callbacks[session_id] = []
+        self._ws_callbacks[session_id].append(send_callback)
+
+    async def unregister_websocket(self, session_id: str, send_callback) -> None:
+        if session_id in self._ws_callbacks:
+            try:
+                self._ws_callbacks[session_id].remove(send_callback)
+            except ValueError:
+                pass
+
+    def has_websocket_connections(self, session_id: str) -> bool:
+        return session_id in self._ws_callbacks and len(self._ws_callbacks[session_id]) > 0
+
+    async def respond_to_permission(
+        self,
+        session_id: str,
+        request_id: str,
+        approved: bool,
+        batch_approve_tier: Optional[str] = None,
+    ) -> bool:
+        if session_id in self._pending_permissions:
+            if request_id in self._pending_permissions[session_id]:
+                del self._pending_permissions[session_id][request_id]
+                return True
+        return False
+
+    async def prompt(self, session_id: str, prompt: List[Dict]) -> Dict[str, Any]:
+        self.prompt_calls.append((session_id, prompt))
+        return {"stopReason": "end", "detail": "ok"}
+
+    async def cancel(self, session_id: str) -> None:
+        self.cancel_calls.append(session_id)
+
+    async def broadcast_update(self, session_id: str, message: Dict[str, Any]) -> None:
+        """Simulate broadcasting an update to connected WebSockets."""
+        if session_id in self._ws_callbacks:
+            for callback in self._ws_callbacks[session_id]:
+                await callback(message)
+
+
+@pytest.fixture
+def mock_runner_client():
+    """Create a mock runner client."""
+    return MockRunnerClient()
+
+
+@pytest.fixture
+def mock_get_runner_client(mock_runner_client, monkeypatch):
+    """Patch get_runner_client to return our mock."""
+    import tldw_Server_API.app.api.v1.endpoints.agent_client_protocol as acp_endpoints
+
+    async def _get_runner_client():
+        return mock_runner_client
+
+    monkeypatch.setattr(acp_endpoints, "get_runner_client", _get_runner_client)
+    return mock_runner_client
+
+
+@pytest.fixture
+def mock_jwt_manager(monkeypatch):
+    """Mock JWT manager for WebSocket authentication."""
+    mock_manager = MagicMock()
+    mock_token_data = MagicMock()
+    mock_token_data.user_id = 1
+    mock_manager.verify_token.return_value = mock_token_data
+
+    import tldw_Server_API.app.api.v1.endpoints.agent_client_protocol as acp_endpoints
+
+    monkeypatch.setattr(acp_endpoints, "get_jwt_manager", lambda: mock_manager)
+    return mock_manager
+
+
+class TestACPWebSocketConnection:
+    """Tests for WebSocket connection handling."""
+
+    def test_websocket_connect_with_valid_token(
+        self, client_user_only, mock_get_runner_client, mock_jwt_manager
+    ):
+        """Test successful WebSocket connection with valid JWT token."""
+        with client_user_only.websocket_connect(
+            "/api/v1/acp/sessions/test-session/stream?token=valid-token"
+        ) as websocket:
+            # Should receive connected message
+            data = websocket.receive_json()
+            assert data["type"] == "connected"
+            assert data["session_id"] == "test-session"
+            assert "agent_capabilities" in data
+
+    def test_websocket_connect_with_api_key(
+        self, client_user_only, mock_get_runner_client, monkeypatch
+    ):
+        """Test WebSocket connection with API key in single-user mode."""
+        import os
+
+        monkeypatch.setenv("SINGLE_USER_API_KEY", "test-api-key")
+
+        with client_user_only.websocket_connect(
+            "/api/v1/acp/sessions/test-session/stream?api_key=test-api-key"
+        ) as websocket:
+            data = websocket.receive_json()
+            assert data["type"] == "connected"
+
+    def test_websocket_connect_without_auth_fails(
+        self, client_user_only, mock_get_runner_client, monkeypatch
+    ):
+        """Test that WebSocket connection without authentication closes with 4401."""
+        # Clear any auth environment
+        monkeypatch.delenv("SINGLE_USER_API_KEY", raising=False)
+
+        # Mock JWT manager to fail
+        import tldw_Server_API.app.api.v1.endpoints.agent_client_protocol as acp_endpoints
+
+        mock_manager = MagicMock()
+        mock_manager.verify_token.return_value = None
+        monkeypatch.setattr(acp_endpoints, "get_jwt_manager", lambda: mock_manager)
+
+        with pytest.raises(Exception):
+            # Connection should be rejected
+            with client_user_only.websocket_connect(
+                "/api/v1/acp/sessions/test-session/stream"
+            ) as websocket:
+                pass
+
+
+class TestACPWebSocketMessages:
+    """Tests for WebSocket message handling."""
+
+    def test_send_prompt_via_websocket(
+        self, client_user_only, mock_get_runner_client, mock_jwt_manager
+    ):
+        """Test sending a prompt message via WebSocket."""
+        with client_user_only.websocket_connect(
+            "/api/v1/acp/sessions/test-session/stream?token=valid-token"
+        ) as websocket:
+            # Receive connected message
+            connected = websocket.receive_json()
+            assert connected["type"] == "connected"
+
+            # Send prompt
+            websocket.send_json({
+                "type": "prompt",
+                "session_id": "test-session",
+                "prompt": [{"role": "user", "content": "Hello"}],
+            })
+
+            # Should receive prompt_complete message
+            response = websocket.receive_json()
+            assert response["type"] == "prompt_complete"
+            assert response["session_id"] == "test-session"
+            assert response["stop_reason"] == "end"
+
+    def test_cancel_operation_via_websocket(
+        self, client_user_only, mock_get_runner_client, mock_jwt_manager
+    ):
+        """Test cancelling an operation via WebSocket."""
+        with client_user_only.websocket_connect(
+            "/api/v1/acp/sessions/test-session/stream?token=valid-token"
+        ) as websocket:
+            # Receive connected message
+            connected = websocket.receive_json()
+            assert connected["type"] == "connected"
+
+            # Send cancel
+            websocket.send_json({
+                "type": "cancel",
+                "session_id": "test-session",
+            })
+
+            # Should receive update about cancellation
+            response = websocket.receive_json()
+            assert response["type"] == "update"
+            assert response["update_type"] == "cancelled"
+
+            # Verify cancel was called on client
+            assert "test-session" in mock_get_runner_client.cancel_calls
+
+    def test_unknown_message_type_returns_error(
+        self, client_user_only, mock_get_runner_client, mock_jwt_manager
+    ):
+        """Test that unknown message types return an error."""
+        with client_user_only.websocket_connect(
+            "/api/v1/acp/sessions/test-session/stream?token=valid-token"
+        ) as websocket:
+            # Receive connected message
+            connected = websocket.receive_json()
+            assert connected["type"] == "connected"
+
+            # Send unknown message type
+            websocket.send_json({
+                "type": "unknown_type",
+                "data": "test",
+            })
+
+            # Should receive error
+            response = websocket.receive_json()
+            assert response["type"] == "error"
+            assert response["code"] == "unknown_message_type"
+
+    def test_invalid_json_returns_error(
+        self, client_user_only, mock_get_runner_client, mock_jwt_manager
+    ):
+        """Test that invalid JSON returns an error."""
+        with client_user_only.websocket_connect(
+            "/api/v1/acp/sessions/test-session/stream?token=valid-token"
+        ) as websocket:
+            # Receive connected message
+            connected = websocket.receive_json()
+            assert connected["type"] == "connected"
+
+            # Send invalid JSON (as text)
+            websocket.send_text("not valid json")
+
+            # Should receive error
+            response = websocket.receive_json()
+            assert response["type"] == "error"
+            assert response["code"] == "invalid_json"
+
+
+class TestACPPermissionFlow:
+    """Tests for permission request/response flow."""
+
+    def test_permission_response_approved(
+        self, client_user_only, mock_get_runner_client, mock_jwt_manager
+    ):
+        """Test approving a permission request."""
+        # Set up a pending permission
+        mock_get_runner_client._pending_permissions["test-session"] = {
+            "perm-123": MagicMock()
+        }
+
+        with client_user_only.websocket_connect(
+            "/api/v1/acp/sessions/test-session/stream?token=valid-token"
+        ) as websocket:
+            # Receive connected message
+            connected = websocket.receive_json()
+            assert connected["type"] == "connected"
+
+            # Send permission response (approve)
+            websocket.send_json({
+                "type": "permission_response",
+                "request_id": "perm-123",
+                "approved": True,
+            })
+
+            # Permission should be removed from pending
+            assert "perm-123" not in mock_get_runner_client._pending_permissions.get(
+                "test-session", {}
+            )
+
+    def test_permission_response_denied(
+        self, client_user_only, mock_get_runner_client, mock_jwt_manager
+    ):
+        """Test denying a permission request."""
+        mock_get_runner_client._pending_permissions["test-session"] = {
+            "perm-456": MagicMock()
+        }
+
+        with client_user_only.websocket_connect(
+            "/api/v1/acp/sessions/test-session/stream?token=valid-token"
+        ) as websocket:
+            connected = websocket.receive_json()
+            assert connected["type"] == "connected"
+
+            # Send permission response (deny)
+            websocket.send_json({
+                "type": "permission_response",
+                "request_id": "perm-456",
+                "approved": False,
+            })
+
+            # Permission should be removed from pending
+            assert "perm-456" not in mock_get_runner_client._pending_permissions.get(
+                "test-session", {}
+            )
+
+    def test_permission_response_not_found(
+        self, client_user_only, mock_get_runner_client, mock_jwt_manager
+    ):
+        """Test permission response for non-existent request."""
+        with client_user_only.websocket_connect(
+            "/api/v1/acp/sessions/test-session/stream?token=valid-token"
+        ) as websocket:
+            connected = websocket.receive_json()
+            assert connected["type"] == "connected"
+
+            # Send permission response for non-existent request
+            websocket.send_json({
+                "type": "permission_response",
+                "request_id": "non-existent",
+                "approved": True,
+            })
+
+            # Should receive error
+            response = websocket.receive_json()
+            assert response["type"] == "error"
+            assert response["code"] == "permission_not_found"
+
+    def test_permission_response_missing_request_id(
+        self, client_user_only, mock_get_runner_client, mock_jwt_manager
+    ):
+        """Test permission response without request_id."""
+        with client_user_only.websocket_connect(
+            "/api/v1/acp/sessions/test-session/stream?token=valid-token"
+        ) as websocket:
+            connected = websocket.receive_json()
+            assert connected["type"] == "connected"
+
+            # Send permission response without request_id
+            websocket.send_json({
+                "type": "permission_response",
+                "approved": True,
+            })
+
+            # Should receive error
+            response = websocket.receive_json()
+            assert response["type"] == "error"
+            assert response["code"] == "missing_request_id"
+
+
+class TestACPRunnerClientPermissions:
+    """Tests for the runner client permission handling."""
+
+    @pytest.mark.asyncio
+    async def test_determine_permission_tier_auto(self):
+        """Test that read operations get auto tier."""
+        from tldw_Server_API.app.core.Agent_Client_Protocol.runner_client import ACPRunnerClient
+
+        # Create client with mock config
+        mock_config = MagicMock()
+        mock_config.command = "echo"
+        mock_config.args = []
+        mock_config.env = {}
+        mock_config.cwd = None
+        mock_config.startup_timeout_sec = 10
+
+        client = ACPRunnerClient(mock_config)
+
+        # Read operations should be auto
+        assert client._determine_permission_tier("fs.read") == "auto"
+        assert client._determine_permission_tier("git.status") == "auto"
+        assert client._determine_permission_tier("search.grep") == "auto"
+        assert client._determine_permission_tier("list_files") == "auto"
+
+    @pytest.mark.asyncio
+    async def test_determine_permission_tier_individual(self):
+        """Test that destructive operations get individual tier."""
+        from tldw_Server_API.app.core.Agent_Client_Protocol.runner_client import ACPRunnerClient
+
+        mock_config = MagicMock()
+        mock_config.command = "echo"
+        mock_config.args = []
+        mock_config.env = {}
+        mock_config.cwd = None
+        mock_config.startup_timeout_sec = 10
+
+        client = ACPRunnerClient(mock_config)
+
+        # Destructive operations should be individual
+        assert client._determine_permission_tier("fs.delete") == "individual"
+        assert client._determine_permission_tier("exec.run") == "individual"
+        assert client._determine_permission_tier("git.push") == "individual"
+        assert client._determine_permission_tier("terminal.execute") == "individual"
+
+    @pytest.mark.asyncio
+    async def test_determine_permission_tier_batch(self):
+        """Test that write operations get batch tier."""
+        from tldw_Server_API.app.core.Agent_Client_Protocol.runner_client import ACPRunnerClient
+
+        mock_config = MagicMock()
+        mock_config.command = "echo"
+        mock_config.args = []
+        mock_config.env = {}
+        mock_config.cwd = None
+        mock_config.startup_timeout_sec = 10
+
+        client = ACPRunnerClient(mock_config)
+
+        # Write operations should be batch
+        assert client._determine_permission_tier("fs.write") == "batch"
+        assert client._determine_permission_tier("git.commit") == "batch"
+        assert client._determine_permission_tier("modify_file") == "batch"
