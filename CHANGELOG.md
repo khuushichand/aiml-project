@@ -23,13 +23,13 @@ and this project adheres to Some kind of Versioning
 - 
 
 ### Changed
-- 
+- CodeQL Bugfixes
 
 ### Removed
 - 
 
 ### Fixed
-- 
+- CodeQL Bugfixes
 
 ## [0.1.19] 2026-01-31
 
