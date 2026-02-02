@@ -66,6 +66,31 @@ export async function launchWithBuiltExtension(
     ]
   })
 
+  // Test-only: redirect sync storage writes to local to avoid sync quota limits.
+  await context.addInitScript(() => {
+    const patchStorage = (storage: any) => {
+      if (!storage?.sync || !storage?.local) return
+      const local = storage.local
+      const sync = storage.sync
+      const methods = ["get", "set", "remove", "clear", "getBytesInUse"]
+      for (const method of methods) {
+        if (typeof local?.[method] === "function") {
+          sync[method] = local[method].bind(local)
+        }
+      }
+    }
+    try {
+      if (typeof chrome !== "undefined") {
+        patchStorage(chrome.storage)
+      }
+      if (typeof browser !== "undefined") {
+        patchStorage((browser as any).storage)
+      }
+    } catch {
+      // ignore patch failures
+    }
+  })
+
   // Seed storage before any extension pages load to bypass connection checks
   await context.addInitScript(
     (cfg, allowOfflineFlag) => {
@@ -138,6 +163,30 @@ export async function launchWithBuiltExtension(
   // This avoids a race where the options UI checks connection before storage is ready.
   const sw = context.serviceWorkers()[0]
   if (sw) {
+    await sw.evaluate(() => {
+      try {
+        const patchStorage = (storage: any) => {
+          if (!storage?.sync || !storage?.local) return
+          const local = storage.local
+          const sync = storage.sync
+          const methods = ["get", "set", "remove", "clear", "getBytesInUse"]
+          for (const method of methods) {
+            if (typeof local?.[method] === "function") {
+              sync[method] = local[method].bind(local)
+            }
+          }
+        }
+        if (typeof chrome !== "undefined") {
+          patchStorage(chrome.storage)
+        }
+        if (typeof browser !== "undefined") {
+          patchStorage((browser as any).storage)
+        }
+      } catch {
+        // ignore patch failures
+      }
+    })
+
     if (seedConfig) {
       await sw.evaluate(({ cfg, allowOfflineFlag }) => {
         return new Promise<void>((resolve) => {

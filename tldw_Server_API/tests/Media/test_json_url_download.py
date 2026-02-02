@@ -95,3 +95,23 @@ async def test_download_url_json_content_disposition(tmp_path):
     # Should respect Content-Disposition filename
     assert out_path.name.endswith("file.json"), out_path
     assert out_path.exists() and out_path.read_text() == '{"v":2}'
+
+
+@pytest.mark.asyncio
+async def test_download_url_rejects_dotdot_filename(tmp_path):
+    # Reject path traversal attempts via Content-Disposition filename
+    from tldw_Server_API.app.api.v1.endpoints.media import _download_url_async
+
+    hdrs = {
+        "content-type": "application/json",
+        "content-disposition": 'attachment; filename=".."',
+    }
+    client = _FakeAsyncClient(headers=hdrs, body=b'{"v":3}')
+    with pytest.raises(ValueError):
+        await _download_url_async(
+            client=client,
+            url="https://example.org/download",
+            target_dir=tmp_path,
+            allowed_extensions=set(),
+            check_extension=False,
+        )

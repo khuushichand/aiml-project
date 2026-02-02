@@ -56,6 +56,28 @@ def _bootstrap_run_with_artifact(db: WorkflowsDatabase, tmpdir: Path):
     return run_id
 
 
+def _bootstrap_run_with_outside_artifact(db: WorkflowsDatabase, tmpdir: Path):
+    run_id = f"run-outside-{uuid4()}"
+    tenant = "default"
+    user_id = "1"
+    db.create_run(run_id=run_id, tenant_id=tenant, user_id=user_id, inputs={})
+    afile = tmpdir / "outside.bin"
+    afile.write_bytes(b"outside-scope")
+    db.add_artifact(
+        artifact_id=f"art-outside-{uuid4()}",
+        tenant_id=tenant,
+        run_id=run_id,
+        step_run_id=None,
+        type="blob",
+        uri=f"file://{afile}",
+        size_bytes=afile.stat().st_size,
+        mime_type="application/octet-stream",
+        checksum_sha256=None,
+        metadata={},
+    )
+    return run_id
+
+
 def test_artifact_download_with_range(monkeypatch, tmp_path, client_and_db):
 
 
@@ -77,3 +99,16 @@ def test_artifact_download_with_range(monkeypatch, tmp_path, client_and_db):
     assert r2.headers.get("Content-Range", "").startswith("bytes 0-9/")
     assert r2.headers.get("Accept-Ranges") == "bytes"
     assert r2.content == b"0123456789"
+
+
+def test_artifact_download_blocks_outside_scope(monkeypatch, tmp_path, client_and_db):
+    monkeypatch.setenv("WORKFLOWS_ARTIFACT_ALLOWED_MIME", "application/octet-stream")
+    monkeypatch.setenv("WORKFLOWS_ARTIFACT_VALIDATE_STRICT", "true")
+    monkeypatch.setenv("WORKFLOWS_ARTIFACTS_DIR", str(tmp_path / "artifacts"))
+    client, db = client_and_db
+    run_id = _bootstrap_run_with_outside_artifact(db, tmp_path)
+    r = client.get(f"/api/v1/workflows/runs/{run_id}/artifacts")
+    assert r.status_code == 200
+    art_id = r.json()[0]["artifact_id"]
+    resp = client.get(f"/api/v1/workflows/artifacts/{art_id}/download")
+    assert resp.status_code == 400

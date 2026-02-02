@@ -50,6 +50,7 @@ from tldw_Server_API.app.api.v1.API_Deps import auth_deps
 from tldw_Server_API.app.core.AuthNZ.principal_model import AuthPrincipal
 import mimetypes
 from tldw_Server_API.app.core.Streaming.streams import WebSocketStream
+from tldw_Server_API.app.core.Utils.path_utils import safe_join
 import hmac
 import hashlib
 import time
@@ -663,12 +664,6 @@ async def upload_files(
     written = 0
     count = 0
 
-    def _safe_join(base: str, name: str) -> str:
-        name = name.replace("\\", "/").lstrip("/")
-        while ".." in name.split("/"):
-            name = name.replace("..", "_")
-        return os.path.join(base, name)
-
     import tarfile, zipfile, io
     for up in files:
         try:
@@ -684,10 +679,13 @@ async def upload_files(
                 mode = "r:*"
                 tf = tarfile.open(fileobj=io.BytesIO(content), mode=mode)
                 for m in tf.getmembers():
+                    # Skip device files, symlinks, and hard links
                     if m.isdev() or m.issym() or m.islnk():
                         continue
-                    target = _safe_join(ws_root, m.name)
-                    if not target.startswith(ws_root):
+                    # Use secure path join to prevent traversal
+                    target = safe_join(ws_root, m.name)
+                    if target is None:
+                        # Path traversal attempt detected, skip this entry
                         continue
                     if m.isdir():
                         os.makedirs(target, exist_ok=True)
@@ -711,9 +709,15 @@ async def upload_files(
                 for m in zf.infolist():
                     if m.is_dir():
                         continue
+                    # Check for symlinks in zip files (external_attr >> 28 == 0xA indicates symlink)
+                    # Unix symlink mode is 0o120000 (0xA000), stored in high 16 bits of external_attr
+                    if (m.external_attr >> 16) & 0xF000 == 0xA000:
+                        continue
                     name = m.filename
-                    target = _safe_join(ws_root, name)
-                    if not target.startswith(ws_root):
+                    # Use secure path join to prevent traversal
+                    target = safe_join(ws_root, name)
+                    if target is None:
+                        # Path traversal attempt detected, skip this entry
                         continue
                     data = zf.read(m)
                     if written + len(data) > cap_bytes:
@@ -726,8 +730,10 @@ async def upload_files(
             except Exception as e:
                 logger.warning(f"Failed to extract zip: {e}")
         else:
-            target = _safe_join(ws_root, up.filename or f"file_{count}")
-            if not target.startswith(ws_root):
+            # Use secure path join for regular file uploads
+            target = safe_join(ws_root, up.filename or f"file_{count}")
+            if target is None:
+                # Path traversal attempt detected, skip this file
                 continue
             os.makedirs(os.path.dirname(target), exist_ok=True)
             with open(target, "wb") as out:

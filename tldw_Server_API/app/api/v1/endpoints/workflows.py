@@ -44,6 +44,7 @@ from tldw_Server_API.app.core.DB_Management.Workflows_DB import WorkflowsDatabas
 from tldw_Server_API.app.core.Workflows import WorkflowEngine, RunMode, WorkflowScheduler
 from tldw_Server_API.app.core.Workflows.registry import StepTypeRegistry
 from tldw_Server_API.app.core.Workflows.adapters._registry import get_parallelizable
+from tldw_Server_API.app.core.Workflows.adapters._common import artifacts_base_dir, is_subpath
 from tldw_Server_API.app.core.MCP_unified.auth.jwt_manager import get_jwt_manager
 from tldw_Server_API.app.core.AuthNZ.permissions import (
     WORKFLOWS_RUNS_READ,
@@ -2344,6 +2345,47 @@ async def replay_webhook_dlq(
         }
 
 
+def _artifact_validation_strict(validation_mode: Optional[str]) -> bool:
+    env_strict = str(os.getenv("WORKFLOWS_ARTIFACT_VALIDATE_STRICT", "true")).lower() in {"1", "true", "yes", "on"}
+    run_val = str(validation_mode or "").lower()
+    non_block = run_val == "non-block"
+    return env_strict and not non_block
+
+
+def _resolve_artifact_file_path(
+    *,
+    uri: str,
+    workdir: Optional[str],
+    validation_mode: Optional[str],
+) -> Path:
+    if not uri.startswith("file://"):
+        raise HTTPException(status_code=400, detail="Only file artifacts are downloadable")
+    fpath = uri[len("file://") :]
+    p = Path(fpath).resolve()
+
+    allowed_roots: list[Path] = []
+    try:
+        allowed_roots.append(artifacts_base_dir())
+    except Exception:
+        pass
+    if workdir:
+        try:
+            wd = Path(str(workdir).replace("file://", "")).resolve()
+            allowed_roots.append(wd)
+        except Exception:
+            pass
+
+    allowed = any(is_subpath(root, p) for root in allowed_roots if root)
+    if not allowed:
+        if _artifact_validation_strict(validation_mode):
+            raise HTTPException(status_code=400, detail="Invalid artifact path scope")
+        logger.warning(
+            "Workflows artifact path outside allowed roots; proceeding due to non-strict setting: %s",
+            p,
+        )
+    return p
+
+
 @router.get(
     "/runs/{run_id}/artifacts",
     dependencies=[
@@ -2420,9 +2462,14 @@ async def get_run_artifacts_manifest(
         }
         if verify and entry["uri"] and str(entry["uri"]).startswith("file://") and entry.get("checksum_sha256"):
             try:
-                from pathlib import Path as _P
                 import hashlib as _h
-                fp = _P(str(entry["uri"])[7:])
+                meta = entry.get("metadata")
+                workdir = meta.get("workdir") if isinstance(meta, dict) else None
+                fp = _resolve_artifact_file_path(
+                    uri=str(entry["uri"]),
+                    workdir=workdir,
+                    validation_mode=getattr(run, "validation_mode", None),
+                )
                 if fp.exists() and fp.is_file():
                     h = _h.sha256()
                     with fp.open("rb") as f:
@@ -2434,6 +2481,9 @@ async def get_run_artifacts_manifest(
                         mismatches += 1
                     else:
                         entry["integrity"] = {"ok": True}
+            except HTTPException:
+                entry["integrity"] = {"ok": False, "error": "path_outside_allowed_dir"}
+                mismatches += 1
             except Exception:
                 entry["integrity"] = {"ok": False, "error": "hash_error"}
                 mismatches += 1
@@ -2477,7 +2527,6 @@ async def verify_artifacts_batch(
         raise HTTPException(status_code=404, detail="Run not found")
 
     import hashlib as _h
-    from pathlib import Path as _P
     results = []
     for item in (body.items or []):
         aid = str(item.artifact_id)
@@ -2489,7 +2538,17 @@ async def verify_artifacts_batch(
         if not uri.startswith("file://"):
             results.append({"artifact_id": aid, "ok": False, "error": "unsupported_uri"})
             continue
-        fp = _P(uri[len("file://"):])
+        meta = a.get("metadata_json")
+        workdir = meta.get("workdir") if isinstance(meta, dict) else None
+        try:
+            fp = _resolve_artifact_file_path(
+                uri=uri,
+                workdir=workdir,
+                validation_mode=getattr(run, "validation_mode", None),
+            )
+        except HTTPException:
+            results.append({"artifact_id": aid, "ok": False, "error": "path_outside_allowed_dir"})
+            continue
         if not (fp.exists() and fp.is_file()):
             results.append({"artifact_id": aid, "ok": False, "error": "file_missing"})
             continue
@@ -2594,38 +2653,13 @@ async def download_artifact(
         raise HTTPException(status_code=404, detail="Artifact not found")
     # Only support file:// URIs for direct download
     uri = str(art.get("uri") or "")
-    if uri.startswith("file://"):
-        fpath = uri[len("file://") :]
-    else:
-        raise HTTPException(status_code=400, detail="Only file artifacts are downloadable")
-    p = Path(fpath).resolve()
-    # Containment check: must be under recorded workdir when present
-    workdir = art.get("metadata_json", {}).get("workdir")
-    if workdir:
-        try:
-            wd = Path(str(workdir).replace("file://", "")).resolve()
-            if wd.exists():
-                try:
-                    common = _os.path.commonpath([str(p), str(wd)])
-                    if common != str(wd):
-                        raise ValueError("path_outside_workdir")
-                except Exception:
-                    raise ValueError("validation_error")
-        except Exception as _e:
-            # Allow non-blocking on validation failure depending on run override or env toggle.
-            # Semantics:
-            #   - If run.validation_mode == 'non-block' => always allow (non-strict)
-            #   - Otherwise fall back to env WORKFLOWS_ARTIFACT_VALIDATE_STRICT (default true)
-            env_strict = str(_os.getenv("WORKFLOWS_ARTIFACT_VALIDATE_STRICT", "true")).lower() in {"1", "true", "yes", "on"}
-            run_val = getattr(run, 'validation_mode', None)
-            strict = not (isinstance(run_val, str) and run_val.lower() == 'non-block') and env_strict
-            if strict:
-                raise HTTPException(status_code=400, detail="Invalid artifact path scope")
-            else:
-                try:
-                    logger.warning(f"Artifact scope validation failed for {p}; proceeding due to non-strict setting: {_e}")
-                except Exception:
-                    pass
+    meta = art.get("metadata_json")
+    workdir = meta.get("workdir") if isinstance(meta, dict) else None
+    p = _resolve_artifact_file_path(
+        uri=uri,
+        workdir=workdir,
+        validation_mode=getattr(run, "validation_mode", None),
+    )
     if not p.exists() or not p.is_file():
         raise HTTPException(status_code=404, detail="File not found")
     # Optional integrity verification when checksum recorded
@@ -2779,7 +2813,16 @@ async def download_run_artifacts_zip(
         uri = str(a.get("uri") or "")
         if not uri.startswith("file://"):
             continue
-        p = Path(uri[len("file://"):]).resolve()
+        meta = a.get("metadata_json")
+        workdir = meta.get("workdir") if isinstance(meta, dict) else None
+        try:
+            p = _resolve_artifact_file_path(
+                uri=uri,
+                workdir=workdir,
+                validation_mode=getattr(run, "validation_mode", None),
+            )
+        except HTTPException:
+            continue
         if not p.exists() or not p.is_file():
             continue
         try:

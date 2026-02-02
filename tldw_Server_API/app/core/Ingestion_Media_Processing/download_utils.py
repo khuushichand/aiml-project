@@ -20,6 +20,28 @@ from tldw_Server_API.app.core.http_client import (
     create_async_client as _create_async_client,
     _validate_egress_or_raise,
 )
+from tldw_Server_API.app.core.Ingestion_Media_Processing.path_utils import (
+    resolve_safe_local_path,
+)
+
+
+def _validate_target_path(target_dir: Path, filename: str) -> Path:
+    """
+    Validate that the constructed path stays within target_dir.
+
+    Raises ValueError if path traversal is detected.
+    """
+    if filename in {".", ".."}:
+        raise ValueError("Unsafe filename for download.")
+    # Path construction is intentional here; resolve_safe_local_path validates containment.
+    # nosec B108  # noqa: S108  # codeql[py/path-injection]: validated by resolve_safe_local_path
+    candidate = target_dir / filename
+    resolved = resolve_safe_local_path(candidate, target_dir)
+    if resolved is None:
+        raise ValueError(
+            f"Path traversal detected: filename '{filename}' escapes target directory"
+        )
+    return resolved
 
 
 def _get_media_processing_config() -> Dict[str, Any]:
@@ -272,7 +294,8 @@ async def download_url_async(
                             filename = part
                     except Exception:
                         pass
-                # Basic sanitization
+                # Basic sanitization; seed_segment fallback is validated via _validate_target_path below.
+                # nosec B108  # noqa: S108  # codeql[py/path-injection]: safe_name validated at line 353
                 safe_name = "".join(c if c.isalnum() or c in ("-", "_", ".") else "_" for c in filename) or seed_segment
                 # Determine effective suffix, checking allowed_extensions when requested.
                 candidates = _extension_candidates_from_name(safe_name)
@@ -332,12 +355,13 @@ async def download_url_async(
                     resp.headers.get("content-length"),
                     resolved_max_bytes,
                 )
-                target_path = target_dir / safe_name
+                target_path = _validate_target_path(target_dir, safe_name)
                 counter = 1
                 stem = target_path.stem
                 suffix = target_path.suffix
                 while target_path.exists():
-                    target_path = target_dir / f"{stem}_{counter}{suffix}"
+                    collision_name = f"{stem}_{counter}{suffix}"
+                    target_path = _validate_target_path(target_dir, collision_name)
                     counter += 1
                 target_path.parent.mkdir(parents=True, exist_ok=True)
                 try:
@@ -394,7 +418,8 @@ async def download_url_async(
             except Exception:
                 pass
 
-        # Basic sanitization
+        # Basic sanitization; seed_segment fallback is validated via _validate_target_path below.
+        # nosec B108  # noqa: S108  # codeql[py/path-injection]: safe_name validated at line 483
         safe_name = "".join(
             c if c.isalnum() or c in ("-", "_", ".") else "_"
             for c in filename
@@ -461,12 +486,13 @@ async def download_url_async(
             resolved_max_bytes,
         )
 
-        target_path = target_dir / safe_name
+        target_path = _validate_target_path(target_dir, safe_name)
         counter = 1
         stem = target_path.stem
         suffix = target_path.suffix
         while target_path.exists():
-            target_path = target_dir / f"{stem}_{counter}{suffix}"
+            collision_name = f"{stem}_{counter}{suffix}"
+            target_path = _validate_target_path(target_dir, collision_name)
             counter += 1
 
         target_path.parent.mkdir(parents=True, exist_ok=True)
@@ -493,6 +519,8 @@ async def download_url_async(
                 "allowed extension" in str(exc).lower()
                 or "unsupported" in str(exc).lower()
                 or "exceeds maximum allowed size" in str(exc).lower()
+                or "unsafe filename" in str(exc).lower()
+                or "path traversal" in str(exc).lower()
             ):
                 raise
 
@@ -505,8 +533,13 @@ async def download_url_async(
                 fallback_ext = sorted(allowed_extensions)[0] if allowed_extensions else ".tmp"
             if fallback_ext and not fallback_ext.startswith("."):
                 fallback_ext = f".{fallback_ext}"
-            fallback_name = f"{seed_segment}{fallback_ext if not seed_segment.endswith(fallback_ext) else ''}"
-            target_path = Path(target_dir) / fallback_name
+            # Sanitize seed_segment to prevent path traversal in test-mode fallback
+            safe_seed = "".join(
+                c if c.isalnum() or c in ("-", "_", ".") else "_"
+                for c in seed_segment
+            ) or "downloaded"
+            fallback_name = f"{safe_seed}{fallback_ext if not safe_seed.endswith(fallback_ext) else ''}"
+            target_path = _validate_target_path(Path(target_dir), fallback_name)
             target_path.parent.mkdir(parents=True, exist_ok=True)
             payload = b"TEST offline fallback content license FastAPI Example Domain"
             try:

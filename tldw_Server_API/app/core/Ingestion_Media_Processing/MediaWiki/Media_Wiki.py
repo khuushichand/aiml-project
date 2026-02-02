@@ -796,22 +796,43 @@ def process_single_item(
 
 
 def load_checkpoint(file_path: str) -> int:
-    # Validate checkpoint file path
-    try:
-        safe_path = validate_file_path(file_path)
-    except InvalidStoragePathError:
-        # File doesn't exist yet, which is fine for checkpoints
+    """Load checkpoint from file.
+
+    Args:
+        file_path: Path to checkpoint file (must be within ./checkpoints directory)
+
+    Returns:
+        The last processed ID from the checkpoint, or 0 if not found/invalid
+    """
+    # Enforce checkpoints directory for defense-in-depth
+    checkpoints_dir = Path('./checkpoints').resolve()
+
+    # Check for null bytes and traversal patterns first
+    if '\x00' in file_path or '../' in file_path or '..' + os.sep in file_path:
+        logging.warning("Invalid checkpoint path attempted: [REDACTED]")
         return 0
 
-    if safe_path.exists():
-        try:
-            with open(safe_path, 'r') as f:
-                data = json.load(f)
-                return data.get('last_processed_id', 0)
-        except json.JSONDecodeError:
-            logging.warning(f"Checkpoint file {safe_path} is corrupted. Starting from beginning.")
+    # Resolve and validate containment
+    try:
+        resolved_path = Path(file_path).resolve()
+        common_path = os.path.commonpath([str(resolved_path), str(checkpoints_dir)])
+        if common_path != str(checkpoints_dir):
+            logging.warning("Checkpoint path outside checkpoints directory")
             return 0
-    return 0
+    except ValueError:
+        # Different drives on Windows or other path resolution issues
+        return 0
+
+    if not resolved_path.exists():
+        return 0
+
+    try:
+        with open(resolved_path, 'r') as f:
+            data = json.load(f)
+            return data.get('last_processed_id', 0)
+    except (json.JSONDecodeError, OSError):
+        logging.warning("Checkpoint file is corrupted or unreadable. Starting from beginning.")
+        return 0
 
 
 def save_checkpoint(file_path: str, last_processed_id: int):

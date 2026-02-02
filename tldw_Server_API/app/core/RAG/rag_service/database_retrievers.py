@@ -193,15 +193,38 @@ class BaseRetriever(ABC):
             logger.error(f"Path normalization error for '{path}': {exc}")
             raise ValueError(f"Invalid database path: {exc}")
 
+        # Handle URI schemes - only allow file:// and validate the path component
         if '://' in path:
-            return path
+            if path.startswith('file://'):
+                from urllib.parse import urlparse, unquote
+                parsed = urlparse(path)
+                # Extract and decode the path component
+                extracted_path = unquote(parsed.path)
+                # Recursively validate the extracted path (this will catch traversal, etc.)
+                validated = self._validate_path(extracted_path)
+                if validated is None:
+                    raise ValueError("Invalid file URI: empty path")
+                # Return only the validated absolute path - drop query params and URI scheme
+                # This prevents SQLite URI mode options that could be dangerous
+                return validated
+            else:
+                # Reject non-file URI schemes (http://, ftp://, etc.)
+                scheme = path.split('://')[0]
+                logger.warning(f"Rejected unsupported URI scheme: {scheme}")
+                raise ValueError(f"Unsupported URI scheme in database path: {scheme}://")
+
+        # Check for path traversal sequences BEFORE resolving
+        # This catches attempts like "../../../etc/passwd" before they get normalized
+        if '..' in path:
+            logger.warning(f"Path traversal attempt detected in: {path}")
+            raise ValueError("Path traversal patterns (..) are not allowed")
+
         try:
             path_obj = Path(path)
             abs_path = path_obj.resolve()
             path_str = str(abs_path)
+            # Check for suspicious system paths in the resolved path
             suspicious_patterns = [
-                '../',
-                '..\\',
                 '/etc/',
                 '/proc/',
                 '/sys/',
@@ -301,7 +324,7 @@ class MediaDBRetriever(BaseRetriever):
         attached = None
         own = False
         if media_db is None:
-            attached = self._maybe_attach_media_db(db_path)
+            attached = self._maybe_attach_media_db(self.db_path)
             own = attached is not None
         self.media_db = media_db or attached
         self._own_media_db = own
@@ -317,8 +340,12 @@ class MediaDBRetriever(BaseRetriever):
         if not db_path:
             return None
         try:
+            # Defensive re-validation in case callers bypass BaseRetriever.
+            validated_path = self._validate_path(db_path)
+            if not validated_path:
+                return None
             from tldw_Server_API.app.core.DB_Management.Media_DB_v2 import MediaDatabase  # type: ignore
-            return MediaDatabase(db_path=db_path, client_id="rag_service")
+            return MediaDatabase(db_path=validated_path, client_id="rag_service")
         except Exception:
             return None
 
@@ -2370,7 +2397,7 @@ class ClaimsRetriever(BaseRetriever):
         attached = None
         own = False
         if media_db is None:
-            attached = self._maybe_attach_media_db(db_path)
+            attached = self._maybe_attach_media_db(self.db_path)
             own = attached is not None
         self.media_db = media_db or attached
         self._own_media_db = own
@@ -2379,8 +2406,12 @@ class ClaimsRetriever(BaseRetriever):
         if not db_path:
             return None
         try:
+            # Defensive re-validation in case callers bypass BaseRetriever.
+            validated_path = self._validate_path(db_path)
+            if not validated_path:
+                return None
             from tldw_Server_API.app.core.DB_Management.Media_DB_v2 import MediaDatabase  # type: ignore
-            return MediaDatabase(db_path=db_path, client_id="rag_service")
+            return MediaDatabase(db_path=validated_path, client_id="rag_service")
         except Exception:
             return None
 

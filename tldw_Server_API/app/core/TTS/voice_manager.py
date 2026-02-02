@@ -359,7 +359,20 @@ class VoiceManager:
         voices_path = self.get_user_voices_path(user_id)
         metadata_dir = voices_path / "metadata"
         metadata_dir.mkdir(parents=True, exist_ok=True)
-        return metadata_dir / f"{voice_id}.json"
+
+        # Sanitize voice_id to prevent path traversal
+        safe_voice_id = Path(voice_id).name
+        if not safe_voice_id or safe_voice_id != voice_id:
+            raise VoiceProcessingError(f"Invalid voice_id: {voice_id}")
+
+        full_path = (metadata_dir / f"{safe_voice_id}.json").resolve()
+        # Verify path stays within metadata_dir
+        try:
+            full_path.relative_to(metadata_dir.resolve())
+        except ValueError as e:
+            raise VoiceProcessingError(f"Invalid metadata path: {e}")
+
+        return full_path
 
     async def load_reference_metadata(
         self, user_id: int, voice_id: str

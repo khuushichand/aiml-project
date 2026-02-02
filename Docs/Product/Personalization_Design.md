@@ -22,7 +22,7 @@ Provide opt-in, explainable personalization that leverages a per-user topic prof
 - RAG integration: scorer/context builder stubs exist; current weights map to vector/personal/recency with BM25 as a base term.
 - WebUI: Personalization tab (preview) for viewing profile/weights and adding/listing memories; tab visibility follows server capabilities.
 - Tests: basic endpoint CRUD, feature flag presence, and usage-event logging across relevant media/audio/web endpoints.
-- Note: Expanded memory taxonomy, sessions, suggestions, import/export, and proactive features are design-stage only unless explicitly marked implemented.
+- Note: Expanded memory taxonomy is Stage 2; sessions/continuity are Stage 3; suggestions/proactive features are Stage 4. These are design-stage only unless explicitly marked implemented.
 
 ## Changelog
 
@@ -147,6 +147,8 @@ Provide opt-in, explainable personalization that leverages a per-user topic prof
 └────────────────────────────────────────────────────────────────────────────┘
 ```
 
+Diagram note: Session Manager and Suggestion Detectors are planned (Stage 3/4); MVP does not include them.
+
 ---
 
 ## Data Model (SQLite + Chroma)
@@ -246,10 +248,13 @@ The enhanced memory model distinguishes six types of memories, each with differe
 └─────────────────────────────────────────────────────────────┘
 ```
 
-Inference policy (decision pending):
+Inference policy:
 - Identity/constraint memories may be inferred, but must be labeled `source=inferred` and low confidence.
 - By default, inferred identity/constraint memories are **not injected** into context until the user validates or pins them.
-- UI should surface a lightweight validation flow (e.g., "Is this still accurate?") before promotion.
+Validation UX (approved):
+- Inferred identity/constraint memories enter a "Pending Validation" queue in the Memories tab.
+- The first time such a memory would be relevant, the UI can prompt the user: "Use this? [Confirm] [Reject]".
+- Confirmed memories are promoted for injection; rejected memories are hidden (and excluded from future prompts).
 
 #### memories (unified table with type taxonomy)
 
@@ -697,6 +702,7 @@ GET /memories/export:
 ### Conversation Sessions API
 
 All endpoints below are relative to `/api/v1/personalization`.
+Stage 3 (planned): APIs are design targets and not implemented in v0.2.x.
 
 ```yaml
 GET /sessions:
@@ -741,6 +747,7 @@ PATCH /sessions/{id}:
 ### Suggestions API
 
 All endpoints below are relative to `/api/v1/personalization`.
+Stage 4 (planned): APIs are design targets and not implemented in v0.2.x.
 
 ```yaml
 GET /suggestions:
@@ -804,7 +811,7 @@ Implementation notes:
 
 ---
 
-## Proactive Features Architecture
+## Proactive Features Architecture (Stage 4 - planned)
 
 ### Feature Categories
 
@@ -877,7 +884,7 @@ Users control proactive features via the profile:
 
 ---
 
-## Conversation Continuity Design
+## Conversation Continuity Design (Stage 3 - planned)
 
 ### Conversation Layers
 
@@ -1041,10 +1048,12 @@ suggestion_max_per_day = 5
 session_inactivity_timeout_minutes = 30
 session_auto_summarize = true
 session_summary_llm_provider = "local_only"  # separate from personalization_llm_provider
+session_summaries_enabled_default = true  # default for new profiles
 max_recent_sessions_in_context = 5
 ```
 
 Environment overrides supported via existing config loader.
+Defaults (e.g., `session_summaries_enabled_default`) apply to newly created profiles.
 
 Runtime capability surface:
 - `GET /api/v1/config/docs-info` → includes `capabilities` and `supported_features` maps (for backward compatibility).
@@ -1150,6 +1159,50 @@ Runtime capability surface:
 
 ---
 
+## Implementation Checklist (Stage 3/4)
+
+### Stage 3 - Conversation Continuity
+
+- **Data & Migration**
+  - Add `conversation_sessions` tables and indexes; avoid duplicating chat transcripts (view/reference existing chat history).
+  - Define retention and cleanup for session summaries and working memories.
+- **Config & Capability Flags**
+  - Wire `session_*` config keys and profile toggles (`session_continuity_enabled`, `session_summaries_enabled`).
+  - Expose capabilities: `personalization.sessions`.
+- **Services**
+  - Session Manager (create/continue/end); summarization job using `session_summary_llm_provider`.
+  - Session cleanup/archival task aligned with consolidation interval.
+- **API**
+  - Implement `/sessions` endpoints; extend `/chat/completions` with `session_id` and `enable_continuity`.
+  - Enforce AuthNZ scope and opt-in gating.
+- **Context Builder**
+  - Inject continuity context with strict token budget and safety framing.
+  - Respect per-user opt-out and summary-disabled behavior.
+- **WebUI**
+  - Sessions tab; “Continue vs Start Fresh” prompt; session detail view.
+- **Metrics & Tests**
+  - Continuation rate/time-to-resume; session lifecycle tests; summary opt-out tests.
+
+### Stage 4 - Proactive Suggestions & Notifications
+
+- **Data & Migration**
+  - Add `suggestions` table + indexes; retention policy.
+- **Config & Capability Flags**
+  - Wire proactive config (`proactive_*`, `suggestion_max_per_day`).
+  - Expose capabilities: `personalization.suggestions`, `personalization.proactive_push`.
+- **Services**
+  - Detector pipeline, ranking, and delivery scheduler with quiet hours and rate limits.
+- **API**
+  - Implement `/suggestions` list/respond; preference updates for proactive types/frequency.
+- **Notifications**
+  - Add optional push channels (email/webhook/desktop) behind explicit opt-in.
+- **WebUI**
+  - Suggestions tab with filters and actions; preferences UI.
+- **Metrics & Tests**
+  - Acceptance/dismissal rate; suggestion lifecycle tests; rate-limit/quiet-hours tests.
+
+---
+
 ## Open Questions
 
 - Default top-k memories to inject for chat without bloat? (Proposed: 5 max, prioritized by type)
@@ -1158,7 +1211,6 @@ Runtime capability surface:
 - Should we add a "Persona Action Log" that records actions taken and rationale?
 - How to handle conflicting memories (e.g., correction contradicts preference)?
 - Should session summaries be editable by the user?
-- What is the exact validation flow for inferred identity/constraint memories?
 
 ---
 
@@ -1175,6 +1227,7 @@ Runtime capability surface:
 
 ## References
 
+Comparables (inspiration only; not requirements):
 - [OpenClaw Official Site](https://openclaw.ai/)
 - [What is OpenClaw - DigitalOcean](https://www.digitalocean.com/resources/articles/what-is-openclaw)
 - [OpenClaw GitHub](https://github.com/clawdbot/clawdbot)

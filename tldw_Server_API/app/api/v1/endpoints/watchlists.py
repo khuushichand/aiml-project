@@ -19,6 +19,7 @@ import os
 import re
 from datetime import datetime, timezone, timedelta
 from html import escape
+from pathlib import Path
 from fastapi import APIRouter, Body, Depends, HTTPException, Path, Query, UploadFile, File, Form, Request, WebSocket, WebSocketDisconnect, status
 from fastapi.responses import PlainTextResponse, HTMLResponse, Response
 from starlette.responses import FileResponse
@@ -38,6 +39,7 @@ from tldw_Server_API.app.core.AuthNZ.settings import get_settings
 from tldw_Server_API.app.api.v1.API_Deps.auth_deps import rbac_rate_limit
 from tldw_Server_API.app.api.v1.API_Deps.Watchlists_DB_Deps import get_watchlists_db_for_user
 from tldw_Server_API.app.api.v1.API_Deps.Collections_DB_Deps import get_collections_db_for_user
+from tldw_Server_API.app.core.DB_Management.db_path_utils import DatabasePaths
 from tldw_Server_API.app.api.v1.API_Deps.DB_Deps import get_media_db_for_user
 from tldw_Server_API.app.services.outputs_service import (
     _build_output_filename,
@@ -706,9 +708,37 @@ async def _resolve_watchlists_ws_user_id(
     raise HTTPException(status_code=401, detail="auth_required")
 
 
+def _resolve_watchlist_log_path(*, user_id: int, log_path: Optional[str]) -> Optional[Path]:
+    if not log_path:
+        return None
+    try:
+        base_dir = DatabasePaths.get_user_base_directory(user_id)
+        try:
+            base_resolved = base_dir.resolve(strict=False)
+        except Exception:
+            base_resolved = base_dir
+        candidate = Path(log_path)
+        if not candidate.is_absolute():
+            candidate = base_resolved / candidate
+        try:
+            candidate_resolved = candidate.resolve(strict=False)
+        except Exception:
+            candidate_resolved = candidate
+        try:
+            candidate_resolved.relative_to(base_resolved)
+        except ValueError:
+            logger.warning("watchlists: log path outside user base dir: %s", candidate_resolved)
+            return None
+        return candidate_resolved
+    except Exception as exc:
+        logger.debug("watchlists: log path resolve failed: %s", exc)
+        return None
+
+
 def _read_log_chunk(
     *,
     log_path: Optional[str],
+    user_id: int,
     offset: int,
     max_bytes: int,
     inode: Optional[int],
@@ -716,9 +746,9 @@ def _read_log_chunk(
     if not log_path:
         return None, offset, inode
     try:
-        from pathlib import Path as _Path
-
-        path = _Path(log_path)
+        path = _resolve_watchlist_log_path(user_id=user_id, log_path=log_path)
+        if path is None:
+            return None, offset, inode
         if not path.exists():
             return None, offset, inode
         stat = path.stat()
@@ -741,14 +771,15 @@ def _read_log_chunk(
 def _read_log_tail(
     *,
     log_path: Optional[str],
+    user_id: int,
     max_bytes: int,
 ) -> tuple[Optional[str], int, Optional[int], bool]:
     if not log_path:
         return None, 0, None, False
     try:
-        from pathlib import Path as _Path
-
-        path = _Path(log_path)
+        path = _resolve_watchlist_log_path(user_id=user_id, log_path=log_path)
+        if path is None:
+            return None, 0, None, False
         if not path.exists():
             return None, 0, None, False
         stat = path.stat()
@@ -2259,9 +2290,8 @@ async def get_run_details(
     truncated = False
     if r.log_path:
         try:
-            from pathlib import Path as _Path
-            p = _Path(r.log_path)
-            if p.exists():
+            p = _resolve_watchlist_log_path(user_id=int(current_user.id), log_path=r.log_path)
+            if p and p.exists():
                 content = p.read_text(encoding="utf-8", errors="replace")
                 max_len = 65536
                 if len(content) > max_len:
@@ -2401,6 +2431,7 @@ async def stream_run(
     last_error = run.error_msg
     log_text, log_offset, log_inode, log_truncated = _read_log_tail(
         log_path=run.log_path,
+        user_id=user_id,
         max_bytes=log_tail_max,
     )
     await stream.send_json(
@@ -2445,6 +2476,7 @@ async def stream_run(
 
             chunk, log_offset, log_inode = _read_log_chunk(
                 log_path=run.log_path,
+                user_id=user_id,
                 offset=log_offset,
                 max_bytes=log_chunk_max,
                 inode=log_inode,
