@@ -1160,7 +1160,7 @@ def post_message_to_conversation(
                 max_content_len = int(configured_max)
         except Exception:
             pass
-        if max_content_len and len(message_content) > max_content_len:
+        if max_content_len:
             effective_len = _content_length_for_guardrails(message_content)
             if effective_len > max_content_len:
                 raise InputError(
@@ -1276,6 +1276,7 @@ def retrieve_conversation_messages_for_ui(
     order: str = "ASC",
     rich_output: bool = False,
     char_first_message_hint: Optional[str] = None,
+    character_id: Optional[int] = None,
 ) -> Union[List[Tuple[Optional[str], Optional[str]]], List[Dict[str, Optional[Dict[str, Any]]]]]:
     """Retrieve and process conversation messages for UI display.
 
@@ -1315,8 +1316,27 @@ def retrieve_conversation_messages_for_ui(
                 user_name,
             ).strip()
         else:
+            char_card = None
+            if isinstance(character_id, int) and character_id > 0:
+                try:
+                    char_card = db.get_character_card_by_id(character_id)
+                except CharactersRAGDBError:
+                    char_card = None
+                except Exception:
+                    char_card = None
+            if char_card is None:
+                try:
+                    conversation = db.get_conversation_by_id(conversation_id)
+                    conv_char_id = conversation.get("character_id") if conversation else None
+                    if isinstance(conv_char_id, int) and conv_char_id > 0:
+                        char_card = db.get_character_card_by_id(conv_char_id)
+                except CharactersRAGDBError:
+                    char_card = None
+                except Exception:
+                    char_card = None
             try:
-                char_card = db.get_character_card_by_name(character_name)
+                if char_card is None:
+                    char_card = db.get_character_card_by_name(character_name)
                 if char_card and isinstance(char_card.get("first_message"), str):
                     char_first_message_processed = replace_placeholders(
                         char_card["first_message"],

@@ -757,7 +757,9 @@ def process_audio_files(
                             # Move or copy to our managed temp dir if different
                             target_path = processing_temp_dir_path / Path(downloaded_path).name
                             if Path(downloaded_path).parent != processing_temp_dir_path:
-                                Path(downloaded_path).rename(target_path)
+                                import shutil
+                                target_path = _unique_path(target_path)
+                                shutil.move(str(downloaded_path), str(target_path))
                                 current_audio_path = str(target_path)
                                 # Clean up original download dir if empty? Maybe too complex.
                             else:

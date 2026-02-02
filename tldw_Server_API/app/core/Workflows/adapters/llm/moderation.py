@@ -78,19 +78,20 @@ async def run_moderation_adapter(config: Dict[str, Any], context: Dict[str, Any]
             }
         if action == "redact":
             # Simulate: redact any occurrence of "secret" or "password"
-            redacted = re.sub(r"\b(secret|password|blocked|unsafe)\b", "[REDACTED]", text, flags=re.IGNORECASE)
+            redacted, base_count = re.subn(r"\b(secret|password|blocked|unsafe)\b", "[REDACTED]", text, flags=re.IGNORECASE)
             # Apply custom patterns if provided
             custom_patterns = config.get("patterns")
+            custom_count = 0
             if custom_patterns and isinstance(custom_patterns, list):
                 for pattern_str in custom_patterns:
                     if isinstance(pattern_str, str) and pattern_str.strip():
                         try:
                             pat = re.compile(pattern_str.strip(), flags=re.IGNORECASE)
-                            redacted = pat.sub("[REDACTED]", redacted)
+                            redacted, count = pat.subn("[REDACTED]", redacted)
+                            custom_count += count
                         except re.error:
                             pass  # Skip invalid patterns in TEST_MODE
-            # Count actual redaction markers
-            redaction_count = redacted.count("[REDACTED]")
+            redaction_count = base_count + custom_count
             return {
                 "redacted_text": redacted,
                 "text": redacted,
@@ -131,21 +132,26 @@ async def run_moderation_adapter(config: Dict[str, Any], context: Dict[str, Any]
             }
 
         if action == "redact":
-            redacted = service.redact_text(text, policy)
+            if hasattr(service, "redact_text_with_count"):
+                redacted, base_count = service.redact_text_with_count(text, policy)
+            else:
+                redacted = service.redact_text(text, policy)
+                base_count = redacted.count("[REDACTED]") + redacted.count("[PII]")
 
             # Apply custom patterns if provided
             custom_patterns = config.get("patterns")
+            custom_count = 0
             if custom_patterns and isinstance(custom_patterns, list):
                 for pattern_str in custom_patterns:
                     if isinstance(pattern_str, str) and pattern_str.strip():
                         try:
                             pat = re.compile(pattern_str.strip(), flags=re.IGNORECASE)
-                            redacted = pat.sub(policy.redact_replacement or "[REDACTED]", redacted)
+                            redacted, count = pat.subn(policy.redact_replacement or "[REDACTED]", redacted)
+                            custom_count += count
                         except re.error as pe:
                             logger.warning(f"Invalid custom redaction pattern '{pattern_str}': {pe}")
 
-            # Count redactions by checking differences
-            redaction_count = redacted.count("[REDACTED]") + redacted.count("[PII]")
+            redaction_count = int(base_count or 0) + custom_count
             return {
                 "redacted_text": redacted,
                 "text": redacted,  # Alias for chaining

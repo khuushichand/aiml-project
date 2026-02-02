@@ -13,6 +13,11 @@ import psutil
 # Local Imports
 # Avoid importing Utils to prevent circular deps (Utils imports http_client in some paths).
 from loguru import logger
+from tldw_Server_API.app.core.Metrics.metrics_manager import (
+    MetricDefinition,
+    MetricType,
+    get_metrics_registry,
+)
 #
 ############################################################################################################
 #
@@ -21,6 +26,31 @@ from loguru import logger
 def _utc_timestamp() -> str:
     """Return an ISO-8601 UTC timestamp with a single Z suffix."""
     return datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+
+def _bridge_to_registry(metric_name, metric_type, value, labels=None):
+    """Best-effort bridge from log-based metrics to the in-process registry."""
+    try:
+        registry = get_metrics_registry()
+        normalized_name = registry.normalize_metric_name(metric_name)
+        if normalized_name not in registry.metrics:
+            registry.register_metric(
+                MetricDefinition(
+                    name=normalized_name,
+                    type=metric_type,
+                    description=f"Auto-bridged metric for {metric_name}",
+                    labels=list((labels or {}).keys()),
+                )
+            )
+        if metric_type == MetricType.COUNTER:
+            registry.increment(metric_name, value, labels)
+        elif metric_type == MetricType.HISTOGRAM:
+            registry.observe(metric_name, value, labels)
+        elif metric_type == MetricType.GAUGE:
+            registry.set_gauge(metric_name, value, labels)
+        else:
+            registry.record(metric_name, value, labels)
+    except Exception as exc:
+        logger.debug("metrics_logger: registry bridge failed: {err}", err=exc)
 
 
 def log_counter(metric_name, labels=None, value=1):
@@ -32,6 +62,7 @@ def log_counter(metric_name, labels=None, value=1):
         "timestamp": _utc_timestamp(),
     }
     logger.bind(**log_entry).info("metric")
+    _bridge_to_registry(metric_name, MetricType.COUNTER, value, labels)
 
 
 def log_histogram(metric_name, value, labels=None):
@@ -43,6 +74,7 @@ def log_histogram(metric_name, value, labels=None):
         "timestamp": _utc_timestamp(),
     }
     logger.bind(**log_entry).info("metric")
+    _bridge_to_registry(metric_name, MetricType.HISTOGRAM, value, labels)
 
 
 def log_gauge(metric_name, value, labels=None):
@@ -61,6 +93,7 @@ def log_gauge(metric_name, value, labels=None):
         "timestamp": _utc_timestamp(),
     }
     logger.bind(**log_entry).info("metric")
+    _bridge_to_registry(metric_name, MetricType.GAUGE, value, labels)
 
 
 def timeit(func):

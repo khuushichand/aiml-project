@@ -64,63 +64,63 @@ async def _handle_export_job(job: Dict[str, Any]) -> Dict[str, Any]:
     if not export_format:
         raise FileArtifactsJobError("missing export_format", retryable=False)
 
-    cdb = CollectionsDatabase.for_user(user_id=user_id)
-    service = FileArtifactsService(cdb, user_id=user_id)
-    try:
-        row = cdb.get_file_artifact(file_id)
-    except KeyError:
-        raise FileArtifactsJobError("file_artifact_not_found", retryable=False) from None
-
-    if row.export_status == "ready" and row.export_storage_path:
-        return {"skipped": True, "status": "ready"}
-
-    file_type = row.file_type
-    if file_type in {"csv_table", "json_table"}:
-        file_type = "data_table"
-    adapter = service.get_adapter(file_type)
-    if adapter is None:
-        raise FileArtifactsJobError(f"adapter_missing:{file_type}", retryable=False)
-
-    try:
-        structured = json.loads(row.structured_json)
-    except (json.JSONDecodeError, TypeError) as exc:
-        raise FileArtifactsJobError(f"structured_json_invalid:{exc}", retryable=False) from exc
-
-    options = FileCreateOptions(
-        persist=True,
-        max_bytes=payload.get("max_bytes"),
-        export_ttl_seconds=payload.get("export_ttl_seconds"),
-    )
-    try:
-        export_info = await service.export_artifact_for_job(
-            adapter=adapter,
-            structured=structured,
-            file_id=file_id,
-            export_format=export_format,
-            options=options,
-        )
-        return {
-            "status": export_info.status,
-            "bytes": export_info.bytes,
-            "expires_at": export_info.expires_at.isoformat() if export_info.expires_at else None,
-        }
-    except Exception as exc:
-        logger.error("file_artifacts worker: export failed file_id={} error={}", file_id, exc)
+    with CollectionsDatabase.for_user(user_id=user_id) as cdb:
+        service = FileArtifactsService(cdb, user_id=user_id)
         try:
-            cdb.update_file_artifact_export(
-                file_id,
-                export_status="none",
-                export_format=row.export_format or export_format,
-                export_storage_path=None,
-                export_bytes=row.export_bytes,
-                export_content_type=row.export_content_type,
-                export_job_id=row.export_job_id,
-                export_expires_at=None,
-                export_consumed_at=None,
+            row = cdb.get_file_artifact(file_id)
+        except KeyError:
+            raise FileArtifactsJobError("file_artifact_not_found", retryable=False) from None
+
+        if row.export_status == "ready" and row.export_storage_path:
+            return {"skipped": True, "status": "ready"}
+
+        file_type = row.file_type
+        if file_type in {"csv_table", "json_table"}:
+            file_type = "data_table"
+        adapter = service.get_adapter(file_type)
+        if adapter is None:
+            raise FileArtifactsJobError(f"adapter_missing:{file_type}", retryable=False)
+
+        try:
+            structured = json.loads(row.structured_json)
+        except (json.JSONDecodeError, TypeError) as exc:
+            raise FileArtifactsJobError(f"structured_json_invalid:{exc}", retryable=False) from exc
+
+        options = FileCreateOptions(
+            persist=True,
+            max_bytes=payload.get("max_bytes"),
+            export_ttl_seconds=payload.get("export_ttl_seconds"),
+        )
+        try:
+            export_info = await service.export_artifact_for_job(
+                adapter=adapter,
+                structured=structured,
+                file_id=file_id,
+                export_format=export_format,
+                options=options,
             )
-        except Exception as reset_exc:
-            logger.warning("file_artifacts worker: failed to reset export status for {}: {}", file_id, reset_exc)
-        raise FileArtifactsJobError(str(exc), retryable=False) from exc
+            return {
+                "status": export_info.status,
+                "bytes": export_info.bytes,
+                "expires_at": export_info.expires_at.isoformat() if export_info.expires_at else None,
+            }
+        except Exception as exc:
+            logger.error("file_artifacts worker: export failed file_id={} error={}", file_id, exc)
+            try:
+                cdb.update_file_artifact_export(
+                    file_id,
+                    export_status="none",
+                    export_format=row.export_format or export_format,
+                    export_storage_path=None,
+                    export_bytes=row.export_bytes,
+                    export_content_type=row.export_content_type,
+                    export_job_id=row.export_job_id,
+                    export_expires_at=None,
+                    export_consumed_at=None,
+                )
+            except Exception as reset_exc:
+                logger.warning("file_artifacts worker: failed to reset export status for {}: {}", file_id, reset_exc)
+            raise FileArtifactsJobError(str(exc), retryable=False) from exc
 
 
 async def run_file_artifacts_jobs_worker(stop_event: Optional[asyncio.Event] = None) -> None:

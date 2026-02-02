@@ -469,7 +469,12 @@ class SentenceChunkingStrategy(BaseChunkingStrategy):
                             max_size: int,
                             overlap: int = 0,
                             **options) -> List[ChunkResult]:
-        """Chunk text and include metadata with reliable offsets."""
+        """Chunk text and include metadata with reliable offsets.
+
+        By default, chunk text is sliced from the original source span to
+        preserve spacing for multilingual inputs. Pass
+        align_text_to_source=False to keep the normalized sentence-joined text.
+        """
         if not self.validate_parameters(text, max_size, overlap):
             return []
 
@@ -487,12 +492,18 @@ class SentenceChunkingStrategy(BaseChunkingStrategy):
             min_length_opt = 10
 
         results: List[ChunkResult] = []
+        align_text_to_source = bool(options.get("align_text_to_source", True))
+        text_len = len(text)
         total = len(records)
         for idx, record in enumerate(records):
             chunk_text = record['text']
             start_char = record['start_char']
             end_char = record['end_char']
             sentence_count = record['sentence_count']
+            if align_text_to_source:
+                start_char = max(0, min(int(start_char), text_len))
+                end_char = max(start_char, min(int(end_char), text_len))
+                chunk_text = text[start_char:end_char]
             word_count = len(chunk_text.split()) if chunk_text else 0
             metadata = ChunkMetadata(
                 index=idx,

@@ -1,6 +1,7 @@
 from typing import List, Optional, Literal
+import json
 from uuid import UUID
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 
 
 class DeckCreate(BaseModel):
@@ -43,6 +44,7 @@ class Flashcard(BaseModel):
     extra: Optional[str] = None
     is_cloze: bool
     tags_json: Optional[str] = None
+    tags: List[str] = Field(default_factory=list)
     ef: float
     interval_days: int
     repetitions: int
@@ -56,6 +58,26 @@ class Flashcard(BaseModel):
     version: int
     model_type: Literal['basic','basic_reverse','cloze']
     reverse: bool
+
+    @model_validator(mode="before")
+    def _populate_tags(cls, data):
+        if not isinstance(data, dict):
+            return data
+        if data.get("tags") is not None:
+            return data
+        tags_json = data.get("tags_json")
+        if tags_json:
+            try:
+                parsed = json.loads(tags_json)
+                if isinstance(parsed, list):
+                    data["tags"] = [str(t) for t in parsed if t is not None]
+                else:
+                    data["tags"] = []
+            except Exception:
+                data["tags"] = []
+        else:
+            data["tags"] = []
+        return data
 
 
 class FlashcardListResponse(BaseModel):

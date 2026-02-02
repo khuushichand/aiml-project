@@ -115,6 +115,18 @@ def test_list_flashcards_postgres_translates_fts(monkeypatch: pytest.MonkeyPatch
     assert "alchemy" in params
 
 
+def test_get_flashcards_by_uuids_postgres_uses_boolean_deleted() -> None:
+    db = _make_postgres_db()
+    db.execute_query = MagicMock(return_value=_CursorStub([]))
+
+    result = db.get_flashcards_by_uuids(["uuid-1", "uuid-2"])
+
+    assert result == []
+    sql, params = db.execute_query.call_args[0]
+    assert "f.deleted = FALSE" in sql
+    assert params == ("uuid-1", "uuid-2")
+
+
 def test_manage_link_postgres_uses_on_conflict():
 
     db = _make_postgres_db()

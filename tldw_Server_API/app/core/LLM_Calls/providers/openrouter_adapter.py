@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from typing import Any, Dict, Iterable, Optional, AsyncIterator, List
+import asyncio
 import os
 
 from .base import ChatProvider
@@ -192,9 +193,13 @@ class OpenRouterAdapter(ChatProvider):
                     with client.stream("POST", url, headers=headers, json=payload) as resp:
                         resp.raise_for_status()
                         seen_done = False
-                        for line in resp.iter_lines():
-                            if not line:
+                        for raw in resp.iter_lines():
+                            if not raw:
                                 continue
+                            try:
+                                line = raw.decode("utf-8") if isinstance(raw, (bytes, bytearray)) else str(raw)
+                            except Exception:
+                                line = str(raw)
                             if is_done_line(line):
                                 if not seen_done:
                                     seen_done = True
@@ -213,7 +218,7 @@ class OpenRouterAdapter(ChatProvider):
         raise RuntimeError("OpenRouterAdapter native HTTP disabled by configuration")
 
     async def achat(self, request: Dict[str, Any], *, timeout: Optional[float] = None) -> Dict[str, Any]:
-        return self.chat(request, timeout=timeout)
+        return await asyncio.to_thread(self.chat, request, timeout=timeout)
 
     async def astream(self, request: Dict[str, Any], *, timeout: Optional[float] = None) -> AsyncIterator[str]:
         async for item in wrap_sync_stream(self.stream(request, timeout=timeout)):

@@ -72,9 +72,10 @@ def test_openai_tool_choice_gating(monkeypatch):
     with pytest.raises(ChatBadRequestError):
         chat_with_openai(messages, tool_choice={"type": "function", "function": {"name": "f"}})
 
-    # 2) No tools, tool_choice == "none" should raise as well
-    with pytest.raises(ChatBadRequestError):
-        chat_with_openai(messages, tool_choice="none")
+    # 2) No tools, tool_choice == "none" should be allowed
+    chat_with_openai(messages, tool_choice="none")
+    payload = captured["json"]
+    assert payload.get("tool_choice") == "none"
 
     # 3) Tools present, function tool_choice should be honored
     tools = [{"type": "function", "function": {"name": "f", "parameters": {}}}]
@@ -96,9 +97,10 @@ def test_groq_tool_choice_gating(monkeypatch):
     with pytest.raises(ChatBadRequestError):
         chat_with_groq(messages, tool_choice={"type": "function", "function": {"name": "f"}})
 
-    # 2) No tools, tool_choice == "none" should raise as well
-    with pytest.raises(ChatBadRequestError):
-        chat_with_groq(messages, tool_choice="none")
+    # 2) No tools, tool_choice == "none" should be allowed
+    chat_with_groq(messages, tool_choice="none")
+    payload = captured["json"]
+    assert payload.get("tool_choice") == "none"
 
     # 3) Tools present, function tool_choice should be honored
     tools = [{"type": "function", "function": {"name": "f", "parameters": {}}}]

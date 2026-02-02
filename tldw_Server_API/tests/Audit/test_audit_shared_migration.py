@@ -3,6 +3,7 @@ from datetime import datetime, timezone
 import aiosqlite
 import pytest
 
+from tldw_Server_API.app.core.Audit import audit_shared_migration as audit_migration
 from tldw_Server_API.app.core.Audit.audit_shared_migration import (
     discover_audit_sources,
     migrate_to_shared_audit_db,
@@ -177,6 +178,100 @@ async def test_migration_resume_checkpoint(tmp_path):
     )
     source_counts2 = next(c for c in report2.sources if c.source.label == f"user:{user_id}")
     assert source_counts2.events_read == 1
+
+
+@pytest.mark.asyncio
+async def test_migration_checkpoint_handles_empty_timestamp_resume(tmp_path, monkeypatch):
+    user_base = tmp_path / "user_dbs"
+    user_id = "909"
+    user_db_path = user_base / user_id / "audit" / "unified_audit.db"
+    shared_db_path = tmp_path / "Databases" / "audit_shared.db"
+    user_db_path.parent.mkdir(parents=True, exist_ok=True)
+
+    svc_user = UnifiedAuditService(
+        db_path=str(user_db_path),
+        storage_mode="per_user",
+        enable_pii_detection=False,
+        enable_risk_scoring=False,
+        buffer_size=1,
+        flush_interval=0.1,
+    )
+    await svc_user.initialize(start_background_tasks=False)
+    await svc_user.stop()
+
+    ts_valid = datetime(2020, 1, 1, 0, 0, 0, tzinfo=timezone.utc).isoformat()
+    async with aiosqlite.connect(user_db_path) as db:
+        await db.execute(
+            "INSERT INTO audit_events (event_id, timestamp, category, event_type, severity) "
+            "VALUES (?, ?, ?, ?, ?)",
+            ("evt-empty", "", "api_call", "api.request", "info"),
+        )
+        await db.execute(
+            "INSERT INTO audit_events (event_id, timestamp, category, event_type, severity) "
+            "VALUES (?, ?, ?, ?, ?)",
+            ("evt-valid", ts_valid, "api_call", "api.request", "info"),
+        )
+        await db.commit()
+
+    svc_shared = UnifiedAuditService(
+        db_path=str(shared_db_path),
+        storage_mode="shared",
+        enable_pii_detection=False,
+        enable_risk_scoring=False,
+        buffer_size=1,
+        flush_interval=0.1,
+    )
+    await svc_shared.initialize(start_background_tasks=False)
+    await svc_shared.stop()
+
+    async with aiosqlite.connect(shared_db_path) as shared_db:
+        shared_db.row_factory = aiosqlite.Row
+        await audit_migration._ensure_checkpoint_table(shared_db)
+        await shared_db.commit()
+
+        source = audit_migration.AuditMigrationSource(
+            path=user_db_path.resolve(),
+            tenant_id=user_id,
+            label=f"user:{user_id}",
+        )
+
+        orig_commit = shared_db.commit
+        call_count = {"count": 0}
+
+        async def commit_with_interrupt():
+            await orig_commit()
+            call_count["count"] += 1
+            if call_count["count"] == 1:
+                raise RuntimeError("interrupt")
+
+        monkeypatch.setattr(shared_db, "commit", commit_with_interrupt)
+        counts = await audit_migration._migrate_source(
+            shared_db,
+            source,
+            columns=list(svc_shared._event_columns),
+            insert_sql=svc_shared._event_insert_sql,
+            system_tenant_id="system",
+            unidentified_tenant_id="unidentified_user",
+            chunk_size=1,
+        )
+        assert counts.failed is True
+
+        monkeypatch.setattr(shared_db, "commit", orig_commit)
+        counts2 = await audit_migration._migrate_source(
+            shared_db,
+            source,
+            columns=list(svc_shared._event_columns),
+            insert_sql=svc_shared._event_insert_sql,
+            system_tenant_id="system",
+            unidentified_tenant_id="unidentified_user",
+            chunk_size=1,
+        )
+        assert counts2.events_inserted == 1
+
+        async with shared_db.execute("SELECT event_id FROM audit_events") as cur:
+            rows = await cur.fetchall()
+        event_ids = {row["event_id"] for row in rows}
+        assert {"evt-empty", "evt-valid"} <= event_ids
 
 
 @pytest.mark.asyncio

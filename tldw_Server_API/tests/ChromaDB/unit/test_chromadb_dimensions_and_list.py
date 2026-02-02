@@ -155,7 +155,7 @@ def test_vector_search_with_mocked_query_embedding(temp_chroma_path, monkeypatch
 
     # Patch create_embedding used by vector_search to match our 3-dim space
     from tldw_Server_API.app.core.Embeddings import ChromaDB_Library as cdl
-    monkeypatch.setattr(cdl, "create_embedding", lambda text, user_embedding_config, model_id_override: [0.1, 0.2, 0.3])
+    monkeypatch.setattr(cdl, "create_embedding", lambda text, user_app_config, model_id_override: [0.1, 0.2, 0.3])
 
     results = mgr.vector_search(
         query="hello",
@@ -169,6 +169,46 @@ def test_vector_search_with_mocked_query_embedding(temp_chroma_path, monkeypatch
     first = results[0]
     assert first.get("id") in {"a", "b"}
     assert "content" in first
+    mgr.close()
+
+
+@pytest.mark.unit
+def test_vector_search_passes_user_app_config(temp_chroma_path, monkeypatch):
+    user_cfg = {
+        "USER_DB_BASE_DIR": str(temp_chroma_path),
+        "embedding_config": {"default_model_id": "unused", "models": {}},
+        "chroma_client_settings": {"anonymized_telemetry": False, "allow_reset": True},
+    }
+    mgr = ChromaDBManager(user_id="vsearch_cfg", user_embedding_config=user_cfg)
+
+    coll = "vsearch_cfg_coll"
+    texts = ["hello", "world"]
+    embeddings = [[0.1, 0.2, 0.3], [0.2, 0.1, 0.4]]
+    ids = ["a", "b"]
+    metas = [{"source": "t"}, {"source": "t"}]
+    mgr.store_in_chroma(coll, texts, embeddings, ids, metas, embedding_model_id_for_dim_check="manual")
+
+    from tldw_Server_API.app.core.Embeddings import ChromaDB_Library as cdl
+
+    captured = {}
+
+    def _fake_create_embedding(*args, **kwargs):
+        captured["kwargs"] = kwargs
+        return [0.1, 0.2, 0.3]
+
+    monkeypatch.setattr(cdl, "create_embedding", _fake_create_embedding)
+
+    mgr.vector_search(
+        query="hello",
+        collection_name=coll,
+        k=1,
+        embedding_model_id_override="manual",
+        include_fields=["documents", "metadatas", "distances"],
+    )
+
+    assert "user_app_config" in captured["kwargs"]
+    assert captured["kwargs"]["user_app_config"] == user_cfg
+    assert "user_embedding_config" not in captured["kwargs"]
     mgr.close()
 
 
@@ -189,7 +229,7 @@ def test_vector_search_k2_ids(temp_chroma_path, monkeypatch):
     mgr.store_in_chroma(coll, texts, embeddings, ids, metas, embedding_model_id_for_dim_check="manual")
 
     from tldw_Server_API.app.core.Embeddings import ChromaDB_Library as cdl
-    monkeypatch.setattr(cdl, "create_embedding", lambda text, user_embedding_config, model_id_override: [0.1, 0.2, 0.3])
+    monkeypatch.setattr(cdl, "create_embedding", lambda text, user_app_config, model_id_override: [0.1, 0.2, 0.3])
 
     results = mgr.vector_search(
         query="doc-a",
@@ -221,7 +261,7 @@ def test_vector_search_where_filter(temp_chroma_path, monkeypatch):
     mgr.store_in_chroma(coll, texts, embeddings, ids, metas, embedding_model_id_for_dim_check="manual")
 
     from tldw_Server_API.app.core.Embeddings import ChromaDB_Library as cdl
-    monkeypatch.setattr(cdl, "create_embedding", lambda text, user_embedding_config, model_id_override: [0.1, 0.2, 0.3])
+    monkeypatch.setattr(cdl, "create_embedding", lambda text, user_app_config, model_id_override: [0.1, 0.2, 0.3])
 
     results = mgr.vector_search(
         query="keep",
@@ -255,7 +295,7 @@ def test_vector_search_include_embeddings_returns_embeddings(temp_chroma_path, m
     mgr.store_in_chroma(coll, texts, embeddings, ids, metas, embedding_model_id_for_dim_check="manual")
 
     from tldw_Server_API.app.core.Embeddings import ChromaDB_Library as cdl
-    monkeypatch.setattr(cdl, "create_embedding", lambda text, user_embedding_config, model_id_override: [0.11, 0.22, 0.33])
+    monkeypatch.setattr(cdl, "create_embedding", lambda text, user_app_config, model_id_override: [0.11, 0.22, 0.33])
 
     results = mgr.vector_search(
         query="emb1",

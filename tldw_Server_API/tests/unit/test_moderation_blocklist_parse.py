@@ -177,6 +177,15 @@ def test_lint_warns_on_invalid_regex_flags():
 
 
 @pytest.mark.unit
+def test_lint_rejects_invalid_action():
+    svc = ModerationService()
+    res = svc.lint_blocklist_lines(["secret -> blok"])
+    item = res["items"][0]
+    assert item["ok"] is False
+    assert "invalid action" in (item.get("error") or "")
+
+
+@pytest.mark.unit
 def test_replacement_limits_are_enforced():
     svc = ModerationService()
     # Create a simple redact rule
@@ -407,6 +416,62 @@ def test_chunk_scanning_detects_matches_past_max_chars():
 
 
 @pytest.mark.unit
+def test_chunk_scanning_limits_search_window():
+    class _FakeMatch:
+        def __init__(self, start: int, end: int):
+            self._start = start
+            self._end = end
+
+        def start(self):
+            return self._start
+
+        def end(self):
+            return self._end
+
+        def span(self):
+            return self._start, self._end
+
+    class _LenCheckingPattern:
+        def __init__(self, needle: str, max_window: int):
+            self.needle = needle
+            self.max_window = max_window
+            self.calls = []
+
+        def search(self, text: str, pos: int = 0, endpos: int | None = None):
+            if endpos is None:
+                endpos = len(text)
+            self.calls.append((pos, endpos))
+            assert (endpos - pos) <= self.max_window
+            idx = text.find(self.needle, pos, endpos)
+            if idx == -1:
+                return None
+            return _FakeMatch(idx, idx + len(self.needle))
+
+        @property
+        def pattern(self):
+            return self.needle
+
+    svc = ModerationService()
+    svc._max_scan_chars = 20
+    svc._match_window_chars = 5
+    pat = _LenCheckingPattern("secret", max_window=25)
+    pol = ModerationPolicy(
+        enabled=True,
+        input_enabled=True,
+        output_enabled=True,
+        input_action="block",
+        output_action="redact",
+        redact_replacement="[REDACTED]",
+        per_user_overrides=False,
+        block_patterns=[PatternRule(regex=pat, action="block")],
+    )
+    text = ("a" * 100) + "secret"
+    flagged, _ = svc.check_text(text, pol)
+    assert flagged is True
+    assert pat.calls
+
+
+@pytest.mark.unit
 def test_set_blocklist_lines_empty_writes_empty_file():
     svc = ModerationService()
     with tempfile.NamedTemporaryFile(mode="w+", delete=False) as tmp:
@@ -535,6 +600,41 @@ def test_redaction_replacement_treated_as_literal():
         red = svc.redact_text(text, pol)
         assert r"\1" in red
         assert "secret" not in red
+    finally:
+        try:
+            os.unlink(tmp_path)
+        except Exception:
+            pass
+
+
+@pytest.mark.unit
+def test_redact_text_with_count_tracks_replacements():
+    svc = ModerationService()
+    lines = [
+        "secret -> redact:[MASK]",
+        "token -> redact:[TOK]",
+    ]
+    with tempfile.NamedTemporaryFile(mode="w+", delete=False) as tmp:
+        tmp.write("\n".join(lines) + "\n")
+        tmp_path = tmp.name
+    try:
+        rules = svc._load_block_patterns(tmp_path)
+        pol = ModerationPolicy(
+            enabled=True,
+            input_enabled=True,
+            output_enabled=True,
+            input_action="block",
+            output_action="redact",
+            redact_replacement="[REDACTED]",
+            per_user_overrides=False,
+            block_patterns=rules,
+        )
+        red, count = svc.redact_text_with_count("secret token secret", pol)
+        assert count == 3
+        assert "[MASK]" in red
+        assert "[TOK]" in red
+        assert "secret" not in red
+        assert "token" not in red
     finally:
         try:
             os.unlink(tmp_path)

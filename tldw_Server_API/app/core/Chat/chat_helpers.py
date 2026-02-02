@@ -105,9 +105,10 @@ async def validate_request_payload(
                         url_val = _extract_image_url(part)
                         if not url_val:
                             return False, f"Image at index {part_idx} in message {msg_idx} is missing a data URI."
-                        ok, error = _validate_image_size(url_val, max_image_bytes)
-                        if not ok:
-                            return False, f"Image at index {part_idx} in message {msg_idx} too large ({error})."
+                        if isinstance(url_val, str) and url_val.startswith("data:image"):
+                            ok, error = _validate_image_size(url_val, max_image_bytes)
+                            if not ok:
+                                return False, f"Image at index {part_idx} in message {msg_idx} too large ({error})."
                 elif part_type == 'text':
                     text_content = part.get("text") if isinstance(part, dict) else getattr(part, 'text', None)
                     if isinstance(text_content, str) and len(text_content) > max_text_length:

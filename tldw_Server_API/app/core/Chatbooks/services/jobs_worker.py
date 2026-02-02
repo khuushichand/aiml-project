@@ -204,15 +204,22 @@ async def _handle_import(service: ChatbookService, payload: Dict[str, Any], job_
     resolved_file_path = str(resolved_path or "").strip()
     if not resolved_file_path:
         raise ChatbooksJobError("Invalid or potentially malicious archive file", retryable=False)
-    ok, msg, warnings = await asyncio.to_thread(
-        service._import_chatbook_sync,
-        resolved_file_path,
-        selections,
-        conflict_resolution,
-        bool(payload.get("prefix_imported", False)),
-        bool(payload.get("import_media", True)),
-        bool(payload.get("import_embeddings", False)),
-    )
+    try:
+        ok, msg, warnings = await asyncio.to_thread(
+            service._import_chatbook_sync,
+            resolved_file_path,
+            selections,
+            conflict_resolution,
+            bool(payload.get("prefix_imported", False)),
+            bool(payload.get("import_media", True)),
+            bool(payload.get("import_embeddings", False)),
+        )
+    finally:
+        try:
+            if resolved_path.exists() and resolved_path.is_file():
+                resolved_path.unlink()
+        except Exception as cleanup_err:
+            logger.debug(f"Chatbooks Jobs worker: failed to remove import archive {resolved_path}: {cleanup_err}")
 
     ij = service._get_import_job(job_id)
     if ok:

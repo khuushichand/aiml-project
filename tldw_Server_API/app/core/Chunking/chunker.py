@@ -1657,8 +1657,10 @@ class Chunker:
 
         Returns:
             List of ChunkResult objects with text and metadata.
-            Note: Text is strategy-produced by default; set `align_text_to_source=True`
-            in options to force text slices to match source offsets.
+            Note: Extractive strategies (words/sentences/paragraphs) return source-aligned
+            text by default. Set `align_text_to_source=False` to keep normalized text
+            when supported, or `align_text_to_source=True` to force source slicing for
+            transforming strategies.
         """
         # Sanitize input
         text = self._sanitize_input(text)
@@ -1669,7 +1671,8 @@ class Chunker:
 
         # Use defaults if not specified
         options_raw: Dict[str, Any] = dict(options)
-        align_text_to_source = bool(options_raw.pop("align_text_to_source", False))
+        align_text_to_source_opt = options_raw.pop("align_text_to_source", None)
+        align_text_to_source = bool(align_text_to_source_opt) if align_text_to_source_opt is not None else False
         method = self._normalize_method_argument(method) or self.config.default_method.value
         max_size = max_size if max_size is not None else self.config.default_max_size
         overlap = overlap if overlap is not None else self.config.default_overlap
@@ -1699,6 +1702,9 @@ class Chunker:
             tokenizer_override = tokenizer_override.strip() or None
         use_per_call_strategy = bool(tokenizer_override) and method == ChunkingMethod.TOKENS.value
         strategy_options: Dict[str, Any] = dict(options_raw)
+        if align_text_to_source_opt is not None:
+            # Allow strategies to opt into/out of source-aligned text
+            strategy_options["align_text_to_source"] = bool(align_text_to_source_opt)
         strategy_options.pop("code_mode", None)
         strategy_options.pop("tokenizer_name", None)
         strategy_options.pop("tokenizer_name_or_path", None)
@@ -2583,20 +2589,30 @@ class Chunker:
                             pos = processed_text.find(txt, cursor, end)
                             if pos == -1:
                                 pos = cursor
+                            # Clamp offsets to the paragraph span to avoid runaway positions
+                            if pos < start:
+                                pos = start
+                            elif pos > end:
+                                pos = end
+                            end_pos = pos + len(txt)
+                            if end_pos > end:
+                                end_pos = end
+                            if end_pos < pos:
+                                end_pos = pos
                             md = {}
                             if isinstance(c, dict):
                                 md.update(c.get('metadata') or {})
                             md.update({
                                 'method': method,
                                 'start_offset': pos,
-                                'end_offset': pos + len(txt),
+                                'end_offset': end_pos,
                                 'language': language,
                                 'paragraph_index': pidx,
                                 'paragraph_kind': kind,
                                 'multi_level': True,
                             })
                             norm_chunks.append({'text': txt, 'metadata': md})
-                            cursor = pos + len(txt)
+                            cursor = min(end, end_pos)
                     pidx += 1
             else:
                 base_chunks = self.chunk_text(

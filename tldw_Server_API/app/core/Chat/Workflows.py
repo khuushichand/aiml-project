@@ -72,11 +72,13 @@ def process_workflow_step(
         save_conv: bool = False,
         temp: float = 0.7,
         system_message: Optional[str] = None,
-        media_content: Dict = {},
-        selected_parts: List[str] = []
+        media_content: Optional[Dict] = None,
+        selected_parts: Optional[List[str]] = None
 ) -> Tuple[List[Tuple[Optional[str], str]], Dict, bool]:
     logging.info(f"Process workflow step called with message: {message}")
     logging.info(f"Current workflow state: {workflow_state}")
+    media_content = dict(media_content or {})
+    selected_parts = list(selected_parts or [])
 
     try:
         selected_workflow = next((wf for wf in workflows if wf['name'] == workflow_name), None)
@@ -137,14 +139,16 @@ def run_workflow(
         save_conv: bool = False,
         temp: float = 0.7,
         system_message: Optional[str] = None,
-        media_content: Dict = {},
-        selected_parts: List[str] = []
+        media_content: Optional[Dict] = None,
+        selected_parts: Optional[List[str]] = None
 ) -> List[Tuple[Optional[str], str]]:
     workflows = load_workflows()
     workflow_state, context, history = initialize_workflow(workflow_name, workflows)
 
     # Combine the initial_context with the workflow's context
     combined_context = f"{initial_context}\n\n{context}".strip()
+    media_content = dict(media_content or {})
+    selected_parts = list(selected_parts or [])
 
     while True:
         user_input = input("Your input (or 'quit' to exit): ")

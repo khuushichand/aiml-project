@@ -203,6 +203,34 @@ class TestValidateRequestPayload:
         assert is_valid is False
         assert "too large" in error.lower()
 
+    async def test_image_size_enforcement_allows_http_url(self):
+        """Test validation allows non-data image URLs when base64 enforcement is enabled."""
+        msg = MockMessage()
+        msg.content = [MockImagePart("https://example.com/image.png")]
+        request = MockChatRequest([msg])
+
+        is_valid, error = await validate_request_payload(
+            request,
+            enforce_image_max_bytes=True,
+            max_image_bytes=100,
+        )
+        assert is_valid is True
+        assert error is None
+
+    async def test_image_size_enforcement_rejects_invalid_data_uri(self):
+        """Test validation rejects invalid data URI payloads when enforcing size."""
+        msg = MockMessage()
+        msg.content = [MockImagePart("data:image/png,not-base64")]
+        request = MockChatRequest([msg])
+
+        is_valid, error = await validate_request_payload(
+            request,
+            enforce_image_max_bytes=True,
+            max_image_bytes=100,
+        )
+        assert is_valid is False
+        assert "invalid" in error.lower()
+
 
 @pytest.mark.asyncio
 class TestGetOrCreateCharacterContext:

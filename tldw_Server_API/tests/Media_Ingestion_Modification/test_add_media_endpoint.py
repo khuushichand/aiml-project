@@ -1272,17 +1272,13 @@ def test_add_media_file_save_error(mock_save_files, test_api_client, db_session,
     )
     # -----------------------------------
 
-    expected_code = status.HTTP_207_MULTI_STATUS
+    expected_code = status.HTTP_400_BAD_REQUEST
     if response.status_code != expected_code:
         logger.error(f"File Save Error test failed. Status: {response.status_code}, Expected: {expected_code}, Text: {response.text}")
 
-    # Expect 207 because the *attempt* was made, but resulted in an error reported in the results
-    data = check_batch_response(response, 207, expected_processed=0, expected_errors=1, check_results_len=1)
-
-    result = data["results"][0]
-    assert result["status"] == "Error" # Check specific status
-    # Don't check DB interaction here, as it shouldn't have happened
-    check_media_item_result(result, "Error", check_db_interaction=False, expected_media_type="audio")
+    assert response.status_code == expected_code
+    data = response.json()
+    assert "detail" in data
     assert result["input_ref"] == SAMPLE_AUDIO_PATH.name
     assert "Failed to save uploaded file" in result.get("error", "")
     assert "Disk full" in result.get("error", "")

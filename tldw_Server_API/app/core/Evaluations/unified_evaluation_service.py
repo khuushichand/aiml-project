@@ -1269,39 +1269,14 @@ class UnifiedEvaluationService:
             List of evaluation records
         """
         try:
-            user_variants = self._user_id_variants(user_id)
-            start_ts = int(start_date.timestamp()) if start_date else None
-            end_ts = int(end_date.timestamp()) if end_date else None
-
-            # Query database - list_evaluations only accepts limit, after, and eval_type
-            # We need to filter results manually since the DB method doesn't support all filters
-            evaluations, _ = self.db.list_evaluations(
-                limit=limit + offset,  # Get more results to handle offset manually
+            evaluations = self.db.list_evaluations_filtered(
+                limit=limit,
+                offset=offset,
                 eval_type=evaluation_type,
-                created_by=user_id
+                created_by=user_id,
+                start_date=start_date,
+                end_date=end_date,
             )
-
-            # Manual filtering for user_id and date ranges since DB method doesn't support all filters
-            filtered_evaluations = []
-            for eval in evaluations:
-                # Filter by creator/user if present in the record
-                owner = eval.get("created_by") or eval.get("user_id")
-                if user_variants and owner not in user_variants:
-                    continue
-
-                # Filter by date range if specified
-                if start_ts is not None or end_ts is not None:
-                    created_ts = self._extract_created_ts(eval)
-                    if created_ts is not None:
-                        if start_ts is not None and created_ts < start_ts:
-                            continue
-                        if end_ts is not None and created_ts > end_ts:
-                            continue
-
-                filtered_evaluations.append(eval)
-
-            # Apply offset and limit manually
-            evaluations = filtered_evaluations[offset:offset + limit]
 
             return evaluations
 
@@ -1329,38 +1304,12 @@ class UnifiedEvaluationService:
             Total count of matching evaluations
         """
         try:
-            user_variants = self._user_id_variants(user_id)
-            start_ts = int(start_date.timestamp()) if start_date else None
-            end_ts = int(end_date.timestamp()) if end_date else None
-
-            # Get count from database - since DB doesn't have count_evaluations, count manually
-            # Get all evaluations and count them with filters
-            evaluations, _ = self.db.list_evaluations(
-                limit=10000,  # Large limit to get all
+            return self.db.count_evaluations_filtered(
                 eval_type=evaluation_type,
-                created_by=user_id
+                created_by=user_id,
+                start_date=start_date,
+                end_date=end_date,
             )
-
-            # Manual filtering and counting
-            count = 0
-            for eval in evaluations:
-                # Filter by creator/user if present in the record
-                owner = eval.get("created_by") or eval.get("user_id")
-                if user_variants and owner not in user_variants:
-                    continue
-
-                # Filter by date range if specified
-                if start_ts is not None or end_ts is not None:
-                    created_ts = self._extract_created_ts(eval)
-                    if created_ts is not None:
-                        if start_ts is not None and created_ts < start_ts:
-                            continue
-                        if end_ts is not None and created_ts > end_ts:
-                            continue
-
-                count += 1
-
-            return count
 
         except Exception as e:
             logger.error(f"Failed to count evaluations: {e}")

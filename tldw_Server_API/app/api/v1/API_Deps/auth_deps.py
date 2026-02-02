@@ -1355,7 +1355,11 @@ async def check_rate_limit(request: Request, rate_limiter=None) -> None:
         return
 
     endpoint = request.url.path if getattr(request, "url", None) else "unknown"
-    client_ip = request.client.host if getattr(request, "client", None) else "unknown"
+    client_ip = (
+        resolve_client_ip(request, settings)
+        or (request.client.host if getattr(request, "client", None) else None)
+        or "unknown"
+    )
     user_id = getattr(request.state, "user_id", None)
     user_id_int: Optional[int] = None
     if user_id is not None:
@@ -1447,7 +1451,11 @@ async def check_auth_rate_limit(request: Request, rate_limiter=None) -> None:
         return
 
     endpoint = request.url.path if getattr(request, "url", None) else "auth"
-    client_ip = request.client.host if getattr(request, "client", None) else "unknown"
+    client_ip = (
+        resolve_client_ip(request, settings)
+        or (request.client.host if getattr(request, "client", None) else None)
+        or "unknown"
+    )
     try:
         allowed, meta = await rate_limiter.check_rate_limit(
             identifier=f"ip:{client_ip}",

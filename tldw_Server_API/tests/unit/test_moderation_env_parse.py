@@ -18,3 +18,17 @@ def test_invalid_env_values_do_not_crash(monkeypatch):
     assert svc._max_replacements_per_pattern == 1000
     assert svc._match_window_chars == 4096
     assert svc._write_debounce_ms == 0
+
+
+@pytest.mark.unit
+def test_categories_enabled_list_parsed(monkeypatch):
+    monkeypatch.delenv("MODERATION_CATEGORIES_ENABLED", raising=False)
+    monkeypatch.setattr(
+        mod_service,
+        "load_and_log_configs",
+        lambda: {"moderation": {"categories_enabled": ["pii", "Confidential"]}},
+    )
+    monkeypatch.setattr(mod_service, "load_comprehensive_config", lambda: None)
+
+    svc = ModerationService()
+    assert svc._global_policy.categories_enabled == {"pii", "confidential"}

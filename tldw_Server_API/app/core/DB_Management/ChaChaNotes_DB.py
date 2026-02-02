@@ -9617,6 +9617,9 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
             else:
                 # Normalize query for SQLite FTS5 (quotes/operators)
                 norm_q = FTSQueryTranslator.normalize_query(q, 'sqlite')
+                if not norm_q:
+                    logger.debug("Flashcard query normalized to empty sqlite tsquery for input '%s'", q)
+                    return []
                 fts_filter = "AND f.rowid IN (SELECT rowid FROM flashcards_fts WHERE flashcards_fts MATCH ?)"
                 params.append(norm_q)
 
@@ -9686,6 +9689,8 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
                 params.append(tsquery)
             else:
                 norm_q = FTSQueryTranslator.normalize_query(q, 'sqlite')
+                if not norm_q:
+                    return 0
                 fts_filter = "AND f.rowid IN (SELECT rowid FROM flashcards_fts WHERE flashcards_fts MATCH ?)"
                 params.append(norm_q)
 
@@ -9709,13 +9714,14 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
         if not uuids:
             return []
         placeholders = ",".join(["?"] * len(uuids))
+        deleted_clause = "f.deleted = FALSE" if self.backend_type == BackendType.POSTGRESQL else "f.deleted = 0"
         query = f"""
             SELECT f.uuid, f.deck_id, d.name AS deck_name, f.front, f.back, f.notes, f.extra, f.is_cloze, f.tags_json,
                    f.ef, f.interval_days, f.repetitions, f.lapses, f.due_at, f.last_reviewed_at,
                    f.created_at, f.last_modified, f.deleted, f.client_id, f.version, f.model_type, f.reverse
               FROM flashcards f
               LEFT JOIN decks d ON d.id = f.deck_id
-             WHERE f.uuid IN ({placeholders}) AND f.deleted = 0
+             WHERE f.uuid IN ({placeholders}) AND {deleted_clause}
         """
         try:
             cursor = self.execute_query(query, tuple(uuids))
@@ -9819,7 +9825,7 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
                     (card_uuid,)
                 ).fetchone()
                 if not card:
-                    raise CharactersRAGDBError("Flashcard not found or deleted")
+                    raise ConflictError("Flashcard not found", entity="flashcards", identifier=card_uuid)
                 card_id = int(card['id'])
                 upd = self._srs_sm2_update(card['ef'], card['interval_days'], card['repetitions'], card['lapses'], rating)
 

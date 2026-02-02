@@ -1286,8 +1286,8 @@ class ChromaDBManager:
                 # Corrected call to create_embedding (from a previous iteration)
                 query_embedding_single: List[float] = create_embedding(
                     text=query,
-                    user_embedding_config=self.user_embedding_config,  # Pass the main app_config
-                    model_id_override=query_embedding_model_id
+                    user_app_config=self.user_embedding_config,  # Pass the main app_config
+                    model_id_override=query_embedding_model_id,
                 )
 
                 if not query_embedding_single or not isinstance(query_embedding_single, list) or \

@@ -315,6 +315,22 @@ def _coerce_timestamp(value: Any) -> str:
         return str(value)
 
 
+def _checkpoint_timestamp(value: Any, previous: Optional[str]) -> Optional[str]:
+    """Return a safe checkpoint timestamp, preserving previous on empty values."""
+    try:
+        if value is None:
+            return previous
+        s = str(value).strip()
+        if not s:
+            return previous
+    except Exception:
+        return previous
+    try:
+        return _coerce_timestamp(value)
+    except Exception:
+        return previous
+
+
 def _parse_timestamp_to_date(value: Any) -> Optional[date]:
     try:
         if isinstance(value, datetime):
@@ -722,7 +738,7 @@ async def _migrate_source(
                     if last_event:
                         last_event_id = str(last_event)
                     try:
-                        last_timestamp = _coerce_timestamp(last_row["timestamp"])
+                        last_timestamp = _checkpoint_timestamp(last_row["timestamp"], last_timestamp)
                     except Exception:
                         last_timestamp = last_timestamp
                     await _save_checkpoint(shared_db, source_key, last_rowid, last_event_id, last_timestamp)

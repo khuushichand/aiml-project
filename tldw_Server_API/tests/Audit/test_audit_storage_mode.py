@@ -2,6 +2,8 @@ from pathlib import Path
 
 import pytest
 
+from tldw_Server_API.app.core.Audit.unified_audit_service import UnifiedAuditService
+
 from tldw_Server_API.app.api.v1.API_Deps import Audit_DB_Deps as audit_deps
 from tldw_Server_API.app.core.config import settings
 from tldw_Server_API.app.core.DB_Management.db_path_utils import DatabasePaths
@@ -39,3 +41,24 @@ async def test_storage_rollback_forces_per_user(tmp_path, monkeypatch):
         assert svc.db_path == expected
     finally:
         await audit_deps.shutdown_all_audit_services()
+
+
+@pytest.mark.asyncio
+async def test_explicit_storage_mode_overrides_rollback(tmp_path, monkeypatch):
+    monkeypatch.setitem(settings, "AUDIT_STORAGE_ROLLBACK", True)
+    db_path = tmp_path / "audit_shared.db"
+
+    service = UnifiedAuditService(
+        db_path=str(db_path),
+        storage_mode="shared",
+        enable_pii_detection=False,
+        enable_risk_scoring=False,
+        buffer_size=1,
+        flush_interval=0.1,
+    )
+    await service.initialize(start_background_tasks=False)
+    try:
+        assert service.storage_mode == "shared"
+        assert service._shared_mode is True
+    finally:
+        await service.stop()

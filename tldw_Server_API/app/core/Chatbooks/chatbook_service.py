@@ -2421,10 +2421,15 @@ class ChatbookService:
                         output_path = row[4] if len(row) > 4 else None
                         job_id = row[0]
 
-                    if output_path and Path(output_path).exists():
+                    if output_path:
                         try:
-                            Path(output_path).unlink()
-                            deleted_count += 1
+                            file_path = Path(output_path).resolve()
+                            expected_base = Path(self.export_dir).resolve()
+                            if os.path.commonpath([str(file_path), str(expected_base)]) != str(expected_base):
+                                logger.warning(f"Refusing to delete export outside export dir: {file_path}")
+                            elif file_path.exists() and file_path.is_file():
+                                file_path.unlink()
+                                deleted_count += 1
                         except Exception as e:
                             logger.error(f"Error deleting expired export: {e}")
 
@@ -2432,7 +2437,8 @@ class ChatbookService:
                     try:
                         self.db.execute_query(
                             "UPDATE export_jobs SET status = ? WHERE job_id = ?",
-                            ('expired', job_id)
+                            ('expired', job_id),
+                            commit=True,
                         )
                     except Exception as _e:
                         logger.warning(f"Failed to mark job {job_id} expired: {_e}")
@@ -2795,7 +2801,7 @@ class ChatbookService:
 
                     # Extract citations from RAG context if available
                     try:
-                        rag_context = self._db.get_message_rag_context(msg['id'])
+                        rag_context = self.db.get_message_rag_context(msg['id'])
                         if rag_context:
                             # Include retrieved documents as citations
                             retrieved_docs = rag_context.get('retrieved_documents', [])
@@ -3132,7 +3138,12 @@ class ChatbookService:
                     conv_data = json.load(f)
 
                 # Check for existing conversation
-                conv_name = conv_data['name']
+                conv_name = (
+                    conv_data.get('name')
+                    or conv_data.get('title')
+                    or conv_data.get('conversation_title')
+                    or 'Untitled'
+                )
                 if prefix_imported:
                     conv_name = f"[Imported] {conv_name}"
 
@@ -3158,7 +3169,7 @@ class ChatbookService:
                 with self.db.transaction():
                     conv_dict = {
                         'title': conv_name,
-                        'created_at': conv_data.get('created_at'),
+                        'created_at': conv_data.get('created_at') or conv_data.get('created') or conv_data.get('timestamp'),
                         'character_id': resolved_char_id
                     }
                     new_conv_id = self.db.add_conversation(conv_dict)
@@ -3167,11 +3178,17 @@ class ChatbookService:
                         # Import messages
                         base_path = extract_dir.resolve()
                         for msg in conv_data.get('messages', []):
+                            raw_role = msg.get('role') or msg.get('sender') or msg.get('author') or msg.get('from')
+                            raw_content = msg.get('content')
+                            if raw_content is None:
+                                raw_content = msg.get('message')
+                            if raw_content is None:
+                                raw_content = msg.get('text')
                             msg_dict = {
                                 'conversation_id': new_conv_id,
-                                'sender': msg['role'],
-                                'content': msg['content'],
-                                'timestamp': msg.get('timestamp')
+                                'sender': raw_role or 'user',
+                                'content': raw_content if raw_content is not None else '',
+                                'timestamp': msg.get('timestamp') or msg.get('created_at')
                             }
 
                             attachments = msg.get('attachments') or []
@@ -4320,11 +4337,16 @@ class ChatbookService:
                         job_id = row[0] if len(row) > 0 else None
                         output_path = row[1] if len(row) > 1 else None
 
-                    if output_path and os.path.exists(output_path):
+                    if output_path:
                         try:
-                            os.unlink(output_path)
-                            deleted_count += 1
-                            logger.info(f"Deleted old export: {output_path}")
+                            file_path = Path(output_path).resolve()
+                            expected_base = Path(self.export_dir).resolve()
+                            if os.path.commonpath([str(file_path), str(expected_base)]) != str(expected_base):
+                                logger.warning(f"Refusing to delete export outside export dir: {file_path}")
+                            elif file_path.exists() and file_path.is_file():
+                                file_path.unlink()
+                                deleted_count += 1
+                                logger.info(f"Deleted old export: {output_path}")
                         except Exception as e:
                             logger.error(f"Failed to delete {output_path}: {e}")
 

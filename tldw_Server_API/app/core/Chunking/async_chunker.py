@@ -7,6 +7,7 @@ Provides async/await interfaces for chunking operations.
 import asyncio
 import copy
 from typing import List, Dict, Any, Optional, AsyncGenerator, Union
+from collections import OrderedDict
 from pathlib import Path
 import aiofiles
 from loguru import logger
@@ -230,6 +231,13 @@ class AsyncChunker:
         """
         buffer = ""
         overlap_buffer = ""
+        max_size_raw = max_size if max_size is not None else self.config.default_max_size
+        try:
+            max_size_value = int(max_size_raw)
+        except Exception as exc:
+            raise InvalidInputError(f"Invalid max_size value: {max_size_raw}") from exc
+        if max_size_value <= 0:
+            raise InvalidInputError(f"max_size must be positive, got {max_size_value}")
         overlap_default = getattr(self.config, 'default_overlap', 0)
         overlap_raw = overlap if overlap is not None else overlap_default
         try:
@@ -238,6 +246,8 @@ class AsyncChunker:
             raise InvalidInputError(f"Invalid overlap value: {overlap_raw}") from exc
         if overlap_size < 0:
             overlap_size = 0
+        if overlap_size >= max_size_value:
+            overlap_size = max_size_value - 1
         overlap = overlap_size
         base_method = method if method is not None else self.config.default_method.value
         normalized_method = Chunker._normalize_method_argument(base_method)
@@ -295,7 +305,7 @@ class AsyncChunker:
             combined = overlap_text + sep + buffer
             chunks = await self.chunk_text(
                 combined,
-                method, max_size, overlap,
+                method, max_size_value, overlap,
                 llm_call_func=llm_call_func,
                 llm_config=llm_config,
                 **options
@@ -339,7 +349,7 @@ class AsyncChunker:
             combined = overlap_text + sep + buffer
             chunks = await self.chunk_text(
                 combined,
-                method, max_size, overlap,
+                method, max_size_value, overlap,
                 llm_call_func=llm_call_func,
                 llm_config=llm_config,
                 **options
@@ -484,19 +494,29 @@ class AsyncBatchProcessor:
 
     def __init__(self,
                 batch_size: int = 10,
-                max_concurrent: int = 5):
+                max_concurrent: int = 5,
+                max_results: Optional[int] = 1000):
         """
         Initialize batch processor.
 
         Args:
             batch_size: Number of items to process per batch
             max_concurrent: Maximum concurrent batches
+            max_results: Maximum results to retain (oldest evicted). None for unlimited.
         """
         self.batch_size = batch_size
         self.max_concurrent = max_concurrent
         self._chunker = AsyncChunker()
         self._queue: asyncio.Queue = asyncio.Queue()
-        self._results: Dict[str, Dict[str, Any]] = {}
+        self._results: "OrderedDict[str, Dict[str, Any]]" = OrderedDict()
+        if max_results is not None:
+            try:
+                max_results = int(max_results)
+            except Exception as exc:
+                raise ValueError(f"max_results must be an int or None, got {max_results}") from exc
+            if max_results <= 0:
+                raise ValueError(f"max_results must be positive or None, got {max_results}")
+        self._max_results = max_results
         self._processing = False
         self._closed = False
 
@@ -528,15 +548,27 @@ class AsyncBatchProcessor:
             'options': options
         })
 
-    async def process_batch(self):
+    def _store_result(self, request_id: str, payload: Dict[str, Any]) -> None:
+        """Store a result with eviction of oldest entries when capped."""
+        if request_id in self._results:
+            self._results.pop(request_id, None)
+        self._results[request_id] = payload
+        if self._max_results is not None:
+            while len(self._results) > self._max_results:
+                self._results.popitem(last=False)
+
+    async def process_batch(self, initial_request: Optional[Dict[str, Any]] = None):
         """Process a batch of requests."""
-        batch = []
+        batch: List[Dict[str, Any]] = []
+        if initial_request is not None:
+            batch.append(initial_request)
 
         # Collect batch
-        for _ in range(self.batch_size):
-            if self._queue.empty():
+        while len(batch) < self.batch_size:
+            try:
+                request = self._queue.get_nowait()
+            except asyncio.QueueEmpty:
                 break
-            request = await self._queue.get()
             batch.append(request)
 
         if not batch:
@@ -552,30 +584,42 @@ class AsyncBatchProcessor:
             )
             tasks.append(task)
 
-        results = await asyncio.gather(*tasks, return_exceptions=True)
+        try:
+            results = await asyncio.gather(*tasks, return_exceptions=True)
 
-        # Store results
-        for request, result in zip(batch, results):
-            if isinstance(result, Exception):
-                logger.error(f"Error processing request {request['id']}: {result}")
-                self._results[request['id']] = {'error': str(result)}
-            else:
-                self._results[request['id']] = {'chunks': result}
+            # Store results
+            for request, result in zip(batch, results):
+                if isinstance(result, Exception):
+                    logger.error(f"Error processing request {request['id']}: {result}")
+                    self._store_result(request['id'], {'error': str(result)})
+                else:
+                    self._store_result(request['id'], {'chunks': result})
+        finally:
+            for _ in batch:
+                try:
+                    self._queue.task_done()
+                except ValueError:
+                    # task_done called too many times; ignore to avoid raising in cleanup
+                    pass
 
     async def start_processing(self):
         """Start processing requests from the queue."""
         self._processing = True
 
         while self._processing:
-            if self._queue.empty():
-                await asyncio.sleep(0.1)
+            try:
+                first = await asyncio.wait_for(self._queue.get(), timeout=0.1)
+            except asyncio.TimeoutError:
                 continue
 
             # Process multiple batches concurrently
-            batch_tasks = []
-            for _ in range(self.max_concurrent):
-                if not self._queue.empty():
-                    batch_tasks.append(self.process_batch())
+            batch_tasks = [self.process_batch(first)]
+            for _ in range(self.max_concurrent - 1):
+                try:
+                    req = self._queue.get_nowait()
+                except asyncio.QueueEmpty:
+                    break
+                batch_tasks.append(self.process_batch(req))
 
             if batch_tasks:
                 await asyncio.gather(*batch_tasks)
@@ -587,8 +631,12 @@ class AsyncBatchProcessor:
         self._processing = False
 
         # Process remaining requests
-        while not self._queue.empty():
-            await self.process_batch()
+        while True:
+            try:
+                req = self._queue.get_nowait()
+            except asyncio.QueueEmpty:
+                break
+            await self.process_batch(req)
 
         try:
             await self._chunker.close()

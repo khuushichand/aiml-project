@@ -712,6 +712,9 @@ def _build_adapter_request_from_chat_args(chat_args: Dict[str, Any]) -> Tuple[st
         "trusted_base_url_override",
         "stream",
         "streaming",
+        "history_message_limit",
+        "history_message_order",
+        "slash_command_injection_mode",
     }
     for key, value in chat_args.items():
         if key in skip_keys or value is None:
@@ -835,6 +838,9 @@ def build_call_params_from_request(
             "prompt_template_name",
             "stream",
             "save_to_db",
+            "history_message_limit",
+            "history_message_order",
+            "slash_command_injection_mode",
         },
     )
 
@@ -1263,7 +1269,7 @@ async def build_context_and_messages(
             history_limit = int(requested_history_limit)
         except Exception:
             history_limit = DEFAULT_HISTORY_MESSAGE_LIMIT
-        history_limit = max(1, min(_MAX_HISTORY_MESSAGES, history_limit))
+        history_limit = max(0, min(_MAX_HISTORY_MESSAGES, history_limit))
 
     requested_history_order = getattr(request_data, "history_message_order", None)
     if requested_history_order:
@@ -1363,6 +1369,12 @@ async def build_context_and_messages(
                     hist_entry["content"] = ""
                 if role == "tool" and tool_call_id_meta:
                     hist_entry["tool_call_id"] = tool_call_id_meta
+                if role == "tool" and not tool_call_id_meta:
+                    logger.debug(
+                        "Skipping tool message {} without tool_call_id metadata.",
+                        db_msg.get("id"),
+                    )
+                    continue
                 historical_msgs.append(hist_entry)
         logger.info(f"Loaded {len(historical_msgs)} historical messages for conv_id '{conv_id}'.")
 
@@ -1387,6 +1399,7 @@ async def build_context_and_messages(
         has_non_user_role = any(
             msg.get("role") in {"assistant", "tool"} for msg in request_messages
         )
+        all_user_roles = all(msg.get("role") == "user" for msg in request_messages)
         def _normalize_content(value: Any) -> Any:
             if isinstance(value, str):
                 return [{"type": "text", "text": value}]
@@ -1436,6 +1449,30 @@ async def build_context_and_messages(
                         overlap_cut,
                         conv_id,
                     )
+        else:
+            try:
+                user_only_trim = str(os.getenv("CHAT_TRIM_USER_ONLY_OVERLAP", "false")).strip().lower() in {
+                    "1",
+                    "true",
+                    "yes",
+                    "on",
+                }
+            except Exception:
+                user_only_trim = False
+            if user_only_trim and all_user_roles:
+                hist_for_overlap = (
+                    list(reversed(historical_msgs)) if history_order == "desc" else historical_msgs
+                )
+                hist_sigs = [_msg_sig(m) for m in hist_for_overlap]
+                req_sigs = [_msg_sig(m) for m in request_messages]
+                if req_sigs and len(req_sigs) <= len(hist_sigs):
+                    if hist_sigs[-len(req_sigs):] == req_sigs:
+                        overlap_cut = len(req_sigs)
+                        logger.debug(
+                            "Trimmed %d user-only request messages overlapping history for conv_id %s.",
+                            overlap_cut,
+                            conv_id,
+                        )
 
     current_turn: List[Dict[str, Any]] = []
     for msg_dict in request_messages[overlap_cut:]:
@@ -1453,9 +1490,8 @@ async def build_context_and_messages(
                 msg_for_llm["name"] = name
         current_turn.append(msg_for_llm)
 
+    # Preserve requested history ordering (DB fetch already honors ASC/DESC).
     historical_msgs_for_payload = historical_msgs
-    if history_order == "desc":
-        historical_msgs_for_payload = list(reversed(historical_msgs))
 
     llm_payload_messages = historical_msgs_for_payload + current_turn
 
@@ -1668,8 +1704,11 @@ async def execute_streaming_call(
     - usage logging and audit success
     """
     llm_start_time = time.time()
+    stream_metrics_recorded = False
+    stream_failure_recorded = False
     raw_stream_iter: Optional[AsyncIterator[str] | Iterator[str]] = None
     queue_for_exec = None
+    queue_future: Optional[asyncio.Future[Any]] = None
     queue_enabled = False
     try:
         try:
@@ -1705,14 +1744,10 @@ async def execute_streaming_call(
                 return refreshed  # type: ignore[return-value]
 
             def _queued_processor():
-                nonlocal selected_provider, model, llm_call_func
+                nonlocal selected_provider, model, llm_call_func, stream_failure_recorded
                 local_start = time.time()
                 try:
                     result = llm_call_func()
-                    latency = time.time() - local_start
-                    metrics.track_llm_call(selected_provider, model, latency, success=True)
-                    if provider_manager:
-                        provider_manager.record_success(selected_provider, latency)
                     if selected_provider != provider:
                         try:
                             metrics.track_provider_fallback_success(
@@ -1733,6 +1768,7 @@ async def execute_streaming_call(
                         success=False,
                         error_type=type(proc_error).__name__,
                     )
+                    stream_failure_recorded = True
                     if provider_manager:
                         provider_manager.record_failure(selected_provider, proc_error)
                         name_lower = type(proc_error).__name__.lower()
@@ -1762,11 +1798,7 @@ async def execute_streaming_call(
                                 model = refreshed_model or model
                                 llm_call_func_fb = lambda: perform_chat_api_call(**refreshed_args)
                                 try:
-                                    fb_start = time.time()
                                     result = llm_call_func_fb()
-                                    fb_latency = time.time() - fb_start
-                                    provider_manager.record_success(fallback_provider, fb_latency)
-                                    metrics.track_llm_call(fallback_provider, model, fb_latency, success=True)
                                     selected_provider = fallback_provider
                                     llm_call_func = llm_call_func_fb
                                     try:
@@ -1830,6 +1862,16 @@ async def execute_streaming_call(
                             CHAT_IDLE_TIMEOUT
                         )
                         try:
+                            if queue_future is not None and not queue_future.done():
+                                queue_future.cancel()
+                        except Exception:
+                            pass
+                        try:
+                            while True:
+                                stream_channel.get_nowait()
+                        except asyncio.QueueEmpty:
+                            pass
+                        try:
                             error_payload = {
                                 "error": {
                                     "message": "Stream channel timed out waiting for queued response.",
@@ -1849,13 +1891,6 @@ async def execute_streaming_call(
             # Execute provided LLM call function in a worker to avoid blocking the loop.
             # llm_call_func is a sync callable (partial of perform_chat_api_call or a mock).
             raw_stream_iter = await current_loop.run_in_executor(None, llm_call_func)
-            latency = time.time() - llm_start_time
-            metrics.track_llm_call(selected_provider, model, latency, success=True)
-            try:
-                if provider_manager:
-                    provider_manager.record_success(selected_provider, latency)
-            except Exception:
-                pass
             if selected_provider != provider:
                 try:
                     metrics.track_provider_fallback_success(
@@ -2027,6 +2062,7 @@ async def execute_streaming_call(
         tool_calls: Optional[List[Dict[str, Any]]],
         function_call: Optional[Dict[str, Any]],
     ):
+        nonlocal stream_metrics_recorded
         saved_message_id: Optional[str] = None
         full_reply_to_save = full_reply
         post_stream_blocked = False
@@ -2144,6 +2180,16 @@ async def execute_streaming_call(
                     full_reply_to_save = moderation.redact_text(full_reply, eff_policy)
         except Exception:
             pass
+
+        if not stream_metrics_recorded:
+            try:
+                latency = time.time() - llm_start_time
+                metrics.track_llm_call(selected_provider, model, latency, success=True)
+                if provider_manager:
+                    provider_manager.record_success(selected_provider, latency)
+                stream_metrics_recorded = True
+            except Exception:
+                pass
 
         if should_persist and final_conversation_id and not post_stream_blocked and (
             full_reply_to_save or tool_calls or function_call
@@ -2447,6 +2493,28 @@ async def execute_streaming_call(
                 pass
 
             async def _finalize_stream(*, success: bool, cancelled: bool, error: bool) -> None:
+                nonlocal stream_failure_recorded, stream_metrics_recorded
+                if not success and not stream_failure_recorded and not stream_metrics_recorded:
+                    try:
+                        latency = time.time() - llm_start_time
+                        if cancelled:
+                            error_type = "stream_cancelled"
+                        elif error:
+                            error_type = "stream_error"
+                        else:
+                            error_type = "stream_incomplete"
+                        metrics.track_llm_call(
+                            selected_provider,
+                            model,
+                            latency,
+                            success=False,
+                            error_type=error_type,
+                        )
+                        if provider_manager and error and not cancelled:
+                            provider_manager.record_failure(selected_provider, RuntimeError(error_type))
+                        stream_failure_recorded = True
+                    except Exception:
+                        pass
                 if success:
                     return
                 if callable(rg_refund_cb):
@@ -2592,6 +2660,7 @@ async def execute_non_stream_call(
     llm_start_time = time.time()
     llm_response = None
     metrics_recorded = False
+    queue_failure_recorded = False
     queue_enabled = False
     try:
         queue_for_exec = None
@@ -2607,6 +2676,7 @@ async def execute_non_stream_call(
         if queue_enabled:
             est_tokens_for_queue = estimate_tokens_from_json(request_json)
             def _queued_processor():
+                nonlocal queue_failure_recorded
                 local_start = time.time()
                 try:
                     result = llm_call_func()
@@ -2636,6 +2706,7 @@ async def execute_non_stream_call(
                     )
                     if provider_manager:
                         provider_manager.record_failure(selected_provider, proc_error)
+                    queue_failure_recorded = True
                     raise
 
             try:
@@ -2693,15 +2764,18 @@ async def execute_non_stream_call(
         raise
     except Exception as e:
         llm_latency = time.time() - llm_start_time
-        metrics.track_llm_call(
-            selected_provider,
-            model,
-            llm_latency,
-            success=False,
-            error_type=type(e).__name__,
-        )
+        if not queue_failure_recorded:
+            metrics.track_llm_call(
+                selected_provider,
+                model,
+                llm_latency,
+                success=False,
+                error_type=type(e).__name__,
+            )
+            if provider_manager:
+                provider_manager.record_failure(selected_provider, e)
+
         if provider_manager:
-            provider_manager.record_failure(selected_provider, e)
             name_lower_e = type(e).__name__.lower()
             client_like_error = (
                 "authentication" in name_lower_e
@@ -2723,7 +2797,9 @@ async def execute_non_stream_call(
                             refreshed_args, refreshed_model = refreshed
                         # Validate refreshed params have required fields before proceeding
                         if not isinstance(refreshed_args, dict) or "messages_payload" not in refreshed_args:
-                            raise ValueError(f"Invalid refreshed params for {fallback_provider}: missing required fields")
+                            raise ValueError(
+                                f"Invalid refreshed params for {fallback_provider}: missing required fields"
+                            )
                     except Exception as refresh_error:
                         provider_manager.record_failure(fallback_provider, refresh_error)
                         raise
