@@ -63,7 +63,10 @@ async def test_webhook_step_signing_redirect_and_size_limit(monkeypatch, tmp_pat
                 content=body,
             )
 
-    monkeypatch.setattr("tldw_Server_API.app.core.Workflows.adapters._wf_create_client", lambda *args, **kwargs: DummyClient())
+    monkeypatch.setattr(
+        "tldw_Server_API.app.core.Workflows.adapters.integration.webhook._wf_create_client",
+        lambda *args, **kwargs: DummyClient(),
+    )
 
     db = WorkflowsDatabase(str(tmp_path / "wf.db"))
     definition = {

@@ -15,7 +15,10 @@ async def test_tokens_cost_aggregated_across_steps(monkeypatch, tmp_path):
             return {"text": "A", "metadata": {"token_usage": {"prompt_tokens": 5, "completion_tokens": 2}, "cost_usd": 0.01}}
         return {"text": "B", "metadata": {"token_usage": {"input_tokens": 7, "output_tokens": 4}, "cost_usd": 0.02}}
 
-    monkeypatch.setattr("tldw_Server_API.app.core.Workflows.adapters.run_llm_adapter", _stub_llm_adapter)
+    from tldw_Server_API.app.core.Workflows.adapters import registry
+    spec = registry.get_spec("llm")
+    assert spec is not None
+    monkeypatch.setattr(spec, "func", _stub_llm_adapter)
 
     db = WorkflowsDatabase(str(tmp_path / "wf.db"))
     definition = {

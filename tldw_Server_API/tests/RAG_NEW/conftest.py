@@ -58,11 +58,13 @@ def _isolate_semantic_cache(tmp_path, monkeypatch):
         cache_module._SHARED_CACHES.clear()
         cache_module._DEFAULT_CACHE_DIR = None
 
-    yield
+# Disable billing limit enforcement for RAG_NEW tests to avoid 402s from shared
+# ResourceDailyLedger state across the suite.
+@pytest.fixture(autouse=True)
+def _disable_limit_enforcement(monkeypatch):
+    monkeypatch.setenv("LIMIT_ENFORCEMENT_ENABLED", "false")
 
-    if cache_module is not None:
-        cache_module._SHARED_CACHES.clear()
-        cache_module._DEFAULT_CACHE_DIR = None
+    yield
 
 # =====================================================================
 # Cross-suite fixtures (mirrors Embeddings fixtures used by RAG tests)

@@ -1,0 +1,331 @@
+"""
+Web Search Fallback for Self-Correcting RAG
+
+This module provides web search fallback when local retrieval fails to find
+relevant documents. Uses the existing WebSearch_APIs infrastructure.
+
+Part of the Self-Correcting RAG feature set (Stage 3).
+"""
+
+import asyncio
+import time
+import uuid
+from dataclasses import dataclass, field
+from typing import Any, Dict, List, Literal, Optional
+
+from loguru import logger
+
+from .types import Document, DataSource
+
+
+@dataclass
+class WebFallbackConfig:
+    """Configuration for web search fallback."""
+
+    engine: str = "duckduckgo"
+    result_count: int = 5
+    content_country: str = "US"
+    search_lang: str = "en"
+    output_lang: str = "en"
+    max_content_chars: int = 2000
+    subquery_generation: bool = False
+    safesearch: str = "active"
+    timeout_seconds: float = 30.0
+
+
+@dataclass
+class WebFallbackResult:
+    """Result of web search fallback."""
+
+    documents: List[Document]
+    search_time_ms: int
+    result_count: int
+    engine_used: str
+    query_used: str
+    metadata: Dict[str, Any] = field(default_factory=dict)
+
+
+async def web_search_fallback(
+    query: str,
+    config: Optional[WebFallbackConfig] = None,
+) -> WebFallbackResult:
+    """
+    Perform web search fallback when local retrieval fails.
+
+    This function calls the existing generate_and_search function and converts
+    the results to Document objects with source=DataSource.WEB_CONTENT.
+
+    Args:
+        query: The search query
+        config: Optional configuration for web search
+
+    Returns:
+        WebFallbackResult with converted documents
+    """
+    if config is None:
+        config = WebFallbackConfig()
+
+    start_time = time.time()
+
+    try:
+        # Import the web search function
+        from tldw_Server_API.app.core.Web_Scraping.WebSearch_APIs import generate_and_search
+
+        # Build search parameters
+        search_params = {
+            "engine": config.engine,
+            "content_country": config.content_country,
+            "search_lang": config.search_lang,
+            "output_lang": config.output_lang,
+            "result_count": config.result_count,
+            "subquery_generation": config.subquery_generation,
+            "safesearch": config.safesearch,
+        }
+
+        # Run the synchronous search in a thread pool
+        search_result = await asyncio.wait_for(
+            asyncio.to_thread(generate_and_search, query, search_params),
+            timeout=config.timeout_seconds,
+        )
+
+        search_time_ms = int((time.time() - start_time) * 1000)
+
+        # Extract web search results
+        web_results = search_result.get("web_search_results_dict", {})
+        raw_results = web_results.get("results", [])
+
+        # Convert to Document objects
+        documents = _convert_web_results_to_documents(
+            raw_results,
+            query,
+            config.max_content_chars,
+        )
+
+        return WebFallbackResult(
+            documents=documents,
+            search_time_ms=search_time_ms,
+            result_count=len(documents),
+            engine_used=config.engine,
+            query_used=query,
+            metadata={
+                "total_raw_results": web_results.get("total_results_found", 0),
+                "search_time_seconds": web_results.get("search_time", 0.0),
+                "sub_queries": search_result.get("sub_query_dict", {}).get("sub_questions", []),
+            },
+        )
+
+    except asyncio.TimeoutError:
+        logger.warning(f"Web search fallback timed out after {config.timeout_seconds}s")
+        return WebFallbackResult(
+            documents=[],
+            search_time_ms=int((time.time() - start_time) * 1000),
+            result_count=0,
+            engine_used=config.engine,
+            query_used=query,
+            metadata={"error": "timeout"},
+        )
+
+    except ImportError:
+        logger.warning("WebSearch_APIs module not available for web fallback")
+        return WebFallbackResult(
+            documents=[],
+            search_time_ms=int((time.time() - start_time) * 1000),
+            result_count=0,
+            engine_used=config.engine,
+            query_used=query,
+            metadata={"error": "module_not_available"},
+        )
+
+    except Exception as e:
+        logger.warning(f"Web search fallback failed: {e}")
+        return WebFallbackResult(
+            documents=[],
+            search_time_ms=int((time.time() - start_time) * 1000),
+            result_count=0,
+            engine_used=config.engine,
+            query_used=query,
+            metadata={"error": str(e)},
+        )
+
+
+def _convert_web_results_to_documents(
+    raw_results: List[Dict[str, Any]],
+    query: str,
+    max_content_chars: int,
+) -> List[Document]:
+    """
+    Convert raw web search results to Document objects.
+
+    Args:
+        raw_results: Raw results from web search
+        query: Original query
+        max_content_chars: Maximum characters to include in content
+
+    Returns:
+        List of Document objects
+    """
+    documents = []
+
+    for idx, result in enumerate(raw_results):
+        try:
+            # Extract content from result
+            title = result.get("title", "")
+            snippet = result.get("snippet", "") or result.get("description", "")
+            url = result.get("url", "") or result.get("link", "")
+            body = result.get("body", "") or result.get("content", "")
+
+            # Build content from available fields
+            content_parts = []
+            if title:
+                content_parts.append(f"Title: {title}")
+            if snippet:
+                content_parts.append(f"Summary: {snippet}")
+            if body:
+                # Truncate body if needed
+                truncated_body = body[:max_content_chars]
+                if len(body) > max_content_chars:
+                    truncated_body += "..."
+                content_parts.append(f"Content: {truncated_body}")
+
+            content = "\n\n".join(content_parts)
+
+            if not content.strip():
+                continue
+
+            # Create Document
+            doc_id = f"web_{uuid.uuid4().hex[:8]}_{idx}"
+            doc = Document(
+                id=doc_id,
+                content=content,
+                source=DataSource.WEB_CONTENT,
+                score=1.0 - (idx * 0.05),  # Decrease score by position
+                metadata={
+                    "title": title,
+                    "url": url,
+                    "snippet": snippet[:500] if snippet else "",
+                    "source": "web_search",
+                    "query": query,
+                    "position": idx + 1,
+                },
+            )
+            documents.append(doc)
+
+        except Exception as e:
+            logger.warning(f"Failed to convert web result {idx}: {e}")
+            continue
+
+    return documents
+
+
+def merge_web_results(
+    local_docs: List[Document],
+    web_docs: List[Document],
+    strategy: Literal["prepend", "append", "interleave"] = "prepend",
+    max_total: Optional[int] = None,
+) -> List[Document]:
+    """
+    Merge local and web documents according to a strategy.
+
+    Args:
+        local_docs: Documents from local retrieval
+        web_docs: Documents from web search
+        strategy: How to merge ("prepend", "append", "interleave")
+        max_total: Maximum total documents to return
+
+    Returns:
+        Merged list of documents
+    """
+    if strategy == "prepend":
+        # Web results first, then local
+        merged = web_docs + local_docs
+    elif strategy == "append":
+        # Local results first, then web
+        merged = local_docs + web_docs
+    elif strategy == "interleave":
+        # Alternate between web and local
+        merged = []
+        max_len = max(len(local_docs), len(web_docs))
+        for i in range(max_len):
+            if i < len(web_docs):
+                merged.append(web_docs[i])
+            if i < len(local_docs):
+                merged.append(local_docs[i])
+    else:
+        # Default to prepend
+        merged = web_docs + local_docs
+
+    if max_total is not None:
+        merged = merged[:max_total]
+
+    return merged
+
+
+# Convenience function for pipeline integration
+async def fallback_to_web_search(
+    query: str,
+    local_docs: List[Document],
+    relevance_signal: float,
+    threshold: float = 0.25,
+    engine: str = "duckduckgo",
+    result_count: int = 5,
+    merge_strategy: Literal["prepend", "append", "interleave"] = "prepend",
+    max_total: Optional[int] = None,
+) -> tuple[List[Document], Dict[str, Any]]:
+    """
+    Convenience function to conditionally fall back to web search.
+
+    Args:
+        query: The search query
+        local_docs: Documents from local retrieval
+        relevance_signal: Current relevance score (e.g., from reranker calibration)
+        threshold: Threshold below which to trigger web fallback
+        engine: Web search engine to use
+        result_count: Number of web results to fetch
+        merge_strategy: How to merge local and web results
+        max_total: Maximum total documents to return
+
+    Returns:
+        Tuple of (merged_documents, metadata)
+    """
+    metadata = {
+        "web_fallback_enabled": True,
+        "relevance_signal": relevance_signal,
+        "threshold": threshold,
+        "triggered": False,
+    }
+
+    # Check if we should trigger web fallback
+    if relevance_signal >= threshold:
+        metadata["triggered"] = False
+        return local_docs, metadata
+
+    # Trigger web fallback
+    metadata["triggered"] = True
+
+    config = WebFallbackConfig(
+        engine=engine,
+        result_count=result_count,
+    )
+
+    result = await web_search_fallback(query, config)
+
+    if not result.documents:
+        metadata["web_search_failed"] = True
+        metadata["error"] = result.metadata.get("error")
+        return local_docs, metadata
+
+    # Merge results
+    merged = merge_web_results(
+        local_docs=local_docs,
+        web_docs=result.documents,
+        strategy=merge_strategy,
+        max_total=max_total,
+    )
+
+    metadata["web_results_count"] = result.result_count
+    metadata["search_time_ms"] = result.search_time_ms
+    metadata["engine_used"] = result.engine_used
+    metadata["merged_count"] = len(merged)
+    metadata["merge_strategy"] = merge_strategy
+
+    return merged, metadata

@@ -198,6 +198,50 @@ except ImportError:
     GradingConfig = None
     grade_and_filter_documents = None
 
+# Self-Correcting RAG: Web Fallback (Stage 3)
+try:
+    from .web_fallback import (
+        WebFallbackConfig,
+        web_search_fallback,
+        merge_web_results,
+        fallback_to_web_search,
+    )
+except ImportError:
+    WebFallbackConfig = None
+    web_search_fallback = None
+    merge_web_results = None
+    fallback_to_web_search = None
+
+# Self-Correcting RAG: Knowledge Strips (Stage 4)
+try:
+    from .knowledge_strips import (
+        KnowledgeStripsProcessor,
+        KnowledgeStripsResult,
+        process_knowledge_strips,
+    )
+except ImportError:
+    KnowledgeStripsProcessor = None
+    KnowledgeStripsResult = None
+    process_knowledge_strips = None
+
+# Self-Correcting RAG: Quality Graders (Stages 5-6)
+try:
+    from .quality_graders import (
+        FastGroundednessGrader,
+        FastGroundednessResult,
+        UtilityGrader,
+        UtilityResult,
+        check_fast_groundedness,
+        grade_utility,
+    )
+except ImportError:
+    FastGroundednessGrader = None
+    FastGroundednessResult = None
+    UtilityGrader = None
+    UtilityResult = None
+    check_fast_groundedness = None
+    grade_utility = None
+
 try:
     from .generation import AnswerGenerator
 except ImportError:
@@ -556,6 +600,7 @@ async def unified_rag_pipeline(
     grading_batch_size: int = 5,
     grading_timeout_sec: float = 30.0,
     grading_fallback_to_score: bool = True,
+    grading_fallback_min_score: float = 0.3,
     # Stage 2: Query Rewriting Loop - rewrite query when grading shows low relevance
     enable_query_rewriting_loop: bool = False,
     max_rewrite_attempts: int = 2,
@@ -2340,6 +2385,8 @@ async def unified_rag_pipeline(
                             db_paths["notes_db"] = notes_db_path
                         if character_db_path:
                             db_paths["character_cards_db"] = character_db_path
+                        if kanban_db_path:
+                            db_paths["kanban_db"] = kanban_db_path
 
                         retriever = MultiDatabaseRetriever(
                             db_paths,
@@ -2355,11 +2402,27 @@ async def unified_rag_pipeline(
                             include_metadata=True,
                             fts_level=fts_level,
                         )
+                        # Reuse the original sources list for follow-up retrievals
+                        src_list = sources or ["media_db"]
+                        source_map = {
+                            "media_db": DataSource.MEDIA_DB,
+                            "media": DataSource.MEDIA_DB,
+                            "notes": DataSource.NOTES,
+                            "characters": DataSource.CHARACTER_CARDS,
+                            "chats": DataSource.CHARACTER_CARDS,
+                            "kanban": DataSource.KANBAN,
+                            "kanban_db": DataSource.KANBAN,
+                        }
+                        data_sources = [source_map.get(s, DataSource.MEDIA_DB) for s in src_list]
+                        if not data_sources:
+                            return []
                         new_docs = await retriever.retrieve(
                             query=gap_query,
-                            sources=[DataSource.MEDIA_DB],
+                            sources=data_sources,
                             config=config,
                             index_namespace=index_namespace,
+                            allowed_media_ids=include_media_ids,
+                            allowed_note_ids=include_note_ids,
                         )
                         # Filter out already-seen documents
                         return [d for d in new_docs if d.id not in exclude_ids]
@@ -2412,6 +2475,7 @@ async def unified_rag_pipeline(
                     batch_size=grading_batch_size,
                     timeout_seconds=grading_timeout_sec,
                     fallback_to_score=grading_fallback_to_score,
+                    fallback_min_score=grading_fallback_min_score,
                 )
                 grader = DocumentGrader(config=grading_config)
 
@@ -2469,6 +2533,148 @@ async def unified_rag_pipeline(
                 result.errors.append(f"Document grading failed: {e}")
                 logger.warning(f"Document grading error: {e}")
                 result.metadata["document_grading"] = {"enabled": True, "error": str(e)}
+
+        # ========== SELF-CORRECTING RAG: QUERY REWRITING LOOP (Stage 2) ==========
+        # When document grading shows low relevance, rewrite query and retry retrieval
+        if (
+            enable_query_rewriting_loop
+            and QueryRewriter
+            and result.metadata.get("document_grading", {}).get("low_relevance_detected")
+        ):
+            rewrite_loop_start = time.time()
+            rewrite_attempts = []
+            best_relevance = result.metadata.get("document_grading", {}).get("avg_relevance", 0.0)
+            best_docs = result.documents
+            current_query = query
+
+            try:
+                rewriter = QueryRewriter()
+
+                for attempt in range(max_rewrite_attempts):
+                    # Rewrite the query using improve_for_retrieval strategy
+                    rewrites = rewriter.rewrite_query(
+                        current_query,
+                        strategies=["improve_for_retrieval"],
+                        failed_docs=result.documents,
+                        failure_reason=f"avg_relevance_{best_relevance:.2f}",
+                    )
+
+                    if not rewrites:
+                        logger.debug(f"No rewrites generated on attempt {attempt + 1}")
+                        break
+
+                    # Use the best rewrite (highest confidence)
+                    best_rewrite = max(rewrites, key=lambda r: r.confidence)
+                    rewritten_query = best_rewrite.rewritten_query
+
+                    rewrite_attempts.append({
+                        "attempt": attempt + 1,
+                        "original_query": current_query,
+                        "rewritten_query": rewritten_query,
+                        "rewrite_type": best_rewrite.rewrite_type,
+                        "confidence": best_rewrite.confidence,
+                        "explanation": best_rewrite.explanation,
+                    })
+
+                    logger.debug(f"Query rewrite attempt {attempt + 1}: '{rewritten_query}'")
+
+                    # Re-run retrieval with rewritten query
+                    if MultiDatabaseRetriever and RetrievalConfig:
+                        try:
+                            db_paths = {}
+                            if media_db_path:
+                                db_paths["media_db"] = media_db_path
+                            if notes_db_path:
+                                db_paths["notes_db"] = notes_db_path
+                            if character_db_path:
+                                db_paths["character_cards_db"] = character_db_path
+
+                            retriever = MultiDatabaseRetriever(
+                                db_paths,
+                                user_id=user_id or "0",
+                                media_db=media_db,
+                                chacha_db=chacha_db,
+                            )
+                            retrieval_config = RetrievalConfig(
+                                max_results=top_k,
+                                min_score=min_score,
+                                use_fts=(search_mode in ["fts", "hybrid"]),
+                                use_vector=(search_mode in ["vector", "hybrid"]),
+                                include_metadata=True,
+                                fts_level=fts_level,
+                            )
+
+                            new_docs = await retriever.retrieve(
+                                query=rewritten_query,
+                                sources=[DataSource.MEDIA_DB] if "media_db" in (sources or ["media_db"]) else [],
+                                config=retrieval_config,
+                                index_namespace=index_namespace,
+                            )
+
+                            if new_docs:
+                                # Re-grade the new documents
+                                if enable_document_grading and DocumentGrader:
+                                    grading_config = GradingConfig(
+                                        provider=grading_provider or "openai",
+                                        model=grading_model,
+                                        batch_size=grading_batch_size,
+                                        timeout_seconds=grading_timeout_sec,
+                                        fallback_to_score=grading_fallback_to_score,
+                                        fallback_min_score=grading_fallback_min_score,
+                                    )
+                                    grader = DocumentGrader(config=grading_config)
+                                    _, new_grading_metadata = await grader.filter_relevant(
+                                        query=rewritten_query,
+                                        documents=new_docs,
+                                        threshold=grading_threshold,
+                                    )
+
+                                    new_avg_relevance = new_grading_metadata.get("avg_relevance", 0.0)
+                                    rewrite_attempts[-1]["new_avg_relevance"] = new_avg_relevance
+
+                                    # Check if we've improved
+                                    if new_avg_relevance > best_relevance:
+                                        best_relevance = new_avg_relevance
+                                        best_docs = new_docs
+                                        current_query = rewritten_query
+
+                                    # Check if we've exceeded threshold
+                                    if new_avg_relevance >= rewrite_relevance_threshold:
+                                        logger.info(f"Query rewrite succeeded after {attempt + 1} attempts, relevance: {new_avg_relevance:.2f}")
+                                        rewrite_attempts[-1]["success"] = True
+                                        break
+                                else:
+                                    # No grading, just use new docs
+                                    best_docs = new_docs
+                                    current_query = rewritten_query
+                                    break
+
+                        except Exception as ret_err:
+                            logger.warning(f"Retrieval with rewritten query failed: {ret_err}")
+                            rewrite_attempts[-1]["error"] = str(ret_err)
+
+                # Update result with best documents found
+                if best_docs:
+                    result.documents = best_docs
+
+                # Store query rewriting loop metadata
+                result.metadata["query_rewrite_loop"] = {
+                    "enabled": True,
+                    "attempts": len(rewrite_attempts),
+                    "max_attempts": max_rewrite_attempts,
+                    "initial_relevance": result.metadata.get("document_grading", {}).get("avg_relevance", 0.0),
+                    "final_relevance": best_relevance,
+                    "threshold": rewrite_relevance_threshold,
+                    "improved": best_relevance > result.metadata.get("document_grading", {}).get("avg_relevance", 0.0),
+                    "rewrite_attempts": rewrite_attempts,
+                }
+
+                result.timings["query_rewrite_loop"] = time.time() - rewrite_loop_start
+
+            except Exception as e:
+                result.errors.append(f"Query rewriting loop failed: {e}")
+                logger.warning(f"Query rewriting loop error: {e}")
+                result.metadata["query_rewrite_loop"] = {"enabled": True, "error": str(e)}
 
         # ========== RERANKING ==========
         if enable_reranking and result.documents and reranking_strategy != "none":
@@ -2677,6 +2883,84 @@ async def unified_rag_pipeline(
                     except Exception:
                         pass
 
+        # ========== SELF-CORRECTING RAG: WEB SEARCH FALLBACK (Stage 3) ==========
+        # When local retrieval has low relevance, fall back to web search
+        if enable_web_fallback and fallback_to_web_search:
+            web_fallback_start = time.time()
+            try:
+                # Compute relevance signal for web fallback decision
+                # Use reranking calibration if available, otherwise use avg document score
+                relevance_signal = 0.5  # Default
+                if isinstance(result.metadata, dict):
+                    cal = result.metadata.get("reranking_calibration", {})
+                    if isinstance(cal, dict) and "fused_score" in cal:
+                        relevance_signal = float(cal.get("fused_score", 0.5))
+                    elif result.documents:
+                        # Fall back to average document score
+                        scores = [
+                            float(getattr(d, "score", 0.0) or 0.0)
+                            for d in result.documents
+                        ]
+                        relevance_signal = sum(scores) / len(scores) if scores else 0.0
+
+                # Only trigger if below threshold
+                if relevance_signal < web_fallback_threshold:
+                    logger.debug(
+                        f"Web fallback triggered: relevance {relevance_signal:.2f} < threshold {web_fallback_threshold}"
+                    )
+
+                    merged_docs, web_metadata = await fallback_to_web_search(
+                        query=query,
+                        local_docs=result.documents or [],
+                        relevance_signal=relevance_signal,
+                        threshold=web_fallback_threshold,
+                        engine=web_search_engine,
+                        result_count=web_fallback_result_count,
+                        merge_strategy=web_fallback_merge_strategy,
+                        max_total=top_k * 2,  # Allow some extra docs from web
+                    )
+
+                    if web_metadata.get("triggered"):
+                        result.documents = merged_docs
+                        result.metadata["web_fallback"] = {
+                            "enabled": True,
+                            "triggered": True,
+                            "relevance_signal": relevance_signal,
+                            "threshold": web_fallback_threshold,
+                            "web_results_count": web_metadata.get("web_results_count", 0),
+                            "merged_count": web_metadata.get("merged_count", 0),
+                            "engine_used": web_metadata.get("engine_used"),
+                            "merge_strategy": web_fallback_merge_strategy,
+                            "search_time_ms": web_metadata.get("search_time_ms", 0),
+                        }
+
+                        # --- OTEL span for web fallback ---
+                        if enable_observability and get_telemetry_manager:
+                            try:
+                                _tm = get_telemetry_manager()
+                                _tr = _tm.get_tracer("tldw.rag")
+                                with _tr.start_as_current_span("rag.web_fallback") as _span:
+                                    _span.set_attribute("rag.phase", "web_fallback")
+                                    _span.set_attribute("rag.web_results", web_metadata.get("web_results_count", 0))
+                                    _span.set_attribute("rag.engine", web_search_engine)
+                            except Exception:
+                                pass
+                else:
+                    result.metadata["web_fallback"] = {
+                        "enabled": True,
+                        "triggered": False,
+                        "relevance_signal": relevance_signal,
+                        "threshold": web_fallback_threshold,
+                        "reason": "relevance_above_threshold",
+                    }
+
+                result.timings["web_fallback"] = time.time() - web_fallback_start
+
+            except Exception as e:
+                result.errors.append(f"Web fallback failed: {e}")
+                logger.warning(f"Web fallback error: {e}")
+                result.metadata["web_fallback"] = {"enabled": True, "error": str(e)}
+
         # ========== WHY THESE SOURCES (metadata) ==========
         try:
             docs = result.documents or []
@@ -2813,6 +3097,8 @@ async def unified_rag_pipeline(
                 except Exception:
                     result.documents = list(result.documents)[:max_docs]
 
+        evidence_chain_result = None
+
         # ========== CITATION GENERATION ==========
         if enable_citations and result.documents:
             citation_start = time.time()
@@ -2829,13 +3115,25 @@ async def unified_rag_pipeline(
                     }
                     style_enum = style_map.get(citation_style) or next(iter([v for v in style_map.values() if v is not None]), None)
 
-                    dual = await generator.generate_citations(
-                        documents=result.documents,
-                        query=query,
-                        style=style_enum if style_enum is not None else CitationStyle.MLA if CitationStyle else None,
-                        include_chunks=bool(enable_chunk_citations),
-                        max_citations=min(len(result.documents), (rerank_top_k or top_k or 10))
-                    )
+                    if enable_evidence_chains and hasattr(generator, "generate_citations_with_chains"):
+                        dual, chain_result = await generator.generate_citations_with_chains(
+                            documents=result.documents,
+                            query=query,
+                            generated_answer=result.generated_answer,
+                            style=style_enum if style_enum is not None else CitationStyle.MLA if CitationStyle else None,
+                            include_chunks=bool(enable_chunk_citations),
+                            max_citations=min(len(result.documents), (rerank_top_k or top_k or 10)),
+                        )
+                        if chain_result:
+                            evidence_chain_result = chain_result
+                    else:
+                        dual = await generator.generate_citations(
+                            documents=result.documents,
+                            query=query,
+                            style=style_enum if style_enum is not None else CitationStyle.MLA if CitationStyle else None,
+                            include_chunks=bool(enable_chunk_citations),
+                            max_citations=min(len(result.documents), (rerank_top_k or top_k or 10))
+                        )
 
                     # Combined citations list for backward compatibility
                     result.citations = (
@@ -2856,22 +3154,69 @@ async def unified_rag_pipeline(
                 result.errors.append(f"Citation generation failed: {str(e)}")
                 logger.error(f"Citation error: {e}")
 
+        # ========== SELF-CORRECTING RAG: KNOWLEDGE STRIPS (Stage 4) ==========
+        # Partition documents into semantic strips and filter by relevance before generation
+        if enable_knowledge_strips and result.documents and process_knowledge_strips:
+            strips_start = time.time()
+            try:
+                filtered_docs, strips_metadata = await process_knowledge_strips(
+                    query=query,
+                    documents=result.documents,
+                    strip_size_tokens=strip_size_tokens,
+                    min_relevance=strip_min_relevance,
+                    max_strips=max_strips,
+                    use_llm_grading=False,  # Use heuristic for speed by default
+                )
+
+                if filtered_docs:
+                    result.documents = filtered_docs
+
+                result.metadata["knowledge_strips"] = {
+                    "enabled": True,
+                    "total_strips": strips_metadata.get("total_strips", 0),
+                    "relevant_strips": strips_metadata.get("relevant_strips", 0),
+                    "filtered_strips": strips_metadata.get("filtered_strips", 0),
+                    "avg_relevance": strips_metadata.get("avg_relevance", 0.0),
+                    "strip_size_tokens": strip_size_tokens,
+                    "min_relevance": strip_min_relevance,
+                    "resulting_docs": len(filtered_docs) if filtered_docs else 0,
+                }
+
+                result.timings["knowledge_strips"] = time.time() - strips_start
+
+                # --- OTEL span for knowledge strips ---
+                if enable_observability and get_telemetry_manager:
+                    try:
+                        _tm = get_telemetry_manager()
+                        _tr = _tm.get_tracer("tldw.rag")
+                        with _tr.start_as_current_span("rag.knowledge_strips") as _span:
+                            _span.set_attribute("rag.phase", "knowledge_strips")
+                            _span.set_attribute("rag.total_strips", strips_metadata.get("total_strips", 0))
+                            _span.set_attribute("rag.filtered_strips", strips_metadata.get("filtered_strips", 0))
+                    except Exception:
+                        pass
+
+            except Exception as e:
+                result.errors.append(f"Knowledge strips processing failed: {e}")
+                logger.warning(f"Knowledge strips error: {e}")
+                result.metadata["knowledge_strips"] = {"enabled": True, "error": str(e)}
+
         # ========== EVIDENCE CHAINS (before generation for chain-aware citations) ==========
-        evidence_chain_result = None
         if enable_evidence_chains and result.documents and EvidenceChainBuilder:
             chain_start = time.time()
             try:
-                chain_builder = EvidenceChainBuilder(
-                    enable_llm_extraction=True,
-                )
+                if evidence_chain_result is None:
+                    chain_builder = EvidenceChainBuilder(
+                        enable_llm_extraction=True,
+                    )
 
-                # Build chains - note: we don't have the answer yet, so chains are built from docs
-                # This will be re-run after generation if needed for claim extraction
-                evidence_chain_result = await chain_builder.build_chains(
-                    query=query,
-                    documents=result.documents,
-                    generated_answer=None,  # Will be updated post-generation
-                )
+                    # Build chains - note: we don't have the answer yet, so chains are built from docs
+                    # This will be re-run after generation if needed for claim extraction
+                    evidence_chain_result = await chain_builder.build_chains(
+                        query=query,
+                        documents=result.documents,
+                        generated_answer=None,  # Will be updated post-generation
+                    )
 
                 if evidence_chain_result:
                     result.metadata["evidence_chains"] = {
@@ -3202,8 +3547,40 @@ async def unified_rag_pipeline(
         except Exception as e:
             result.errors.append(f"Quote citations mapping failed: {str(e)}")
 
+        # ========== FAST GROUNDEDNESS CHECK (Self-Correcting RAG Stage 5) ==========
+        # Lightweight check before expensive claims extraction
+        fast_grounded = True  # default assumption
+        fast_groundedness_confidence = 0.0
+        try:
+            if enable_fast_hallucination_check and result.generated_answer and check_fast_groundedness:
+                with otel_span("rag.fast_groundedness_check"):
+                    fg_result, fg_meta = await check_fast_groundedness(
+                        query=query,
+                        answer=result.generated_answer,
+                        documents=result.documents or [],
+                        provider=fast_hallucination_provider,
+                        model=fast_hallucination_model,
+                        timeout_sec=fast_hallucination_timeout_sec,
+                    )
+                    fast_grounded = fg_result.is_grounded
+                    fast_groundedness_confidence = fg_result.confidence
+                    result.metadata["fast_groundedness"] = fg_meta
+
+                    # If highly confident grounded, can optionally skip full claims
+                    if fast_grounded and fast_groundedness_confidence >= 0.9:
+                        result.metadata["fast_groundedness"]["skip_full_claims"] = True
+        except Exception as e:
+            result.errors.append(f"Fast groundedness check failed: {str(e)}")
+
         # ========== CLAIMS & FACTUALITY ==========
-        if enable_claims and result.generated_answer:
+        # Optionally skip if fast groundedness check passed with high confidence
+        skip_claims_due_to_groundedness = (
+            enable_fast_hallucination_check
+            and fast_grounded
+            and fast_groundedness_confidence >= 0.9
+            and result.metadata.get("fast_groundedness", {}).get("skip_full_claims", False)
+        )
+        if enable_claims and result.generated_answer and not skip_claims_due_to_groundedness:
             try:
                 # Import shared analyze function for LLM calls
                 import tldw_Server_API.app.core.LLM_Calls.Summarization_General_Lib as sgl  # type: ignore
@@ -3862,6 +4239,22 @@ async def unified_rag_pipeline(
             except Exception as e:
                 result.errors.append(f"Post-generation evidence chain update failed: {e}")
                 logger.debug(f"Evidence chain update error: {e}")
+
+        # ========== UTILITY GRADING (Self-Correcting RAG Stage 6) ==========
+        # Rate response usefulness independent of factual grounding
+        try:
+            if enable_utility_grading and result.generated_answer and grade_utility:
+                with otel_span("rag.utility_grading"):
+                    ug_result, ug_meta = await grade_utility(
+                        query=query,
+                        answer=result.generated_answer,
+                        provider=utility_grading_provider,
+                        model=utility_grading_model,
+                        timeout_sec=utility_grading_timeout_sec,
+                    )
+                    result.metadata["utility_grade"] = ug_meta
+        except Exception as e:
+            result.errors.append(f"Utility grading failed: {str(e)}")
 
         # ========== USER FEEDBACK ==========
         if collect_feedback:

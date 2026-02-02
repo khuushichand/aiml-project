@@ -104,8 +104,14 @@ class ChatbookValidator:
         if not filename:
             return False, "No filename provided", ""
 
+        # Reject path separators or traversal attempts up front
+        if "/" in filename or "\\" in filename or cls.PATH_TRAVERSAL_PATTERN.search(filename):
+            return False, "Invalid filename: path separators are not allowed", ""
+
         # Extract basename and remove path components
         base_filename = os.path.basename(filename)
+        if base_filename != filename:
+            return False, "Invalid filename: path separators are not allowed", ""
 
         # Check length
         if len(base_filename) > cls.MAX_NAME_LENGTH:

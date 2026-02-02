@@ -83,7 +83,9 @@ def _setup_secure_temp_directory(user_id: str) -> Path:
         raise HTTPException(status_code=400, detail="Insecure chatbooks temp directory")
     temp_dir = temp_dir.resolve(strict=True)
     base_dir = DatabasePaths.get_user_chatbooks_dir(user_id).resolve(strict=True)
-    if os.path.commonpath([str(temp_dir), str(base_dir)]) != str(base_dir):
+    try:
+        temp_dir.relative_to(base_dir)
+    except ValueError:
         raise HTTPException(status_code=400, detail="Invalid chatbooks temp directory path")
 
     return temp_dir
@@ -252,7 +254,9 @@ async def create_chatbook(
                 job_id = str(uuid.uuid4())
                 file_path = Path(result).resolve()
                 expected_base = Path(service.export_dir).resolve()
-                if os.path.commonpath([str(file_path), str(expected_base)]) != str(expected_base):
+                try:
+                    file_path.relative_to(expected_base)
+                except ValueError:
                     raise HTTPException(status_code=500, detail="Export path validation failed")
                 file_size = None
                 try:
@@ -437,11 +441,16 @@ async def import_chatbook(
 
         # Save uploaded file to secure temp location with sanitized name
         temp_dir = _setup_secure_temp_directory(str(user.id))
+        temp_dir_resolved = temp_dir.resolve(strict=True)
 
         # Build the destination file path
         temp_file = temp_dir / f"import_{uuid4().hex}_{safe_filename}"
-        if temp_file.parent != temp_dir:
+        temp_file_resolved = temp_file.resolve()
+        try:
+            temp_file_resolved.relative_to(temp_dir_resolved)
+        except ValueError:
             raise HTTPException(status_code=400, detail="Invalid file path")
+        temp_file = temp_file_resolved
 
         with open(temp_file, 'wb') as f:
             shutil.copyfileobj(file.file, f)
@@ -627,11 +636,16 @@ async def preview_chatbook(
 
         # Save uploaded file to secure temp location with sanitized name
         temp_dir = _setup_secure_temp_directory(str(user.id))
+        temp_dir_resolved = temp_dir.resolve(strict=True)
 
         # Build the preview file path
         temp_file = temp_dir / f"preview_{uuid4().hex}_{safe_filename}"
-        if temp_file.parent != temp_dir:
+        temp_file_resolved = temp_file.resolve()
+        try:
+            temp_file_resolved.relative_to(temp_dir_resolved)
+        except ValueError:
             raise HTTPException(status_code=400, detail="Invalid file path")
+        temp_file = temp_file_resolved
 
         with open(temp_file, 'wb') as f:
             shutil.copyfileobj(file.file, f)
@@ -1061,8 +1075,9 @@ async def download_chatbook(
         # Additional path containment check - ensure file is in expected user directory
         # The file should be within the user's export directory
         expected_base = Path(service.export_dir).resolve()
-        import os as _os
-        if _os.path.commonpath([str(file_path), str(expected_base)]) != str(expected_base):
+        try:
+            file_path.relative_to(expected_base)
+        except ValueError:
             logger.warning(f"Path traversal attempt detected for user {user.id}")
             # Log security event via unified audit service
             try:

@@ -259,10 +259,17 @@ class RobotsFilter:
 
         Skips robots check when egress policy denies the target host.
         """
+        # Always short-circuit on egress denial; do not fetch robots for disallowed hosts.
+        # Import lazily so test monkeypatches on egress.evaluate_url_policy are honored.
+        eval_fn = None
         try:
-            # Always short-circuit on egress denial; do not fetch robots for disallowed hosts
-            if evaluate_url_policy is not None:
-                pol = evaluate_url_policy(url)
+            from tldw_Server_API.app.core.Security import egress as _egress  # local import to honor monkeypatch
+            eval_fn = getattr(_egress, "evaluate_url_policy", None)
+        except Exception:
+            eval_fn = evaluate_url_policy
+        try:
+            if eval_fn is not None:
+                pol = eval_fn(url)
                 if not getattr(pol, "allowed", False):
                     return False
         except Exception:

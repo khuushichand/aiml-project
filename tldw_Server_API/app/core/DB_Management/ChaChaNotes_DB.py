@@ -8877,9 +8877,19 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
 
         if self.backend_type == BackendType.POSTGRESQL:
             tsquery = FTSQueryTranslator.normalize_query(search_term, 'postgresql')
+            fallback_query = """
+                SELECT n.*
+                FROM notes n
+                WHERE n.deleted = FALSE
+                  AND (n.title ILIKE ? OR n.content ILIKE ?)
+                ORDER BY n.last_modified DESC
+                LIMIT ? OFFSET ?
+            """
+            fallback_params = (f"%{search_term}%", f"%{search_term}%", limit, offset)
             if not tsquery:
                 logger.debug("Notes search term normalized to empty tsquery for input '%s'", search_term)
-                return []
+                cursor = self.execute_query(fallback_query, fallback_params)
+                return [dict(row) for row in cursor.fetchall()]
 
             query = """
                 SELECT n.*, ts_rank(n.notes_fts_tsv, to_tsquery('english', ?)) AS rank
@@ -8891,6 +8901,11 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
             """
             try:
                 cursor = self.execute_query(query, (tsquery, tsquery, limit, offset))
+                rows = cursor.fetchall()
+                if rows:
+                    return [dict(row) for row in rows]
+                # Fallback: if FTS vectors are missing/stale, use ILIKE search.
+                cursor = self.execute_query(fallback_query, fallback_params)
                 return [dict(row) for row in cursor.fetchall()]
             except CharactersRAGDBError as exc:
                 logger.error("PostgreSQL FTS search failed for notes term '%s': %s", search_term, exc)

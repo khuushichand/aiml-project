@@ -652,6 +652,214 @@ class UnifiedRAGRequest(BaseModel):
         example=False,
     )
 
+    # ========== DOC-RESEARCHER FEATURES ==========
+    enable_dynamic_granularity: bool = Field(
+        default=False,
+        description="Auto-select retrieval granularity (document/chunk/passage) based on query type",
+        example=False,
+    )
+    enable_evidence_accumulation: bool = Field(
+        default=False,
+        description="Iteratively retrieve additional evidence until sufficient or budget reached",
+        example=False,
+    )
+    accumulation_max_rounds: int = Field(
+        default=3,
+        ge=1,
+        le=5,
+        description="Maximum evidence accumulation rounds",
+        example=3,
+    )
+    accumulation_time_budget_sec: Optional[float] = Field(
+        default=None,
+        description="Optional time budget for evidence accumulation (seconds)",
+        example=3.0,
+    )
+    enable_evidence_chains: bool = Field(
+        default=False,
+        description="Build multi-hop evidence chains linking facts to claims",
+        example=False,
+    )
+
+    # ========== SELF-CORRECTING RAG ==========
+    # Stage 1: Document Grading - filter documents by LLM-assessed relevance
+    enable_document_grading: bool = Field(
+        default=False,
+        description="Pre-filter retrieved documents using LLM-based relevance grading before reranking",
+        example=False,
+    )
+    grading_threshold: float = Field(
+        default=0.5,
+        ge=0.0,
+        le=1.0,
+        description="Minimum relevance score to keep a document during grading",
+        example=0.5,
+    )
+    grading_model: Optional[str] = Field(
+        default=None,
+        description="Optional model override for document grading",
+        example="gpt-4o-mini",
+    )
+    grading_provider: Optional[str] = Field(
+        default=None,
+        description="Optional LLM provider for document grading",
+        example="openai",
+    )
+    grading_batch_size: int = Field(
+        default=5,
+        ge=1,
+        le=20,
+        description="Batch size for document grading requests",
+        example=5,
+    )
+    grading_timeout_sec: float = Field(
+        default=30.0,
+        ge=1.0,
+        le=120.0,
+        description="Timeout for document grading in seconds",
+        example=30.0,
+    )
+    grading_fallback_to_score: bool = Field(
+        default=True,
+        description="Fall back to document score when LLM grading fails",
+        example=True,
+    )
+    grading_fallback_min_score: float = Field(
+        default=0.3,
+        ge=0.0,
+        le=1.0,
+        description="Minimum score threshold for fallback scoring when LLM grading unavailable",
+        example=0.3,
+    )
+
+    # Stage 2: Query Rewriting Loop - rewrite query when grading shows low relevance
+    enable_query_rewriting_loop: bool = Field(
+        default=False,
+        description="Enable query rewriting loop when document grading shows low relevance",
+        example=False,
+    )
+    max_rewrite_attempts: int = Field(
+        default=2,
+        ge=1,
+        le=5,
+        description="Maximum query rewrite attempts in the loop",
+        example=2,
+    )
+    rewrite_relevance_threshold: float = Field(
+        default=0.3,
+        ge=0.0,
+        le=1.0,
+        description="Average relevance below this triggers query rewriting",
+        example=0.3,
+    )
+
+    # Stage 3: Web Search Fallback - fall back to web search when local retrieval fails
+    enable_web_fallback: bool = Field(
+        default=False,
+        description="Enable web search fallback when local retrieval yields low relevance",
+        example=False,
+    )
+    web_fallback_threshold: float = Field(
+        default=0.25,
+        ge=0.0,
+        le=1.0,
+        description="Relevance threshold below which to trigger web fallback",
+        example=0.25,
+    )
+    web_search_engine: str = Field(
+        default="duckduckgo",
+        description="Web search engine to use for fallback",
+        example="duckduckgo",
+    )
+    web_fallback_result_count: int = Field(
+        default=5,
+        ge=1,
+        le=20,
+        description="Number of web search results to fetch",
+        example=5,
+    )
+    web_fallback_merge_strategy: Literal["prepend", "append", "interleave"] = Field(
+        default="prepend",
+        description="How to merge web results with local results",
+        example="prepend",
+    )
+
+    # Stage 4: Knowledge Strips - partition documents into semantic units
+    enable_knowledge_strips: bool = Field(
+        default=False,
+        description="Partition documents into semantic strips and filter by relevance",
+        example=False,
+    )
+    strip_size_tokens: int = Field(
+        default=100,
+        ge=20,
+        le=500,
+        description="Target size for each knowledge strip in tokens",
+        example=100,
+    )
+    strip_min_relevance: float = Field(
+        default=0.3,
+        ge=0.0,
+        le=1.0,
+        description="Minimum relevance score to keep a strip",
+        example=0.3,
+    )
+    max_strips: int = Field(
+        default=20,
+        ge=1,
+        le=100,
+        description="Maximum number of strips to pass to generation",
+        example=20,
+    )
+
+    # Stage 5: Fast Hallucination Check - lightweight groundedness check
+    enable_fast_hallucination_check: bool = Field(
+        default=False,
+        description="Run fast groundedness check after generation (before full claims)",
+        example=False,
+    )
+    fast_hallucination_timeout_sec: float = Field(
+        default=5.0,
+        ge=1.0,
+        le=30.0,
+        description="Timeout for fast hallucination check in seconds",
+        example=5.0,
+    )
+    fast_hallucination_provider: Optional[str] = Field(
+        default=None,
+        description="Optional LLM provider for groundedness check",
+        example="openai",
+    )
+    fast_hallucination_model: Optional[str] = Field(
+        default=None,
+        description="Optional model override for groundedness check",
+        example="gpt-4o-mini",
+    )
+
+    # Stage 6: Utility Grading - rate response usefulness
+    enable_utility_grading: bool = Field(
+        default=False,
+        description="Rate response usefulness on a 1-5 scale after claims verification",
+        example=False,
+    )
+    utility_grading_timeout_sec: float = Field(
+        default=5.0,
+        ge=1.0,
+        le=30.0,
+        description="Timeout for utility grading in seconds",
+        example=5.0,
+    )
+    utility_grading_provider: Optional[str] = Field(
+        default=None,
+        description="Optional LLM provider for utility grading",
+        example="openai",
+    )
+    utility_grading_model: Optional[str] = Field(
+        default=None,
+        description="Optional model override for utility grading",
+        example="gpt-4o-mini",
+    )
+
     # ========== RERANKING ==========
     enable_reranking: bool = Field(
         default=True,

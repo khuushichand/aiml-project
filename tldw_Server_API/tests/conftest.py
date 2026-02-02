@@ -34,6 +34,9 @@ os.environ.setdefault("SINGLE_USER_TEST_API_KEY", "test-api-key-12345")
 os.environ["SINGLE_USER_API_KEY"] = os.environ["SINGLE_USER_TEST_API_KEY"]
 # Default to single-user auth for tests; suites that need multi-user set it explicitly.
 os.environ["AUTH_MODE"] = "single_user"
+# Ensure a deterministic default AuthNZ DB for baseline restores.
+# Tests that need Postgres must override DATABASE_URL explicitly.
+os.environ.setdefault("DATABASE_URL", "sqlite:///./Databases/users.db")
 # Ensure the AuthNZ PROFILE hint does not leak from developer shells into tests.
 # Tests that need a profile should set it explicitly via monkeypatch.
 os.environ.pop("PROFILE", None)
