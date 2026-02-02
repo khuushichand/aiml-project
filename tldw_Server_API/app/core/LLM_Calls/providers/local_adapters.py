@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import os
 from typing import Any, Dict, Iterable, Optional, AsyncIterator, List, Union, Callable
 
@@ -1706,7 +1707,7 @@ class _LocalAdapterBase(ChatProvider):
         return self._wrap_non_streaming(result)
 
     async def achat(self, request: Dict[str, Any], *, timeout: Optional[float] = None) -> Dict[str, Any]:
-        return self.chat(request, timeout=timeout)
+        return await asyncio.to_thread(self.chat, request, timeout=timeout)
 
     async def astream(self, request: Dict[str, Any], *, timeout: Optional[float] = None) -> AsyncIterator[str]:
         async for item in wrap_sync_stream(self.stream(request, timeout=timeout)):

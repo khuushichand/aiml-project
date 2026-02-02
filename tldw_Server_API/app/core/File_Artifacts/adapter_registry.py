@@ -65,4 +65,15 @@ class FileAdapterRegistry:
 
 
 def get_registry() -> FileAdapterRegistry:
-    return FileAdapterRegistry()
+    global _registry
+    if _registry is None:
+        _registry = FileAdapterRegistry()
+    return _registry
+
+
+def reset_registry() -> None:
+    global _registry
+    _registry = None
+
+
+_registry: Optional[FileAdapterRegistry] = None

@@ -103,6 +103,7 @@ class ModerationService:
     """Loads moderation configuration and evaluates content against policies."""
     _UNCATEGORIZED_CATEGORY = "uncategorized"
     _ALLOWED_REGEX_FLAGS = {"i", "m", "s", "x"}
+    _ALLOWED_ACTIONS = {"block", "redact", "warn"}
 
     def __init__(self) -> None:
         self._config = load_and_log_configs() or {}
@@ -202,11 +203,21 @@ class ModerationService:
                 self._write_debounce_ms = int(mod_cfg.get("blocklist_write_debounce_ms", self._write_debounce_ms) or 0)
         except Exception:
             pass
-        # Categories
-        cats_raw = (mod_cfg.get("categories_enabled") or os.getenv("MODERATION_CATEGORIES_ENABLED") or "").strip()
-        categories_enabled = set()
-        if cats_raw:
-            categories_enabled = {c.strip().lower() for c in cats_raw.split(',') if c.strip()}
+        # Categories (list- and string-safe)
+        cats_val = None
+        if isinstance(mod_cfg, dict) and "categories_enabled" in mod_cfg:
+            cats_val = mod_cfg.get("categories_enabled")
+        if cats_val is None:
+            cats_val = os.getenv("MODERATION_CATEGORIES_ENABLED", "")
+        categories_enabled: Set[str] = set()
+        if isinstance(cats_val, (list, set, tuple)):
+            categories_enabled = {str(c).strip().lower() for c in cats_val if str(c).strip()}
+        elif isinstance(cats_val, str):
+            if cats_val.strip():
+                categories_enabled = {c.strip().lower() for c in cats_val.split(',') if c.strip()}
+        else:
+            if cats_val:
+                logger.warning(f"Invalid moderation categories_enabled type: {type(cats_val)}")
         pii_enabled = str(mod_cfg.get("pii_enabled", os.getenv("MODERATION_PII_ENABLED", "false"))).strip().lower() in {"1","true","yes","on","y"}
         # Apply runtime overrides if present
         try:
@@ -366,6 +377,9 @@ class ModerationService:
                         expr, action, repl, cats = self._parse_rule_line(s)
                         if expr is None:
                             continue
+                        if action and not self._is_valid_action(action):
+                            logger.warning(f"Invalid moderation action '{action}' in blocklist; skipping line: {s}")
+                            continue
                         # Treat lines starting and ending with '/' (optional flags) as regex
                         regex_parts = self._parse_regex_expr(expr)
                         if regex_parts:
@@ -470,7 +484,12 @@ class ModerationService:
             with open(p, "r", encoding="utf-8") as f:
                 data = json.load(f)
                 if isinstance(data, dict):
-                    overrides = {str(k): v for k, v in data.items() if isinstance(v, dict)}
+                    cleaned: Dict[str, Dict[str, object]] = {}
+                    for k, v in data.items():
+                        if not isinstance(v, dict):
+                            continue
+                        cleaned[str(k)] = self._sanitize_user_override(v)
+                    overrides = cleaned
         except Exception as e:
             logger.error(f"Failed to load user overrides: {e}")
         return overrides
@@ -612,7 +631,7 @@ class ModerationService:
             output_action=str(u.get("output_action", p.output_action)).lower(),
             redact_replacement=str(u.get("redact_replacement", p.redact_replacement)),
             per_user_overrides=p.per_user_overrides,
-            block_patterns=p.block_patterns,  # same global patterns for now
+            block_patterns=list(p.block_patterns or []),  # avoid mutating shared list
             categories_enabled=self._resolve_categories_override(u, p.categories_enabled),
         )
         return policy
@@ -642,6 +661,36 @@ class ModerationService:
         except Exception:
             return None
         return None
+
+    @classmethod
+    def _is_valid_action(cls, action: str) -> bool:
+        return str(action).strip().lower() in cls._ALLOWED_ACTIONS
+
+    @staticmethod
+    def _normalize_override_actions(override: Dict[str, object]) -> Dict[str, object]:
+        out = dict(override or {})
+        for key in ("input_action", "output_action"):
+            if key in out and out[key] is not None:
+                out[key] = str(out[key]).strip().lower()
+        return out
+
+    def _validate_override_actions(self, override: Dict[str, object]) -> Optional[str]:
+        for key in ("input_action", "output_action"):
+            if key in (override or {}) and override.get(key) is not None:
+                val = str(override.get(key)).strip().lower()
+                if val not in self._ALLOWED_ACTIONS:
+                    return f"invalid {key}: {override.get(key)}"
+        return None
+
+    def _sanitize_user_override(self, override: Dict[str, object]) -> Dict[str, object]:
+        out = self._normalize_override_actions(override)
+        for key in ("input_action", "output_action"):
+            if key in out and out.get(key) is not None:
+                val = str(out.get(key)).strip().lower()
+                if val not in self._ALLOWED_ACTIONS:
+                    logger.warning(f"Invalid moderation override action '{out.get(key)}' for {key}; dropping value")
+                    out.pop(key, None)
+        return out
 
     @classmethod
     def _effective_rule_categories(cls, rule: PatternRule) -> Set[str]:
@@ -812,6 +861,45 @@ class ModerationService:
                 continue
         return redacted
 
+    def redact_text_with_count(self, text: str, policy: ModerationPolicy) -> Tuple[str, int]:
+        """Redact text and return (redacted_text, replacement_count)."""
+        if not text or not policy.block_patterns:
+            return text, 0
+        redacted = text
+        total_count = 0
+        for rule in policy.block_patterns:
+            # Respect category gating similar to evaluate_action/check_text
+            if isinstance(rule, PatternRule) and policy.categories_enabled:
+                rcats = self._effective_rule_categories(rule)
+                if not (rcats & policy.categories_enabled):
+                    continue
+            pat = rule.regex if isinstance(rule, PatternRule) else rule
+            repl = None
+            if isinstance(rule, PatternRule) and rule.replacement:
+                repl = rule.replacement
+            try:
+                replacement = repl or policy.redact_replacement
+                limit_raw = self._max_replacements_per_pattern
+                try:
+                    limit_int = int(limit_raw) if limit_raw is not None else 0
+                except Exception:
+                    limit_int = 0
+                # Treat non-positive values as unlimited (re.sub uses 0 for no limit)
+                if limit_int <= 0:
+                    limit_int = 0
+                if len(redacted) <= self._max_scan_chars:
+                    redacted, count = pat.subn(lambda _m: replacement, redacted, count=limit_int)
+                else:
+                    matches = self._collect_rule_matches(redacted, pat)
+                    count = len(matches)
+                    if matches:
+                        redacted = self._apply_rule_redactions(redacted, matches, replacement)
+                total_count += count
+            except re.error:
+                # in case of unexpected regex issue, skip
+                continue
+        return redacted, total_count
+
     # --------------- Decision helpers ---------------
     def _evaluate_action_internal(
         self,
@@ -923,12 +1011,24 @@ class ModerationService:
 
     def _find_match_span(self, pat: re.Pattern, text: str) -> Optional[Tuple[int, int]]:
         try:
-            m = pat.search(text)
+            chunk_limit = max(1, int(self._max_scan_chars))
+            if len(text) <= chunk_limit:
+                m = pat.search(text)
+                if not m:
+                    return None
+                return m.start(), m.end()
+            text_len = len(text)
+            window = max(0, int(self._match_window_chars))
+            for start, end in self._iter_scan_chunks(text):
+                window_end = min(text_len, end + window)
+                m = pat.search(text, start, window_end)
+                if not m:
+                    continue
+                if m.start() < end:
+                    return m.start(), m.end()
+            return None
         except re.error:
             return None
-        if not m:
-            return None
-        return m.start(), m.end()
 
     def _collect_rule_matches(self, text: str, pat: re.Pattern) -> List[re.Match]:
         """Collect non-overlapping matches across scan chunks for soft-capped redaction."""
@@ -979,8 +1079,12 @@ class ModerationService:
         """
         if not user_id:
             return {"ok": False, "persisted": False, "error": "user_id required"}
+        err = self._validate_override_actions(override)
+        if err:
+            return {"ok": False, "persisted": False, "error": err}
         with self._lock:
-            self._user_overrides[str(user_id)] = {str(k): v for k, v in override.items()}
+            normalized = self._normalize_override_actions(override)
+            self._user_overrides[str(user_id)] = {str(k): v for k, v in normalized.items()}
             path = getattr(self, "_user_overrides_path", None)
             if not path:
                 logger.warning("User override path not configured; changes will not persist across restarts")
@@ -1162,6 +1266,11 @@ class ModerationService:
                 expr, action, repl, cats = self._parse_rule_line(line)
                 if expr is None or expr == "":
                     item.update({"ok": False, "error": "empty pattern after parsing"})
+                    results.append(item)
+                    invalid_count += 1
+                    continue
+                if action and not self._is_valid_action(action):
+                    item.update({"ok": False, "error": f"invalid action: {action}"})
                     results.append(item)
                     invalid_count += 1
                     continue

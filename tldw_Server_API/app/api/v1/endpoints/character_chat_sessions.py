@@ -220,6 +220,29 @@ class _BoundedThrottleCache:
             self._last_access[key] = now
             return self._data[key]
 
+    async def check_and_record(self, key: str, max_hits: int, window_seconds: float) -> bool:
+        """Atomically enforce windowed limit and record a hit if allowed."""
+        current_loop = asyncio.get_running_loop()
+        if self._lock is None or self._lock_loop is not current_loop:
+            self._lock = asyncio.Lock()
+            self._lock_loop = current_loop
+        async with self._lock:
+            now = time.time()
+            if len(self._data) > THROTTLE_CACHE_MAX_KEYS:
+                self._cleanup(now)
+            window = self._data.get(key)
+            if window is None:
+                window = deque(maxlen=THROTTLE_WINDOW_SIZE)
+                self._data[key] = window
+            while window and (now - window[0]) > window_seconds:
+                window.popleft()
+            if len(window) >= max_hits:
+                self._last_access[key] = now
+                return False
+            window.append(now)
+            self._last_access[key] = now
+            return True
+
     def _cleanup(self, now: float) -> None:
         """Remove entries not accessed recently."""
         stale_keys = [
@@ -296,6 +319,7 @@ async def create_chat_session(
     seed_first_message: bool = Query(False, description="If true, seed the chat with an initial assistant greeting"),
     greeting_strategy: Literal["default", "alternate_random", "alternate_index"] = Query("default", description="How to choose the initial assistant greeting when seeding"),
     alternate_index: Optional[int] = Query(None, ge=0, description="Index for alternate greeting when greeting_strategy=alternate_index"),
+    response: Response = None,
 ):
     """
     Create a new chat session with a character.
@@ -356,6 +380,7 @@ async def create_chat_session(
             if parent_conversation:
                 validated_parent_id = parent_conversation.get("id") or session_data.parent_conversation_id
                 parent_root_id = parent_conversation.get("root_id") or parent_conversation.get("id")
+            # Cross-character forks are intentionally supported; do not enforce a character_id match.
 
         # Generate chat ID and title
         chat_id = str(uuid.uuid4())
@@ -395,6 +420,7 @@ async def create_chat_session(
             )
 
         # Optionally seed the chat with a greeting (first_message or alternate)
+        seed_status: Optional[str] = None
         if seed_first_message:
             try:
                 raw_name = character.get('name') or 'Assistant'
@@ -424,8 +450,18 @@ async def create_chat_session(
                         created_conv['message_count'] = (created_conv.get('message_count') or 0) + 1
                     except Exception:
                         pass
+                    seed_status = "ok"
+                else:
+                    seed_status = "no_greeting"
             except Exception as _seed_err:
-                logger.debug(f"Non-fatal: failed to seed first message for chat {created_id}: {_seed_err}")
+                seed_status = "failed"
+                logger.warning(f"Failed to seed first message for chat {created_id}: {_seed_err}")
+
+        if response is not None and seed_status is not None:
+            try:
+                response.headers["X-Chat-Seed-Status"] = seed_status
+            except Exception:
+                pass
 
         # Log creation
         logger.info(f"Created chat session {created_id} for character {session_data.character_id} by user {current_user.id}")
@@ -603,15 +639,13 @@ async def complete_chat_legacy(
 
         # Test-mode throttle: 5 requests per second per (user, chat)
         key = f"{current_user.id}:{chat_id}"
-        now = time.time()
-        window = await _complete_windows.get(key)
-        # Evict entries older than 1 second
-        while window and (now - window[0]) > 1.0:
-            window.popleft()
-        # Enforce limit
-        if len(window) >= 5:
+        allowed = await _complete_windows.check_and_record(
+            key,
+            max_hits=5,
+            window_seconds=1.0,
+        )
+        if not allowed:
             raise HTTPException(status_code=status.HTTP_429_TOO_MANY_REQUESTS, detail="Rate limit exceeded for chat completion")
-        window.append(now)
 
         # Return a minimal success payload
         return {"status": "ok", "chat_id": chat_id}

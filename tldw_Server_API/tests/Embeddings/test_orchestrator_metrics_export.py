@@ -104,3 +104,10 @@ def test_stage_flag_metric_after_pause(disable_heavy_startup, admin_user, redis_
     m = _re.search(r'^embedding_stage_flag\{[^}]*stage="embedding",[^}]*flag="paused"[^}]*\}\s+(\d+(?:\.\d+)?)$', text, _re.M)
     assert m, f"embedding_stage_flag paused metric not found for embedding stage in metrics: {text[:4000]}"
     assert float(m.group(1)) == 1.0
+    paused_lines = [
+        line for line in text.splitlines()
+        if line.startswith("embedding_stage_flag{")
+        and 'stage="embedding"' in line
+        and 'flag="paused"' in line
+    ]
+    assert len(paused_lines) == 1

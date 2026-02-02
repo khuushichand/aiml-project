@@ -56,8 +56,6 @@ def load_mediawiki_import_config():
         return yaml.safe_load(f)
 
 
-media_wiki_import_config = load_mediawiki_import_config()
-
 logger = _base_logger.bind(component="mediawiki_import")
 _STDOUT_HANDLER_ID: Optional[int] = None
 _FILE_HANDLER_ID: Optional[int] = None
@@ -158,6 +156,20 @@ def setup_media_wiki_logger(name: str, level: Union[int, str] = "INFO", log_file
 
 
 setup_media_wiki_logger('mediawiki_import', log_file='mediawiki_import.log')
+
+_mediawiki_import_config_cache: Optional[Dict[str, Any]] = None
+
+
+def get_mediawiki_import_config() -> Dict[str, Any]:
+    """Lazy-load and cache MediaWiki import config."""
+    global _mediawiki_import_config_cache
+    if _mediawiki_import_config_cache is None:
+        try:
+            _mediawiki_import_config_cache = load_mediawiki_import_config() or {}
+        except Exception as exc:
+            logger.warning(f"Failed to load mediawiki_import_config.yaml, using defaults: {exc}")
+            _mediawiki_import_config_cache = {}
+    return _mediawiki_import_config_cache
 
 
 #
@@ -399,7 +411,8 @@ def optimized_chunking(text: str, chunk_options: Dict[str, Any]) -> List[Dict[st
     # This function should produce a list of dictionaries, e.g.,
     # [{"text": "chunk text 1", "metadata": {"section_title": "Introduction", ...}}, ...]
 
-    max_size = chunk_options.get('max_size', media_wiki_import_config.get('chunking', {}).get('default_size', 1000))
+    cfg = get_mediawiki_import_config()
+    max_size = chunk_options.get('max_size', cfg.get('chunking', {}).get('default_size', 1000))
     # Fallback to simple splitting if no section-based logic is defined or needed
     # For this example, we'll just split by paragraphs if no section logic from original needed.
     # Your original `optimized_chunking` was section-aware. Let's keep that spirit.
@@ -474,7 +487,8 @@ def _build_mediawiki_embedding_config(
     api_name_vector_db: Optional[str],
     api_key_vector_db: Optional[str],
 ) -> Optional[Dict[str, Any]]:
-    embeddings_cfg = media_wiki_import_config.get("embeddings", {}) or {}
+    cfg = get_mediawiki_import_config()
+    embeddings_cfg = cfg.get("embeddings", {}) or {}
     provider = str(embeddings_cfg.get("provider") or "openai").strip()
     model = str(embeddings_cfg.get("model") or "text-embedding-3-small").strip()
     api_key = api_key_vector_db or embeddings_cfg.get("api_key")
@@ -544,9 +558,8 @@ def _build_mediawiki_embedding_config(
 
 
 def _mediawiki_collection_name(wiki_name: str) -> str:
-    prefix = (
-        media_wiki_import_config.get("chromadb", {}) or {}
-    ).get("collection_prefix", "mediawiki_")
+    cfg = get_mediawiki_import_config()
+    prefix = (cfg.get("chromadb", {}) or {}).get("collection_prefix", "mediawiki_")
     safe_prefix = re.sub(r"[^a-zA-Z0-9_-]+", "_", str(prefix)).strip()
     safe_wiki = sanitize_wiki_name(wiki_name)
     if safe_prefix:
@@ -900,8 +913,8 @@ def import_mediawiki_dump(
 
         logging.info(
             f"Importing MediaWiki dump: {safe_file_path} for wiki: {safe_wiki_name}. StoreDB: {store_to_db}, StoreVector: {store_to_vector_db}")
-        final_chunk_options = chunk_options_override if chunk_options_override else media_wiki_import_config.get(
-            'chunking', {})
+        cfg = get_mediawiki_import_config()
+        final_chunk_options = chunk_options_override if chunk_options_override else cfg.get('chunking', {})
 
         # Get safe checkpoint path
         checkpoint_file = get_safe_checkpoint_path(safe_wiki_name)

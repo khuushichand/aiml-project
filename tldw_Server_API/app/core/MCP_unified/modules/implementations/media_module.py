@@ -12,6 +12,7 @@ import socket
 import ipaddress
 import hashlib
 import json
+import time
 from collections import OrderedDict
 from urllib.parse import urlsplit
 from typing import Dict, Any, List, Optional, Tuple
@@ -70,8 +71,15 @@ class MediaModule(BaseModule):
             self._semantic_retrievers: Dict[Tuple[Optional[str], Optional[str]], Any] = {}
             self._ingestion_jobs: Dict[str, Dict[str, Any]] = {}
             self._ingestion_jobs_lock = asyncio.Lock()
-            self._user_db_cache: Dict[str, MediaDatabase] = {}
+            self._user_db_cache: "OrderedDict[str, tuple[MediaDatabase, float]]" = OrderedDict()
             self._user_db_cache_lock = threading.Lock()
+            # Per-user DB cache bounds (TTL + LRU)
+            self._user_db_cache_ttl_seconds = int(self.config.settings.get("user_db_cache_ttl_seconds", 900))
+            self._user_db_cache_max_size = int(self.config.settings.get("user_db_cache_max_size", 100))
+            if self._user_db_cache_ttl_seconds <= 0:
+                self._user_db_cache_ttl_seconds = 900
+            if self._user_db_cache_max_size <= 0:
+                self._user_db_cache_max_size = 1
 
             logger.info(f"Media module initialized with database: {db_path}")
 
@@ -99,7 +107,8 @@ class MediaModule(BaseModule):
 
             try:
                 if hasattr(self, "_user_db_cache"):
-                    for db in self._user_db_cache.values():
+                    for entry in self._user_db_cache.values():
+                        db = entry[0] if isinstance(entry, tuple) else entry
                         self._close_media_db_instance(db)
                     self._user_db_cache.clear()
             except Exception:
@@ -429,25 +438,76 @@ class MediaModule(BaseModule):
         except Exception:
             pass
 
+    def _evict_user_db_cache_locked(self, now: Optional[float] = None) -> None:
+        cache = getattr(self, "_user_db_cache", None)
+        if not cache:
+            return
+        now_ts = now if now is not None else time.monotonic()
+        ttl = max(1, int(getattr(self, "_user_db_cache_ttl_seconds", 900)))
+        max_size = max(1, int(getattr(self, "_user_db_cache_max_size", 100)))
+
+        expired = [k for k, (_, last_used) in cache.items() if now_ts - last_used > ttl]
+        for key in expired:
+            try:
+                db, _ = cache.pop(key)
+                self._close_media_db_instance(db)
+            except Exception:
+                pass
+
+        while len(cache) > max_size:
+            try:
+                key, (db, _) = cache.popitem(last=False)
+                self._close_media_db_instance(db)
+            except Exception:
+                break
+
     def _get_or_create_user_db(self, db_path: str) -> MediaDatabase:
         cache = getattr(self, "_user_db_cache", None)
         if cache is None:
-            self._user_db_cache = {}
+            self._user_db_cache = OrderedDict()
             cache = self._user_db_cache
         lock = getattr(self, "_user_db_cache_lock", None)
         if lock:
             with lock:
+                now_ts = time.monotonic()
+                self._evict_user_db_cache_locked(now_ts)
                 cached = cache.get(db_path)
                 if cached is not None:
-                    return cached
+                    db, last_used = cached
+                    ttl = max(1, int(getattr(self, "_user_db_cache_ttl_seconds", 900)))
+                    if now_ts - last_used <= ttl:
+                        cache[db_path] = (db, now_ts)
+                        cache.move_to_end(db_path)
+                        return db
+                    try:
+                        cache.pop(db_path, None)
+                        self._close_media_db_instance(db)
+                    except Exception:
+                        pass
                 db = MediaDatabase(db_path=db_path, client_id=f"mcp_media_{self.config.name}")
-                cache[db_path] = db
+                cache[db_path] = (db, now_ts)
+                cache.move_to_end(db_path)
+                self._evict_user_db_cache_locked(now_ts)
                 return db
+        now_ts = time.monotonic()
+        self._evict_user_db_cache_locked(now_ts)
         cached = cache.get(db_path)
         if cached is not None:
-            return cached
+            db, last_used = cached
+            ttl = max(1, int(getattr(self, "_user_db_cache_ttl_seconds", 900)))
+            if now_ts - last_used <= ttl:
+                cache[db_path] = (db, now_ts)
+                cache.move_to_end(db_path)
+                return db
+            try:
+                cache.pop(db_path, None)
+                self._close_media_db_instance(db)
+            except Exception:
+                pass
         db = MediaDatabase(db_path=db_path, client_id=f"mcp_media_{self.config.name}")
-        cache[db_path] = db
+        cache[db_path] = (db, now_ts)
+        cache.move_to_end(db_path)
+        self._evict_user_db_cache_locked(now_ts)
         return db
 
     def _open_media_db(self, context: Any | None) -> MediaDatabase:
@@ -524,6 +584,31 @@ class MediaModule(BaseModule):
         return sanitized
 
     async def _media_search_normalized(
+        self,
+        query: str,
+        limit: int = 10,
+        offset: int = 0,
+        snippet_length: int = 300,
+        media_types: Optional[List[str]] = None,
+        date_from: Optional[str] = None,
+        date_to: Optional[str] = None,
+        order_by: str = "relevance",
+        context: Any | None = None,
+    ) -> Dict[str, Any]:
+        return await asyncio.to_thread(
+            self._media_search_normalized_sync,
+            query,
+            limit,
+            offset,
+            snippet_length,
+            media_types,
+            date_from,
+            date_to,
+            order_by,
+            context,
+        )
+
+    def _media_search_normalized_sync(
         self,
         query: str,
         limit: int = 10,
@@ -639,6 +724,14 @@ class MediaModule(BaseModule):
         }
 
     async def _media_get_normalized(self, media_id: int, retrieval: Optional[Dict[str, Any]] = None, context: Any | None = None) -> Dict[str, Any]:
+        return await asyncio.to_thread(
+            self._media_get_normalized_sync,
+            media_id,
+            retrieval,
+            context,
+        )
+
+    def _media_get_normalized_sync(self, media_id: int, retrieval: Optional[Dict[str, Any]] = None, context: Any | None = None) -> Dict[str, Any]:
         retrieval = retrieval or {}
         mode = retrieval.get("mode", "snippet")
         snippet_length = int(retrieval.get("snippet_length", 300))
@@ -934,11 +1027,12 @@ class MediaModule(BaseModule):
 
         try:
             if search_type == "keyword":
-                rows, total = self._keyword_search(
-                    dbi=dbi,
-                    query=query,
-                    limit=limit,
-                    offset=offset,
+                rows, total = await asyncio.to_thread(
+                    self._keyword_search,
+                    dbi,
+                    query,
+                    limit,
+                    offset,
                     search_fields=search_fields,
                     media_types=media_types,
                     date_range=date_range,
@@ -1244,10 +1338,11 @@ class MediaModule(BaseModule):
         query_vector: Any,
     ) -> Tuple[List[Dict[str, Any]], int]:
         fetch_size = limit + offset
-        keyword_rows_all, keyword_total = self._keyword_search_head(
-            dbi=dbi,
-            query=query,
-            size=fetch_size,
+        keyword_rows_all, keyword_total = await asyncio.to_thread(
+            self._keyword_search_head,
+            dbi,
+            query,
+            fetch_size,
             search_fields=search_fields,
             media_types=media_types,
             date_range=date_range,
@@ -1309,6 +1404,23 @@ class MediaModule(BaseModule):
         context: Any | None = None,
         **kwargs
     ) -> Dict[str, Any]:
+        return await asyncio.to_thread(
+            self._get_transcript_sync,
+            media_id,
+            include_timestamps,
+            format,
+            context,
+            kwargs,
+        )
+
+    def _get_transcript_sync(
+        self,
+        media_id: int,
+        include_timestamps: bool = False,
+        format: str = "text",
+        context: Any | None = None,
+        _kwargs: Optional[Dict[str, Any]] = None,
+    ) -> Dict[str, Any]:
         """Get media transcript with formatting options"""
         try:
             # Ownership check first
@@ -1353,6 +1465,23 @@ class MediaModule(BaseModule):
         context: Any | None = None,
         **kwargs
     ) -> Dict[str, Any]:
+        metadata = await asyncio.to_thread(
+            self._get_media_metadata_sync,
+            media_id,
+            context,
+            kwargs,
+        )
+        if include_stats:
+            stats = await self._get_media_stats(media_id)
+            metadata["statistics"] = stats
+        return metadata
+
+    def _get_media_metadata_sync(
+        self,
+        media_id: int,
+        context: Any | None = None,
+        _kwargs: Optional[Dict[str, Any]] = None,
+    ) -> Dict[str, Any]:
         """Get comprehensive media metadata"""
         try:
             # Ownership check
@@ -1367,11 +1496,6 @@ class MediaModule(BaseModule):
             description = self._get_latest_description(dbi, media_id)
             metadata = self._sanitize_media_metadata(metadata)
             metadata["description"] = description
-
-            # Add statistics if requested
-            if include_stats:
-                stats = await self._get_media_stats(media_id)
-                metadata["statistics"] = stats
 
             return metadata
 
@@ -1439,6 +1563,21 @@ class MediaModule(BaseModule):
         updates: Dict[str, Any],
         context: Any | None = None,
         **kwargs
+    ) -> Dict[str, Any]:
+        return await asyncio.to_thread(
+            self._update_media_sync,
+            media_id,
+            updates,
+            context,
+            kwargs,
+        )
+
+    def _update_media_sync(
+        self,
+        media_id: int,
+        updates: Dict[str, Any],
+        context: Any | None = None,
+        _kwargs: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, Any]:
         """Update media with validation"""
         try:
@@ -1529,6 +1668,21 @@ class MediaModule(BaseModule):
         context: Any | None = None,
         **kwargs
     ) -> Dict[str, Any]:
+        return await asyncio.to_thread(
+            self._delete_media_sync,
+            media_id,
+            permanent,
+            context,
+            kwargs,
+        )
+
+    def _delete_media_sync(
+        self,
+        media_id: int,
+        permanent: bool = False,
+        context: Any | None = None,
+        _kwargs: Optional[Dict[str, Any]] = None,
+    ) -> Dict[str, Any]:
         """Delete media with soft/hard delete options"""
         try:
             # Ownership check
@@ -1592,7 +1746,11 @@ class MediaModule(BaseModule):
 
     async def read_resource(self, uri: str, context: Any | None = None) -> Dict[str, Any]:
         """Read media resource"""
+        return await asyncio.to_thread(self._read_resource_sync, uri, context)
+
+    def _read_resource_sync(self, uri: str, context: Any | None = None) -> Dict[str, Any]:
         dbi = self._open_media_db(context)
+
         def _rows_to_items(rows: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
             items = []
             for row in rows:
@@ -1628,7 +1786,7 @@ class MediaModule(BaseModule):
                 "items": _rows_to_items(rows),
             }
 
-        elif uri == "media://popular":
+        if uri == "media://popular":
             rows, _ = dbi.search_media_db(
                 search_query=None,
                 search_fields=None,
@@ -1648,12 +1806,11 @@ class MediaModule(BaseModule):
                 "type": "media_list",
                 "items": _rows_to_items(rows),
             }
-        elif uri == "media://types":
+        if uri == "media://types":
             types = dbi.get_distinct_media_types()
             return {"uri": uri, "type": "media_types", "items": types}
 
-        else:
-            raise ValueError(f"Unknown resource URI: {uri}")
+        raise ValueError(f"Unknown resource URI: {uri}")
 
     # Helper methods
 

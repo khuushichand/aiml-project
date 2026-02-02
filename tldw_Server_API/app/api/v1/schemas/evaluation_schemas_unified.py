@@ -148,6 +148,12 @@ class EvaluationSpec(BaseModel):
         default=None,
         description="Metrics to compute"
     )
+    threshold: Optional[float] = Field(
+        default=None,
+        ge=0.0,
+        le=1.0,
+        description="Pass/fail threshold (legacy single-value form)"
+    )
     thresholds: Optional[Dict[str, float]] = Field(
         default=None,
         description="Pass/fail thresholds"

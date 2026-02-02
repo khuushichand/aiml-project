@@ -9,6 +9,7 @@ import threading
 import builtins
 import io
 import os
+import tempfile
 from typing import Dict, Any, Optional, List, Tuple, Union, Callable
 from dataclasses import dataclass, asdict
 from pathlib import Path
@@ -330,31 +331,41 @@ class L2DiskCache:
             file_path = self.cache_dir / file_name
 
             try:
-                # Write to disk
-                with open(file_path, 'wb') as f:
-                    pickle.dump(value, f)
+                tmp_path = None
+
+                # Write to a temp file first so we don't corrupt an existing entry on failure
+                with tempfile.NamedTemporaryFile(dir=self.cache_dir, delete=False, suffix=".tmp") as tmp_file:
+                    pickle.dump(value, tmp_file)
+                    tmp_file.flush()
+                    os.fsync(tmp_file.fileno())
+                    tmp_path = Path(tmp_file.name)
 
                 # Get file size
-                size_bytes = file_path.stat().st_size
+                size_bytes = tmp_path.stat().st_size if tmp_path else 0
+
+                def _total_excluding_current() -> int:
+                    total_size = self._get_total_size()
+                    if key in self.index:
+                        try:
+                            total_size -= int(self.index[key].get('size_bytes') or 0)
+                        except Exception:
+                            pass
+                    return max(0, total_size)
 
                 # Check total cache size and evict until we have room
-                total = self._get_total_size()
+                total = _total_excluding_current()
                 if total + size_bytes > self.max_size_bytes:
-                    prev_total = -1
                     # Keep evicting while over capacity and there are entries to evict
                     while total + size_bytes > self.max_size_bytes and self.index:
                         self._evict_lru()
-                        new_total = self._get_total_size()
-                        # If eviction did not change total size, break to avoid infinite loop
-                        if new_total == total:
-                            break
-                        total = new_total
+                        total = _total_excluding_current()
                     if total + size_bytes > self.max_size_bytes:
-                        # Give up: refuse to cache this entry and clean up file
+                        # Give up: refuse to cache this entry and clean up temp file
                         try:
-                            file_path.unlink()
+                            if tmp_path and tmp_path.exists():
+                                tmp_path.unlink()
                         except Exception as de:
-                            logger.debug(f"L2 cleanup file unlink failed at capacity: {de}")
+                            logger.debug(f"L2 cleanup temp unlink failed at capacity: {de}")
                             try:
                                 get_metrics_registry().increment(
                                     "app_warning_events_total",
@@ -362,8 +373,22 @@ class L2DiskCache:
                                 )
                             except Exception:
                                 logger.debug("metrics increment failed for embeddings_cache l2_unlink_failed")
+                        # Ensure index doesn't reference missing files after a failed update
+                        try:
+                            if key in self.index:
+                                existing_file = self.cache_dir / self.index[key].get('file', '')
+                                if not existing_file.exists():
+                                    self.index.pop(key, None)
+                                    self._save_index()
+                        except Exception:
+                            pass
                         logger.warning(f"L2 Disk cache at capacity; refusing to cache key {key}")
                         return False
+
+                # Replace the existing cache file atomically
+                if tmp_path:
+                    os.replace(tmp_path, file_path)
+                    tmp_path = None
 
                 # Update index
                 self.index[key] = {
@@ -381,6 +406,11 @@ class L2DiskCache:
                 return True
 
             except Exception as e:
+                try:
+                    if 'tmp_path' in locals() and tmp_path and tmp_path.exists():
+                        tmp_path.unlink()
+                except Exception:
+                    pass
                 logger.error(f"Error writing L2 cache file {file_path}: {e}")
                 try:
                     get_metrics_registry().increment(

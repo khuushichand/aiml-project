@@ -591,6 +591,12 @@ def _async_only_enabled() -> bool:
     return value.strip().lower() in {"1", "true", "yes", "on"}
 
 
+def _sync_in_event_loop_strict() -> bool:
+    """Return True when CHAT_SYNC_IN_EVENT_LOOP_STRICT is enabled."""
+    value = os.getenv("CHAT_SYNC_IN_EVENT_LOOP_STRICT", "")
+    return value.strip().lower() in {"1", "true", "yes", "on"}
+
+
 def _run_coro_sync(coro: Awaitable[_T], timeout: float = _SYNC_CORO_TIMEOUT_SECONDS) -> _T:
     """
     Run an async coroutine from synchronous code in a loop-safe way.
@@ -1189,6 +1195,16 @@ def chat(
             llm_tool_choice=llm_tool_choice,
         )
 
+    if _sync_in_event_loop_strict():
+        raise RuntimeError(
+            "chat() called from a running event loop. "
+            "Use await achat(...) or disable CHAT_SYNC_IN_EVENT_LOOP_STRICT."
+        )
+
+    logging.warning(
+        "chat() called from a running event loop; returning a Future. "
+        "Prefer await achat(...) in async contexts."
+    )
     executor = _get_sync_executor()
     return loop.run_in_executor(
         executor,

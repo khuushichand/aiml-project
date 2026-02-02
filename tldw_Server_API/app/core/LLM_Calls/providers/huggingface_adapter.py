@@ -3,6 +3,7 @@ from __future__ import annotations
 from typing import Any, Dict, Iterable, Optional, AsyncIterator, List
 
 from .base import ChatProvider
+import asyncio
 from loguru import logger
 from tldw_Server_API.app.core.http_client import (
     create_client as _hc_create_client,
@@ -237,7 +238,7 @@ class HuggingFaceAdapter(ChatProvider):
             raise self.normalize_error(e)
 
     async def achat(self, request: Dict[str, Any], *, timeout: Optional[float] = None) -> Dict[str, Any]:
-        return self.chat(request, timeout=timeout)
+        return await asyncio.to_thread(self.chat, request, timeout=timeout)
 
     async def astream(self, request: Dict[str, Any], *, timeout: Optional[float] = None) -> AsyncIterator[str]:
         async for item in wrap_sync_stream(self.stream(request, timeout=timeout)):

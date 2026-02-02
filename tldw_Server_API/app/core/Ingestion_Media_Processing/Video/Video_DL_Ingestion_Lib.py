@@ -1143,8 +1143,10 @@ def process_videos(
                 else:
                     confabulation_results = "Confabulation check completed: no valid transcript/summary pairs to evaluate."
 
-    logger.debug(
-        f"process_videos DEBUG: Final results list before return: {json.dumps(results, indent=2, default=str)}")
+    logger.opt(lazy=True).debug(
+        "process_videos DEBUG: Final results list before return: {}",
+        lambda: json.dumps(results, indent=2, default=str),
+    )
     logger.debug(f"process_videos DEBUG: Calculated processed_count: {processed_count_calc}")
     logger.debug(f"process_videos DEBUG: Calculated errors_count: {errors_count_calc}")
     logger.debug(f"process_videos DEBUG: Calculated warnings_count: {warnings_count_calc}")

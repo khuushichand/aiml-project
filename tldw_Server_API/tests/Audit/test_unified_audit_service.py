@@ -268,6 +268,39 @@ async def test_shared_mode_sets_tenant_user_id(temp_db_path):
 
 
 @pytest.mark.asyncio
+async def test_shared_mode_allows_unidentified_context_user_id(temp_db_path):
+    service = UnifiedAuditService(
+        db_path=temp_db_path,
+        storage_mode="shared",
+        enable_pii_detection=False,
+        enable_risk_scoring=False,
+        buffer_size=1,
+        flush_interval=0.1,
+    )
+    await service.initialize()
+    try:
+        ctx = AuditContext(user_id="unidentified_user")
+        await service.log_event(
+            event_type=AuditEventType.DATA_READ,
+            context=ctx,
+            resource_type="doc",
+            resource_id="anon-doc",
+        )
+        await service.flush()
+        async with aiosqlite.connect(temp_db_path) as db:
+            db.row_factory = aiosqlite.Row
+            async with db.execute(
+                "SELECT tenant_user_id FROM audit_events WHERE resource_id = ? LIMIT 1",
+                ("anon-doc",),
+            ) as cur:
+                row = await cur.fetchone()
+        assert row is not None
+        assert row["tenant_user_id"] == "unidentified_user"
+    finally:
+        await service.stop()
+
+
+@pytest.mark.asyncio
 async def test_shared_mode_allows_non_numeric_tenant_id(temp_db_path):
     service = UnifiedAuditService(
         db_path=temp_db_path,

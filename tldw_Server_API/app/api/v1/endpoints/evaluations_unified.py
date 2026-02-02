@@ -1028,13 +1028,32 @@ async def evaluate_rag(
         # Extract and format metrics from results
         raw_metrics = result["results"].get("metrics", {})
         formatted_metrics = {}
-        for metric_name, score in raw_metrics.items():
-            formatted_metrics[metric_name] = EvaluationMetric(
-                name=metric_name,
-                score=score if isinstance(score, (int, float)) else 0.0,
-                raw_score=score if isinstance(score, (int, float)) else 0.0,
-                explanation=""
-            )
+        for metric_name, metric_value in raw_metrics.items():
+            if isinstance(metric_value, dict):
+                score_val = metric_value.get("score", metric_value.get("raw_score", 0.0))
+                try:
+                    score_float = float(score_val) if score_val is not None else 0.0
+                except (TypeError, ValueError):
+                    score_float = 0.0
+                raw_score_val = metric_value.get("raw_score")
+                formatted_metrics[metric_name] = EvaluationMetric(
+                    name=metric_value.get("name", metric_name),
+                    score=score_float,
+                    raw_score=raw_score_val,
+                    explanation=metric_value.get("explanation"),
+                    metadata=metric_value.get("metadata", {})
+                )
+            else:
+                try:
+                    score_float = float(metric_value) if metric_value is not None else 0.0
+                except (TypeError, ValueError):
+                    score_float = 0.0
+                formatted_metrics[metric_name] = EvaluationMetric(
+                    name=metric_name,
+                    score=score_float,
+                    raw_score=score_float,
+                    explanation=""
+                )
 
         # Send webhook: evaluation completed (await in TEST_MODE)
         if _os.getenv("TEST_MODE", "").lower() in ("true", "1", "yes"):

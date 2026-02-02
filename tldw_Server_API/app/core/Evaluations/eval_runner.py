@@ -1346,7 +1346,7 @@ class EvaluationRunner:
 
             # Calculate pass/fail
             avg_score = statistics.mean(scores.values()) if scores else 0
-            passed = avg_score >= eval_spec.get("threshold", 0.7)
+            passed = self._evaluate_passed(scores, avg_score, eval_spec, default_threshold=0.7)
 
             return {
                 "sample_id": sample_id,
@@ -1407,7 +1407,7 @@ class EvaluationRunner:
 
             # Calculate pass/fail
             avg_score = statistics.mean(scores.values()) if scores else 0
-            passed = avg_score >= eval_spec.get("threshold", 0.7)
+            passed = self._evaluate_passed(scores, avg_score, eval_spec, default_threshold=0.7)
 
             return {
                 "sample_id": sample_id,
@@ -1463,7 +1463,7 @@ class EvaluationRunner:
 
             # Calculate pass/fail
             avg_score = scores.get("overall_quality", 0)
-            passed = avg_score >= eval_spec.get("threshold", 0.7)
+            passed = self._evaluate_passed(scores, avg_score, eval_spec, default_threshold=0.7)
 
             return {
                 "sample_id": sample_id,
@@ -1546,7 +1546,8 @@ class EvaluationRunner:
                     found_count += 1
 
             score = found_count / len(expected_items) if expected_items else 0
-            passed = score >= eval_spec.get("threshold", 0.7)
+            threshold = self._resolve_metric_threshold(eval_spec, "includes", default=0.7)
+            passed = score >= threshold
 
             return {
                 "sample_id": sample_id,
@@ -1586,7 +1587,8 @@ class EvaluationRunner:
 
             # Calculate similarity
             similarity = SequenceMatcher(None, output, expected).ratio()
-            passed = similarity >= eval_spec.get("threshold", 0.7)
+            threshold = self._resolve_metric_threshold(eval_spec, "fuzzy_match", default=0.7)
+            passed = similarity >= threshold
 
             return {
                 "sample_id": sample_id,
@@ -2035,6 +2037,78 @@ class EvaluationRunner:
             return {"sample_id": sample_id, "error": str(e)}
 
     # ============= Helper Methods =============
+
+    @staticmethod
+    def _coerce_threshold_value(raw: Any) -> Optional[float]:
+        """Convert threshold values to float when possible."""
+        if raw is None:
+            return None
+        try:
+            return float(raw)
+        except (TypeError, ValueError):
+            return None
+
+    def _extract_threshold_config(
+        self,
+        eval_spec: Dict[str, Any]
+    ) -> tuple[Optional[float], Dict[str, float]]:
+        """Extract global and per-metric thresholds from eval_spec.
+
+        Supports legacy `threshold` and new `thresholds` mappings.
+        """
+        global_threshold = self._coerce_threshold_value(eval_spec.get("threshold"))
+        per_metric: Dict[str, float] = {}
+
+        thresholds = eval_spec.get("thresholds")
+        if isinstance(thresholds, dict):
+            if global_threshold is None:
+                for key in ("pass", "overall", "default", "threshold"):
+                    if key in thresholds:
+                        global_threshold = self._coerce_threshold_value(thresholds.get(key))
+                        if global_threshold is not None:
+                            break
+            for key, value in thresholds.items():
+                if key in {"pass", "overall", "default", "threshold", "excellent"}:
+                    continue
+                metric_threshold = self._coerce_threshold_value(value)
+                if metric_threshold is not None:
+                    per_metric[key] = metric_threshold
+
+        return global_threshold, per_metric
+
+    def _resolve_metric_threshold(
+        self,
+        eval_spec: Dict[str, Any],
+        metric_name: Optional[str],
+        *,
+        default: float = 0.7
+    ) -> float:
+        """Resolve a threshold for a single metric."""
+        global_threshold, per_metric = self._extract_threshold_config(eval_spec)
+        if metric_name and metric_name in per_metric:
+            return per_metric[metric_name]
+        if global_threshold is not None:
+            return global_threshold
+        return default
+
+    def _evaluate_passed(
+        self,
+        scores: Dict[str, float],
+        avg_score: float,
+        eval_spec: Dict[str, Any],
+        *,
+        default_threshold: float = 0.7
+    ) -> bool:
+        """Determine pass/fail from scores and eval_spec thresholds."""
+        global_threshold, per_metric = self._extract_threshold_config(eval_spec)
+        if per_metric:
+            per_metric_passed = all(scores.get(metric, 0.0) >= threshold for metric, threshold in per_metric.items())
+            if global_threshold is not None:
+                return per_metric_passed and avg_score >= global_threshold
+            return per_metric_passed
+
+        threshold = global_threshold if global_threshold is not None else default_threshold
+        return avg_score >= threshold
 
     def _calculate_aggregate_results(
         self,

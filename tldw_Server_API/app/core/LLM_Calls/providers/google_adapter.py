@@ -4,6 +4,7 @@ from typing import Any, Dict, Iterable, Optional, AsyncIterator, List
 
 from .base import ChatProvider
 
+import asyncio
 import os
 import json
 from loguru import logger
@@ -617,7 +618,7 @@ class GoogleAdapter(ChatProvider):
             raise self.normalize_error(e)
 
     async def achat(self, request: Dict[str, Any], *, timeout: Optional[float] = None) -> Dict[str, Any]:
-        return self.chat(request, timeout=timeout)
+        return await asyncio.to_thread(self.chat, request, timeout=timeout)
 
     async def astream(self, request: Dict[str, Any], *, timeout: Optional[float] = None) -> AsyncIterator[str]:
         async for item in wrap_sync_stream(self.stream(request, timeout=timeout)):

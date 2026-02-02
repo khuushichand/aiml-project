@@ -203,7 +203,7 @@ class UsersDB:
                         if "metadata" not in columns:
                             await conn.execute("ALTER TABLE users ADD COLUMN metadata TEXT")
                         if "uuid" not in columns:
-                            await conn.execute("ALTER TABLE users ADD COLUMN uuid TEXT UNIQUE")
+                            await conn.execute("ALTER TABLE users ADD COLUMN uuid TEXT")
                         if "storage_quota_mb" not in columns:
                             await conn.execute("ALTER TABLE users ADD COLUMN storage_quota_mb INTEGER DEFAULT 5120")
                         if "storage_used_mb" not in columns:
@@ -211,6 +211,12 @@ class UsersDB:
                         await conn.execute(
                             "UPDATE users SET uuid = lower(hex(randomblob(16))) WHERE uuid IS NULL OR uuid = ''"
                         )
+                        try:
+                            await conn.execute(
+                                "CREATE UNIQUE INDEX IF NOT EXISTS idx_users_uuid ON users(uuid)"
+                            )
+                        except Exception as idx_err:
+                            logger.warning(f"Could not create unique index on users.uuid: {idx_err}")
 
                         await conn.commit()
 
@@ -453,19 +459,36 @@ class UsersDB:
                         cur = await conn.execute("PRAGMA table_info(users)")
                         cols = {row[1] for row in await cur.fetchall()}
                         # Add commonly-missing columns for older installs
+                        added_uuid = False
                         async def _add_col(name: str, decl: str):
                             nonlocal cols
+                            nonlocal added_uuid
                             if name not in cols:
                                 await conn.execute(f"ALTER TABLE users ADD COLUMN {decl}")
                                 cols.add(name)
+                                if name == "uuid":
+                                    added_uuid = True
 
-                        await _add_col('uuid', "uuid TEXT UNIQUE")
+                        await _add_col('uuid', "uuid TEXT")
                         await _add_col('is_active', "is_active INTEGER DEFAULT 1")
                         await _add_col('is_superuser', "is_superuser INTEGER DEFAULT 0")
                         await _add_col('email_verified', "email_verified INTEGER DEFAULT 0")
                         await _add_col('is_verified', "is_verified INTEGER DEFAULT 0")
                         await _add_col('storage_quota_mb', "storage_quota_mb INTEGER DEFAULT 5120")
                         await _add_col('storage_used_mb', "storage_used_mb INTEGER DEFAULT 0")
+                        if added_uuid:
+                            try:
+                                await conn.execute(
+                                    "UPDATE users SET uuid = lower(hex(randomblob(16))) WHERE uuid IS NULL OR uuid = ''"
+                                )
+                            except Exception:
+                                pass
+                            try:
+                                await conn.execute(
+                                    "CREATE UNIQUE INDEX IF NOT EXISTS idx_users_uuid ON users(uuid)"
+                                )
+                            except Exception:
+                                pass
                     except Exception:
                         # Best-effort; insertion may still succeed if columns already present
                         pass

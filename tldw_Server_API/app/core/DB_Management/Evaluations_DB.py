@@ -11,7 +11,7 @@ Provides CRUD operations and query methods for:
 import json
 import os
 import sqlite3
-from datetime import datetime
+from datetime import datetime, timezone
 import uuid
 from typing import Dict, List, Optional, Any, Tuple
 from contextlib import contextmanager
@@ -786,6 +786,96 @@ class EvaluationsDatabase:
             evaluations = [self._row_to_eval_dict(row) for row in rows[:limit]]
 
             return evaluations, has_more
+
+    def list_evaluations_filtered(
+        self,
+        *,
+        limit: int = 20,
+        offset: int = 0,
+        eval_type: Optional[str] = None,
+        created_by: Optional[str] = None,
+        start_date: Optional[Any] = None,
+        end_date: Optional[Any] = None,
+        return_has_more: bool = False,
+    ) -> Any:
+        """List evaluations with optional created_by and date range filters."""
+        with self.get_connection() as conn:
+            cursor = conn.cursor()
+            query = "SELECT * FROM evaluations WHERE deleted_at IS NULL"
+            params: List[Any] = []
+
+            if eval_type:
+                query += " AND eval_type = ?"
+                params.append(eval_type)
+
+            query, params = self._append_user_filter(query, params, "created_by", created_by)
+
+            start_value = self._coerce_datetime_filter(start_date)
+            if start_value:
+                query += " AND created_at >= ?"
+                params.append(start_value)
+
+            end_value = self._coerce_datetime_filter(end_date)
+            if end_value:
+                query += " AND created_at <= ?"
+                params.append(end_value)
+
+            query += " ORDER BY created_at DESC LIMIT ?"
+            params.append(limit + 1 if return_has_more else limit)
+            if offset:
+                query += " OFFSET ?"
+                params.append(offset)
+
+            cursor.execute(query, params)
+            rows = cursor.fetchall()
+
+            if return_has_more:
+                has_more = len(rows) > limit
+                evaluations = [self._row_to_eval_dict(row) for row in rows[:limit]]
+                return evaluations, has_more
+
+            return [self._row_to_eval_dict(row) for row in rows]
+
+    def count_evaluations_filtered(
+        self,
+        *,
+        eval_type: Optional[str] = None,
+        created_by: Optional[str] = None,
+        start_date: Optional[Any] = None,
+        end_date: Optional[Any] = None,
+    ) -> int:
+        """Count evaluations with optional created_by and date range filters."""
+        with self.get_connection() as conn:
+            cursor = conn.cursor()
+            query = "SELECT COUNT(*) AS count FROM evaluations WHERE deleted_at IS NULL"
+            params: List[Any] = []
+
+            if eval_type:
+                query += " AND eval_type = ?"
+                params.append(eval_type)
+
+            query, params = self._append_user_filter(query, params, "created_by", created_by)
+
+            start_value = self._coerce_datetime_filter(start_date)
+            if start_value:
+                query += " AND created_at >= ?"
+                params.append(start_value)
+
+            end_value = self._coerce_datetime_filter(end_date)
+            if end_value:
+                query += " AND created_at <= ?"
+                params.append(end_value)
+
+            cursor.execute(query, params)
+            row = cursor.fetchone()
+            if row is None:
+                return 0
+            if isinstance(row, dict):
+                return int(row.get("count", 0) or 0)
+            try:
+                return int(row[0])
+            except Exception:
+                return 0
 
     def _init_abtest_store(self) -> None:
         desired = str(os.getenv("EVALS_ABTEST_PERSISTENCE", "sqlalchemy")).strip().lower()
@@ -1687,6 +1777,30 @@ class EvaluationsDatabase:
         # Unknown type
         logger.debug(f"Unsupported timestamp type: {type(value)} value={value!r}")
         return int(datetime.now().timestamp()) if fallback_now else None
+
+    def _coerce_datetime_filter(self, value: Optional[Any]) -> Optional[str]:
+        """Coerce date filter inputs into ISO-like strings for SQL comparisons."""
+        if value is None:
+            return None
+        if isinstance(value, str):
+            cleaned = value.strip()
+            return cleaned or None
+        dt: Optional[datetime]
+        if isinstance(value, (int, float)):
+            try:
+                dt = datetime.fromtimestamp(value, tz=timezone.utc)
+            except Exception:
+                return None
+        elif isinstance(value, datetime):
+            dt = value
+        else:
+            return None
+        try:
+            if dt.tzinfo:
+                dt = dt.astimezone(timezone.utc).replace(tzinfo=None)
+        except Exception:
+            pass
+        return dt.replace(microsecond=0).isoformat(sep=" ")
 
     def _json_maybe(self, value: Any, *, default: Any = None) -> Any:
         """Return JSON-decoded value.

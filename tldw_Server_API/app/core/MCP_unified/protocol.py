@@ -6,6 +6,8 @@ Implements JSON-RPC 2.0 with enhanced error handling and request routing.
 
 import uuid
 import json
+import asyncio
+import secrets
 from typing import Dict, Any, Optional, List, Union, Callable, Literal, Tuple
 from datetime import datetime, timezone
 from enum import IntEnum
@@ -30,6 +32,7 @@ from .auth.rate_limiter import get_rate_limiter, RateLimitExceeded
 import time
 from .monitoring.metrics import get_metrics_collector
 from tldw_Server_API.app.core.Metrics.telemetry import get_telemetry_manager
+from tldw_Server_API.app.core.Infrastructure.redis_factory import create_async_redis_client
 import re
 
 
@@ -141,6 +144,204 @@ class RequestContext:
         )
 
 
+class IdempotencyManager:
+    """Idempotency manager with Redis backing and local lock fallback."""
+
+    def __init__(self) -> None:
+        self._local_cache: "OrderedDict[str, Tuple[float, Dict[str, Any]]]" = OrderedDict()
+        self._local_locks: Dict[str, asyncio.Lock] = {}
+        self._local_guard = asyncio.Lock()
+        self._redis_client: Any | None = None
+        self._redis_ready = False
+        self._redis_attempted = False
+        self._redis_guard = asyncio.Lock()
+
+    async def _ensure_redis(self) -> bool:
+        if self._redis_attempted:
+            return self._redis_ready
+        async with self._redis_guard:
+            if self._redis_attempted:
+                return self._redis_ready
+            self._redis_attempted = True
+            cfg = get_config()
+            params = cfg.get_redis_connection_params()
+            if not params:
+                self._redis_ready = False
+                return False
+            url = params.pop("url", None)
+            try:
+                self._redis_client = await create_async_redis_client(
+                    preferred_url=url,
+                    decode_responses=True,
+                    fallback_to_fake=False,
+                    context="mcp_idempotency",
+                    redis_kwargs=params,
+                )
+                self._redis_ready = True
+            except Exception as exc:
+                logger.warning(
+                    "MCP idempotency Redis unavailable; falling back to local locks. Error: {}",
+                    exc,
+                )
+                self._redis_client = None
+                self._redis_ready = False
+            return self._redis_ready
+
+    def _local_get(self, cache_key: str, ttl: int) -> Optional[Dict[str, Any]]:
+        item = self._local_cache.get(cache_key)
+        if not item:
+            return None
+        ts, payload = item
+        if time.time() - ts > ttl:
+            try:
+                del self._local_cache[cache_key]
+            except Exception:
+                pass
+            return None
+        try:
+            self._local_cache.move_to_end(cache_key)
+        except Exception:
+            pass
+        return payload
+
+    def _local_put(self, cache_key: str, payload: Dict[str, Any], ttl: int, max_size: int) -> None:
+        now = time.time()
+        self._local_cache[cache_key] = (now, payload)
+        try:
+            self._local_cache.move_to_end(cache_key)
+        except Exception:
+            pass
+        # Evict expired entries opportunistically
+        expired = [k for k, (ts, _) in self._local_cache.items() if now - ts > ttl]
+        for k in expired:
+            try:
+                del self._local_cache[k]
+            except Exception:
+                pass
+        # Enforce max size (LRU)
+        while len(self._local_cache) > max_size:
+            try:
+                self._local_cache.popitem(last=False)
+            except Exception:
+                break
+
+    async def _get_local_lock(self, cache_key: str) -> asyncio.Lock:
+        async with self._local_guard:
+            lock = self._local_locks.get(cache_key)
+            if lock is None:
+                lock = asyncio.Lock()
+                self._local_locks[cache_key] = lock
+            return lock
+
+    async def _redis_get(self, client: Any, key: str) -> Optional[Dict[str, Any]]:
+        raw = await client.get(key)
+        if not raw:
+            return None
+        try:
+            return json.loads(raw)
+        except Exception:
+            return None
+
+    async def _redis_set(self, client: Any, key: str, payload: Dict[str, Any], ttl: int) -> None:
+        data = json.dumps(payload, separators=(",", ":"), default=str)
+        await client.set(key, data, ex=ttl)
+
+    async def _redis_try_acquire(self, client: Any, key: str, token: str, ttl: int) -> bool:
+        resp = await client.set(key, token, nx=True, ex=ttl)
+        return bool(resp)
+
+    async def _redis_release(self, client: Any, key: str, token: str) -> None:
+        try:
+            val = await client.get(key)
+            if val == token:
+                await client.delete(key)
+        except Exception:
+            pass
+
+    async def _run_local(
+        self,
+        cache_key: str,
+        execute_fn: Callable[[], Any],
+        *,
+        ttl: int,
+        max_size: int,
+    ) -> Tuple[Dict[str, Any], bool]:
+        async with self._local_guard:
+            cached = self._local_get(cache_key, ttl)
+        if cached is not None:
+            return cached, True
+
+        lock = await self._get_local_lock(cache_key)
+        async with lock:
+            async with self._local_guard:
+                cached = self._local_get(cache_key, ttl)
+            if cached is not None:
+                return cached, True
+            result = await execute_fn()
+            async with self._local_guard:
+                self._local_put(cache_key, result, ttl, max_size)
+            return result, False
+
+    async def _run_redis(
+        self,
+        cache_key: str,
+        execute_fn: Callable[[], Any],
+        *,
+        ttl: int,
+        lock_ttl: int,
+    ) -> Tuple[Dict[str, Any], bool]:
+        client = self._redis_client
+        if client is None:
+            raise RuntimeError("Redis client not initialized")
+        result_key = f"mcp:idemp:result:{cache_key}"
+        lock_key = f"mcp:idemp:lock:{cache_key}"
+        cached = await self._redis_get(client, result_key)
+        if cached is not None:
+            return cached, True
+
+        poll_interval = 0.2
+        while True:
+            token = secrets.token_urlsafe(16)
+            acquired = await self._redis_try_acquire(client, lock_key, token, lock_ttl)
+            if acquired:
+                try:
+                    result = await execute_fn()
+                    await self._redis_set(client, result_key, result, ttl)
+                finally:
+                    await self._redis_release(client, lock_key, token)
+                return result, False
+
+            cached = await self._redis_get(client, result_key)
+            if cached is not None:
+                return cached, True
+            await asyncio.sleep(poll_interval)
+
+    async def run(
+        self,
+        cache_key: str,
+        execute_fn: Callable[[], Any],
+        *,
+        ttl: int,
+        max_size: int,
+        lock_ttl: int,
+    ) -> Tuple[Dict[str, Any], bool]:
+        if await self._ensure_redis():
+            try:
+                return await self._run_redis(
+                    cache_key,
+                    execute_fn,
+                    ttl=ttl,
+                    lock_ttl=lock_ttl,
+                )
+            except Exception as exc:
+                logger.warning(
+                    "MCP idempotency Redis path failed; falling back to local locks. Error: {}",
+                    exc,
+                )
+                self._redis_ready = False
+        return await self._run_local(cache_key, execute_fn, ttl=ttl, max_size=max_size)
+
+
 class MCPProtocol:
     """
     MCP Protocol handler with enhanced security and error handling.
@@ -164,8 +365,8 @@ class MCPProtocol:
         self.telemetry = get_telemetry_manager()
         # Strict tool name validation regex
         self._tool_name_re = re.compile(r'^[A-Za-z0-9_.:-]{1,100}$')
-        # Small LRU with TTL for idempotency of write tools
-        self._idempotency_cache: "OrderedDict[str, Tuple[float, Dict[str, Any]] ]" = OrderedDict()
+        # Idempotency manager for write-capable tools
+        self._idempotency = IdempotencyManager()
 
         # Method handlers
         self.handlers: Dict[str, Callable] = {
@@ -1106,149 +1307,151 @@ class MCPProtocol:
                         pass
                     raise ValueError(f"Invalid parameters for tool {tool_name}: {ve}")
 
-                # Idempotency dedupe for write-capable tools (optional)
+                idempotency_cache_key = None
                 if isinstance(idempotency_key, str) and idempotency_key:
-                    cache_key = self._make_idempotency_cache_key(
+                    idempotency_cache_key = self._make_idempotency_cache_key(
                         context, module_id or getattr(module, "name", "unknown"), tool_name, idempotency_key
                     )
-                    cached = self._idemp_cache_get(cache_key)
-                    if cached is not None:
-                        try:
-                            self.metrics.record_idempotency_hit(module_id or getattr(module, "name", "unknown"), str(tool_name))
-                        except Exception:
-                            pass
-                        return cached
-                    else:
-                        try:
-                            self.metrics.record_idempotency_miss(module_id or getattr(module, "name", "unknown"), str(tool_name))
-                        except Exception:
-                            pass
         except ValueError as ve:
             # Surface as JSON-RPC INVALID_PARAMS at the protocol layer
             # by raising a sentinel exception handled by process_request
             raise InvalidParamsException(str(ve))
 
-        # Optional per-tool/category rate limits (ingestion vs read)
-        try:
-            # Categorization for per-category rate limiting
-            cfg = get_config()
-            category = None
-            # 1) Prefer tool metadata.category if available
+        async def _execute_tool_call() -> Dict[str, Any]:
+            # Optional per-tool/category rate limits (ingestion vs read)
             try:
-                meta = (tool_def or {}).get("metadata") or {}
-                cat = str(meta.get("category") or "").lower()
-                if cat in {"ingestion", "management", "read"}:
-                    category = cat
-            except Exception:
+                # Categorization for per-category rate limiting
+                cfg = get_config()
                 category = None
-            # 2) Config-driven mapping
-            if not category:
+                # 1) Prefer tool metadata.category if available
                 try:
-                    if isinstance(cfg.tool_category_map, dict) and tool_name in cfg.tool_category_map:
-                        category = str(cfg.tool_category_map.get(tool_name))
+                    meta = (tool_def or {}).get("metadata") or {}
+                    cat = str(meta.get("category") or "").lower()
+                    if cat in {"ingestion", "management", "read"}:
+                        category = cat
                 except Exception:
                     category = None
-            # 3) Heuristic fallback
-            if not category:
-                ingestion_tools = {'ingest_media', 'update_media', 'delete_media'}
-                category = 'ingestion' if tool_name in ingestion_tools else 'read'
-            key_owner = f"user:{context.user_id}" if context.user_id else (f"client:{context.client_id}" if context.client_id else "anon")
-            rl_key = f"{key_owner}:tool:{tool_name}:cat:{category}"
-            await self.rate_limiter.check_rate_limit(rl_key, category=category)
-        except RateLimitExceeded:
-            raise
-        except Exception:
-            # Best-effort; do not block on limiter errors
-            pass
+                # 2) Config-driven mapping
+                if not category:
+                    try:
+                        if isinstance(cfg.tool_category_map, dict) and tool_name in cfg.tool_category_map:
+                            category = str(cfg.tool_category_map.get(tool_name))
+                    except Exception:
+                        category = None
+                # 3) Heuristic fallback
+                if not category:
+                    ingestion_tools = {'ingest_media', 'update_media', 'delete_media'}
+                    category = 'ingestion' if tool_name in ingestion_tools else 'read'
+                key_owner = f"user:{context.user_id}" if context.user_id else (f"client:{context.client_id}" if context.client_id else "anon")
+                rl_key = f"{key_owner}:tool:{tool_name}:cat:{category}"
+                await self.rate_limiter.check_rate_limit(rl_key, category=category)
+            except RateLimitExceeded:
+                raise
+            except Exception:
+                # Best-effort; do not block on limiter errors
+                pass
 
-        # Execute tool with circuit breaker (pass context through)
-        t0 = time.time()
-        args_hash = self._hash_arguments(tool_args if isinstance(tool_args, dict) else {})
+            # Execute tool with circuit breaker (pass context through)
+            t0 = time.time()
+            args_hash = self._hash_arguments(tool_args if isinstance(tool_args, dict) else {})
 
-        try:
-            # Trace the tool call with OTEL
-            with self.telemetry.trace_context(
-                "mcp.tool_call",
-                {
-                    "mcp.tool": tool_name,
-                    "mcp.module": getattr(module, "name", "unknown"),
-                    "mcp.user_id": str(context.user_id or ""),
-                    "mcp.client_id": str(context.client_id or ""),
-                },
-            ) as span:
+            try:
+                # Trace the tool call with OTEL
+                with self.telemetry.trace_context(
+                    "mcp.tool_call",
+                    {
+                        "mcp.tool": tool_name,
+                        "mcp.module": getattr(module, "name", "unknown"),
+                        "mcp.user_id": str(context.user_id or ""),
+                        "mcp.client_id": str(context.client_id or ""),
+                    },
+                ) as span:
+                    try:
+                        result = await module.execute_with_circuit_breaker(
+                            module.execute_tool,
+                            tool_name,
+                            tool_args,
+                            context
+                        )
+                        span.set_attribute("mcp.status", "success")
+                    except Exception as _tool_e:
+                        span.set_attribute("mcp.status", "failure")
+                        span.set_attribute("mcp.error_type", _tool_e.__class__.__name__)
+                        span.set_attribute("mcp.error_message", str(_tool_e)[:200])
+                        raise
+                    finally:
+                        span.set_attribute("mcp.duration_ms", max(0.0, (time.time() - t0) * 1000.0))
+
+                # Format result
+                if isinstance(result, str):
+                    content = [{"type": "text", "text": result}]
+                elif isinstance(result, list):
+                    content = result
+                elif isinstance(result, dict):
+                    # Preserve structured tool results as JSON content instead of stringifying.
+                    content = [{"type": "json", "json": result}]
+                else:
+                    content = [{"type": "text", "text": str(result)}]
+
+                module_name = module_id or getattr(module, "name", None)
+                # Record module operation metrics
                 try:
-                    result = await module.execute_with_circuit_breaker(
-                        module.execute_tool,
-                        tool_name,
-                        tool_args,
-                        context
-                    )
-                    span.set_attribute("mcp.status", "success")
-                except Exception as _tool_e:
-                    span.set_attribute("mcp.status", "failure")
-                    span.set_attribute("mcp.error_type", _tool_e.__class__.__name__)
-                    span.set_attribute("mcp.error_message", str(_tool_e)[:200])
-                    raise
-                finally:
-                    span.set_attribute("mcp.duration_ms", max(0.0, (time.time() - t0) * 1000.0))
+                    duration = max(0.0, time.time() - t0)
+                    self.metrics.record_module_operation(module=module_name or "unknown", operation="tools_call", duration=duration, success=True)
+                except Exception:
+                    pass
+                self._audit_tool_event(
+                    context,
+                    tool_name,
+                    module_name,
+                    status="success",
+                    duration_ms=max(0.0, (time.time() - t0) * 1000.0),
+                    arguments_hash=args_hash,
+                )
+                response_payload = {"content": content, "module": module_name, "tool": tool_name}
+                return response_payload
 
-            # Format result
-            if isinstance(result, str):
-                content = [{"type": "text", "text": result}]
-            elif isinstance(result, list):
-                content = result
-            elif isinstance(result, dict):
-                # Preserve structured tool results as JSON content instead of stringifying.
-                content = [{"type": "json", "json": result}]
-            else:
-                content = [{"type": "text", "text": str(result)}]
+            except Exception as e:
+                context.logger.error(f"Tool execution failed: {tool_name} - {e}")
+                try:
+                    duration = max(0.0, time.time() - t0)
+                    self.metrics.record_module_operation(module=getattr(module, "name", "unknown"), operation="tools_call", duration=duration, success=False)
+                except Exception:
+                    pass
+                self._audit_tool_event(
+                    context,
+                    tool_name,
+                    module_id or getattr(module, "name", None),
+                    status="failure",
+                    duration_ms=max(0.0, (time.time() - t0) * 1000.0),
+                    arguments_hash=args_hash,
+                    error=e,
+                )
+                raise
 
-            module_name = module_id or getattr(module, "name", None)
-            # Record module operation metrics
-            try:
-                duration = max(0.0, time.time() - t0)
-                self.metrics.record_module_operation(module=module_name or "unknown", operation="tools_call", duration=duration, success=True)
-            except Exception:
-                pass
-            self._audit_tool_event(
-                context,
-                tool_name,
-                module_name,
-                status="success",
-                duration_ms=max(0.0, (time.time() - t0) * 1000.0),
-                arguments_hash=args_hash,
+        if is_write and idempotency_cache_key:
+            cfg = get_config()
+            ttl = max(1, int(getattr(cfg, "idempotency_ttl_seconds", 300)))
+            max_size = max(1, int(getattr(cfg, "idempotency_cache_size", 512)))
+            module_timeout = int(getattr(getattr(module, "config", None), "timeout_seconds", cfg.module_timeout))
+            lock_ttl = max(ttl, module_timeout * 2)
+            payload, from_cache = await self._idempotency.run(
+                idempotency_cache_key,
+                _execute_tool_call,
+                ttl=ttl,
+                max_size=max_size,
+                lock_ttl=lock_ttl,
             )
-            response_payload = {"content": content, "module": module_name, "tool": tool_name}
-
-            # Store idempotent result for write-capable tools
             try:
-                if isinstance(idempotency_key, str) and idempotency_key and 'is_write' in locals() and is_write:
-                    cache_key = self._make_idempotency_cache_key(
-                        context, module_name or getattr(module, "name", "unknown"), tool_name, idempotency_key
-                    )
-                    self._idemp_cache_put(cache_key, response_payload)
+                if from_cache:
+                    self.metrics.record_idempotency_hit(module_id or getattr(module, "name", "unknown"), str(tool_name))
+                else:
+                    self.metrics.record_idempotency_miss(module_id or getattr(module, "name", "unknown"), str(tool_name))
             except Exception:
                 pass
+            return payload
 
-            return response_payload
-
-        except Exception as e:
-            context.logger.error(f"Tool execution failed: {tool_name} - {e}")
-            try:
-                duration = max(0.0, time.time() - t0)
-                self.metrics.record_module_operation(module=getattr(module, "name", "unknown"), operation="tools_call", duration=duration, success=False)
-            except Exception:
-                pass
-            self._audit_tool_event(
-                context,
-                tool_name,
-                module_id or getattr(module, "name", None),
-                status="failure",
-                duration_ms=max(0.0, (time.time() - t0) * 1000.0),
-                arguments_hash=args_hash,
-                error=e,
-            )
-            raise
+        return await _execute_tool_call()
 
     # -------------------------
     # Idempotency cache helpers
@@ -1256,51 +1459,6 @@ class MCPProtocol:
     def _make_idempotency_cache_key(self, context: RequestContext, module_name: str, tool_name: str, idempotency_key: str) -> str:
         owner = f"user:{context.user_id}" if context.user_id else (f"client:{context.client_id}" if context.client_id else "anon")
         return f"{owner}|module:{module_name}|tool:{tool_name}|key:{idempotency_key}"
-
-    def _idemp_cache_get(self, cache_key: str) -> Optional[Dict[str, Any]]:
-        try:
-            now = time.time()
-            cfg = get_config()
-            ttl = max(1, int(getattr(cfg, 'idempotency_ttl_seconds', 300)))
-            item = self._idempotency_cache.get(cache_key)
-            if not item:
-                return None
-            ts, payload = item
-            if now - ts > ttl:
-                # Expired; remove
-                try:
-                    del self._idempotency_cache[cache_key]
-                except Exception:
-                    pass
-                return None
-            # Touch LRU order
-            try:
-                self._idempotency_cache.move_to_end(cache_key)
-            except Exception:
-                pass
-            return payload
-        except Exception:
-            return None
-
-    def _idemp_cache_put(self, cache_key: str, payload: Dict[str, Any]) -> None:
-        try:
-            now = time.time()
-            cfg = get_config()
-            max_size = max(1, int(getattr(cfg, 'idempotency_cache_size', 512)))
-            self._idempotency_cache[cache_key] = (now, payload)
-            # Move to end to mark recent
-            try:
-                self._idempotency_cache.move_to_end(cache_key)
-            except Exception:
-                pass
-            # Evict if over size
-            while len(self._idempotency_cache) > max_size:
-                try:
-                    self._idempotency_cache.popitem(last=False)
-                except Exception:
-                    break
-        except Exception:
-            pass
 
     def _validate_input_schema(self, schema: Dict[str, Any], args: Dict[str, Any]) -> None:
         """Quick JSON Schema checks: required keys, primitive types, unknown fields.

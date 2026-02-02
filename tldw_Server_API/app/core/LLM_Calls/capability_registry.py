@@ -296,12 +296,16 @@ def validate_payload(provider: str, payload: Mapping[str, Any]) -> Dict[str, Any
             provider=provider_key or None,
         )
     _validate_nested_fields(provider_key, filtered)
-    if normalized.get("tool_choice") is not None and not (isinstance(normalized.get("tools"), list) and normalized.get("tools")):
-        _record_validation_rejection(provider_key)
-        raise ChatBadRequestError(
-            message="tool_choice requires tools",
-            provider=provider_key or None,
-        )
+    tool_choice = normalized.get("tool_choice")
+    if tool_choice is not None:
+        if isinstance(tool_choice, str) and tool_choice.strip().lower() == "none":
+            return normalized
+        if not (isinstance(normalized.get("tools"), list) and normalized.get("tools")):
+            _record_validation_rejection(provider_key)
+            raise ChatBadRequestError(
+                message="tool_choice requires tools",
+                provider=provider_key or None,
+            )
     return normalized
 
 

@@ -109,6 +109,28 @@ async def test_chat_wrapper_returns_future_in_running_loop(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_chat_wrapper_strict_mode_raises_in_running_loop(monkeypatch):
+    """CHAT_SYNC_IN_EVENT_LOOP_STRICT should raise when chat() is invoked inside a running loop."""
+
+    monkeypatch.setenv("CHAT_SYNC_IN_EVENT_LOOP_STRICT", "1")
+
+    with pytest.raises(RuntimeError, match="CHAT_SYNC_IN_EVENT_LOOP_STRICT"):
+        chat_orchestrator.chat(
+            message="inside-loop",
+            history=[],
+            media_content=None,
+            selected_parts=[],
+            api_endpoint="openai",
+            api_key=None,
+            custom_prompt=None,
+            temperature=0.2,
+            system_message=None,
+            streaming=False,
+            chatdict_entries=None,
+        )
+
+
+@pytest.mark.asyncio
 async def test_chat_wrapper_safe_under_running_loop(monkeypatch):
     """chat() should be callable without raising when an event loop is already running.
 

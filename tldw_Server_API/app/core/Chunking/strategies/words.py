@@ -399,7 +399,12 @@ class WordChunkingStrategy(BaseChunkingStrategy):
                             max_size: int,
                             overlap: int = 0,
                             **options) -> List[ChunkResult]:
-        """Chunk text and return metadata with accurate offsets."""
+        """Chunk text and return metadata with accurate offsets.
+
+        By default, chunk text is sliced from the original source span to
+        preserve whitespace and multilingual fidelity. Pass
+        align_text_to_source=False to keep the normalized token-joined text.
+        """
         if not self.validate_parameters(text, max_size, overlap):
             return []
 
@@ -417,6 +422,8 @@ class WordChunkingStrategy(BaseChunkingStrategy):
             min_size_opt = 0
 
         results: List[ChunkResult] = []
+        align_text_to_source = bool(options.get("align_text_to_source", True))
+        text_len = len(text)
         total = len(records)
         for idx, record in enumerate(records):
             token_indices: List[int] = record.get('token_indices', [])
@@ -429,7 +436,12 @@ class WordChunkingStrategy(BaseChunkingStrategy):
                 end_char = self._expand_end_to_grapheme_boundary(text, end_char, options=options)
             except Exception:
                 pass
+            # Default to source-aligned text for multilingual fidelity.
             chunk_text = record.get('text', '')
+            if align_text_to_source:
+                start_char = max(0, min(int(start_char), text_len))
+                end_char = max(start_char, min(int(end_char), text_len))
+                chunk_text = text[start_char:end_char]
             word_count = len(token_indices)
             metadata = ChunkMetadata(
                 index=idx,

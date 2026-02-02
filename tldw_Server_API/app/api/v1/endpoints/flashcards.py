@@ -37,6 +37,47 @@ from tldw_Server_API.app.core.Flashcards.apkg_exporter import export_apkg_from_r
 router = APIRouter(prefix="/flashcards", tags=["flashcards"])
 
 
+def _fetch_flashcard_or_404(card_uuid: str, db: CharactersRAGDB) -> dict:
+    card = db.get_flashcard(card_uuid)
+    if not card:
+        raise HTTPException(status_code=404, detail="Flashcard not found")
+    return card
+
+
+def _normalize_flashcard_model_fields(
+    front: Optional[str],
+    model_type: Optional[str],
+    is_cloze: Optional[bool],
+    reverse: Optional[bool],
+) -> tuple[str, bool, bool]:
+    if model_type is not None:
+        effective_model = str(model_type).lower()
+    elif is_cloze is True:
+        effective_model = "cloze"
+    elif reverse is True:
+        effective_model = "basic_reverse"
+    else:
+        effective_model = "basic"
+
+    if effective_model not in ("basic", "basic_reverse", "cloze"):
+        raise HTTPException(status_code=400, detail="Invalid model_type")
+
+    eff_is_cloze = effective_model == "cloze"
+    eff_reverse = effective_model == "basic_reverse"
+
+    if eff_is_cloze:
+        if not re.search(r"\{\{c\d+::", front or ""):
+            raise HTTPException(
+                status_code=400,
+                detail={
+                    "error": "Invalid cloze",
+                    "invalid_fields": ["front"],
+                    "message": "Front must contain one or more {{cN::...}} patterns",
+                },
+            )
+    return effective_model, eff_is_cloze, eff_reverse
+
+
 def _require_flashcards_admin(principal: AuthPrincipal) -> None:
     """Raise 403 if the principal lacks flashcards admin permission."""
     perms = set(principal.permissions or [])
@@ -106,17 +147,15 @@ def create_flashcard(payload: FlashcardCreate, db: CharactersRAGDB = Depends(get
                     },
                 )
         # Cloze validation if requested
-        eff_is_cloze = (str(data.get("model_type") or "").lower() == "cloze") or bool(data.get("is_cloze"))
-        if eff_is_cloze:
-            if not re.search(r"\{\{c\d+::", data.get("front") or ""):
-                raise HTTPException(
-                    status_code=400,
-                    detail={
-                        "error": "Invalid cloze",
-                        "invalid_fields": ["front"],
-                        "message": "Front must contain one or more {{cN::...}} patterns",
-                    },
-                )
+        effective_model, eff_is_cloze, eff_reverse = _normalize_flashcard_model_fields(
+            data.get("front"),
+            data.get("model_type"),
+            data.get("is_cloze"),
+            data.get("reverse"),
+        )
+        data["model_type"] = effective_model
+        data["is_cloze"] = eff_is_cloze
+        data["reverse"] = eff_reverse
         card_uuid = db.add_flashcard(data)
         # Link keyword tags if provided
         if tags:
@@ -152,6 +191,15 @@ def create_flashcards_bulk(payload: List[FlashcardCreate], db: CharactersRAGDB =
                     deck_ids_to_validate.add(int(data.get("deck_id")))
                 except Exception:
                     raise HTTPException(status_code=400, detail="Invalid deck_id type")
+            effective_model, eff_is_cloze, eff_reverse = _normalize_flashcard_model_fields(
+                data.get("front"),
+                data.get("model_type"),
+                data.get("is_cloze"),
+                data.get("reverse"),
+            )
+            data["model_type"] = effective_model
+            data["is_cloze"] = eff_is_cloze
+            data["reverse"] = eff_reverse
             raw_list.append(data)
         # Validate all referenced deck IDs before inserting; collect all invalids
         invalid_deck_ids: List[int] = []
@@ -221,10 +269,7 @@ def list_flashcards(
 @router.get("/id/{card_uuid}", response_model=Flashcard)
 def get_flashcard(card_uuid: str, db: CharactersRAGDB = Depends(get_chacha_db_for_user)):
     try:
-        card = db.get_flashcard(card_uuid)
-        if not card:
-            raise HTTPException(status_code=404, detail="Flashcard not found")
-        return card
+        return _fetch_flashcard_or_404(card_uuid, db)
     except CharactersRAGDBError as e:
         logger.error(f"Failed to get flashcard: {e}")
         raise HTTPException(status_code=500, detail="Failed to get flashcard")
@@ -711,6 +756,8 @@ def review_flashcard(payload: FlashcardReviewRequest, db: CharactersRAGDB = Depe
     try:
         updated = db.review_flashcard(payload.card_uuid, payload.rating, payload.answer_time_ms)
         return updated
+    except ConflictError as e:
+        raise HTTPException(status_code=404, detail=str(e))
     except CharactersRAGDBError as e:
         logger.error(f"Failed to review flashcard: {e}")
         raise HTTPException(status_code=500, detail="Failed to review flashcard")
@@ -744,3 +791,12 @@ def export_flashcards(
     except CharactersRAGDBError as e:
         logger.error(f"Failed to export flashcards: {e}")
         raise HTTPException(status_code=500, detail="Failed to export flashcards")
+
+
+@router.get("/{card_uuid}", response_model=Flashcard)
+def get_flashcard_alias(card_uuid: str, db: CharactersRAGDB = Depends(get_chacha_db_for_user)):
+    try:
+        return _fetch_flashcard_or_404(card_uuid, db)
+    except CharactersRAGDBError as e:
+        logger.error(f"Failed to get flashcard: {e}")
+        raise HTTPException(status_code=500, detail="Failed to get flashcard")

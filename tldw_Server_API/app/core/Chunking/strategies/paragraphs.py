@@ -119,9 +119,9 @@ class ParagraphChunkingStrategy(BaseChunkingStrategy):
 
         This implementation preserves the original character spans from the input
         text when computing start/end offsets. Paragraph boundaries are two or more
-        newlines (optionally with whitespace). Leading/trailing whitespace attached
-        to a paragraph is trimmed for content, but the offsets refer to the exact
-        positions in the original text for the trimmed content.
+        newlines (optionally with whitespace). By default, chunk text is sliced from
+        the original source span to retain spacing; pass align_text_to_source=False
+        to return a normalized join of trimmed paragraph content instead.
         """
         if not text or not text.strip():
             return []  # Consistent with other strategies
@@ -189,6 +189,8 @@ class ParagraphChunkingStrategy(BaseChunkingStrategy):
 
             # Window the paragraph spans according to max_size/overlap
             results: List[ChunkResult] = []
+            align_text_to_source = bool(options.get("align_text_to_source", True))
+            text_len = len(text)
             step = max(1, max_size - overlap)
             chunk_index = 0
             for i in range(0, len(spans), step):
@@ -201,9 +203,14 @@ class ParagraphChunkingStrategy(BaseChunkingStrategy):
                     end_char = self._expand_end_to_grapheme_boundary(text, end_char, options=options)
                 except (IndexError, ValueError) as e:
                     logger.debug(f"Grapheme expansion failed for paragraph chunk {chunk_index}: {e}")
-                # Build display text by joining trimmed paragraph content with double newlines
-                parts = [text[s:e] for (s, e) in window]
-                chunk_text = "\n\n".join(p.strip() for p in parts)
+                if align_text_to_source:
+                    start_char = max(0, min(int(start_char), text_len))
+                    end_char = max(start_char, min(int(end_char), text_len))
+                    chunk_text = text[start_char:end_char]
+                else:
+                    # Build display text by joining trimmed paragraph content with double newlines
+                    parts = [text[s:e] for (s, e) in window]
+                    chunk_text = "\n\n".join(p.strip() for p in parts)
                 metadata = ChunkMetadata(
                     index=chunk_index,
                     start_char=start_char,

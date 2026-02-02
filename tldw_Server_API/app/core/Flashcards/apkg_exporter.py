@@ -217,8 +217,14 @@ def _compute_card_sched(model_type: str, ef: float, interval_days: int, repetiti
         return (1, 1, due_secs, 0, factor, reps_val, lapses_val)
     # Review
     ivl_days = max(1, int(interval_days))
-    # due: days since collection creation
+    # due: days since collection creation (prefer due_at when available)
     days_since_crt = max(1, int((datetime.now(timezone.utc).timestamp() - col_crt_secs) / 86400.0))
+    if due_at_iso:
+        try:
+            due_dt = datetime.fromisoformat(due_at_iso.replace('Z', '+00:00'))
+            days_since_crt = max(1, int((due_dt.timestamp() - col_crt_secs) / 86400.0))
+        except Exception:
+            pass
     return (2, 2, days_since_crt, ivl_days, factor, reps_val, lapses_val)
 
 

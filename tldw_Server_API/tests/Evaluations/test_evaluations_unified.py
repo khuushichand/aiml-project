@@ -467,6 +467,8 @@ class TestTldwSpecificEndpoints:
             assert "metrics" in data
             assert "overall_score" in data
             assert "retrieval_quality" in data
+            assert data["metrics"]["relevance"]["score"] == pytest.approx(0.9)
+            assert data["metrics"]["faithfulness"]["score"] == pytest.approx(0.85)
 
     async def test_response_quality_endpoint(self, client, auth_headers):
         """Test response quality evaluation endpoint"""

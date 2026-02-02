@@ -186,12 +186,11 @@ def _normalize_storage_mode(raw: Any) -> str:
 
 
 def _resolve_storage_mode(explicit: Optional[str] = None) -> str:
-    if explicit:
-        mode = _normalize_storage_mode(explicit)
-    else:
-        mode = _normalize_storage_mode(
-            _app_settings.get("AUDIT_STORAGE_MODE", None) or os.getenv("AUDIT_STORAGE_MODE")
-        )
+    if explicit is not None and str(explicit).strip() != "":
+        return _normalize_storage_mode(explicit)
+    mode = _normalize_storage_mode(
+        _app_settings.get("AUDIT_STORAGE_MODE", None) or os.getenv("AUDIT_STORAGE_MODE")
+    )
     rollback_raw = _app_settings.get("AUDIT_STORAGE_ROLLBACK", None) or os.getenv("AUDIT_STORAGE_ROLLBACK")
     if _coerce_bool(rollback_raw, False):
         return "per_user"
@@ -803,7 +802,14 @@ class RiskScorer:
 
         # Time-based risk (after hours)
         # Toggleable after-hours risk
-        if bool(self.suspicious_thresholds.get("after_hours", True)):
+        after_hours_raw = self.suspicious_thresholds.get("after_hours", True)
+        if after_hours_raw is None:
+            after_hours = True
+        elif isinstance(after_hours_raw, str):
+            after_hours = _coerce_bool(after_hours_raw, True)
+        else:
+            after_hours = bool(after_hours_raw)
+        if after_hours:
             hour = event.timestamp.hour
             if hour < 6 or hour > 22:
                 score += 10
@@ -1705,7 +1711,8 @@ class UnifiedAuditService:
                     )
             return self.system_tenant_id
         if lowered == self.unidentified_tenant_id:
-            if context_user_id is not None and str(context_user_id).strip() != "":
+            ctx_val = self._normalize_tenant_value(context_user_id).lower()
+            if ctx_val and ctx_val != self.unidentified_tenant_id:
                 raise ValueError("unidentified tenant id cannot be assigned to a user")
             return self.unidentified_tenant_id
 

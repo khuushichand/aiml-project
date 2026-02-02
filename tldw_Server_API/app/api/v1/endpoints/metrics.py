@@ -64,33 +64,6 @@ async def get_prometheus_metrics() -> Response:
             prometheus_text = (prometheus_text + "\n" + pc_generate_latest(PC_REGISTRY).decode('utf-8')).strip() + "\n"
         except Exception:
             logger.debug("metrics: failed to augment with prometheus_client registry")
-        # Append explicit stage flag gauge lines (best-effort) to satisfy text scrapers
-        try:
-            import tldw_Server_API.app.api.v1.endpoints.embeddings_v5_production_enhanced as _emb
-            # Read current values via gauge collectors if present; otherwise fetch from Redis directly
-            lines = ["# HELP embedding_stage_flag Per-stage control flags as gauges (1=true,0=false)",
-                     "# TYPE embedding_stage_flag gauge"]
-            try:
-                # Prefer Redis source for authoritative values
-                client = await _emb._get_redis_client()
-                for _st in ("chunking", "embedding", "storage"):
-                    p = await client.get(f"embeddings:stage:{_st}:paused")
-                    d = await client.get(f"embeddings:stage:{_st}:drain")
-                    pv = 1.0 if str(p).lower() in ("1","true","yes") else 0.0
-                    dv = 1.0 if str(d).lower() in ("1","true","yes") else 0.0
-                    lines.append(f"embedding_stage_flag{{stage=\"{_st}\",flag=\"paused\"}} {pv}")
-                    lines.append(f"embedding_stage_flag{{stage=\"{_st}\",flag=\"drain\"}} {dv}")
-                try:
-                    await client.close()
-                except Exception:
-                    logger.debug("metrics: failed closing redis client (gauge lines)")
-            except Exception:
-                # Fallback: if Redis unavailable, skip explicit lines
-                lines = []
-            if lines:
-                prometheus_text = (prometheus_text.rstrip("\n") + "\n" + "\n".join(lines) + "\n")
-        except Exception:
-            logger.debug("metrics: failed to append explicit gauge lines")
         return Response(
             content=prometheus_text,
             media_type="text/plain; version=0.0.4",
@@ -232,17 +205,17 @@ async def get_chat_metrics_endpoint() -> Dict[str, Any]:
 
 @router.post(
     "/metrics/reset",
-    summary="Reset metrics (admin only)",
+    summary="Reset registry metrics (admin only)",
     response_model=Dict[str, str],
     dependencies=[Depends(require_roles("admin"))],
 )
 async def reset_metrics() -> Dict[str, str]:
     """
-    Reset all metrics to their initial state.
+    Reset registry-backed metrics to their initial state.
 
-    WARNING: This will clear all historical metrics data.
-    This endpoint should be protected with admin authentication
-    in production.
+    WARNING: This clears in-process registry aggregates only. It does not reset
+    Prometheus client metrics or OpenTelemetry exporters.
+    This endpoint should be protected with admin authentication in production.
     """
     try:
         # Reinitialize metrics
@@ -261,7 +234,7 @@ async def reset_metrics() -> Dict[str, str]:
 
         return {
             "status": "success",
-            "message": "All metrics have been reset"
+            "message": "Registry metrics have been reset"
         }
     except Exception as e:
         logger.error(f"Error resetting metrics: {e}")

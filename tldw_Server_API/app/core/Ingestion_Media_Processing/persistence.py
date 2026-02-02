@@ -23,7 +23,7 @@ from tldw_Server_API.app.core.DB_Management.Media_DB_v2 import (
     MediaDatabase,
 )
 from tldw_Server_API.app.core.Metrics import get_metrics_registry
-from tldw_Server_API.app.core.config import settings
+from tldw_Server_API.app.core.config import settings, loaded_config_data
 from tldw_Server_API.app.core.exceptions import DownloadError, NetworkError, RetryExhaustedError
 from tldw_Server_API.app.core.Ingestion_Media_Processing.chunking_options import (
     prepare_chunking_options_dict,
@@ -62,6 +62,55 @@ def _is_httpx_request_error(exc: Exception) -> bool:
     if not module.startswith("httpx"):
         return False
     return exc.__class__.__name__ in {"HTTPStatusError", "RequestError"}
+
+
+def _document_like_concurrency_limit(default: int = 10) -> int:
+    env_raw = os.getenv("DOCUMENT_LIKE_CONCURRENCY")
+    if env_raw:
+        try:
+            env_val = int(str(env_raw).strip())
+            if env_val > 0:
+                return env_val
+        except Exception:
+            pass
+
+    try:
+        cfg = loaded_config_data.get("media_processing", {}) if loaded_config_data else {}
+    except Exception:
+        cfg = {}
+    cfg_val = None
+    if isinstance(cfg, dict):
+        cfg_val = cfg.get("document_like_concurrency") or cfg.get("doc_like_concurrency")
+    if cfg_val is not None:
+        try:
+            cfg_int = int(str(cfg_val).strip())
+            if cfg_int > 0:
+                return cfg_int
+        except Exception:
+            pass
+    return max(1, int(default))
+
+
+def _classify_upload_error(file_save_errors: List[Dict[str, Any]]) -> Optional[tuple[int, str]]:
+    if not file_save_errors:
+        return None
+    priority = {HTTP_413_TOO_LARGE: 3, status.HTTP_415_UNSUPPORTED_MEDIA_TYPE: 2, status.HTTP_400_BAD_REQUEST: 1}
+    chosen_status = status.HTTP_400_BAD_REQUEST
+    chosen_detail = "File upload failed."
+    for err_info in file_save_errors:
+        error_msg = str(err_info.get("error", "") or "").strip()
+        error_lower = error_msg.lower()
+        if "exceeds maximum allowed size" in error_lower:
+            candidate = (HTTP_413_TOO_LARGE, error_msg or "Uploaded file too large.")
+        elif "not allowed for security reasons" in error_lower:
+            candidate = (status.HTTP_415_UNSUPPORTED_MEDIA_TYPE, error_msg or "Unsupported media type.")
+        elif "empty" in error_lower:
+            candidate = (status.HTTP_400_BAD_REQUEST, error_msg or "Uploaded file content is empty.")
+        else:
+            candidate = (status.HTTP_400_BAD_REQUEST, error_msg or "File upload failed.")
+        if priority.get(candidate[0], 0) > priority.get(chosen_status, 0):
+            chosen_status, chosen_detail = candidate
+    return chosen_status, chosen_detail
 
 
 def _compute_source_hash_safe(
@@ -369,24 +418,7 @@ async def add_media_orchestrate(
                 ),
             )
 
-            # Immediate HTTP errors for specific file failures
-            for err_info in file_save_errors:
-                error_msg = err_info.get("error", "")
-                if "exceeds maximum allowed size" in error_msg:
-                    raise HTTPException(
-                        status_code=HTTP_413_TOO_LARGE,
-                        detail=error_msg,
-                    )
-                if "not allowed for security reasons" in error_msg:
-                    raise HTTPException(
-                        status_code=status.HTTP_415_UNSUPPORTED_MEDIA_TYPE,
-                        detail=error_msg,
-                    )
-                if "empty" in error_msg.lower():
-                    raise HTTPException(
-                        status_code=status.HTTP_400_BAD_REQUEST,
-                        detail=error_msg,
-                    )
+            upload_error_status = _classify_upload_error(file_save_errors)
 
             # Adapt file saving errors to the standard result format
             for err_info in file_save_errors:
@@ -501,9 +533,14 @@ async def add_media_orchestrate(
                     logger.warning(
                         "No valid inputs remaining after file handling errors."
                     )
-                    return JSONResponse(
-                        status_code=status.HTTP_207_MULTI_STATUS,
-                        content={"results": results},
+                    if upload_error_status:
+                        raise HTTPException(
+                            status_code=upload_error_status[0],
+                            detail=upload_error_status[1],
+                        )
+                    raise HTTPException(
+                        status_code=status.HTTP_400_BAD_REQUEST,
+                        detail="File upload failed; no valid media sources found to process.",
                     )
                 logger.error(
                     "No input URLs or successfully saved files found for /media/add."
@@ -612,26 +649,30 @@ async def add_media_orchestrate(
                 results.extend(batch_results)
             else:
                 # PDF / Document / Ebook / Email
-                tasks = [
-                    _process_doc_item_fn(  # type: ignore[misc]
-                        item_input_ref=source_to_ref_map.get(source, source),
-                        processing_source=source,
-                        media_type=form_data.media_type,
-                        is_url=(source in url_list),
-                        form_data=form_data,
-                        chunk_options=chunking_options_dict,
-                        temp_dir=temp_dir_path,
-                        loop=loop,
-                        db_path=db_path_for_workers,
-                        client_id=client_id_for_workers,
-                        user_id=(
-                            current_user.id
-                            if hasattr(current_user, "id")
-                            else None
-                        ),
-                    )
-                    for source in all_valid_input_sources
-                ]
+                doc_like_concurrency = _document_like_concurrency_limit()
+                semaphore = asyncio.Semaphore(doc_like_concurrency)
+
+                async def _run_doc_item(source: str) -> Dict[str, Any]:
+                    async with semaphore:
+                        return await _process_doc_item_fn(  # type: ignore[misc]
+                            item_input_ref=source_to_ref_map.get(source, source),
+                            processing_source=source,
+                            media_type=form_data.media_type,
+                            is_url=(source in url_list),
+                            form_data=form_data,
+                            chunk_options=chunking_options_dict,
+                            temp_dir=temp_dir_path,
+                            loop=loop,
+                            db_path=db_path_for_workers,
+                            client_id=client_id_for_workers,
+                            user_id=(
+                                current_user.id
+                                if hasattr(current_user, "id")
+                                else None
+                            ),
+                        )
+
+                tasks = [_run_doc_item(source) for source in all_valid_input_sources]
                 individual_results = await asyncio.gather(
                     *tasks,
                     return_exceptions=True,

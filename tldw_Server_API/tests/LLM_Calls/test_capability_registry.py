@@ -178,13 +178,12 @@ def test_validate_payload_rejects_invalid_response_format():
     assert "response_format" in str(exc.value).lower()
 
 
-def test_validate_payload_requires_tools_for_tool_choice():
+def test_validate_payload_allows_tool_choice_none_without_tools():
 
 
     payload = {"messages": [], "model": "test", "tool_choice": "none"}
-    with pytest.raises(ChatBadRequestError) as exc:
-        cr.validate_payload("openai", payload)
-    assert "tool_choice requires tools" in str(exc.value)
+    normalized = cr.validate_payload("openai", payload)
+    assert normalized["tool_choice"] == "none"
 
 
 def test_validate_payload_allows_unknown_response_format_type():

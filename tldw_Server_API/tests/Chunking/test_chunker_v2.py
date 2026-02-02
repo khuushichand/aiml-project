@@ -77,7 +77,6 @@ class TestV2Chunker:
             method="words",
             max_size=3,
             overlap=1,
-            align_text_to_source=True,
         )
         assert chunks  # sanity
 
@@ -727,7 +726,7 @@ class TestWordsStrategy:
         assert chunks[0].metadata.index == 0
 
     def test_words_metadata_preserves_offsets_with_whitespace(self):
-        """Offsets should reflect original spacing even when output normalizes whitespace."""
+        """Chunk text should preserve original spacing for source-aligned spans."""
         from tldw_Server_API.app.core.Chunking.strategies.words import WordChunkingStrategy
 
         strategy = WordChunkingStrategy()
@@ -738,17 +737,14 @@ class TestWordsStrategy:
         first = chunks[0]
         second = chunks[1]
 
-        # Chunk text normalizes internal whitespace
-        assert first.text == "Alpha beta"
-        # Offsets should still capture the double space from the original source
-        assert text[first.metadata.start_char : first.metadata.end_char] == "Alpha  beta"
+        first_slice = text[first.metadata.start_char : first.metadata.end_char]
+        assert first.text == first_slice
+        assert "  " in first.text
 
         second_slice = text[second.metadata.start_char : second.metadata.end_char]
         assert "gamma" in second_slice
         assert "delta" in second_slice
-        # Original slice retains the newline separator while normalized chunk text does not
-        assert second_slice != second.text
-        assert " ".join(second_slice.split()) == second.text
+        assert second.text == second_slice
 
     def test_thai_tokenizer_fallback_preserves_newlines(self):
         """Fallback Thai tokenization should keep explicit newlines intact."""
@@ -789,7 +785,7 @@ class TestSentencesStrategy:
         assert "Statement. Another?" in chunks[1]
 
     def test_sentences_metadata_preserves_offsets_with_whitespace(self):
-        """Sentence metadata should map back to original slices with preserved spacing."""
+        """Sentence chunks should preserve original spacing for source-aligned spans."""
         from tldw_Server_API.app.core.Chunking.strategies.sentences import SentenceChunkingStrategy
 
         strategy = SentenceChunkingStrategy()
@@ -799,18 +795,14 @@ class TestSentencesStrategy:
         assert len(chunks) >= 2
         first = chunks[0]
         first_slice = text[first.metadata.start_char : first.metadata.end_char]
-        # Chunk text is normalized, but original slice keeps the blank line and indentation
-        assert first.text == "First sentence. Second sentence!"
         assert first_slice.startswith("First sentence.")
         assert "Second sentence!" in first_slice
-        assert first_slice != first.text
-        assert " ".join(first_slice.split()) == first.text
+        assert first.text == first_slice
 
         second = chunks[1]
         second_slice = text[second.metadata.start_char : second.metadata.end_char]
-        assert " ".join(second_slice.split()).startswith("Second sentence!")
         assert "Third sentence?" in second_slice
-        assert " ".join(second_slice.split()) == second.text
+        assert second.text == second_slice
 
 
 class TestParagraphsStrategy:
@@ -1349,7 +1341,6 @@ def test_paragraph_chunk_with_metadata_offsets_match_source():
         method="paragraphs",
         max_size=2,
         overlap=1,
-        align_text_to_source=True,
     )
     assert results, "Expected paragraph chunks"
     for res in results:
@@ -1395,7 +1386,6 @@ def test_paragraph_chunk_with_crlf_offsets_match_source():
         method="paragraphs",
         max_size=2,
         overlap=1,
-        align_text_to_source=True,
     )
     assert results, "Expected paragraph chunks with CRLF input"
     for res in results:
@@ -1415,7 +1405,6 @@ def test_words_chunk_with_metadata_preserves_offsets_japanese():
         max_size=6,
         overlap=2,
         language="ja",
-        align_text_to_source=True,
     )
     assert chunks, "Expected Japanese word chunks"
     for ch in chunks:
@@ -1435,7 +1424,6 @@ def test_sentences_chunk_with_metadata_no_space_thai():
         max_size=1,
         overlap=0,
         language="th",
-        align_text_to_source=True,
     )
     assert chunks, "Expected Thai sentence chunks"
     for ch in chunks:

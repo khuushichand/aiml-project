@@ -288,13 +288,17 @@ class OpenAIAdapter(ChatProvider):
                         for raw in resp.iter_lines():
                             if not raw:
                                 continue
+                            try:
+                                line = raw.decode("utf-8") if isinstance(raw, (bytes, bytearray)) else str(raw)
+                            except Exception:
+                                line = str(raw)
                             # Canonicalize provider lines to OpenAI-style SSE
-                            if is_done_line(raw):
+                            if is_done_line(line):
                                 if not seen_done:
                                     seen_done = True
                                     yield sse_done()
                                 continue
-                            normalized = normalize_provider_line(raw)
+                            normalized = normalize_provider_line(line)
                             if normalized is not None:
                                 yield normalized
                         # Ensure a single terminal DONE marker

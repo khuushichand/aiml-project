@@ -331,14 +331,16 @@ class SQLiteBackend(DatabaseBackend):
         else:
             conn = self.get_pool().get_connection()
 
+        started = False
         try:
             if not getattr(conn, "in_transaction", False):
                 conn.execute("BEGIN")
+                started = True
             yield conn
-            if getattr(conn, "in_transaction", False):
+            if started and getattr(conn, "in_transaction", False):
                 conn.execute("COMMIT")
         except Exception as e:
-            if getattr(conn, "in_transaction", False):
+            if started and getattr(conn, "in_transaction", False):
                 try:
                     conn.execute("ROLLBACK")
                 except sqlite3.OperationalError:
