@@ -163,6 +163,41 @@ except ImportError:
     CitationGenerator = None
     CitationStyle = None
 
+# Dynamic granularity routing
+try:
+    from .granularity_router import GranularityRouter, GranularityDecision, route_query_granularity
+    from .types import QueryType, Granularity
+except ImportError:
+    GranularityRouter = None
+    GranularityDecision = None
+    route_query_granularity = None
+    QueryType = None
+    Granularity = None
+
+# Progressive evidence accumulation
+try:
+    from .evidence_accumulator import EvidenceAccumulator, AccumulationResult, accumulate_evidence
+except ImportError:
+    EvidenceAccumulator = None
+    AccumulationResult = None
+    accumulate_evidence = None
+
+# Multi-hop evidence chains
+try:
+    from .evidence_chains import EvidenceChainBuilder, ChainBuildResult, build_evidence_chains
+except ImportError:
+    EvidenceChainBuilder = None
+    ChainBuildResult = None
+    build_evidence_chains = None
+
+# Self-Correcting RAG: Document Grading (Stage 1)
+try:
+    from .document_grader import DocumentGrader, GradingConfig, grade_and_filter_documents
+except ImportError:
+    DocumentGrader = None
+    GradingConfig = None
+    grade_and_filter_documents = None
+
 try:
     from .generation import AnswerGenerator
 except ImportError:
@@ -501,6 +536,51 @@ async def unified_rag_pipeline(
     numeric_precision_mode: Literal["standard", "strict", "academic"] = "standard",
     doc_only_verification: bool = False,
     generate_verification_report: bool = False,
+
+    # ========== DOC-RESEARCHER FEATURES ==========
+    # Dynamic granularity selection
+    enable_dynamic_granularity: bool = False,
+    # Progressive evidence accumulation
+    enable_evidence_accumulation: bool = False,
+    accumulation_max_rounds: int = 3,
+    accumulation_time_budget_sec: Optional[float] = None,
+    # Multi-hop evidence chains
+    enable_evidence_chains: bool = False,
+
+    # ========== SELF-CORRECTING RAG ==========
+    # Stage 1: Document Grading - filter documents by LLM-assessed relevance
+    enable_document_grading: bool = False,
+    grading_threshold: float = 0.5,
+    grading_model: Optional[str] = None,
+    grading_provider: Optional[str] = None,
+    grading_batch_size: int = 5,
+    grading_timeout_sec: float = 30.0,
+    grading_fallback_to_score: bool = True,
+    # Stage 2: Query Rewriting Loop - rewrite query when grading shows low relevance
+    enable_query_rewriting_loop: bool = False,
+    max_rewrite_attempts: int = 2,
+    rewrite_relevance_threshold: float = 0.3,
+    # Stage 3: Web Search Fallback - fall back to web search when local retrieval fails
+    enable_web_fallback: bool = False,
+    web_fallback_threshold: float = 0.25,
+    web_search_engine: str = "duckduckgo",
+    web_fallback_result_count: int = 5,
+    web_fallback_merge_strategy: Literal["prepend", "append", "interleave"] = "prepend",
+    # Stage 4: Knowledge Strips - partition documents into semantic units
+    enable_knowledge_strips: bool = False,
+    strip_size_tokens: int = 100,
+    strip_min_relevance: float = 0.3,
+    max_strips: int = 20,
+    # Stage 5: Fast Hallucination Check - lightweight groundedness check
+    enable_fast_hallucination_check: bool = False,
+    fast_hallucination_timeout_sec: float = 5.0,
+    fast_hallucination_provider: Optional[str] = None,
+    fast_hallucination_model: Optional[str] = None,
+    # Stage 6: Utility Grading - rate response usefulness
+    enable_utility_grading: bool = False,
+    utility_grading_timeout_sec: float = 5.0,
+    utility_grading_provider: Optional[str] = None,
+    utility_grading_model: Optional[str] = None,
 
     # ========== BATCH PROCESSING ==========
     enable_batch: bool = False,
@@ -958,6 +1038,53 @@ async def unified_rag_pipeline(
                 }
             except Exception as e:
                 result.errors.append(f"Intent routing failed: {e}")
+
+        # ========== DYNAMIC GRANULARITY ROUTING ==========
+        granularity_decision = None
+        if enable_dynamic_granularity and GranularityRouter and route_query_granularity:
+            try:
+                granularity_start = time.time()
+                granularity_decision = route_query_granularity(query)
+
+                # Apply granularity-specific retrieval parameters
+                if granularity_decision:
+                    params = granularity_decision.retrieval_params
+                    # Override top_k if not explicitly set by user
+                    if "top_k" in params:
+                        top_k = params["top_k"]
+                    # Override fts_level
+                    if "fts_level" in params:
+                        fts_level = params["fts_level"]
+                    # Override parent expansion settings
+                    if params.get("enable_parent_expansion"):
+                        enable_parent_expansion = True
+                        if "parent_context_size" in params:
+                            parent_context_size = params["parent_context_size"]
+                    if params.get("include_parent_document"):
+                        include_parent_document = True
+                        if "parent_max_tokens" in params:
+                            parent_max_tokens = params["parent_max_tokens"]
+                    # Override multi-vector passages
+                    if params.get("enable_multi_vector_passages"):
+                        enable_multi_vector_passages = True
+                        if "mv_span_chars" in params:
+                            mv_span_chars = params["mv_span_chars"]
+                        if "mv_stride" in params:
+                            mv_stride = params["mv_stride"]
+                        if "mv_max_spans" in params:
+                            mv_max_spans = params["mv_max_spans"]
+
+                    result.metadata["granularity_routing"] = {
+                        "query_type": granularity_decision.query_type.value,
+                        "granularity": granularity_decision.granularity.value,
+                        "confidence": granularity_decision.confidence,
+                        "reasoning": granularity_decision.reasoning,
+                    }
+
+                result.timings["granularity_routing"] = time.time() - granularity_start
+            except Exception as e:
+                result.errors.append(f"Granularity routing failed: {e}")
+                logger.warning(f"Granularity routing error: {e}")
 
         # ========== CACHE CHECK ==========
         cached_documents = None
@@ -2191,6 +2318,77 @@ async def unified_rag_pipeline(
                 result.errors.append(f"VLM late-chunking failed: {e}")
                 logger.warning(f"VLM late-chunking failed: {e}")
 
+        # ========== PROGRESSIVE EVIDENCE ACCUMULATION ==========
+        if enable_evidence_accumulation and result.documents and EvidenceAccumulator:
+            accumulation_start = time.time()
+            try:
+                accumulator = EvidenceAccumulator(
+                    max_rounds=accumulation_max_rounds,
+                    enable_gap_assessment=True,
+                )
+
+                # Create retrieval function for additional rounds
+                async def _additional_retrieval(gap_query: str, exclude_ids: set):
+                    if not (MultiDatabaseRetriever and RetrievalConfig):
+                        return []
+                    try:
+                        # Reuse the same retriever setup
+                        db_paths = {}
+                        if media_db_path:
+                            db_paths["media_db"] = media_db_path
+                        if notes_db_path:
+                            db_paths["notes_db"] = notes_db_path
+                        if character_db_path:
+                            db_paths["character_cards_db"] = character_db_path
+
+                        retriever = MultiDatabaseRetriever(
+                            db_paths,
+                            user_id=user_id or "0",
+                            media_db=media_db,
+                            chacha_db=chacha_db,
+                        )
+                        config = RetrievalConfig(
+                            max_results=top_k,
+                            min_score=min_score,
+                            use_fts=(search_mode in ["fts", "hybrid"]),
+                            use_vector=(search_mode in ["vector", "hybrid"]),
+                            include_metadata=True,
+                            fts_level=fts_level,
+                        )
+                        new_docs = await retriever.retrieve(
+                            query=gap_query,
+                            sources=[DataSource.MEDIA_DB],
+                            config=config,
+                            index_namespace=index_namespace,
+                        )
+                        # Filter out already-seen documents
+                        return [d for d in new_docs if d.id not in exclude_ids]
+                    except Exception as e:
+                        logger.warning(f"Additional retrieval failed: {e}")
+                        return []
+
+                accumulation_result = await accumulator.accumulate(
+                    query=query,
+                    initial_results=result.documents,
+                    retrieval_fn=_additional_retrieval,
+                    time_budget_sec=accumulation_time_budget_sec,
+                )
+
+                # Update documents with accumulated results
+                result.documents = accumulation_result.documents
+                result.metadata["evidence_accumulation"] = {
+                    "total_rounds": accumulation_result.total_rounds,
+                    "is_sufficient": accumulation_result.is_sufficient,
+                    "sufficiency_reason": accumulation_result.sufficiency_reason,
+                    "initial_docs": accumulation_result.metadata.get("initial_docs", 0),
+                    "final_docs": len(accumulation_result.documents),
+                    "docs_added": accumulation_result.metadata.get("docs_added", 0),
+                }
+                result.timings["evidence_accumulation"] = time.time() - accumulation_start
+
+            except Exception as e:
+                result.errors.append(f"Evidence accumulation failed: {e}")
+                logger.warning(f"Evidence accumulation error: {e}")
 
         # Apply personalization priors (pre-rerank) if requested
         try:
@@ -2202,6 +2400,75 @@ async def unified_rag_pipeline(
             logger.debug(f"Personalization boost disabled for user_id={feedback_user_id or user_id}: {exc}")
         except Exception:
             pass
+
+        # ========== SELF-CORRECTING RAG: DOCUMENT GRADING (Stage 1) ==========
+        # Grade documents for relevance BEFORE expensive reranking/generation
+        if enable_document_grading and result.documents and DocumentGrader:
+            grading_start = time.time()
+            try:
+                grading_config = GradingConfig(
+                    provider=grading_provider or "openai",
+                    model=grading_model,
+                    batch_size=grading_batch_size,
+                    timeout_seconds=grading_timeout_sec,
+                    fallback_to_score=grading_fallback_to_score,
+                )
+                grader = DocumentGrader(config=grading_config)
+
+                filtered_docs, grading_metadata = await grader.filter_relevant(
+                    query=query,
+                    documents=result.documents,
+                    threshold=grading_threshold,
+                    provider=grading_provider,
+                    model=grading_model,
+                )
+
+                # Store grading metadata
+                result.metadata["document_grading"] = {
+                    "enabled": True,
+                    "threshold": grading_threshold,
+                    "total_graded": grading_metadata.get("total_graded", 0),
+                    "relevant_count": grading_metadata.get("relevant_count", 0),
+                    "filtered_count": grading_metadata.get("filtered_count", 0),
+                    "removed_count": grading_metadata.get("removed_count", 0),
+                    "avg_relevance": grading_metadata.get("avg_relevance", 0.0),
+                    "grading_latency_ms": grading_metadata.get("total_latency_ms", 0),
+                }
+
+                # Check if we should trigger query rewriting loop (Stage 2)
+                avg_relevance = grading_metadata.get("avg_relevance", 0.0)
+                if enable_query_rewriting_loop and avg_relevance < rewrite_relevance_threshold:
+                    result.metadata["document_grading"]["low_relevance_detected"] = True
+                    result.metadata["document_grading"]["will_rewrite"] = True
+
+                # Update documents with filtered set
+                if filtered_docs:
+                    result.documents = filtered_docs
+                else:
+                    # If no documents passed grading, keep original for fallback
+                    result.metadata["document_grading"]["fallback_to_original"] = True
+                    logger.warning(f"No documents passed grading threshold {grading_threshold}, keeping originals")
+
+                result.timings["document_grading"] = time.time() - grading_start
+
+                # --- OTEL span for document grading ---
+                if enable_observability and get_telemetry_manager:
+                    try:
+                        _tm = get_telemetry_manager()
+                        _tr = _tm.get_tracer("tldw.rag")
+                        with _tr.start_as_current_span("rag.document_grading") as _span:
+                            _span.set_attribute("rag.phase", "document_grading")
+                            _span.set_attribute("rag.grading_threshold", grading_threshold)
+                            _span.set_attribute("rag.docs_graded", grading_metadata.get("total_graded", 0))
+                            _span.set_attribute("rag.docs_passed", grading_metadata.get("filtered_count", 0))
+                            _span.set_attribute("rag.avg_relevance", avg_relevance)
+                    except Exception:
+                        pass
+
+            except Exception as e:
+                result.errors.append(f"Document grading failed: {e}")
+                logger.warning(f"Document grading error: {e}")
+                result.metadata["document_grading"] = {"enabled": True, "error": str(e)}
 
         # ========== RERANKING ==========
         if enable_reranking and result.documents and reranking_strategy != "none":
@@ -2588,6 +2855,37 @@ async def unified_rag_pipeline(
             except Exception as e:
                 result.errors.append(f"Citation generation failed: {str(e)}")
                 logger.error(f"Citation error: {e}")
+
+        # ========== EVIDENCE CHAINS (before generation for chain-aware citations) ==========
+        evidence_chain_result = None
+        if enable_evidence_chains and result.documents and EvidenceChainBuilder:
+            chain_start = time.time()
+            try:
+                chain_builder = EvidenceChainBuilder(
+                    enable_llm_extraction=True,
+                )
+
+                # Build chains - note: we don't have the answer yet, so chains are built from docs
+                # This will be re-run after generation if needed for claim extraction
+                evidence_chain_result = await chain_builder.build_chains(
+                    query=query,
+                    documents=result.documents,
+                    generated_answer=None,  # Will be updated post-generation
+                )
+
+                if evidence_chain_result:
+                    result.metadata["evidence_chains"] = {
+                        "total_chains": len(evidence_chain_result.chains),
+                        "overall_confidence": evidence_chain_result.overall_confidence,
+                        "multi_hop_detected": evidence_chain_result.multi_hop_detected,
+                        "total_nodes": evidence_chain_result.metadata.get("total_nodes", 0),
+                    }
+
+                result.timings["evidence_chains"] = time.time() - chain_start
+
+            except Exception as e:
+                result.errors.append(f"Evidence chain building failed: {e}")
+                logger.warning(f"Evidence chains error: {e}")
 
         # ========== ANSWER GENERATION ==========
         # Honor reranking calibration gating if present (e.g., TwoTier strategy)
@@ -3522,6 +3820,48 @@ async def unified_rag_pipeline(
             # Non-fatal: log and continue
             result.errors.append(f"Post-verification failed: {str(e)}")
             logger.warning(f"Post-verification error: {e}")
+
+        # ========== POST-GENERATION EVIDENCE CHAINS UPDATE ==========
+        # Now that we have the generated answer, rebuild evidence chains with claim extraction
+        if enable_evidence_chains and result.generated_answer and result.documents and EvidenceChainBuilder:
+            try:
+                chain_builder = EvidenceChainBuilder(enable_llm_extraction=True)
+
+                # Rebuild chains with the generated answer for claim extraction
+                evidence_chain_result = await chain_builder.build_chains(
+                    query=query,
+                    documents=result.documents,
+                    generated_answer=result.generated_answer,
+                )
+
+                if evidence_chain_result:
+                    # Update metadata with full chain information
+                    chains_data = []
+                    for chain in evidence_chain_result.chains:
+                        chains_data.append({
+                            "hop_count": chain.hop_count,
+                            "chain_confidence": chain.chain_confidence,
+                            "source_documents": chain.get_source_documents(),
+                            "root_claims": chain.root_claims,
+                            "nodes_count": len(chain.nodes),
+                        })
+
+                    result.metadata["evidence_chains"] = {
+                        "total_chains": len(evidence_chain_result.chains),
+                        "overall_confidence": evidence_chain_result.overall_confidence,
+                        "multi_hop_detected": evidence_chain_result.multi_hop_detected,
+                        "total_claims": evidence_chain_result.metadata.get("total_claims", 0),
+                        "supported_claims": evidence_chain_result.metadata.get("supported_claims", 0),
+                        "chains": chains_data[:5],  # Include top 5 chains
+                    }
+
+                    # Optionally include full chain data for debugging
+                    if debug_mode:
+                        result.metadata["evidence_chains_full"] = evidence_chain_result.to_dict()
+
+            except Exception as e:
+                result.errors.append(f"Post-generation evidence chain update failed: {e}")
+                logger.debug(f"Evidence chain update error: {e}")
 
         # ========== USER FEEDBACK ==========
         if collect_feedback:

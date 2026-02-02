@@ -21,6 +21,20 @@ class DataSource(Enum):
     CLAIMS = "claims"  # Claims table/vector store
 
 
+class QueryType(Enum):
+    """Classification of query types for granularity routing."""
+    BROAD = "broad"          # Overview/summary queries - use document-level
+    SPECIFIC = "specific"    # Detail queries - use chunk-level
+    FACTOID = "factoid"      # Precise fact queries - use passage-level
+
+
+class Granularity(Enum):
+    """Retrieval granularity levels."""
+    DOCUMENT = "document"    # Full document retrieval
+    CHUNK = "chunk"          # Chunk-level retrieval (default)
+    PASSAGE = "passage"      # Fine-grained passage retrieval
+
+
 class CitationType(Enum):
     """Type of citation match."""
     EXACT = "exact"          # Exact phrase match
@@ -395,6 +409,113 @@ class GenerationStrategy(ABC):
             Generated response
         """
         pass
+
+
+# Evidence Chain Types for Multi-Hop Reasoning
+
+@dataclass
+class EvidenceNode:
+    """
+    A node in an evidence chain representing a single fact from a source.
+
+    Tracks the relationship between a source document, the fact extracted,
+    and which claims this fact supports.
+    """
+    document_id: str
+    chunk_id: str
+    fact: str
+    confidence: float
+    supports: List[str] = field(default_factory=list)  # Claim IDs this fact supports
+    source_text: str = ""  # Original text from which fact was extracted
+    extraction_method: str = "llm"  # "llm", "pattern", "keyword"
+    metadata: Dict[str, Any] = field(default_factory=dict)
+
+    def __post_init__(self):
+        """Validate node data."""
+        if self.confidence < 0 or self.confidence > 1:
+            raise ValueError(f"Confidence must be between 0 and 1, got {self.confidence}")
+
+    def to_dict(self) -> Dict[str, Any]:
+        """Convert to dictionary for serialization."""
+        return {
+            "document_id": self.document_id,
+            "chunk_id": self.chunk_id,
+            "fact": self.fact,
+            "confidence": self.confidence,
+            "supports": self.supports,
+            "source_text": self.source_text[:200] if self.source_text else "",
+            "extraction_method": self.extraction_method,
+            "metadata": self.metadata,
+        }
+
+
+@dataclass
+class EvidenceChain:
+    """
+    A chain of evidence nodes supporting claims in a response.
+
+    Tracks dependencies between evidence nodes and computes aggregate
+    confidence scores for the chain.
+    """
+    query: str
+    nodes: List[EvidenceNode] = field(default_factory=list)
+    root_claims: List[str] = field(default_factory=list)  # Top-level claims being supported
+    chain_confidence: float = 0.0  # Aggregate confidence (product of node confidences)
+    hop_count: int = 0  # Number of reasoning hops in the chain
+    metadata: Dict[str, Any] = field(default_factory=dict)
+
+    def __post_init__(self):
+        """Compute chain statistics after initialization."""
+        self._compute_chain_confidence()
+        self._compute_hop_count()
+
+    def _compute_chain_confidence(self) -> None:
+        """Compute aggregate chain confidence as product of node confidences."""
+        if not self.nodes:
+            self.chain_confidence = 0.0
+            return
+
+        # Use product of confidences (conservative estimate)
+        confidence = 1.0
+        for node in self.nodes:
+            confidence *= node.confidence
+        self.chain_confidence = confidence
+
+    def _compute_hop_count(self) -> None:
+        """Compute the number of reasoning hops in the chain."""
+        if not self.nodes:
+            self.hop_count = 0
+            return
+
+        # Count unique documents involved
+        unique_docs = set(node.document_id for node in self.nodes)
+        self.hop_count = len(unique_docs)
+
+    def add_node(self, node: EvidenceNode) -> None:
+        """Add a node to the chain and recompute statistics."""
+        self.nodes.append(node)
+        self._compute_chain_confidence()
+        self._compute_hop_count()
+
+    def get_nodes_for_claim(self, claim_id: str) -> List[EvidenceNode]:
+        """Get all nodes that support a specific claim."""
+        return [n for n in self.nodes if claim_id in n.supports]
+
+    def get_source_documents(self) -> List[str]:
+        """Get unique list of source document IDs."""
+        return list(set(node.document_id for node in self.nodes))
+
+    def to_dict(self) -> Dict[str, Any]:
+        """Convert to dictionary for serialization."""
+        return {
+            "query": self.query,
+            "nodes": [n.to_dict() for n in self.nodes],
+            "root_claims": self.root_claims,
+            "chain_confidence": self.chain_confidence,
+            "hop_count": self.hop_count,
+            "source_documents": self.get_source_documents(),
+            "metadata": self.metadata,
+        }
 
 
 # Exceptions

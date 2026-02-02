@@ -21,7 +21,7 @@ import numpy as np
 from loguru import logger
 from tldw_Server_API.app.core.Metrics import get_metrics_registry
 
-from .types import Document, Citation, CitationType
+from .types import Document, Citation, CitationType, EvidenceChain, EvidenceNode
 
 
 class CitationStyle(Enum):
@@ -729,6 +729,125 @@ class CitationGenerator:
                 lines.append("")
 
         return "\n".join(lines)
+
+    def link_citations_to_chain(
+        self,
+        citations: DualCitationResult,
+        chain: EvidenceChain,
+    ) -> DualCitationResult:
+        """
+        Link citations to an evidence chain for multi-hop transparency.
+
+        Args:
+            citations: The citation results
+            chain: Evidence chain to link
+
+        Returns:
+            Updated DualCitationResult with chain information
+        """
+        if not chain or not chain.nodes:
+            return citations
+
+        # Build a mapping of document IDs to chain nodes
+        doc_to_nodes = {}
+        for node in chain.nodes:
+            if node.document_id not in doc_to_nodes:
+                doc_to_nodes[node.document_id] = []
+            doc_to_nodes[node.document_id].append(node)
+
+        # Update chunk citations with chain info
+        for chunk_cite in citations.chunk_citations:
+            doc_id = chunk_cite.source_document_id
+            if doc_id in doc_to_nodes:
+                nodes = doc_to_nodes[doc_id]
+                # Add chain metadata to the citation
+                chunk_cite.usage_context = self._enhance_usage_context(
+                    chunk_cite.usage_context,
+                    nodes,
+                    chain,
+                )
+
+        return citations
+
+    def _enhance_usage_context(
+        self,
+        current_context: str,
+        nodes: list,
+        chain: EvidenceChain,
+    ) -> str:
+        """Enhance usage context with chain information."""
+        facts = [n.fact[:50] + "..." if len(n.fact) > 50 else n.fact for n in nodes[:2]]
+        claims_supported = set()
+        for n in nodes:
+            claims_supported.update(n.supports)
+
+        chain_info = []
+        if chain.hop_count > 1:
+            chain_info.append(f"Multi-hop evidence ({chain.hop_count} sources)")
+        if claims_supported:
+            chain_info.append(f"Supports {len(claims_supported)} claim(s)")
+        if facts:
+            chain_info.append(f"Key facts: {'; '.join(facts)}")
+
+        if chain_info:
+            return f"{current_context}. {'. '.join(chain_info)}"
+        return current_context
+
+    async def generate_citations_with_chains(
+        self,
+        documents: List[Document],
+        query: str = "",
+        generated_answer: Optional[str] = None,
+        style: CitationStyle = CitationStyle.MLA,
+        include_chunks: bool = True,
+        max_citations: int = 10,
+    ) -> Tuple[DualCitationResult, Optional[Any]]:
+        """
+        Generate citations with evidence chain building.
+
+        Args:
+            documents: Documents to generate citations from
+            query: The search query
+            generated_answer: The generated answer for claim extraction
+            style: Academic citation style
+            include_chunks: Whether to include chunk-level citations
+            max_citations: Maximum number of citations
+
+        Returns:
+            Tuple of (DualCitationResult, ChainBuildResult or None)
+        """
+        # Generate base citations
+        citations = await self.generate_citations(
+            documents=documents,
+            query=query,
+            style=style,
+            include_chunks=include_chunks,
+            max_citations=max_citations,
+        )
+
+        # Try to build evidence chains
+        chain_result = None
+        try:
+            from .evidence_chains import EvidenceChainBuilder
+
+            builder = EvidenceChainBuilder()
+            chain_result = await builder.build_chains(
+                query=query,
+                documents=documents,
+                generated_answer=generated_answer,
+            )
+
+            # Link citations to chains
+            if chain_result and chain_result.chains:
+                for chain in chain_result.chains:
+                    citations = self.link_citations_to_chain(citations, chain)
+
+        except ImportError:
+            logger.debug("Evidence chains module not available")
+        except Exception as e:
+            logger.warning(f"Evidence chain building failed: {e}")
+
+        return citations, chain_result
 
 
 # Pipeline integration function
