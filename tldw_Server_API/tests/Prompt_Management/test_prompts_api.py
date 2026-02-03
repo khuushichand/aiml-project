@@ -2,6 +2,7 @@
 # Description: Extensive integration tests for the Prompts API.
 #
 # Imports
+import asyncio
 from datetime import datetime, timezone
 import urllib.parse
 import pytest
@@ -206,7 +207,7 @@ def client_env_setup(tmp_path: Path, monkeypatch, test_user_instance: User):
     # Teardown: remove overrides
     del fastapi_app.dependency_overrides[get_request_user]
     if callable(close_all_cached_prompts_db_instances):
-        close_all_cached_prompts_db_instances()
+        asyncio.run(close_all_cached_prompts_db_instances())
 
 
 @pytest.fixture(scope="function")
@@ -251,7 +252,7 @@ def client(test_user: User, test_api_token: str, tmp_path: Path, monkeypatch):
         yield test_client_instance
     finally:
         fastapi_app.dependency_overrides = original_overrides
-        close_all_cached_prompts_db_instances()
+        asyncio.run(close_all_cached_prompts_db_instances())
         if original_user_db_base_dir_in_settings is not None:
             monkeypatch.setitem(settings, "USER_DB_BASE_DIR", original_user_db_base_dir_in_settings)
         else:
@@ -299,7 +300,7 @@ def client_with_auth(tmp_path: Path, monkeypatch, test_user_instance: User, actu
         monkeypatch.setitem(settings, "SINGLE_USER_MODE", original_single_user_mode)
 
     if callable(close_all_cached_prompts_db_instances):
-        close_all_cached_prompts_db_instances()
+        asyncio.run(close_all_cached_prompts_db_instances())
 
 
 @pytest.fixture

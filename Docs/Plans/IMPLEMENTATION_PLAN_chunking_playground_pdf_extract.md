@@ -7,7 +7,7 @@
 **Tests**:
 - New integration tests for `/api/v1/media/process-pdfs` response shape (success + error cases).
 - If OCR engine selection is added, test single engine selection and invalid engine handling.
-**Status**: Not Started
+**Status**: Complete
 
 **File-by-file tasks**:
 - `tldw_Server_API/app/api/v1/endpoints/media/process_pdfs.py`
@@ -32,7 +32,7 @@
 - Existing clients continue to work without changes.
 **Tests**:
 - Unit/integration test validating schema shape and presence of required fields.
-**Status**: Not Started
+**Status**: Complete
 
 **File-by-file tasks**:
 - `tldw_Server_API/app/api/v1/endpoints/chunking.py`
@@ -51,7 +51,7 @@
 **Tests**:
 - Component tests for PDF input flow and split view rendering.
 - Smoke test for `/chunking-playground` page.
-**Status**: Not Started
+**Status**: Complete
 
 **File-by-file tasks**:
 - `apps/packages/ui/src/components/Option/ChunkingPlayground/index.tsx`
@@ -76,7 +76,7 @@
 **Tests**:
 - UI test for OCR engine selection control.
 - Integration test for multi-engine request behavior (if implemented).
-**Status**: Not Started
+**Status**: Not Started (Optional)
 
 **File-by-file tasks**:
 - `apps/packages/ui/src/components/Option/ChunkingPlayground/index.tsx`

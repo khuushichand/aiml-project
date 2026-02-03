@@ -114,8 +114,10 @@ function parseNumber(value: unknown): number | undefined {
   if (value === undefined || value === null) return undefined
   if (typeof value === "number" && Number.isFinite(value)) return value
   if (typeof value === "string") {
-    const parsed = Number(value.replace(/[^\d.]/g, ""))
-    if (!Number.isNaN(parsed)) return parsed
+    const cleaned = value.replace(/[^\d.]/g, "")
+    if (!cleaned) return undefined
+    const parsed = Number(cleaned)
+    if (Number.isFinite(parsed)) return parsed
   }
   return undefined
 }

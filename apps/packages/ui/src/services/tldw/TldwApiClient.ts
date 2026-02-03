@@ -1124,6 +1124,7 @@ export class TldwApiClient {
         uploadTimeoutMs = cfgTimeout
       }
     }
+    uploadTimeoutMs = Math.max(uploadTimeoutMs, 5000)
     return await bgUpload<any>({
       path: '/api/v1/media/add',
       method: 'POST',
@@ -1366,7 +1367,8 @@ export class TldwApiClient {
     }>({
       path: `/api/v1/media/${id}/references?enrich=${enrich}`,
       method: "GET",
-      abortSignal: options?.signal
+      abortSignal: options?.signal,
+      timeoutMs: 45000
     })
   }
 

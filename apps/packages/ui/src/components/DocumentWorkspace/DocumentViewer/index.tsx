@@ -146,6 +146,15 @@ export const DocumentViewer: React.FC<DocumentViewerProps> = ({
       reloadAttemptsRef.current.set(activeDocumentId, attempts + 1)
       reloadInFlightRef.current.add(activeDocumentId)
       Promise.resolve(onReloadDocument(activeDocumentId, type))
+        .catch((reloadError) => {
+          console.error("Failed to reload document:", reloadError)
+          const prevAttempts = reloadAttemptsRef.current.get(activeDocumentId) ?? 0
+          if (prevAttempts <= 1) {
+            reloadAttemptsRef.current.delete(activeDocumentId)
+          } else {
+            reloadAttemptsRef.current.set(activeDocumentId, prevAttempts - 1)
+          }
+        })
         .finally(() => {
           reloadInFlightRef.current.delete(activeDocumentId)
         })
@@ -226,7 +235,7 @@ export const DocumentViewer: React.FC<DocumentViewerProps> = ({
   }
 
   return (
-    <div className={`flex h-full flex-col ${className || ""}`}>
+    <div className={`flex h-full min-h-0 flex-col ${className || ""}`}>
       <ViewerToolbar
         currentPage={currentPage}
         totalPages={totalPages}
@@ -240,7 +249,7 @@ export const DocumentViewer: React.FC<DocumentViewerProps> = ({
         onPreviousPage={goToPreviousPage}
         onNextPage={goToNextPage}
       />
-      <div className="relative min-h-0 flex-1 overflow-auto bg-neutral-200 dark:bg-neutral-800">
+      <div className="relative min-h-0 flex-1 overflow-hidden bg-neutral-200 dark:bg-neutral-800">
         {activeDocumentType === "pdf" && (
           <PdfSearch pdfDocumentRef={pdfDocumentRef} />
         )}

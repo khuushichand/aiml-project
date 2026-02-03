@@ -26,7 +26,7 @@ def _sanitize_validation_errors(exc: ValidationError) -> list[dict[str, Any]]:
         err = error.copy()
         loc = list(err.get("loc") or [])
         if loc and loc[0] != "body":
-            loc = ["body"] + loc
+            loc = ["body", *loc]
         elif not loc:
             loc = ["body"]
         err["loc"] = loc

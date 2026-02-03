@@ -98,7 +98,9 @@
     "xlsx": "^0.18.5",
     "zod": "^4.2.1",
     "zustand": "^5.0.10",
-    "react-joyride": "^2.9.0"
+    "react-joyride": "^2.9.0",
+    "xterm": "^5.5.0",
+    "xterm-addon-fit": "^0.8.0"
   },
   "devDependencies": {
     "@eslint/eslintrc": "^3.3.3",

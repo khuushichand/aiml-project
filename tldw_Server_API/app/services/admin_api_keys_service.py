@@ -184,32 +184,22 @@ async def list_virtual_keys(
     status_filter: str | None,
     org_id: int | None,
     team_id: int | None,
-    created_after: str | None,
-    created_before: str | None,
+    created_after: datetime | None,
+    created_before: datetime | None,
     is_pg_fn: Callable[[], Awaitable[bool]],
 ) -> list[APIKeyMetadata]:
     try:
         await admin_scope_service.enforce_admin_user_scope(principal, user_id, require_hierarchy=False)
 
-        def _parse_iso_ts(value: str, field_name: str) -> datetime:
-            raw = value.strip()
-            if raw.endswith("Z"):
-                raw = raw[:-1] + "+00:00"
-            try:
-                dt = datetime.fromisoformat(raw)
-            except ValueError as exc:
-                raise HTTPException(
-                    status_code=status.HTTP_400_BAD_REQUEST,
-                    detail=f"{field_name} must be ISO-8601 timestamp",
-                ) from exc
-            if dt.tzinfo is None:
-                dt = dt.replace(tzinfo=timezone.utc)
-            return dt.astimezone(timezone.utc)
+        def _normalize_ts(value: datetime) -> datetime:
+            if value.tzinfo is None:
+                return value.replace(tzinfo=timezone.utc)
+            return value.astimezone(timezone.utc)
 
         name_filter = name.strip() if isinstance(name, str) and name.strip() else None
         status_filter = status_filter.strip() if isinstance(status_filter, str) and status_filter.strip() else None
-        created_after_dt = _parse_iso_ts(created_after, "created_after") if created_after else None
-        created_before_dt = _parse_iso_ts(created_before, "created_before") if created_before else None
+        created_after_dt = _normalize_ts(created_after) if created_after else None
+        created_before_dt = _normalize_ts(created_before) if created_before else None
         if created_after_dt and created_before_dt and created_after_dt > created_before_dt:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,

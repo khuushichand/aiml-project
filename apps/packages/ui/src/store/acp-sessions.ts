@@ -121,6 +121,10 @@ interface SessionsActions {
   updateSessionTags: (sessionId: string, tags: string[]) => void
   /** Set session capabilities */
   setSessionCapabilities: (sessionId: string, capabilities: Record<string, unknown>) => void
+  /** Update session metadata */
+  updateSessionMetadata: (sessionId: string, metadata: Partial<Pick<ACPSession, "sandboxSessionId" | "sandboxRunId" | "sshWsUrl" | "sshUser">>) => void
+  /** Replace a local session id with the server session id */
+  replaceSessionId: (localSessionId: string, serverSessionId: string, updates?: Partial<ACPSession>) => void
   /** Add an update to a session */
   addUpdate: (sessionId: string, update: Omit<ACPUpdate, "timestamp">) => void
   /** Add a pending permission */
@@ -192,6 +196,10 @@ export const useACPSessionsStore = createWithEqualityFn<ACPSessionsStore>()(
           mcpServers: options.mcpServers,
           state: "disconnected",
           capabilities: undefined,
+          sandboxSessionId: null,
+          sandboxRunId: null,
+          sshWsUrl: null,
+          sshUser: null,
           updates: [],
           pendingPermissions: [],
           createdAt: now,
@@ -256,6 +264,47 @@ export const useACPSessionsStore = createWithEqualityFn<ACPSessionsStore>()(
                 updatedAt: new Date(),
               },
             },
+          }
+        })
+      },
+
+      updateSessionMetadata: (sessionId: string, metadata) => {
+        set((state) => {
+          const session = state.sessions[sessionId]
+          if (!session) return state
+
+          return {
+            sessions: {
+              ...state.sessions,
+              [sessionId]: {
+                ...session,
+                ...metadata,
+                updatedAt: new Date(),
+              },
+            },
+          }
+        })
+      },
+
+      replaceSessionId: (localSessionId: string, serverSessionId: string, updates) => {
+        set((state) => {
+          const session = state.sessions[localSessionId]
+          if (!session) return state
+
+          const updated: ACPSession = {
+            ...session,
+            ...updates,
+            id: serverSessionId,
+            updatedAt: new Date(),
+          }
+
+          const sessions = { ...state.sessions }
+          delete sessions[localSessionId]
+          sessions[serverSessionId] = updated
+
+          return {
+            sessions,
+            activeSessionId: serverSessionId,
           }
         })
       },

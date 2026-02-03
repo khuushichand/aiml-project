@@ -56,7 +56,18 @@ const TocEntry: React.FC<TocEntryProps> = ({
   const showPageNumber = documentType === "pdf"
 
   return (
-    <div role="treeitem" aria-expanded={hasChildren ? expanded : undefined}>
+    <div
+      role="treeitem"
+      aria-expanded={hasChildren ? expanded : undefined}
+      aria-current={isActive ? "page" : undefined}
+      tabIndex={0}
+      onKeyDown={(e) => {
+        if (e.key === "Enter" || e.key === " ") {
+          e.preventDefault()
+          onNavigate(item.page, item.href)
+        }
+      }}
+    >
       <div
         className={`
           group flex w-full items-center gap-1 rounded px-2 py-1.5 text-left text-sm
@@ -92,7 +103,6 @@ const TocEntry: React.FC<TocEntryProps> = ({
           type="button"
           onClick={handleClick}
           className="flex min-w-0 flex-1 items-center gap-1 text-left"
-          aria-current={isActive ? "page" : undefined}
         >
           <span className="flex-1 truncate" title={item.title}>
             {item.title}

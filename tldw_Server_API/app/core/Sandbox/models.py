@@ -66,6 +66,13 @@ class RunSpec:
     stdin_idle_timeout_sec: int | None = None
     # Trust level for risk-based isolation profiles
     trust_level: TrustLevel | None = None  # Defaults to standard if not specified
+    # Optional port mappings for runtimes that support it (e.g., docker)
+    # Each mapping: {"host_ip": "127.0.0.1", "host_port": 2222, "container_port": 22}
+    port_mappings: list[dict[str, str | int]] = field(default_factory=list)
+    # When true, skip setting a random non-root user in the container
+    run_as_root: bool | None = None
+    # When false, skip --read-only on the root filesystem (runtime-specific)
+    read_only_root: bool | None = None
 
 
 class RunPhase(str, Enum):

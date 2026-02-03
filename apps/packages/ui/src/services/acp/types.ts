@@ -157,6 +157,10 @@ export interface ACPSessionNewResponse {
   name: string
   agent_type: ACPAgentType
   agent_capabilities?: Record<string, unknown>
+  sandbox_session_id?: string | null
+  sandbox_run_id?: string | null
+  ssh_ws_url?: string | null
+  ssh_user?: string | null
 }
 
 export interface ACPSessionPromptRequest {
@@ -185,6 +189,10 @@ export interface ACPSession {
   mcpServers?: ACPMCPServerConfig[]
   state: ACPSessionState
   capabilities?: Record<string, unknown>
+  sandboxSessionId?: string | null
+  sandboxRunId?: string | null
+  sshWsUrl?: string | null
+  sshUser?: string | null
   updates: ACPUpdate[]
   pendingPermissions: ACPPendingPermission[]
   createdAt: Date

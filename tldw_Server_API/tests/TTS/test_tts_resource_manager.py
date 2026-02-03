@@ -374,6 +374,19 @@ class TestTTSResourceManager:
         assert resource_manager._registered_models["kokoro"]["model"] == mock_model
         assert resource_manager._registered_models["kokoro"]["cleanup"] == mock_cleanup
 
+    def test_model_cache_eviction(self):
+        """Evicts least-recently-used models when cache limit exceeded"""
+        manager = TTSResourceManager({"model_cache_max_entries": 1})
+        cleanup_a = Mock()
+        cleanup_b = Mock()
+
+        manager.register_model(provider="a", model_instance=Mock(), cleanup_callback=cleanup_a)
+        manager.register_model(provider="b", model_instance=Mock(), cleanup_callback=cleanup_b)
+
+        cleanup_a.assert_called_once()
+        assert "a" not in manager._registered_models
+        assert "b" in manager._registered_models
+
     @pytest.mark.asyncio
     async def test_unregister_model(self, resource_manager):
         """Test unregistering a model"""

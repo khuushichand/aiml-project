@@ -196,6 +196,7 @@ export const ACPSessionCreateModal: React.FC<ACPSessionCreateModalProps> = ({
 
   // Store
   const createSession = useACPSessionsStore((s) => s.createSession)
+  const replaceSessionId = useACPSessionsStore((s) => s.replaceSessionId)
   const closeSession = useACPSessionsStore((s) => s.closeSession)
 
   // Create REST client
@@ -292,6 +293,12 @@ export const ACPSessionCreateModal: React.FC<ACPSessionCreateModalProps> = ({
           localSessionId,
           serverSessionId: response.session_id,
           name: response.name,
+          metadata: {
+            sandboxSessionId: response.sandbox_session_id ?? null,
+            sandboxRunId: response.sandbox_run_id ?? null,
+            sshWsUrl: response.ssh_ws_url ?? null,
+            sshUser: response.ssh_user ?? null,
+          },
         }
       } catch (error) {
         // Clean up local session on failure
@@ -300,6 +307,10 @@ export const ACPSessionCreateModal: React.FC<ACPSessionCreateModalProps> = ({
       }
     },
     onSuccess: (result) => {
+      replaceSessionId(result.localSessionId, result.serverSessionId, {
+        name: result.name,
+        ...result.metadata,
+      })
       notification.success({
         message: t("acp.create.success", "Session created"),
         description: t("acp.create.successDesc", {
@@ -383,7 +394,7 @@ export const ACPSessionCreateModal: React.FC<ACPSessionCreateModalProps> = ({
       title={t("acp.create.title", "Create ACP Session")}
       footer={null}
       width={560}
-      destroyOnHidden
+      destroyOnClose
       maskClosable={!isPending}
       closable={!isPending}
     >

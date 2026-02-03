@@ -125,7 +125,7 @@ def _compute_source_hash_safe(
         return None, "Source hash skipped: local path rejected outside allowed base directory."
     if not safe_path.is_file():
         logger.debug(
-            "Skipping source hash computation for non-file path: %s",
+            "Skipping source hash computation for non-file path: {}",
             safe_path,
         )
         return None, None
@@ -133,7 +133,7 @@ def _compute_source_hash_safe(
         hasher = hashlib.sha256()
         handle = open_safe_local_path(safe_path, base_dir, mode="rb")
         if handle is None:
-            logger.warning("Source hash compute skipped for rejected path: %s", safe_path)
+            logger.warning("Source hash compute skipped for rejected path: {}", safe_path)
             return None, None
         with handle:
             for chunk in iter(lambda: handle.read(chunk_size), b""):
@@ -143,14 +143,14 @@ def _compute_source_hash_safe(
         try:
             if safe_path.exists():
                 logger.warning(
-                    "Source hash compute failed for existing file %s: %s",
+                    "Source hash compute failed for existing file {}: {}",
                     safe_path,
                     exc,
                 )
             else:
-                logger.debug("Source hash compute failed for %s: %s", safe_path, exc)
+                logger.debug("Source hash compute failed for {}: {}", safe_path, exc)
         except Exception:
-            logger.debug("Source hash compute failed for %s: %s", safe_path, exc)
+            logger.debug("Source hash compute failed for {}: {}", safe_path, exc)
         return None, None
 
 
@@ -324,14 +324,14 @@ async def add_media_orchestrate(
         if str(os.getenv("TEST_MODE", "")).lower() in {"1", "true", "yes", "on"}:
             _dbp = getattr(db, "db_path_str", getattr(db, "db_path", "?"))
             logger.info(
-                "TEST_MODE: add_media db_path=%s user_id=%s",
+                "TEST_MODE: add_media db_path={} user_id={}",
                 _dbp,
                 getattr(current_user, "id", "?"),
             )
     except Exception:
         pass
 
-    logger.info("Received request to add %s media.", form_data.media_type)
+    logger.info("Received request to add {} media.", form_data.media_type)
     try:
         usage_log.log_event(
             "media.add",
@@ -351,7 +351,7 @@ async def add_media_orchestrate(
         logger.error("CRITICAL: Database instance dependency missing client_id.")
         db.client_id = settings.get("SERVER_CLIENT_ID", "SERVER_API_V1_FALLBACK")
         logger.warning(
-            "Manually set missing client_id on DB instance to: %s", db.client_id
+            "Manually set missing client_id on DB instance to: {}", db.client_id
         )
 
     results: list[dict[str, Any]] = []
@@ -365,7 +365,7 @@ async def add_media_orchestrate(
         # --- 3. Setup Temporary Directory ---
         with temp_dir_manager as temp_dir:
             temp_dir_path = FilePath(str(temp_dir))
-            logger.info("Using temporary directory: %s", temp_dir_path)
+            logger.info("Using temporary directory: {}", temp_dir_path)
 
             # --- 4. Save Uploaded Files ---
             # Restrict allowed extensions based on declared media_type to avoid mismatches
@@ -501,7 +501,7 @@ async def add_media_orchestrate(
             except HTTPException:
                 raise
             except Exception as quota_err:
-                logger.warning("Quota check failed (non-fatal): %s", quota_err)
+                logger.warning("Quota check failed (non-fatal): {}", quota_err)
 
             # --- 5. Prepare Inputs and Options ---
             uploaded_file_paths = [str(pf["path"]) for pf in saved_files_info]
@@ -513,14 +513,14 @@ async def add_media_orchestrate(
                     )
                     expanded_urls = parse_and_expand_urls(url_list)
                     if expanded_urls != url_list:
-                        logging.info(
-                            "Expanded playlist and shortcut URLs into %d concrete entries.",
+                        logger.info(
+                            "Expanded playlist and shortcut URLs into {} concrete entries.",
                             len(expanded_urls),
                         )
                     url_list = expanded_urls
                 except Exception as expand_err:
                     logger.warning(
-                        "Failed to expand playlist URLs; continuing with originals: %s",
+                        "Failed to expand playlist URLs; continuing with originals: {}",
                         expand_err,
                     )
             all_valid_input_sources = url_list + uploaded_file_paths
@@ -574,7 +574,7 @@ async def add_media_orchestrate(
                     first_filename=first_filename,
                 )
             except Exception as auto_err:
-                logger.warning("Auto-apply chunking template failed: %s", auto_err)
+                logger.warning("Auto-apply chunking template failed: {}", auto_err)
 
             # Even if not used directly here, preserve the legacy call
             # to common options preparation to keep side effects/logging.
@@ -600,21 +600,21 @@ async def add_media_orchestrate(
                     )
                     if resolved_path is None:
                         logger.warning(
-                            "Skipping source path %s outside temp dir %s",
+                            "Skipping source path {} outside temp dir {}",
                             path,
                             temp_dir_path,
                         )
                         continue
                 except OSError as exc:
                     logger.warning(
-                        "Skipping source path %s due to resolve error: %s",
+                        "Skipping source path {} due to resolve error: {}",
                         path,
                         exc,
                     )
                     continue
                 except Exception as exc:
                     logger.warning(
-                        "Skipping source path %s due to unexpected resolve error: %s",
+                        "Skipping source path {} due to unexpected resolve error: {}",
                         path,
                         exc,
                     )
@@ -625,8 +625,8 @@ async def add_media_orchestrate(
             db_path_for_workers = db.db_path_str
             client_id_for_workers = db.client_id
 
-            logging.info(
-                "Processing %d items of type '%s'",
+            logger.info(
+                "Processing {} items of type '{}'",
                 len(all_valid_input_sources),
                 form_data.media_type,
             )
@@ -691,7 +691,7 @@ async def add_media_orchestrate(
                                 f"Processing failed: {type(result).__name__}: {detail_text}"
                             )
                         logger.error(
-                            "Document-like processing failed for %s: %s",
+                            "Document-like processing failed for {}: {}",
                             source,
                             error_msg,
                             exc_info=True,
@@ -749,7 +749,7 @@ async def add_media_orchestrate(
                         )
                         if safe_source is None:
                             logger.warning(
-                                "Original file path rejected outside temp dir: %s",
+                                "Original file path rejected outside temp dir: {}",
                                 source_path,
                             )
                             _ensure_warnings_list(result).append(
@@ -759,7 +759,7 @@ async def add_media_orchestrate(
                         source_file = safe_source
                         if not source_file.exists():
                             logger.warning(
-                                "Original file not found for storage: %s",
+                                "Original file not found for storage: {}",
                                 source_path,
                             )
                             continue
@@ -832,7 +832,7 @@ async def add_media_orchestrate(
                                 try:
                                     handle.close()
                                 except Exception:
-                                    logger.debug("Failed to close original file handle for %s", source_file)
+                                    logger.debug("Failed to close original file handle for {}", source_file)
 
                             # Insert database record
                             db.insert_media_file(
@@ -865,7 +865,7 @@ async def add_media_orchestrate(
 
 
         # --- 7. Generate Embeddings if Requested ---
-        logger.info("generate_embeddings flag: %s", form_data.generate_embeddings)
+        logger.info("generate_embeddings flag: {}", form_data.generate_embeddings)
         if form_data.generate_embeddings:
             logger.info(
                 "Generating embeddings for successfully processed media items..."
@@ -875,7 +875,7 @@ async def add_media_orchestrate(
                 if result.get("status") == "Success" and result.get("db_id"):
                     media_id = result["db_id"]
                     logger.info(
-                        "Scheduling embedding generation for media ID %s",
+                        "Scheduling embedding generation for media ID {}",
                         media_id,
                     )
 
@@ -911,13 +911,13 @@ async def add_media_orchestrate(
                                 or 200,
                             )
                             logger.info(
-                                "Embedding generation result for media %s: %s",
+                                "Embedding generation result for media {}: {}",
                                 media_id,
                                 result_emb,
                             )
                         except Exception as embed_err:
                             logger.error(
-                                "Failed to generate embeddings for media %s: %s",
+                                "Failed to generate embeddings for media {}: {}",
                                 media_id,
                                 embed_err,
                             )
@@ -950,7 +950,7 @@ async def add_media_orchestrate(
         )
         logger.log(
             log_level,
-            "Request finished with status %s. Results count: %s",
+            "Request finished with status {}. Results count: {}",
             final_status_code,
             len(results),
         )
@@ -990,23 +990,23 @@ async def add_media_orchestrate(
         )
 
     except HTTPException as exc:
-        logging.warning(
-            "HTTP Exception encountered in /media/add: Status=%s, Detail=%s",
+        logger.warning(
+            "HTTP Exception encountered in /media/add: Status={}, Detail={}",
             exc.status_code,
             exc.detail,
         )
         raise
     except OSError as os_err:
-        logging.error(
-            "OSError during /media/add setup: %s", os_err, exc_info=True
+        logger.error(
+            "OSError during /media/add setup: {}", os_err, exc_info=True
         )
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"OS error during setup: {os_err}",
         )
     except Exception as unexpected:
-        logging.error(
-            "Unhandled exception in /media/add endpoint: %s - %s",
+        logger.error(
+            "Unhandled exception in /media/add endpoint: {} - {}",
             type(unexpected).__name__,
             unexpected,
             exc_info=True,
@@ -1114,13 +1114,13 @@ async def persist_primary_av_item(
             process_result=process_result,
         )
         logger.warning(
-            "Skipping DB persistence for %s due to missing content.",
+            "Skipping DB persistence for {} due to missing content.",
             original_input_ref,
         )
         return
 
     try:
-        logger.info("Attempting DB persistence for item: %s", process_result.get("input_ref"))
+        logger.info("Attempting DB persistence for item: {}", process_result.get("input_ref"))
 
         # Build a safe metadata subset for persistence.
         safe_meta: dict[str, Any] = {}
@@ -1347,7 +1347,7 @@ async def persist_primary_av_item(
                 process_result["normalized_stt"] = artifact
         except Exception as stt_err:
             logger.debug(
-                "STT transcript upsert skipped/failed for %s (media_id=%s): %s",
+                "STT transcript upsert skipped/failed for {} (media_id={}): {}",
                 original_input_ref,
                 media_id_result,
                 stt_err,
@@ -1371,14 +1371,14 @@ async def persist_primary_av_item(
                 created_visual_docs = await loop.run_in_executor(None, _visual_docs_worker)
                 if created_visual_docs:
                     logger.info(
-                        "Persisted %s VisualDocuments for media_id=%s (input_ref=%s)",
+                        "Persisted {} VisualDocuments for media_id={} (input_ref={})",
                         created_visual_docs,
                         media_id_result,
                         original_input_ref,
                     )
         except Exception as visual_err:
             logger.debug(
-                "Visual RAG ingestion skipped/failed for %s (media_id=%s): %s",
+                "Visual RAG ingestion skipped/failed for {} (media_id={}): {}",
                 original_input_ref,
                 media_id_result,
                 visual_err,
@@ -1394,7 +1394,7 @@ async def persist_primary_av_item(
         )
 
         logger.info(
-            "DB persistence result for %s: ID=%s, UUID=%s, Msg='%s'",
+            "DB persistence result for {}: ID={}, UUID={}, Msg='{}'",
             original_input_ref,
             media_id_result,
             media_uuid_result,
@@ -1403,7 +1403,7 @@ async def persist_primary_av_item(
 
     except (DatabaseError, InputError, ConflictError) as db_err:
         logger.error(
-            "Database operation failed for %s: %s",
+            "Database operation failed for {}: {}",
             original_input_ref,
             db_err,
             exc_info=True,
@@ -1427,7 +1427,7 @@ async def persist_primary_av_item(
 
     except Exception as exc:
         logger.error(
-            "Unexpected error during DB persistence for %s: %s",
+            "Unexpected error during DB persistence for {}: {}",
             original_input_ref,
             exc,
             exc_info=True,
@@ -1486,7 +1486,7 @@ async def process_batch_media(
             return False
 
     logger.debug(
-        "Starting pre-check for %d %s items...",
+        "Starting pre-check for {} {} items...",
         len(all_processing_sources),
         media_type,
     )
@@ -1497,7 +1497,7 @@ async def process_batch_media(
         input_ref = input_ref_info[0] if isinstance(input_ref_info, tuple) else input_ref_info
         if not input_ref:
             logger.error(
-                "CRITICAL: Could not find original input reference for %s.",
+                "CRITICAL: Could not find original input reference for {}.",
                 source_path_or_url,
             )
             input_ref = source_path_or_url
@@ -1563,7 +1563,7 @@ async def process_batch_media(
                     continue
             except Exception as policy_err:
                 logger.warning(
-                    "URL policy check failed for %s: %s",
+                    "URL policy check failed for {}: {}",
                     source_path_or_url,
                     policy_err,
                 )
@@ -1585,7 +1585,7 @@ async def process_batch_media(
                     source_hash_by_source[str(source_path_or_url)] = source_hash
             except Exception as hash_err:
                 logger.debug(
-                    "Source hash computation failed for %s: %s",
+                    "Source hash computation failed for {}: {}",
                     source_path_or_url,
                     hash_err,
                 )
@@ -1707,7 +1707,7 @@ async def process_batch_media(
                         )
             except (DatabaseError, sqlite3.Error) as check_err:
                 logger.error(
-                    "DB pre-check (custom query) failed for %s: %s",
+                    "DB pre-check (custom query) failed for {}: {}",
                     identifier_for_check,
                     check_err,
                     exc_info=True,
@@ -1720,7 +1720,7 @@ async def process_batch_media(
                 pre_check_warning = f"Database pre-check failed: {check_err}"
             except Exception as check_err:
                 logger.error(
-                    "Unexpected error during DB pre-check (custom query) for %s: %s",
+                    "Unexpected error during DB pre-check (custom query) for {}: {}",
                     identifier_for_check,
                     check_err,
                     exc_info=True,
@@ -1741,7 +1741,7 @@ async def process_batch_media(
             )
 
         if not should_process:
-            logger.info("Skipping processing for %s: %s", input_ref, reason)
+            logger.info("Skipping processing for {}: {}", input_ref, reason)
             skipped_warnings = [pre_check_warning] if pre_check_warning else None
             skipped_result = {
                 "status": "Skipped",
@@ -1868,8 +1868,8 @@ async def process_batch_media(
                 "keep_original": getattr(form_data, "keep_original_file", False),
                 "cancel_check": cancel_check,
             }
-            logging.debug(
-                "Calling external process_videos with args including temp_dir: %s",
+            logger.debug(
+                "Calling external process_videos with args including temp_dir: {}",
                 list(video_args.keys()),
             )
             target_func = functools.partial(process_videos, **video_args)
@@ -1933,8 +1933,8 @@ async def process_batch_media(
                 "author": getattr(form_data, "author", None),
                 "cancel_check": cancel_check,
             }
-            logging.debug(
-                "Calling external process_audio_files with args including temp_dir: %s",
+            logger.debug(
+                "Calling external process_audio_files with args including temp_dir: {}",
                 list(audio_args.keys()),
             )
             target_func = functools.partial(process_audio_files, **audio_args)
@@ -1943,8 +1943,8 @@ async def process_batch_media(
             raise ValueError(f"Invalid media type '{media_type}' for batch processing.")
 
     except Exception as call_e:
-        logging.error(
-            "Error calling external batch processor for %s: %s",
+        logger.error(
+            "Error calling external batch processor for {}: {}",
             media_type,
             call_e,
             exc_info=True,
@@ -1987,14 +1987,14 @@ async def process_batch_media(
     if processing_output and isinstance(processing_output.get("results"), list):
         processing_results_list = processing_output["results"]
         if processing_output.get("errors_count", 0) > 0:
-            logging.warning(
-                "Batch %s processor reported errors: %s",
+            logger.warning(
+                "Batch {} processor reported errors: {}",
                 media_type,
                 processing_output.get("errors"),
             )
     else:
-        logging.error(
-            "Batch %s processor returned unexpected output: %s",
+        logger.error(
+            "Batch {} processor returned unexpected output: {}",
             media_type,
             processing_output,
         )
@@ -2002,7 +2002,7 @@ async def process_batch_media(
 
     for process_result in processing_results_list:
         if not isinstance(process_result, dict):
-            logging.error("Processor returned non-dict item: %s", process_result)
+            logger.error("Processor returned non-dict item: {}", process_result)
             malformed_result = {
                 "status": "Error",
                 "input_ref": "Unknown Input",
@@ -2035,7 +2035,7 @@ async def process_batch_media(
             else:
                 logger.warning(
                     "Could not find original input reference in source_to_ref_map "
-                    "for processing_source: %s. Falling back.",
+                    "for processing_source: {}. Falling back.",
                     processing_source,
                 )
                 original_input_ref = (
@@ -2044,7 +2044,7 @@ async def process_batch_media(
         else:
             original_input_ref = process_result.get("input_ref") or "Unknown Input (Missing Source)"
             logger.warning(
-                "Processing result missing 'processing_source'. Using fallback input_ref: %s",
+                "Processing result missing 'processing_source'. Using fallback input_ref: {}",
                 original_input_ref,
             )
             process_result["processing_source"] = (
@@ -2095,7 +2095,7 @@ async def process_batch_media(
                 )
             except Exception as claims_err:
                 logger.debug(
-                    "Claim extraction skipped for %s: %s",
+                    "Claim extraction skipped for {}: {}",
                     original_input_ref,
                     claims_err,
                 )
@@ -2217,7 +2217,7 @@ async def process_document_like_item(
 
     try:
         if is_url:
-            logger.info("Downloading URL: %s", processing_source)
+            logger.info("Downloading URL: {}", processing_source)
             # SSRF guard for individual item
             try:
                 from tldw_Server_API.app.core.Security.url_validation import (  # type: ignore
@@ -2237,7 +2237,7 @@ async def process_document_like_item(
                     and "Host could not be resolved" in detail
                 ):
                     logger.warning(
-                        "TEST_MODE: ignoring host resolution error for %s: %s",
+                        "TEST_MODE: ignoring host resolution error for {}: {}",
                         processing_source,
                         detail,
                     )
@@ -2341,7 +2341,7 @@ async def process_document_like_item(
                         raise
                     except Exception as quota_err:
                         logger.warning(
-                            "Per-item quota check failed (non-fatal): %s",
+                            "Per-item quota check failed (non-fatal): {}",
                             quota_err,
                         )
 
@@ -2393,8 +2393,8 @@ async def process_document_like_item(
 
     except Exception as prep_err:
         error_detail = str(getattr(prep_err, "detail", prep_err))
-        logging.error(
-            "File preparation/download error for %s: %s",
+        logger.error(
+            "File preparation/download error for {}: {}",
             item_input_ref,
             error_detail,
             exc_info=True,
@@ -2631,8 +2631,8 @@ async def process_document_like_item(
                 "__name__",
                 str(processing_func),
             )
-            logging.info(
-                "Calling document-like processor '%s' for '%s' %s",
+            logger.info(
+                "Calling document-like processor '{}' for '{}' {}",
                 func_name,
                 item_input_ref,
                 "in executor" if run_in_executor else "directly",
@@ -2775,8 +2775,8 @@ async def process_document_like_item(
             )
 
     except Exception as proc_err:
-        logging.error(
-            "Error during processing call for %s: %s",
+        logger.error(
+            "Error during processing call for {}: {}",
             item_input_ref,
             proc_err,
             exc_info=True,
@@ -2823,7 +2823,7 @@ async def process_document_like_item(
             )
         except Exception as claims_err:
             logger.debug(
-                "Claim extraction failed for %s: %s",
+                "Claim extraction failed for {}: {}",
                 item_input_ref,
                 claims_err,
             )
@@ -2944,13 +2944,13 @@ async def persist_doc_item_and_children(
     final_keywords_list = sorted(list(combined_keywords))
     try:
         final_result["keywords"] = final_keywords_list
-        logging.info(
-            "Archive parent keywords set for %s: %s",
+        logger.info(
+            "Archive parent keywords set for {}: {}",
             item_input_ref,
             final_keywords_list,
         )
     except Exception as kw_err:
-        logging.warning("Failed to set parent keywords for %s: %s", item_input_ref, kw_err)
+        logger.warning("Failed to set parent keywords for {}: {}", item_input_ref, kw_err)
 
     model_used = metadata_for_db.get("parser_used", "Imported")
     if not model_used and media_type == "pdf":
@@ -2976,7 +2976,7 @@ async def persist_doc_item_and_children(
     if content_for_db:
         try:
             logger.info(
-                "Attempting DB persistence for item: %s using user DB",
+                "Attempting DB persistence for item: {} using user DB",
                 item_input_ref,
             )
             safe_meta: dict[str, Any] = {}
@@ -3122,7 +3122,7 @@ async def persist_doc_item_and_children(
             final_result["db_message"] = db_message_result
             final_result["media_uuid"] = media_uuid_result
             logger.info(
-                "DB persistence result for %s: ID=%s, UUID=%s, Msg='%s'",
+                "DB persistence result for {}: ID={}, UUID={}, Msg='{}'",
                 item_input_ref,
                 media_id_result,
                 media_uuid_result,
@@ -3321,8 +3321,8 @@ async def persist_doc_item_and_children(
                                         }
                                     )
                                 except Exception as child_db_err:
-                                    logging.warning(
-                                        "Child email persistence failed: %s",
+                                    logger.warning(
+                                        "Child email persistence failed: {}",
                                         child_db_err,
                                     )
                             if child_db_results:
@@ -3332,7 +3332,7 @@ async def persist_doc_item_and_children(
 
         except (DatabaseError, InputError, ConflictError) as db_err:
             logger.error(
-                "Database operation failed for %s: %s",
+                "Database operation failed for {}: {}",
                 item_input_ref,
                 db_err,
                 exc_info=True,
@@ -3347,7 +3347,7 @@ async def persist_doc_item_and_children(
             final_result["media_uuid"] = None
         except Exception as exc:
             logger.error(
-                "Unexpected error during DB persistence for %s: %s",
+                "Unexpected error during DB persistence for {}: {}",
                 item_input_ref,
                 exc,
                 exc_info=True,
@@ -3553,8 +3553,8 @@ async def persist_doc_item_and_children(
                                 )
                                 persisted_any_children = True
                             except Exception as child_db_err:
-                                logging.warning(
-                                    "Archive child email persistence failed: %s",
+                                logger.warning(
+                                    "Archive child email persistence failed: {}",
                                     child_db_err,
                                 )
                         try:
@@ -3567,7 +3567,7 @@ async def persist_doc_item_and_children(
 
         if not persisted_any_children:
             logger.warning(
-                "Skipping DB persistence for %s due to missing content.",
+                "Skipping DB persistence for {} due to missing content.",
                 item_input_ref,
             )
             final_result["db_message"] = "DB persistence skipped (no content)."

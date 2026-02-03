@@ -197,7 +197,7 @@ export const TestCaseFormModal: React.FC<TestCaseFormModalProps> = ({
       }
       width={600}
       footer={null}
-      destroyOnHidden
+      destroyOnClose
     >
       {isEditing && isLoadingTestCase ? (
         <Skeleton paragraph={{ rows: 6 }} />

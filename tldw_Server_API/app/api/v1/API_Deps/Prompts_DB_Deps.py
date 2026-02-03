@@ -156,8 +156,8 @@ def _create_prompts_db_instance(
 
 
 async def get_prompts_db_for_user(
+        request: Request,
         current_user: User = Depends(get_request_user),
-        request: Request = None
 ) -> PromptsDatabase:
     """
     FastAPI dependency to get the PromptsDatabase instance for the identified user,
@@ -178,7 +178,7 @@ async def get_prompts_db_for_user(
     # In test mode, isolate DB per app instance to avoid cross-test conflicts
     salt = ""
     try:
-        if os.environ.get("TEST_MODE", "").lower() == "true" and request is not None:
+        if os.environ.get("TEST_MODE", "").lower() == "true":
             if not hasattr(request.app.state, "prompts_db_salt"):
                 setattr(request.app.state, "prompts_db_salt", _uuid.uuid4().hex)
             salt = str(getattr(request.app.state, "prompts_db_salt"))
@@ -245,7 +245,7 @@ async def get_prompts_db_for_user(
                 _create_prompts_db_instance,
                 user_id,
                 salt or None,
-                str(current_user.id),
+                SERVER_CLIENT_ID,
             )
             logger.info(f"Initializing PromptsDatabase instance for user {user_id} at path: {db_path}")
 
@@ -280,25 +280,29 @@ async def get_prompts_db_for_user(
             ) from e
 
 
-def close_all_cached_prompts_db_instances():
+async def close_all_cached_prompts_db_instances() -> None:
     """Closes all cached PromptsDatabase connections. Useful for application shutdown."""
     if _user_db_instances is None or _user_db_locks is None:
         return
-    logger.info(f"Closing all cached PromptsDatabase instances ({len(_user_db_instances)})...")
-    for cache_key, db_instance in list(_user_db_instances.items()):
-        try:
-            db_instance.close_connection() # PromptsDatabase handles its own thread-local connections
-            logger.info(f"Closed PromptsDatabase connection for cache_key {cache_key}.")
-        except Exception as e:
-            logger.error(f"Error closing PromptsDatabase instance for cache_key {cache_key}: {e}", exc_info=True)
-    _user_db_instances.clear()
-    _user_db_locks.clear() # Clear user-specific locks as well
-    logger.info("All PromptsDatabase instances cleared from cache and locks removed.")
+    async with _prompts_cache_lock:
+        logger.info(f"Closing all cached PromptsDatabase instances ({len(_user_db_instances)})...")
+        for cache_key, db_instance in list(_user_db_instances.items()):
+            try:
+                await asyncio.to_thread(db_instance.close_connection)
+                logger.info(f"Closed PromptsDatabase connection for cache_key {cache_key}.")
+            except Exception as e:
+                logger.error(
+                    f"Error closing PromptsDatabase instance for cache_key {cache_key}: {e}",
+                    exc_info=True,
+                )
+        _user_db_instances.clear()
+        _user_db_locks.clear()  # Clear user-specific locks as well
+        logger.info("All PromptsDatabase instances cleared from cache and locks removed.")
 
 # Register for shutdown in your main FastAPI app:
 # @app.on_event("shutdown")
 # async def shutdown_event():
-#     close_all_cached_prompts_db_instances()
+#     await close_all_cached_prompts_db_instances()
 
 #
 # End of Prompts_DB_Deps.py

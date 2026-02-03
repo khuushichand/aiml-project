@@ -342,6 +342,11 @@ async def get_process_pdfs_form(
     use_multi_level_chunking: bool = Form(False),
     chunk_language: str | None = Form(None),
 ) -> ProcessPDFsForm:
+    """
+    Dependency that parses multipart/form-data into a ProcessPDFsForm.
+
+    Used by /media/process-pdfs (no DB persistence).
+    """
     try:
         urls_norm = _coerce_urls(urls)
         return ProcessPDFsForm(
@@ -396,6 +401,11 @@ async def get_process_ebooks_form(
     api_name: str | None = Form(None),
     api_key: str | None = Form(None),
 ) -> ProcessEbooksForm:
+    """
+    Dependency that parses multipart/form-data into a ProcessEbooksForm.
+
+    Used by /media/process-ebooks (no DB persistence).
+    """
     try:
         urls_norm = _coerce_urls(urls)
         keywords_value = (
@@ -450,6 +460,11 @@ async def get_process_emails_form(
     ingest_attachments: bool = Form(False),
     max_depth: int = Form(2),
 ) -> ProcessEmailsForm:
+    """
+    Dependency that parses multipart/form-data into a ProcessEmailsForm.
+
+    Used by /media/process-emails (no DB persistence).
+    """
     try:
         urls_norm = _coerce_urls(urls)
         return ProcessEmailsForm(

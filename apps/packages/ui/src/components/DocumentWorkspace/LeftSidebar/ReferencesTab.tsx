@@ -1,6 +1,6 @@
 import React from "react"
 import { useTranslation } from "react-i18next"
-import { Empty, Skeleton, Tag, Tooltip, Input } from "antd"
+import { Empty, Skeleton, Tag, Tooltip, Input, message } from "antd"
 import {
   BookOpen,
   ExternalLink,
@@ -10,6 +10,7 @@ import {
   Calendar,
   FileText,
   Search,
+  Copy,
 } from "lucide-react"
 import { useDocumentWorkspaceStore } from "@/store/document-workspace"
 import {
@@ -28,15 +29,33 @@ const ReferenceCard: React.FC<{ reference: ReferenceEntry; index: number }> = ({
   index,
 }) => {
   const { t } = useTranslation(["option", "common"])
+  const [messageApi, contextHolder] = message.useMessage()
   const url = getReferenceUrl(reference)
 
   // Use title if available, otherwise use first part of raw_text
   const displayTitle = reference.title || reference.raw_text.slice(0, 150)
   const isRawText = !reference.title
   const showCitations = reference.citation_count !== undefined && reference.citation_count > 0
+  const copyText = reference.raw_text || displayTitle
+
+  const handleCopy = async (event: React.MouseEvent<HTMLButtonElement>) => {
+    event.preventDefault()
+    event.stopPropagation()
+    try {
+      await navigator.clipboard.writeText(copyText)
+      messageApi.success(
+        t("option:documentWorkspace.referenceCopied", "Reference copied")
+      )
+    } catch {
+      messageApi.error(
+        t("option:documentWorkspace.referenceCopyFailed", "Copy failed")
+      )
+    }
+  }
 
   const cardContent = (
     <div className="rounded-lg border border-border bg-surface-alt p-3 text-sm transition-shadow hover:shadow-md">
+      {contextHolder}
       {/* Reference number */}
       <div className="flex items-start gap-2">
         <span className="shrink-0 rounded bg-surface px-1.5 py-0.5 text-xs font-medium text-text-muted">
@@ -165,23 +184,60 @@ const ReferenceCard: React.FC<{ reference: ReferenceEntry; index: number }> = ({
             )}
           </div>
         </div>
-        {url && (
-          <ExternalLink className="mt-1 h-4 w-4 shrink-0 text-muted" />
-        )}
+        <div className="mt-1 flex shrink-0 items-center gap-2">
+          <Tooltip title={t("option:documentWorkspace.copyReference", "Copy reference")}>
+            <button
+              type="button"
+              onClick={handleCopy}
+              className="rounded p-1 text-muted hover:bg-hover hover:text-text"
+              aria-label={t("option:documentWorkspace.copyReference", "Copy reference")}
+            >
+              <Copy className="h-4 w-4" />
+            </button>
+          </Tooltip>
+          {url && (
+            <ExternalLink className="h-4 w-4 text-muted" />
+          )}
+        </div>
       </div>
     </div>
   )
 
   if (url) {
+    const handleCardClick = (event: React.MouseEvent<HTMLDivElement>) => {
+      const target = event.target as HTMLElement | null
+      if (target?.closest("a")) {
+        return
+      }
+      window.open(url, "_blank", "noopener,noreferrer")
+    }
+
+    const handleCardKeyDown = (event: React.KeyboardEvent<HTMLDivElement>) => {
+      const target = event.target as HTMLElement | null
+      if (target?.closest("a")) {
+        return
+      }
+      if (event.key === "Enter" || event.key === " ") {
+        event.preventDefault()
+        window.open(url, "_blank", "noopener,noreferrer")
+      }
+    }
+
     return (
-      <a
-        href={url}
-        target="_blank"
-        rel="noopener noreferrer"
+      <div
+        role="link"
+        tabIndex={0}
+        onClick={handleCardClick}
+        onKeyDown={handleCardKeyDown}
+        aria-label={t(
+          "option:documentWorkspace.referenceOpenAriaLabel",
+          "Open reference: {{title}}",
+          { title: displayTitle }
+        )}
         className="block focus:outline-none focus-visible:ring-2 focus-visible:ring-primary"
       >
         {cardContent}
-      </a>
+      </div>
     )
   }
 
@@ -427,7 +483,11 @@ export const ReferencesTab: React.FC = () => {
         ) : (
           <div className="space-y-2">
             {filteredReferences.map((ref, idx) => (
-              <ReferenceCard key={idx} reference={ref} index={idx} />
+              <ReferenceCard
+                key={ref.doi || ref.arxiv_id || ref.semantic_scholar_id || idx}
+                reference={ref}
+                index={idx}
+              />
             ))}
           </div>
         )}

@@ -1965,9 +1965,12 @@ const pollForDictionaryByName = async (
   const normalized = serverUrl.replace(/\/$/, "")
   const deadline = Date.now() + timeoutMs
   while (Date.now() < deadline) {
-    const listRes = await fetchWithKey(
+    const remainingMs = Math.max(0, deadline - Date.now())
+    const listRes = await fetchWithKeyTimeout(
       `${normalized}/api/v1/chat/dictionaries?include_inactive=true`,
-      apiKey
+      apiKey,
+      {},
+      remainingMs
     ).catch(() => null)
     if (listRes?.ok) {
       const payload = await listRes.json().catch(() => [])
@@ -4462,6 +4465,14 @@ test.describe("Real server end-to-end workflows", () => {
         })
       }
       attachPageLogging(page, "options")
+      page.on("framenavigated", (frame) => {
+        if (frame === page.mainFrame()) {
+          const url = frame.url()
+          if (!url.startsWith(optionsUrl)) {
+            logStep("unexpected navigation", { url })
+          }
+        }
+      })
 
       const logNotifications = async (label: string) => {
         const notices = await page
@@ -5180,6 +5191,18 @@ test.describe("Real server end-to-end workflows", () => {
         }
       }
 
+      const ensureOnDictionariesRoute = async (label: string) => {
+        const url = page.url()
+        if (!url.startsWith(optionsUrl)) {
+          logStep("recovering navigation", { label, url })
+          await driver.goto(page, "/dictionaries", {
+            waitUntil: "domcontentloaded"
+          })
+          await waitForConnected(page, `workflow-dictionaries-recover-${label}`)
+          logStep("navigation recovered", { label, url: page.url() })
+        }
+      }
+
       const unique = Date.now()
       const dictionaryName = `E2E Dictionary ${unique}`
       logStep("generated test identifiers", { unique, dictionaryName })
@@ -5209,6 +5232,7 @@ test.describe("Real server end-to-end workflows", () => {
       }
 
       const resolveDictionaryRow = async (label: string) => {
+        await ensureOnDictionariesRoute(label)
         await expect
           .poll(async () => {
             await debugDictionaryTableState(label)
@@ -5235,6 +5259,7 @@ test.describe("Real server end-to-end workflows", () => {
             const item = paginationItems.nth(i)
             const classes = (await item.getAttribute("class")) || ""
             if (!classes.includes("ant-pagination-item-active")) {
+              await ensureOnDictionariesRoute(`${label}-page-${i + 1}`)
               await item.click()
               await page.waitForTimeout(500)
             }
@@ -5332,36 +5357,49 @@ test.describe("Real server end-to-end workflows", () => {
         }
 
         await step("manage entries", async () => {
+          const entriesModal = page.getByRole("dialog", {
+            name: /Manage Entries/i
+          })
+          let opened = false
           let lastClickError: unknown = null
           for (let attempt = 1; attempt <= 3; attempt += 1) {
+            await ensureOnDictionariesRoute(`manage-entries-${attempt}-before`)
             row = await resolveDictionaryRow(`manage-entries-${attempt}`)
             const entriesButton = row!.getByRole("button", {
               name: /^Entries$/i
             })
             try {
               await entriesButton.scrollIntoViewIfNeeded().catch(() => {})
-              await expect(entriesButton).toBeVisible({ timeout: 15000 })
-              await entriesButton.click({ timeout: 15000 })
-              lastClickError = null
-              break
+              await entriesButton.click({
+                timeout: 5000,
+                force: true,
+                noWaitAfter: true
+              })
+              await ensureOnDictionariesRoute(`manage-entries-${attempt}-after`)
+              const visible = await entriesModal
+                .waitFor({ state: "visible", timeout: 10000 })
+                .then(() => true)
+                .catch(() => false)
+              if (visible) {
+                opened = true
+                lastClickError = null
+                break
+              }
             } catch (error) {
               lastClickError = error
-              logStep("entries click retry", {
-                attempt,
-                error: String(error)
-              })
-              await page.waitForTimeout(1000)
             }
+            logStep("entries click retry", {
+              attempt,
+              error: String(lastClickError ?? "modal not visible"),
+              url: page.url()
+            })
+            await page.waitForTimeout(1000)
           }
-          if (lastClickError) {
+          if (!opened) {
             throw new Error(
-              `Entries button not clickable after retries: ${String(lastClickError)}`
+              `Entries modal did not open after retries: ${String(lastClickError)}`
             )
           }
-          const entriesModal = page.getByRole("dialog", {
-            name: /Manage Entries/i
-          })
-          await expect(entriesModal).toBeVisible({ timeout: 15000 })
           await entriesModal.getByLabel("Pattern").fill("hello")
           const replacementInput = entriesModal.locator("#replacement")
           if ((await replacementInput.count()) > 0) {

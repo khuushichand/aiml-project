@@ -689,6 +689,15 @@ class UsageTopResponse(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
 
+class UsageAggregateResponse(BaseModel):
+    """Response for manual usage aggregation."""
+    status: str
+    day: str | None = None
+    reason: str | None = None
+
+    model_config = ConfigDict(from_attributes=True)
+
+
 #######################################################################################################################
 #
 # Budget Governance Schemas

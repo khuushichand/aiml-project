@@ -74,6 +74,28 @@ runner_env = HOME=/Users/macbook-dev/Documents/GitHub/tldw_server2/tldw_Server_A
 # Startup timeout for runner initialize.
 startup_timeout_ms = 10000
 
+[ACP-SANDBOX]
+# Enable ACP sandbox mode (runs ACP in container/VM and exposes web SSH).
+enabled = false
+# Sandbox runtime (docker|firecracker|lima). Docker only is supported initially.
+runtime = docker
+# Base image for ACP sandbox (must include sshd + tldw-agent-acp).
+base_image = tldw/acp-agent:latest
+# Network policy for ACP sandbox (allow_all|allowlist|deny_all).
+network_policy = allow_all
+# SSH settings
+ssh_enabled = true
+ssh_user = acp
+ssh_host = 127.0.0.1
+ssh_port_min = 2222
+ssh_port_max = 2299
+# Downstream agent command (inside container)
+agent_command =
+# JSON array or shell-style args
+agent_args = []
+# JSON or comma-separated key=value env
+agent_env = {}
+
 [Audit]
 # Auto-switch audit exports to streaming when max_rows exceeds this threshold to avoid large in-memory buffers.
 export_stream_auto_max_rows = 5000

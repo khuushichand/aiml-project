@@ -410,7 +410,8 @@ class VibeVoiceAdapter(TTSAdapter):
                 register_result = resource_manager.register_model(
                     provider=self.provider_name.lower(),
                     model_instance=self.model,
-                    cleanup_callback=self._cleanup_resources
+                    cleanup_callback=self._cleanup_resources,
+                    model_key=f"{self.variant}:{self.model_path}",
                 )
                 if asyncio.iscoroutine(register_result):
                     await register_result

@@ -196,6 +196,54 @@ ACP_RUNNER_CWD=/abs/path/to/runner/dir
 ACP_RUNNER_STARTUP_TIMEOUT_MS=10000
 ```
 
+## ACP Sandbox Mode (Container/VM)
+
+ACP sandbox mode runs `tldw-agent-acp` inside a sandbox container and exposes a web SSH proxy.
+
+### Install ACP Dependencies
+
+```bash
+pip install -e ".[acp]"
+```
+
+### Build the ACP Image
+
+The Dockerfile expects `tldw-agent` to be in the build context:
+
+```bash
+# From repo root (or a parent that includes tldw-agent/)
+docker build -f Dockerfiles/ACP/Dockerfile -t tldw/acp-agent:latest .
+```
+
+### Config
+
+Enable ACP sandbox mode and set the agent command:
+
+```ini
+[ACP-SANDBOX]
+enabled = true
+runtime = docker
+base_image = tldw/acp-agent:latest
+network_policy = allow_all
+agent_command = claude
+agent_args = ["code"]
+```
+
+### Required Env
+
+```bash
+ACP_SANDBOX_ENABLED=1
+ACP_SANDBOX_AGENT_COMMAND=claude
+SANDBOX_ENABLE_EXECUTION=1
+SANDBOX_BACKGROUND_EXECUTION=1
+SANDBOX_DOCKER_BIND_WORKSPACE=1
+```
+
+### Notes
+
+- Each ACP session starts a dedicated sandbox run.
+- The container exposes SSH on a host port (local only) and the UI connects via WS proxy.
+
 ## Agent Configurations
 
 The runner launches the downstream ACP agent based on:

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response, status
 from fastapi.responses import PlainTextResponse
@@ -107,16 +108,16 @@ async def list_users(
         try:
             if str(os.getenv("TEST_MODE", "")).lower() in ("1", "true", "yes"):
                 response.headers["X-TLDW-Admin-Error"] = str(e)
-        except Exception:
-            pass
+        except Exception as diag_exc:
+            logger.debug("TEST_MODE header assignment failed: {}", diag_exc)
         raise
     except Exception as e:
-        logger.error(f"Failed to list users: {e}")
+        logger.error("Failed to list users: {}", e)
         try:
             if str(os.getenv("TEST_MODE", "")).lower() in ("1", "true", "yes"):
                 response.headers["X-TLDW-Admin-Error"] = str(e)
-        except Exception:
-            pass
+        except Exception as diag_exc:
+            logger.debug("TEST_MODE header assignment failed: {}", diag_exc)
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Failed to retrieve users",
@@ -159,7 +160,7 @@ async def export_users(
     except HTTPException:
         raise
     except Exception as exc:
-        logger.error(f"Failed to export users: {exc}")
+        logger.error("Failed to export users: {}", exc)
         raise HTTPException(status_code=500, detail="Failed to export users")
 
 
@@ -182,7 +183,7 @@ async def update_user(
     user_id: int,
     request: UserUpdateRequest,
     principal: AuthPrincipal = Depends(get_auth_principal),
-    db=Depends(get_db_transaction),
+    db: Any = Depends(get_db_transaction),
 ) -> MessageResponse:
     return await admin_users_service.update_user(
         principal,
@@ -197,7 +198,7 @@ async def update_user(
 async def delete_user(
     user_id: int,
     principal: AuthPrincipal = Depends(get_auth_principal),
-    db=Depends(get_db_transaction),
+    db: Any = Depends(get_db_transaction),
 ) -> MessageResponse:
     return await admin_users_service.delete_user(
         principal,

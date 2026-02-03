@@ -85,19 +85,19 @@ class ConfigMigrator:
         if self.config_file.exists():
             config_backup = self.backup_dir / f"config.txt.backup_{timestamp}"
             shutil.copy2(self.config_file, config_backup)
-            print(f"✓ Backed up config.txt to {config_backup}")
+            logger.success("Backed up config.txt to {}", config_backup)
 
         if self.env_file.exists():
             env_backup = self.backup_dir / f".env.backup_{timestamp}"
             shutil.copy2(self.env_file, env_backup)
-            print(f"✓ Backed up .env to {env_backup}")
+            logger.success("Backed up .env to {}", env_backup)
 
         return config_backup, env_backup
 
     def extract_keys_from_config(self) -> dict[str, str]:
         """Extract API keys and sensitive data from config.txt"""
         if not self.config_file.exists():
-            print(f"⚠ Config file not found: {self.config_file}")
+            logger.warning("Config file not found: {}", self.config_file)
             return {}
 
         config = configparser.ConfigParser()
@@ -162,7 +162,7 @@ class ConfigMigrator:
                         existing[key.strip()] = value.strip()
         except (OSError, UnicodeError) as exc:
             logger.error("Failed to read .env file: {}", exc)
-            return {}
+            raise
 
         self.existing_env_keys = existing
         return existing

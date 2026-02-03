@@ -168,6 +168,19 @@ class PocketTTSOnnxAdapter(TTSAdapter):
 
         self._engine = engine
         try:
+            from ..tts_resource_manager import get_resource_manager
+            resource_manager = await get_resource_manager()
+            register_result = resource_manager.register_model(
+                provider=self.PROVIDER_KEY,
+                model_instance=engine,
+                cleanup_callback=self._cleanup_resources,
+                model_key=f"{self.models_dir}:{self.precision}",
+            )
+            if asyncio.iscoroutine(register_result):
+                await register_result
+        except Exception:
+            pass
+        try:
             self.sample_rate = int(getattr(engine, "SAMPLE_RATE", self.sample_rate))
         except Exception:
             self.sample_rate = self.DEFAULT_SAMPLE_RATE

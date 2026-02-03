@@ -194,6 +194,19 @@ class LuxTTSAdapter(TTSAdapter):
             ) from exc
 
         self._engine = engine
+        try:
+            from ..tts_resource_manager import get_resource_manager
+            resource_manager = await get_resource_manager()
+            register_result = resource_manager.register_model(
+                provider=self.PROVIDER_KEY,
+                model_instance=self._engine,
+                cleanup_callback=self._cleanup_resources,
+                model_key=str(self.model_path),
+            )
+            if asyncio.iscoroutine(register_result):
+                await register_result
+        except Exception:
+            pass
         self._capabilities = await self.get_capabilities()
         self._status = ProviderStatus.AVAILABLE
         self._initialized = True

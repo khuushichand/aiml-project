@@ -265,9 +265,6 @@ export const PlaygroundForm = ({ droppedFiles }: Props) => {
   )
   React.useEffect(() => {
     const next = voiceChatTriggerPhrases.join(", ")
-    if (import.meta?.env?.DEV) {
-      console.count("PlaygroundForm/voiceChatTriggerPhrases")
-    }
     setVoiceChatTriggerInput((prev) => (prev === next ? prev : next))
   }, [voiceChatTriggerPhrases])
 
@@ -617,7 +614,9 @@ export const PlaygroundForm = ({ droppedFiles }: Props) => {
   }, [selectedModelMeta])
 
   const modelCapabilities = React.useMemo(() => {
-    const caps = selectedModelMeta?.details?.capabilities
+    const caps =
+      selectedModelMeta?.details?.capabilities ??
+      (selectedModelMeta as any)?.capabilities
     return Array.isArray(caps) ? caps.map((cap) => String(cap).toLowerCase()) : []
   }, [selectedModelMeta])
 
@@ -835,7 +834,7 @@ export const PlaygroundForm = ({ droppedFiles }: Props) => {
             title={modelDescription}
             placement="right"
             mouseEnterDelay={0.5}
-            overlayStyle={{ maxWidth: 280 }}
+            styles={{ root: { maxWidth: 280 } }}
           >
             <div className="flex items-center gap-2 text-sm">
               <ProviderIcons provider={providerRaw} className="h-3 w-3 text-text-subtle" />
@@ -1641,9 +1640,6 @@ export const PlaygroundForm = ({ droppedFiles }: Props) => {
   }, [textAreaFocus])
 
   React.useEffect(() => {
-    if (import.meta?.env?.DEV) {
-      console.count("PlaygroundForm/defaultInternetSearchOn")
-    }
     if (defaultInternetSearchOn && !webSearch) {
       setWebSearch(true)
     }
@@ -1656,9 +1652,6 @@ export const PlaygroundForm = ({ droppedFiles }: Props) => {
   }, [isConnectionReady])
 
   React.useEffect(() => {
-    if (import.meta?.env?.DEV) {
-      console.count("PlaygroundForm/queuedMessagesBanner")
-    }
     const next = queuedMessages.length > 0
     setShowQueuedBanner((prev) => (prev === next ? prev : next))
   }, [queuedMessages.length])
@@ -5036,619 +5029,620 @@ export const PlaygroundForm = ({ droppedFiles }: Props) => {
                         ) : null}
                       </div>
                     )}
-                    <div
-                      className={`transition-all duration-200 overflow-hidden ${actionBarVisibilityClass}`}
-                      aria-hidden={!actionBarVisible}
-                    >
-                    {isProMode ? (
-                      <div className="mt-2 flex flex-col gap-1">
-                        <div className="mt-1 flex flex-col gap-2">
-                        <div className="flex flex-wrap items-center gap-2">
-                          <PromptSelect
-                            selectedSystemPrompt={selectedSystemPrompt}
-                            setSelectedSystemPrompt={setSelectedSystemPrompt}
-                            setSelectedQuickPrompt={setSelectedQuickPrompt}
-                            iconClassName="h-4 w-4"
-                            className="text-text-muted hover:text-text"
-                          />
-                          {modelSelectButton}
-                          <CharacterSelect
-                            iconClassName="h-4 w-4"
-                            className="text-text-muted hover:text-text"
-                          />
-                          {mcpControl}
-                        </div>
-                          {/* Enhanced Playground Features Row */}
-                          <div className="flex flex-wrap items-center justify-between gap-3 border-t border-border/50 pt-2">
-                            <div className="flex flex-wrap items-center gap-2">
-                              <ParameterPresets compact />
-                            </div>
-                            <div className="flex flex-wrap items-center gap-2">
-                              <SystemPromptTemplatesButton
-                                onSelect={(template: PromptTemplate) => {
-                                  setSystemPrompt(template.content)
-                                  setSelectedSystemPrompt(undefined)
-                                }}
-                              />
-                              {messages.length > 0 && (
-                                <SessionCostEstimation
-                                  modelId={selectedModel}
-                                  provider={resolvedProviderKey}
-                                  messages={messages}
+                    {actionBarVisible ? (
+                      <div
+                        className={`transition-all duration-200 overflow-hidden ${actionBarVisibilityClass}`}
+                      >
+                        {isProMode ? (
+                          <div className="mt-2 flex flex-col gap-1">
+                            <div className="mt-1 flex flex-col gap-2">
+                              <div className="flex flex-wrap items-center gap-2">
+                                <PromptSelect
+                                  selectedSystemPrompt={selectedSystemPrompt}
+                                  setSelectedSystemPrompt={setSelectedSystemPrompt}
+                                  setSelectedQuickPrompt={setSelectedQuickPrompt}
+                                  iconClassName="h-4 w-4"
+                                  className="text-text-muted hover:text-text"
                                 />
-                              )}
-                            </div>
-                          </div>
-                          <div className="flex flex-col gap-2 md:flex-row md:items-center md:justify-between">
-                            <div className="flex flex-wrap items-center gap-2 text-[11px] text-text-muted">
-                              <Tooltip title={persistenceTooltip}>
-                                <span>
+                                {modelSelectButton}
+                                <CharacterSelect
+                                  iconClassName="h-4 w-4"
+                                  className="text-text-muted hover:text-text"
+                                />
+                                {mcpControl}
+                              </div>
+                              {/* Enhanced Playground Features Row */}
+                              <div className="flex flex-wrap items-center justify-between gap-3 border-t border-border/50 pt-2">
+                                <div className="flex flex-wrap items-center gap-2">
+                                  <ParameterPresets compact />
+                                </div>
+                                <div className="flex flex-wrap items-center gap-2">
+                                  <SystemPromptTemplatesButton
+                                    onSelect={(template: PromptTemplate) => {
+                                      setSystemPrompt(template.content)
+                                      setSelectedSystemPrompt(undefined)
+                                    }}
+                                  />
+                                  {messages.length > 0 && (
+                                    <SessionCostEstimation
+                                      modelId={selectedModel}
+                                      provider={resolvedProviderKey}
+                                      messages={messages}
+                                    />
+                                  )}
+                                </div>
+                              </div>
+                              <div className="flex flex-col gap-2 md:flex-row md:items-center md:justify-between">
+                                <div className="flex flex-wrap items-center gap-2 text-[11px] text-text-muted">
+                                  <Tooltip title={persistenceTooltip}>
+                                    <span>
+                                      <button
+                                        type="button"
+                                        onClick={() =>
+                                          handleToggleTemporaryChat(!temporaryChat)
+                                        }
+                                        disabled={privateChatLocked || isFireFoxPrivateMode}
+                                        aria-pressed={temporaryChat}
+                                        aria-label={
+                                          temporaryChat
+                                            ? (t(
+                                                "playground:composer.ephemeralLabel",
+                                                "Ephemeral"
+                                              ) as string)
+                                            : (t(
+                                                "playground:composer.savedLabel",
+                                                "Saved"
+                                              ) as string)
+                                        }
+                                        className={`inline-flex items-center gap-1 rounded-full border px-2 py-0.5 text-[11px] font-medium transition ${
+                                          temporaryChat
+                                            ? "border-accent bg-surface2 text-accent hover:bg-surface"
+                                            : "border-border text-text-muted hover:bg-surface2 hover:text-text"
+                                        } ${privateChatLocked || isFireFoxPrivateMode ? "cursor-not-allowed opacity-50" : ""}`}
+                                      >
+                                        {temporaryChat
+                                          ? t(
+                                              "playground:composer.ephemeralLabel",
+                                              "Ephemeral"
+                                            )
+                                          : t(
+                                              "playground:composer.savedLabel",
+                                              "Saved"
+                                            )}
+                                      </button>
+                                    </span>
+                                  </Tooltip>
                                   <button
                                     type="button"
-                                    onClick={() =>
-                                      handleToggleTemporaryChat(!temporaryChat)
-                                    }
-                                    disabled={privateChatLocked || isFireFoxPrivateMode}
-                                    aria-pressed={temporaryChat}
-                                    aria-label={
-                                      temporaryChat
+                                    onClick={() => toggleKnowledgePanel("search")}
+                                    title={
+                                      contextToolsOpen
                                         ? (t(
-                                            "playground:composer.ephemeralLabel",
-                                            "Ephemeral"
+                                            "playground:composer.contextKnowledgeClose",
+                                            "Close Search & Context"
                                           ) as string)
                                         : (t(
-                                            "playground:composer.savedLabel",
-                                            "Saved"
+                                            "playground:composer.contextKnowledge",
+                                            "Search & Context"
+                                          ) as string)
+                                    }
+                                    aria-pressed={contextToolsOpen}
+                                    aria-expanded={contextToolsOpen}
+                                    aria-label={
+                                      contextToolsOpen
+                                        ? (t(
+                                            "playground:composer.contextKnowledgeClose",
+                                            "Close Search & Context"
+                                          ) as string)
+                                        : (t(
+                                            "playground:composer.contextKnowledge",
+                                            "Search & Context"
                                           ) as string)
                                     }
                                     className={`inline-flex items-center gap-1 rounded-full border px-2 py-0.5 text-[11px] font-medium transition ${
-                                      temporaryChat
+                                      contextToolsOpen
                                         ? "border-accent bg-surface2 text-accent hover:bg-surface"
                                         : "border-border text-text-muted hover:bg-surface2 hover:text-text"
-                                    } ${privateChatLocked || isFireFoxPrivateMode ? "cursor-not-allowed opacity-50" : ""}`}
+                                    }`}
                                   >
-                                    {temporaryChat
-                                      ? t(
-                                          "playground:composer.ephemeralLabel",
-                                          "Ephemeral"
-                                        )
-                                      : t(
-                                          "playground:composer.savedLabel",
-                                          "Saved"
-                                        )}
+                                    <Search className="h-3 w-3" />
+                                    <span>
+                                      {contextToolsOpen
+                                        ? t(
+                                            "playground:composer.contextKnowledgeClose",
+                                            "Close Search & Context"
+                                          )
+                                        : t(
+                                            "playground:composer.contextKnowledge",
+                                            "Search & Context"
+                                          )}
+                                    </span>
                                   </button>
-                                </span>
-                              </Tooltip>
-                              <button
-                                type="button"
-                                onClick={() => toggleKnowledgePanel("search")}
-                                title={
-                                  contextToolsOpen
-                                    ? (t(
-                                        "playground:composer.contextKnowledgeClose",
-                                        "Close Search & Context"
-                                      ) as string)
-                                    : (t(
-                                        "playground:composer.contextKnowledge",
-                                        "Search & Context"
-                                      ) as string)
-                                }
-                                aria-pressed={contextToolsOpen}
-                                aria-expanded={contextToolsOpen}
-                                aria-label={
-                                  contextToolsOpen
-                                    ? (t(
-                                        "playground:composer.contextKnowledgeClose",
-                                        "Close Search & Context"
-                                      ) as string)
-                                    : (t(
-                                        "playground:composer.contextKnowledge",
-                                        "Search & Context"
-                                      ) as string)
-                                }
-                                className={`inline-flex items-center gap-1 rounded-full border px-2 py-0.5 text-[11px] font-medium transition ${
-                                  contextToolsOpen
-                                    ? "border-accent bg-surface2 text-accent hover:bg-surface"
-                                    : "border-border text-text-muted hover:bg-surface2 hover:text-text"
-                                }`}
-                              >
-                                <Search className="h-3 w-3" />
-                                <span>
-                                  {contextToolsOpen
-                                    ? t(
-                                        "playground:composer.contextKnowledgeClose",
-                                        "Close Search & Context"
-                                      )
-                                    : t(
-                                        "playground:composer.contextKnowledge",
-                                        "Search & Context"
-                                      )}
-                                </span>
-                              </button>
-                              {capabilities?.hasWebSearch && (
+                                  {capabilities?.hasWebSearch && (
+                                    <button
+                                      type="button"
+                                      onClick={() => setWebSearch(!webSearch)}
+                                      aria-pressed={webSearch}
+                                      aria-label={
+                                        webSearch
+                                          ? (t("playground:actions.webSearchOn", "Web search on") as string)
+                                          : (t("playground:actions.webSearchOff", "Web search off") as string)
+                                      }
+                                      title={t("playground:actions.webSearchOff", "Web search") as string}
+                                      className={`inline-flex items-center gap-1 rounded-full border px-2 py-0.5 text-[11px] font-medium transition ${
+                                        webSearch
+                                          ? "border-primary/50 bg-primary/10 text-primaryStrong hover:bg-primary/15"
+                                          : "border-border text-text-muted hover:bg-surface2 hover:text-text"
+                                      }`}
+                                    >
+                                      <Globe className="h-3 w-3" />
+                                      <span>
+                                        {t("playground:actions.webSearchOff", "Web")}
+                                      </span>
+                                    </button>
+                                  )}
+                                  {selectedDocuments.length > 0 && (
+                                    <button
+                                      type="button"
+                                      onClick={() => {
+                                        const chips =
+                                          document.querySelector<HTMLElement>(
+                                            "[data-playground-tabs='true']"
+                                          )
+                                        if (chips) {
+                                          chips.focus()
+                                          chips.scrollIntoView({ block: "nearest" })
+                                        }
+                                      }}
+                                      title={
+                                        t(
+                                          "playground:composer.contextTabsHint",
+                                          "Review or remove referenced tabs, or add more from your open browser tabs."
+                                        ) as string
+                                      }
+                                      className="inline-flex items-center gap-1 rounded-full border border-transparent px-2 py-0.5 hover:border-border hover:bg-surface2">
+                                      <FileText className="h-3 w-3 text-text-subtle" />
+                                      <span>
+                                        {t("playground:composer.contextTabs", {
+                                          defaultValue: "{{count}} tabs",
+                                          count: selectedDocuments.length
+                                        } as any) as string}
+                                      </span>
+                                    </button>
+                                  )}
+                                  {uploadedFiles.length > 0 && (
+                                    <button
+                                      type="button"
+                                      onClick={() => {
+                                        const files =
+                                          document.querySelector<HTMLElement>(
+                                            "[data-playground-uploads='true']"
+                                          )
+                                        if (files) {
+                                          files.focus()
+                                          files.scrollIntoView({ block: "nearest" })
+                                        }
+                                      }}
+                                      title={
+                                        t(
+                                          "playground:composer.contextFilesHint",
+                                          "Review attached files, remove them, or add more."
+                                        ) as string
+                                      }
+                                      className="inline-flex items-center gap-1 rounded-full border border-transparent px-2 py-0.5 hover:border-border hover:bg-surface2">
+                                      <FileIcon className="h-3 w-3 text-text-subtle" />
+                                      <span>
+                                        {t("playground:composer.contextFiles", {
+                                          defaultValue: "{{count}} files",
+                                          count: uploadedFiles.length
+                                        } as any) as string}
+                                      </span>
+                                    </button>
+                                  )}
+                                </div>
+                                <div className="flex items-center justify-end gap-3 flex-wrap">
+                                  <Tooltip
+                                    title={
+                                      t(
+                                        "option:promptInsert.useInChat",
+                                        "Insert prompt"
+                                      ) as string
+                                    }>
+                                    <button
+                                      type="button"
+                                      onClick={() => setPromptInsertOpen(true)}
+                                      aria-label={
+                                        t(
+                                          "option:promptInsert.useInChat",
+                                          "Insert prompt"
+                                        ) as string
+                                      }
+                                      className="inline-flex items-center gap-1 rounded-full border border-border px-2 py-1 text-xs text-text-muted transition hover:bg-surface2 hover:text-text"
+                                    >
+                                      <BookPlus className="h-4 w-4" />
+                                      <span className="hidden text-xs font-medium sm:inline">
+                                        {t(
+                                          "option:promptInsert.useInChat",
+                                          "Insert prompt"
+                                        )}
+                                      </span>
+                                    </button>
+                                  </Tooltip>
+                                  {(browserSupportsSpeechRecognition || hasServerAudio) && (
+                                    <Tooltip
+                                      title={
+                                        !speechAvailable
+                                          ? t(
+                                              "playground:actions.speechUnavailableBody",
+                                              "Connect to a tldw server that exposes the audio transcriptions API to use dictation."
+                                            )
+                                          : speechUsesServer
+                                            ? t(
+                                                "playground:tooltip.speechToTextServer",
+                                                "Dictation via your tldw server"
+                                              ) +
+                                              " " +
+                                              t(
+                                                "playground:tooltip.speechToTextDetails",
+                                                "Uses {{model}} · {{task}} · {{format}}. Configure in Settings → General → Speech-to-Text.",
+                                                {
+                                                  model: sttModel || "whisper-1",
+                                                  task:
+                                                    sttTask === "translate"
+                                                      ? "translate"
+                                                      : "transcribe",
+                                                  format: (sttResponseFormat || "json").toUpperCase()
+                                                } as any
+                                              )
+                                            : t(
+                                                "playground:tooltip.speechToTextBrowser",
+                                                "Dictation via browser speech recognition"
+                                              )
+                                      }
+                                    >
+                                      <button
+                                        type="button"
+                                        onClick={speechUsesServer ? handleServerDictationToggle : handleSpeechToggle}
+                                        disabled={!speechAvailable || voiceChatEnabled}
+                                        className={`inline-flex items-center justify-center rounded-full border text-xs transition hover:bg-surface2 disabled:cursor-not-allowed disabled:opacity-50 ${
+                                          speechAvailable &&
+                                          ((speechUsesServer && isServerDictating) ||
+                                            (!speechUsesServer && isListening))
+                                            ? "border-primary text-primaryStrong"
+                                            : "border-border text-text-muted"
+                                        } ${isProMode ? "px-2 py-1" : "h-9 w-9 p-0"}`}
+                                        aria-label={
+                                          !speechAvailable
+                                            ? (t(
+                                                "playground:actions.speechUnavailableTitle",
+                                                "Dictation unavailable"
+                                              ) as string)
+                                            : speechUsesServer
+                                              ? (isServerDictating
+                                                  ? (t("playground:actions.speechStop", "Stop dictation") as string)
+                                                  : (t("playground:actions.speechStart", "Start dictation") as string))
+                                              : (isListening
+                                                  ? (t("playground:actions.speechStop", "Stop dictation") as string)
+                                                  : (t("playground:actions.speechStart", "Start dictation") as string))
+                                        }
+                                      >
+                                        <MicIcon className="h-4 w-4" />
+                                      </button>
+                                    </Tooltip>
+                                  )}
+                                  {modelUsageBadge}
+                                  <Tooltip
+                                    title={
+                                      t(
+                                        "common:currentChatModelSettings"
+                                      ) as string
+                                    }>
+                                    <button
+                                      type="button"
+                                      onClick={() => setOpenModelSettings(true)}
+                                      aria-label={
+                                        t(
+                                          "common:currentChatModelSettings"
+                                        ) as string
+                                      }
+                                      className="inline-flex items-center gap-2 rounded-md border border-border px-3 py-1.5 text-xs text-text transition hover:bg-surface2">
+                                      <Gauge
+                                        className="h-4 w-4"
+                                        aria-hidden="true"
+                                      />
+                                      <span className="flex flex-col items-start text-left">
+                                        <span className="font-medium">
+                                          {t("playground:composer.chatSettings", "Chat Settings")}
+                                        </span>
+                                        <span className="text-[11px] text-text-muted">
+                                          {modelSummaryLabel} • {promptSummaryLabel}
+                                        </span>
+                                      </span>
+                                    </button>
+                                  </Tooltip>
+                                  {voiceChatButton}
+                                  {attachmentButton}
+                                  {toolsButton}
+                                  {sendControl}
+                                </div>
+                              </div>
+                              {!temporaryChat && !isConnectionReady && (
                                 <button
                                   type="button"
-                                  onClick={() => setWebSearch(!webSearch)}
-                                  aria-pressed={webSearch}
-                                  aria-label={
-                                    webSearch
-                                      ? (t("playground:actions.webSearchOn", "Web search on") as string)
-                                      : (t("playground:actions.webSearchOff", "Web search off") as string)
+                                  onClick={focusConnectionCard}
+                                  title={
+                                    t(
+                                      "playground:composer.persistence.connectToSave",
+                                      "Connect your server to sync chats."
+                                    ) as string
                                   }
-                                  title={t("playground:actions.webSearchOff", "Web search") as string}
-                                  className={`inline-flex items-center gap-1 rounded-full border px-2 py-0.5 text-[11px] font-medium transition ${
-                                    webSearch
-                                      ? "border-primary/50 bg-primary/10 text-primaryStrong hover:bg-primary/15"
+                                  className="inline-flex w-fit items-center gap-1 text-[11px] font-medium text-primary hover:text-primaryStrong"
+                                >
+                                  {t(
+                                    "playground:composer.persistence.connectToSave",
+                                    "Connect your server to sync chats."
+                                  )}
+                                </button>
+                              )}
+                              {!temporaryChat && serverChatId && showServerPersistenceHint && (
+                                <p className="max-w-md text-[11px] text-text-muted">
+                                  <span className="font-semibold">
+                                    {t(
+                                      "playground:composer.persistence.serverInlineTitle",
+                                      "Saved locally + on your server"
+                                    )}
+                                    {": "}
+                                  </span>
+                                  {t(
+                                    "playground:composer.persistence.serverInlineBody",
+                                    "This chat is stored both in this browser and on your tldw server, so you can reopen it from server history, keep a long-term record, and analyze it alongside other conversations."
+                                  )}
+                                  <button
+                                    type="button"
+                                    onClick={() => setShowServerPersistenceHint(false)}
+                                    title={t("common:dismiss", "Dismiss") as string}
+                                    className="ml-1 text-[11px] font-medium text-primary hover:text-primaryStrong"
+                                  >
+                                    {t("common:dismiss", "Dismiss")}
+                                  </button>
+                                </p>
+                              )}
+                            </div>
+                          </div>
+                        ) : (
+                          <div className="mt-2 flex flex-col gap-2">
+                            <div className="flex flex-wrap items-center gap-2">
+                              <PromptSelect
+                                selectedSystemPrompt={selectedSystemPrompt}
+                                setSelectedSystemPrompt={setSelectedSystemPrompt}
+                                setSelectedQuickPrompt={setSelectedQuickPrompt}
+                                iconClassName="h-4 w-4"
+                                className="text-text-muted hover:text-text"
+                              />
+                              {modelSelectButton}
+                              <CharacterSelect
+                                showLabel={false}
+                                className="text-text-muted hover:text-text"
+                                iconClassName="h-4 w-4"
+                              />
+                              {mcpControl}
+                            </div>
+                            <div className="flex items-center justify-between gap-2">
+                              <div className="flex items-center gap-2 flex-nowrap">
+                                <Tooltip title={persistenceTooltip}>
+                                  <span>
+                                    <button
+                                      type="button"
+                                      onClick={() =>
+                                        handleToggleTemporaryChat(!temporaryChat)
+                                      }
+                                      disabled={privateChatLocked || isFireFoxPrivateMode}
+                                      aria-pressed={temporaryChat}
+                                      aria-label={
+                                        temporaryChat
+                                          ? (t(
+                                              "playground:composer.ephemeralLabel",
+                                              "Ephemeral"
+                                            ) as string)
+                                          : (t(
+                                              "playground:composer.savedLabel",
+                                              "Saved"
+                                            ) as string)
+                                      }
+                                      className={`inline-flex items-center gap-1 rounded-full border px-2 py-1 text-[11px] font-medium transition ${
+                                        temporaryChat
+                                          ? "border-accent bg-surface2 text-accent hover:bg-surface"
+                                          : "border-border text-text-muted hover:bg-surface2 hover:text-text"
+                                      } ${privateChatLocked || isFireFoxPrivateMode ? "cursor-not-allowed opacity-50" : ""}`}
+                                    >
+                                      {temporaryChat
+                                        ? t(
+                                            "playground:composer.ephemeralLabel",
+                                            "Ephemeral"
+                                          )
+                                        : t(
+                                            "playground:composer.savedLabel",
+                                            "Saved"
+                                          )}
+                                    </button>
+                                  </span>
+                                </Tooltip>
+                                <button
+                                  type="button"
+                                  onClick={() => toggleKnowledgePanel("search")}
+                                  title={
+                                    contextToolsOpen
+                                      ? (t(
+                                          "playground:composer.contextKnowledgeClose",
+                                          "Close Search & Context"
+                                        ) as string)
+                                      : (t(
+                                          "playground:composer.contextKnowledge",
+                                          "Search & Context"
+                                        ) as string)
+                                  }
+                                  aria-pressed={contextToolsOpen}
+                                  aria-expanded={contextToolsOpen}
+                                  aria-label={
+                                    contextToolsOpen
+                                      ? (t(
+                                          "playground:composer.contextKnowledgeClose",
+                                          "Close Search & Context"
+                                        ) as string)
+                                      : (t(
+                                          "playground:composer.contextKnowledge",
+                                          "Search & Context"
+                                        ) as string)
+                                  }
+                                  className={`inline-flex min-w-0 max-w-[140px] items-center gap-1 rounded-full border px-2 py-1 text-[11px] font-medium transition ${
+                                    contextToolsOpen
+                                      ? "border-accent bg-surface2 text-accent hover:bg-surface"
                                       : "border-border text-text-muted hover:bg-surface2 hover:text-text"
                                   }`}
                                 >
-                                  <Globe className="h-3 w-3" />
-                                  <span>
-                                    {t("playground:actions.webSearchOff", "Web")}
-                                  </span>
-                                </button>
-                              )}
-                              {selectedDocuments.length > 0 && (
-                                <button
-                                  type="button"
-                                  onClick={() => {
-                                    const chips =
-                                      document.querySelector<HTMLElement>(
-                                        "[data-playground-tabs='true']"
-                                      )
-                                    if (chips) {
-                                      chips.focus()
-                                      chips.scrollIntoView({ block: "nearest" })
-                                    }
-                                  }}
-                                  title={
-                                    t(
-                                      "playground:composer.contextTabsHint",
-                                      "Review or remove referenced tabs, or add more from your open browser tabs."
-                                    ) as string
-                                  }
-                                  className="inline-flex items-center gap-1 rounded-full border border-transparent px-2 py-0.5 hover:border-border hover:bg-surface2">
-                                  <FileText className="h-3 w-3 text-text-subtle" />
-                                  <span>
-                                    {t("playground:composer.contextTabs", {
-                                      defaultValue: "{{count}} tabs",
-                                      count: selectedDocuments.length
-                                    } as any) as string}
-                                  </span>
-                                </button>
-                              )}
-                              {uploadedFiles.length > 0 && (
-                                <button
-                                  type="button"
-                                  onClick={() => {
-                                    const files =
-                                      document.querySelector<HTMLElement>(
-                                        "[data-playground-uploads='true']"
-                                      )
-                                    if (files) {
-                                      files.focus()
-                                      files.scrollIntoView({ block: "nearest" })
-                                    }
-                                  }}
-                                  title={
-                                    t(
-                                      "playground:composer.contextFilesHint",
-                                      "Review attached files, remove them, or add more."
-                                    ) as string
-                                  }
-                                  className="inline-flex items-center gap-1 rounded-full border border-transparent px-2 py-0.5 hover:border-border hover:bg-surface2">
-                                  <FileIcon className="h-3 w-3 text-text-subtle" />
-                                  <span>
-                                    {t("playground:composer.contextFiles", {
-                                      defaultValue: "{{count}} files",
-                                      count: uploadedFiles.length
-                                    } as any) as string}
-                                  </span>
-                                </button>
-                              )}
-                            </div>
-                            <div className="flex items-center justify-end gap-3 flex-wrap">
-                              <Tooltip
-                                title={
-                                  t(
-                                    "option:promptInsert.useInChat",
-                                    "Insert prompt"
-                                  ) as string
-                                }>
-                                <button
-                                  type="button"
-                                  onClick={() => setPromptInsertOpen(true)}
-                                  aria-label={
-                                    t(
-                                      "option:promptInsert.useInChat",
-                                      "Insert prompt"
-                                    ) as string
-                                  }
-                                  className="inline-flex items-center gap-1 rounded-full border border-border px-2 py-1 text-xs text-text-muted transition hover:bg-surface2 hover:text-text"
-                                >
-                                  <BookPlus className="h-4 w-4" />
-                                  <span className="hidden text-xs font-medium sm:inline">
-                                    {t(
-                                      "option:promptInsert.useInChat",
-                                      "Insert prompt"
-                                    )}
-                                  </span>
-                                </button>
-                              </Tooltip>
-                              {(browserSupportsSpeechRecognition || hasServerAudio) && (
-                                <Tooltip
-                                  title={
-                                    !speechAvailable
+                                  <Search className="h-3 w-3" />
+                                  <span className="truncate">
+                                    {contextToolsOpen
                                       ? t(
-                                          "playground:actions.speechUnavailableBody",
-                                          "Connect to a tldw server that exposes the audio transcriptions API to use dictation."
+                                          "playground:composer.contextKnowledgeClose",
+                                          "Close Search & Context"
                                         )
-                                      : speechUsesServer
-                                        ? t(
-                                            "playground:tooltip.speechToTextServer",
-                                            "Dictation via your tldw server"
-                                          ) +
-                                          " " +
-                                          t(
-                                            "playground:tooltip.speechToTextDetails",
-                                            "Uses {{model}} · {{task}} · {{format}}. Configure in Settings → General → Speech-to-Text.",
-                                            {
-                                              model: sttModel || "whisper-1",
-                                              task:
-                                                sttTask === "translate"
-                                                  ? "translate"
-                                                  : "transcribe",
-                                              format: (sttResponseFormat || "json").toUpperCase()
-                                            } as any
-                                          )
-                                        : t(
-                                            "playground:tooltip.speechToTextBrowser",
-                                            "Dictation via browser speech recognition"
-                                          )
-                                  }
-                                >
+                                      : t(
+                                          "playground:composer.contextKnowledge",
+                                          "Search & Context"
+                                        )}
+                                  </span>
+                                </button>
+                                {capabilities?.hasWebSearch && (
                                   <button
                                     type="button"
-                                    onClick={speechUsesServer ? handleServerDictationToggle : handleSpeechToggle}
-                                    disabled={!speechAvailable || voiceChatEnabled}
-                                    className={`inline-flex items-center justify-center rounded-full border text-xs transition hover:bg-surface2 disabled:cursor-not-allowed disabled:opacity-50 ${
-                                      speechAvailable &&
-                                      ((speechUsesServer && isServerDictating) ||
-                                        (!speechUsesServer && isListening))
-                                        ? "border-primary text-primaryStrong"
-                                        : "border-border text-text-muted"
-                                    } ${isProMode ? "px-2 py-1" : "h-9 w-9 p-0"}`}
+                                    onClick={() => setWebSearch(!webSearch)}
+                                    aria-pressed={webSearch}
                                     aria-label={
-                                      !speechAvailable
-                                        ? (t(
-                                            "playground:actions.speechUnavailableTitle",
-                                            "Dictation unavailable"
-                                          ) as string)
-                                        : speechUsesServer
-                                          ? (isServerDictating
-                                              ? (t("playground:actions.speechStop", "Stop dictation") as string)
-                                              : (t("playground:actions.speechStart", "Start dictation") as string))
-                                          : (isListening
-                                              ? (t("playground:actions.speechStop", "Stop dictation") as string)
-                                              : (t("playground:actions.speechStart", "Start dictation") as string))
+                                      webSearch
+                                        ? (t("playground:actions.webSearchOn", "Web search on") as string)
+                                        : (t("playground:actions.webSearchOff", "Web search off") as string)
                                     }
+                                    title={t("playground:actions.webSearchOff", "Web search") as string}
+                                    className={`inline-flex items-center gap-1 rounded-full border px-2 py-1 text-[11px] font-medium transition ${
+                                      webSearch
+                                        ? "border-primary/50 bg-primary/10 text-primaryStrong hover:bg-primary/15"
+                                        : "border-border text-text-muted hover:bg-surface2 hover:text-text"
+                                    }`}
                                   >
-                                    <MicIcon className="h-4 w-4" />
+                                    <Globe className="h-3 w-3" />
+                                    <span className="truncate">
+                                      {t("playground:actions.webSearchOff", "Web")}
+                                    </span>
+                                  </button>
+                                )}
+                              </div>
+                              <div className="flex items-center gap-2 flex-nowrap">
+                                <Tooltip
+                                  title={
+                                    t(
+                                      "option:promptInsert.useInChat",
+                                      "Insert prompt"
+                                    ) as string
+                                  }>
+                                  <button
+                                    type="button"
+                                    onClick={() => setPromptInsertOpen(true)}
+                                    aria-label={
+                                      t(
+                                        "option:promptInsert.useInChat",
+                                        "Insert prompt"
+                                      ) as string
+                                    }
+                                    className="inline-flex h-9 w-9 items-center justify-center rounded-full border border-border text-text-muted transition hover:bg-surface2 hover:text-text"
+                                  >
+                                    <BookPlus className="h-4 w-4" />
                                   </button>
                                 </Tooltip>
-                              )}
-                              {modelUsageBadge}
-                              <Tooltip
-                                title={
-                                  t(
-                                    "common:currentChatModelSettings"
-                                  ) as string
-                                }>
-                                <button
-                                  type="button"
-                                  onClick={() => setOpenModelSettings(true)}
-                                  aria-label={
+                                {(browserSupportsSpeechRecognition || hasServerAudio) && (
+                                  <Tooltip
+                                    title={
+                                      !speechAvailable
+                                        ? t(
+                                            "playground:actions.speechUnavailableBody",
+                                            "Connect to a tldw server that exposes the audio transcriptions API to use dictation."
+                                          )
+                                        : speechUsesServer
+                                          ? t(
+                                              "playground:tooltip.speechToTextServer",
+                                              "Dictation via your tldw server"
+                                            )
+                                          : t(
+                                              "playground:tooltip.speechToTextBrowser",
+                                              "Dictation via browser speech recognition"
+                                            )
+                                    }>
+                                    <button
+                                      type="button"
+                                      onClick={speechUsesServer ? handleServerDictationToggle : handleSpeechToggle}
+                                      disabled={!speechAvailable || voiceChatEnabled}
+                                      className={`inline-flex items-center justify-center rounded-full border px-2 py-1 text-xs transition hover:bg-surface2 disabled:cursor-not-allowed disabled:opacity-50 ${
+                                        speechAvailable &&
+                                        ((speechUsesServer && isServerDictating) ||
+                                          (!speechUsesServer && isListening))
+                                          ? "border-primary text-primaryStrong"
+                                          : "border-border text-text-muted"
+                                      }`}
+                                      aria-label={
+                                        !speechAvailable
+                                          ? (t(
+                                              "playground:actions.speechUnavailableTitle",
+                                              "Dictation unavailable"
+                                            ) as string)
+                                          : speechUsesServer
+                                            ? (isServerDictating
+                                                ? (t("playground:actions.speechStop", "Stop dictation") as string)
+                                                : (t("playground:actions.speechStart", "Start dictation") as string))
+                                            : (isListening
+                                                ? (t("playground:actions.speechStop", "Stop dictation") as string)
+                                                : (t("playground:actions.speechStart", "Start dictation") as string))
+                                      }>
+                                      <MicIcon className="h-4 w-4" />
+                                    </button>
+                                  </Tooltip>
+                                )}
+                                {modelUsageBadge}
+                                <Tooltip
+                                  title={
                                     t(
                                       "common:currentChatModelSettings"
                                     ) as string
-                                  }
-                                  className="inline-flex items-center gap-2 rounded-md border border-border px-3 py-1.5 text-xs text-text transition hover:bg-surface2">
-                                  <Gauge
-                                    className="h-4 w-4"
-                                    aria-hidden="true"
-                                  />
-                                  <span className="flex flex-col items-start text-left">
-                                    <span className="font-medium">
-                                      {t("playground:composer.chatSettings", "Chat Settings")}
+                                  }>
+                                  <TldwButton
+                                    variant="outline"
+                                    shape="pill"
+                                    iconOnly
+                                    onClick={() => setOpenModelSettings(true)}
+                                    ariaLabel={
+                                      t(
+                                        "common:currentChatModelSettings"
+                                      ) as string
+                                    }
+                                    className="text-text-muted">
+                                    <Gauge className="h-4 w-4" aria-hidden="true" />
+                                    <span className="sr-only">
+                                      {t(
+                                        "playground:composer.chatSettings",
+                                        "Chat Settings"
+                                      )}
                                     </span>
-                                    <span className="text-[11px] text-text-muted">
-                                      {modelSummaryLabel} • {promptSummaryLabel}
-                                    </span>
-                                  </span>
-                                </button>
-                              </Tooltip>
-                              {voiceChatButton}
-                              {attachmentButton}
-                              {toolsButton}
-                              {sendControl}
+                                  </TldwButton>
+                                </Tooltip>
+                                {voiceChatButton}
+                                {attachmentButton}
+                                {toolsButton}
+                                {sendControl}
+                              </div>
                             </div>
                           </div>
-                          {!temporaryChat && !isConnectionReady && (
-                            <button
-                              type="button"
-                              onClick={focusConnectionCard}
-                              title={
-                                t(
-                                  "playground:composer.persistence.connectToSave",
-                                  "Connect your server to sync chats."
-                                ) as string
-                              }
-                              className="inline-flex w-fit items-center gap-1 text-[11px] font-medium text-primary hover:text-primaryStrong"
-                            >
-                              {t(
-                                "playground:composer.persistence.connectToSave",
-                                "Connect your server to sync chats."
-                              )}
-                            </button>
-                          )}
-                          {!temporaryChat && serverChatId && showServerPersistenceHint && (
-                            <p className="max-w-md text-[11px] text-text-muted">
-                              <span className="font-semibold">
-                                {t(
-                                  "playground:composer.persistence.serverInlineTitle",
-                                  "Saved locally + on your server"
-                                )}
-                                {": "}
-                              </span>
-                              {t(
-                                "playground:composer.persistence.serverInlineBody",
-                                "This chat is stored both in this browser and on your tldw server, so you can reopen it from server history, keep a long-term record, and analyze it alongside other conversations."
-                              )}
-                              <button
-                                type="button"
-                                onClick={() => setShowServerPersistenceHint(false)}
-                                title={t("common:dismiss", "Dismiss") as string}
-                                className="ml-1 text-[11px] font-medium text-primary hover:text-primaryStrong"
-                              >
-                                {t("common:dismiss", "Dismiss")}
-                              </button>
-                            </p>
-                          )}
-                        </div>
+                        )}
                       </div>
-                    ) : (
-                      <div className="mt-2 flex flex-col gap-2">
-                        <div className="flex flex-wrap items-center gap-2">
-                          <PromptSelect
-                            selectedSystemPrompt={selectedSystemPrompt}
-                            setSelectedSystemPrompt={setSelectedSystemPrompt}
-                            setSelectedQuickPrompt={setSelectedQuickPrompt}
-                            iconClassName="h-4 w-4"
-                            className="text-text-muted hover:text-text"
-                          />
-                          {modelSelectButton}
-                          <CharacterSelect
-                            showLabel={false}
-                            className="text-text-muted hover:text-text"
-                            iconClassName="h-4 w-4"
-                          />
-                          {mcpControl}
-                        </div>
-                        <div className="flex items-center justify-between gap-2">
-                          <div className="flex items-center gap-2 flex-nowrap">
-                            <Tooltip title={persistenceTooltip}>
-                              <span>
-                                <button
-                                  type="button"
-                                  onClick={() =>
-                                    handleToggleTemporaryChat(!temporaryChat)
-                                  }
-                                  disabled={privateChatLocked || isFireFoxPrivateMode}
-                                  aria-pressed={temporaryChat}
-                                  aria-label={
-                                    temporaryChat
-                                      ? (t(
-                                          "playground:composer.ephemeralLabel",
-                                          "Ephemeral"
-                                        ) as string)
-                                      : (t(
-                                          "playground:composer.savedLabel",
-                                          "Saved"
-                                        ) as string)
-                                  }
-                                  className={`inline-flex items-center gap-1 rounded-full border px-2 py-1 text-[11px] font-medium transition ${
-                                    temporaryChat
-                                      ? "border-accent bg-surface2 text-accent hover:bg-surface"
-                                      : "border-border text-text-muted hover:bg-surface2 hover:text-text"
-                                  } ${privateChatLocked || isFireFoxPrivateMode ? "cursor-not-allowed opacity-50" : ""}`}
-                                >
-                                  {temporaryChat
-                                    ? t(
-                                        "playground:composer.ephemeralLabel",
-                                        "Ephemeral"
-                                      )
-                                    : t(
-                                        "playground:composer.savedLabel",
-                                        "Saved"
-                                      )}
-                                </button>
-                              </span>
-                            </Tooltip>
-                            <button
-                              type="button"
-                              onClick={() => toggleKnowledgePanel("search")}
-                              title={
-                                contextToolsOpen
-                                  ? (t(
-                                      "playground:composer.contextKnowledgeClose",
-                                      "Close Search & Context"
-                                    ) as string)
-                                  : (t(
-                                      "playground:composer.contextKnowledge",
-                                      "Search & Context"
-                                    ) as string)
-                              }
-                              aria-pressed={contextToolsOpen}
-                              aria-expanded={contextToolsOpen}
-                              aria-label={
-                                contextToolsOpen
-                                  ? (t(
-                                      "playground:composer.contextKnowledgeClose",
-                                      "Close Search & Context"
-                                    ) as string)
-                                  : (t(
-                                      "playground:composer.contextKnowledge",
-                                      "Search & Context"
-                                    ) as string)
-                              }
-                              className={`inline-flex min-w-0 max-w-[140px] items-center gap-1 rounded-full border px-2 py-1 text-[11px] font-medium transition ${
-                                contextToolsOpen
-                                  ? "border-accent bg-surface2 text-accent hover:bg-surface"
-                                  : "border-border text-text-muted hover:bg-surface2 hover:text-text"
-                              }`}
-                            >
-                              <Search className="h-3 w-3" />
-                              <span className="truncate">
-                                {contextToolsOpen
-                                  ? t(
-                                      "playground:composer.contextKnowledgeClose",
-                                      "Close Search & Context"
-                                    )
-                                  : t(
-                                      "playground:composer.contextKnowledge",
-                                      "Search & Context"
-                                    )}
-                              </span>
-                            </button>
-                            {capabilities?.hasWebSearch && (
-                              <button
-                                type="button"
-                                onClick={() => setWebSearch(!webSearch)}
-                                aria-pressed={webSearch}
-                                aria-label={
-                                  webSearch
-                                    ? (t("playground:actions.webSearchOn", "Web search on") as string)
-                                    : (t("playground:actions.webSearchOff", "Web search off") as string)
-                                }
-                                title={t("playground:actions.webSearchOff", "Web search") as string}
-                                className={`inline-flex items-center gap-1 rounded-full border px-2 py-1 text-[11px] font-medium transition ${
-                                  webSearch
-                                    ? "border-primary/50 bg-primary/10 text-primaryStrong hover:bg-primary/15"
-                                    : "border-border text-text-muted hover:bg-surface2 hover:text-text"
-                                }`}
-                              >
-                                <Globe className="h-3 w-3" />
-                                <span className="truncate">
-                                  {t("playground:actions.webSearchOff", "Web")}
-                                </span>
-                              </button>
-                            )}
-                          </div>
-                          <div className="flex items-center gap-2 flex-nowrap">
-                            <Tooltip
-                              title={
-                                t(
-                                  "option:promptInsert.useInChat",
-                                  "Insert prompt"
-                                ) as string
-                              }>
-                              <button
-                                type="button"
-                                onClick={() => setPromptInsertOpen(true)}
-                                aria-label={
-                                  t(
-                                    "option:promptInsert.useInChat",
-                                    "Insert prompt"
-                                  ) as string
-                                }
-                                className="inline-flex h-9 w-9 items-center justify-center rounded-full border border-border text-text-muted transition hover:bg-surface2 hover:text-text"
-                              >
-                                <BookPlus className="h-4 w-4" />
-                              </button>
-                            </Tooltip>
-                            {(browserSupportsSpeechRecognition || hasServerAudio) && (
-                              <Tooltip
-                                title={
-                                  !speechAvailable
-                                    ? t(
-                                        "playground:actions.speechUnavailableBody",
-                                        "Connect to a tldw server that exposes the audio transcriptions API to use dictation."
-                                      )
-                                    : speechUsesServer
-                                      ? t(
-                                          "playground:tooltip.speechToTextServer",
-                                          "Dictation via your tldw server"
-                                        )
-                                      : t(
-                                          "playground:tooltip.speechToTextBrowser",
-                                          "Dictation via browser speech recognition"
-                                        )
-                                }>
-                                <button
-                                  type="button"
-                                  onClick={speechUsesServer ? handleServerDictationToggle : handleSpeechToggle}
-                                  disabled={!speechAvailable || voiceChatEnabled}
-                                  className={`inline-flex items-center justify-center rounded-full border px-2 py-1 text-xs transition hover:bg-surface2 disabled:cursor-not-allowed disabled:opacity-50 ${
-                                    speechAvailable &&
-                                    ((speechUsesServer && isServerDictating) ||
-                                      (!speechUsesServer && isListening))
-                                      ? "border-primary text-primaryStrong"
-                                      : "border-border text-text-muted"
-                                  }`}
-                                  aria-label={
-                                    !speechAvailable
-                                      ? (t(
-                                          "playground:actions.speechUnavailableTitle",
-                                          "Dictation unavailable"
-                                        ) as string)
-                                      : speechUsesServer
-                                        ? (isServerDictating
-                                            ? (t("playground:actions.speechStop", "Stop dictation") as string)
-                                            : (t("playground:actions.speechStart", "Start dictation") as string))
-                                        : (isListening
-                                            ? (t("playground:actions.speechStop", "Stop dictation") as string)
-                                            : (t("playground:actions.speechStart", "Start dictation") as string))
-                                  }>
-                                  <MicIcon className="h-4 w-4" />
-                                </button>
-                              </Tooltip>
-                            )}
-                            {modelUsageBadge}
-                            <Tooltip
-                              title={
-                                t(
-                                  "common:currentChatModelSettings"
-                                ) as string
-                              }>
-                              <TldwButton
-                                variant="outline"
-                                shape="pill"
-                                iconOnly
-                                onClick={() => setOpenModelSettings(true)}
-                                ariaLabel={
-                                  t(
-                                    "common:currentChatModelSettings"
-                                  ) as string
-                                }
-                                className="text-text-muted">
-                                <Gauge className="h-4 w-4" aria-hidden="true" />
-                                <span className="sr-only">
-                                  {t(
-                                    "playground:composer.chatSettings",
-                                    "Chat Settings"
-                                  )}
-                                </span>
-                              </TldwButton>
-                            </Tooltip>
-                            {voiceChatButton}
-                            {attachmentButton}
-                            {toolsButton}
-                            {sendControl}
-                          </div>
-                        </div>
-                      </div>
-                    )}
-                    </div>
+                    ) : null}
                     {showConnectBanner && !isConnectionReady && (
                       <div className="mt-2 flex flex-wrap items-center justify-between gap-2 rounded-md border border-amber-300 bg-amber-50 px-3 py-2 text-xs text-amber-900 dark:border-amber-500 dark:bg-[#2a2310] dark:text-amber-100">
                         <p className="max-w-xs text-left">

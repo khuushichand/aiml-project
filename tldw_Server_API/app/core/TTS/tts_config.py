@@ -93,10 +93,17 @@ class PerformanceConfig(BaseModel):
     cache_enabled: bool = False
     cache_ttl_seconds: int = 3600
     stream_chunk_size: int = 1024
+    model_cache_max_entries: Optional[int] = None
     # Compatibility flag: when true, embed error messages as audio bytes in streams.
     # Default is False so APIs surface structured HTTP errors instead of "ERROR: ..." audio.
     # Set to true only if you explicitly rely on error-as-audio semantics.
     stream_errors_as_audio: bool = False
+    token_estimation_enabled: bool = True
+    token_estimate_per_char: float = 2.5
+    token_estimate_safety: float = 1.3
+    token_estimate_min_tokens: int = 256
+    max_new_tokens_cap: int = 4096
+    min_new_tokens_default: int = 60
     memory_warning_threshold: int = 80
     memory_critical_threshold: int = 90
     max_connections_per_provider: int = 5

@@ -20,8 +20,12 @@ from tldw_Server_API.app.core.Audio.error_payloads import _http_error_detail
 from tldw_Server_API.app.core.Audio.tts_service import _raise_for_tts_error
 from tldw_Server_API.app.core.AuthNZ.exceptions import QuotaExceededError, StorageError
 from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import User, get_request_user
+from tldw_Server_API.app.core.DB_Management.Collections_DB import CollectionsDatabase
+from tldw_Server_API.app.core.Jobs.manager import JobManager
 from tldw_Server_API.app.core.Logging.log_context import ensure_request_id
 from tldw_Server_API.app.core.TTS.tts_service_v2 import TTSServiceV2, get_tts_service_v2
+from tldw_Server_API.app.core.Utils.pydantic_compat import model_dump_compat
+from tldw_Server_API.app.api.v1.endpoints.audio.audio_jobs import get_job_manager
 
 router = APIRouter(
     tags=["Audio"],
@@ -50,6 +54,90 @@ def _audio_shim_attr(name: str):
     if not hasattr(audio_shim, name):
         raise NameError(name)
     return getattr(audio_shim, name)
+
+
+@router.post(
+    "/speech/jobs",
+    summary="Submit a long-form TTS job",
+    dependencies=[
+        Depends(check_rate_limit),
+        Depends(require_token_scope("any", require_if_present=True, endpoint_id="audio.speech", count_as="call")),
+    ],
+)
+async def create_speech_job(
+    request_data: OpenAISpeechRequest,
+    request: Request,
+    current_user: User = Depends(get_request_user),
+    jm: JobManager = Depends(get_job_manager),
+):
+    """Submit a long-form TTS job and return job id."""
+    request_id = ensure_request_id(request)
+    provider_hint = _audio_shim_attr("_sanitize_speech_request")(request_data, request_id=request_id)
+
+    user_id_int, tts_overrides, _byok = await _audio_shim_attr("_resolve_tts_byok")(
+        provider_hint=provider_hint,
+        current_user=current_user,
+        request=request,
+    )
+
+    payload = {
+        "speech_request": model_dump_compat(request_data),
+        "provider_hint": provider_hint,
+        "provider_overrides": tts_overrides,
+        "user_id": user_id_int,
+    }
+    # Force non-streaming in jobs worker.
+    payload["speech_request"]["stream"] = False
+
+    job = jm.create_job(
+        domain="audio",
+        queue="default",
+        job_type="tts_longform",
+        payload=payload,
+        owner_user_id=str(current_user.id),
+        priority=5,
+        max_retries=3,
+        request_id=request_id,
+    )
+    return JSONResponse(
+        status_code=status.HTTP_200_OK,
+        content={"job_id": int(job.get("id")), "status": job.get("status", "queued")},
+    )
+
+
+@router.get(
+    "/speech/jobs/{job_id}/artifacts",
+    summary="List artifacts for a TTS job",
+    dependencies=[
+        Depends(check_rate_limit),
+        Depends(require_token_scope("any", require_if_present=True, endpoint_id="audio.speech", count_as="call")),
+    ],
+)
+async def get_speech_job_artifacts(
+    job_id: int,
+    current_user: User = Depends(get_request_user),
+):
+    with CollectionsDatabase.for_user(user_id=str(current_user.id)) as cdb:
+        rows, _total = cdb.list_output_artifacts(job_id=job_id, limit=200, offset=0)
+    artifacts: list[dict[str, Any]] = []
+    for row in rows:
+        metadata = {}
+        if row.metadata_json:
+            try:
+                metadata = json.loads(row.metadata_json)
+            except Exception:
+                metadata = {}
+        artifacts.append(
+            {
+                "output_id": row.id,
+                "format": row.format,
+                "type": row.type,
+                "title": row.title,
+                "download_url": f"/api/v1/outputs/{row.id}/download",
+                "metadata": metadata,
+            }
+        )
+    return {"job_id": job_id, "artifacts": artifacts}
 
 
 async def get_tts_service() -> TTSServiceV2:

@@ -7,6 +7,7 @@ import gc
 import threading
 import time
 import weakref
+from collections import OrderedDict
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
 from enum import Enum
@@ -58,6 +59,19 @@ class ResourceMetrics:
         """Update usage statistics"""
         self.last_used = time.time()
         self.use_count += 1
+
+
+@dataclass
+class ModelCacheEntry:
+    """Track cached TTS model instances for LRU eviction."""
+    provider: str
+    cache_key: str
+    model_ref: weakref.ReferenceType
+    cleanup_callback: Optional[Callable]
+    created_at: float
+    last_used: float
+    use_count: int = 0
+    metadata: dict[str, Any] = field(default_factory=dict)
 
 
 class StreamingSession:
@@ -697,12 +711,55 @@ class TTSResourceManager:
 
         # Model instance tracking
         self._model_instances: dict[str, weakref.ReferenceType] = {}
-        self._registered_models: dict[str, weakref.ReferenceType] = {}
+        self._registered_models: dict[str, dict[str, Any]] = {}
+        self._model_cache: "OrderedDict[str, ModelCacheEntry]" = OrderedDict()
+        self._model_cache_lock = threading.Lock()
+        self._model_cache_evictions = 0
+        self._model_cache_max_entries = self._coerce_cache_limit(
+            self.config.get("model_cache_max_entries", self.config.get("max_cached_models"))
+        )
 
         # Resource cleanup
         self._cleanup_handlers: dict[ResourceType, list[Callable]] = {}
 
         logger.info("TTS Resource Manager initialized")
+
+    @staticmethod
+    def _coerce_cache_limit(raw_value: Any) -> Optional[int]:
+        """Normalize cache size limits; return None when unlimited/disabled."""
+        if raw_value is None:
+            return None
+        try:
+            limit = int(raw_value)
+        except (TypeError, ValueError):
+            return None
+        if limit <= 0:
+            return None
+        return limit
+
+    @staticmethod
+    def _normalize_cache_key(provider: str, model_key: Optional[str] = None) -> str:
+        """Normalize provider/model into a cache key."""
+        provider_key = (provider or "").strip().lower()
+        model_part = (model_key or "").strip().lower()
+        if provider_key and model_part:
+            return f"{provider_key}:{model_part}"
+        if provider_key:
+            return provider_key
+        return model_part
+
+    @staticmethod
+    def _cleanup_device_cache() -> None:
+        """Best-effort device cleanup after model eviction."""
+        gc.collect()
+        try:
+            import torch
+            if torch.cuda.is_available():
+                torch.cuda.empty_cache()
+            if hasattr(torch, "mps") and torch.backends.mps.is_available():
+                torch.mps.empty_cache()
+        except Exception:
+            pass
 
     async def initialize(self):
         """Initialize resource management"""
@@ -776,12 +833,130 @@ class TTSResourceManager:
         """Get HTTP client for provider"""
         return await self.connection_pool.get_client(provider, base_url)
 
-    def register_model(self, provider: str, model_instance: Any, cleanup_callback: Optional[Callable] = None):
-        """Register model instance for resource management"""
-        self._model_instances[provider] = weakref.ref(model_instance)
+    def register_model(
+        self,
+        provider: str,
+        model_instance: Any,
+        cleanup_callback: Optional[Callable] = None,
+        model_key: Optional[str] = None,
+        metadata: Optional[dict[str, Any]] = None,
+    ):
+        """Register model instance for resource management."""
+        cache_key = self._normalize_cache_key(provider, model_key)
+        now = time.time()
+
+        with self._model_cache_lock:
+            entry = self._model_cache.get(cache_key)
+            if entry is None:
+                entry = ModelCacheEntry(
+                    provider=provider,
+                    cache_key=cache_key,
+                    model_ref=weakref.ref(model_instance),
+                    cleanup_callback=cleanup_callback,
+                    created_at=now,
+                    last_used=now,
+                    use_count=1,
+                    metadata=metadata or {},
+                )
+                self._model_cache[cache_key] = entry
+            else:
+                entry.model_ref = weakref.ref(model_instance)
+                entry.cleanup_callback = cleanup_callback
+                entry.last_used = now
+                entry.use_count += 1
+                if metadata:
+                    entry.metadata.update(metadata)
+                self._model_cache.move_to_end(cache_key)
+
+            # Track explicit registered models as expected by tests
+            self._registered_models[provider] = {"model": model_instance, "cleanup": cleanup_callback}
+            self._model_instances[provider] = weakref.ref(model_instance)
+
         self.memory_monitor.register_model(model_instance, cleanup_callback)
-        # Track explicit registered models as expected by tests
-        self._registered_models[provider] = {"model": model_instance, "cleanup": cleanup_callback}
+
+        eviction_coros = self._evict_models_if_needed(exclude_keys={cache_key})
+        if eviction_coros:
+            async def _run_evictions():
+                for coro in eviction_coros:
+                    await coro
+            return _run_evictions()
+        return None
+
+    def touch_model(self, provider: str, model_key: Optional[str] = None) -> bool:
+        """Mark a cached model as recently used."""
+        cache_key = self._normalize_cache_key(provider, model_key)
+        if not cache_key:
+            return False
+        with self._model_cache_lock:
+            entry = self._model_cache.get(cache_key)
+            if entry is None:
+                return False
+            entry.last_used = time.time()
+            entry.use_count += 1
+            self._model_cache.move_to_end(cache_key)
+        return True
+
+    def _evict_models_if_needed(self, exclude_keys: Optional[set[str]] = None) -> list[Any]:
+        """Evict least-recently-used models when limits are exceeded."""
+        async_cleanups: list[Any] = []
+        exclude_keys = exclude_keys or set()
+        max_entries = self._model_cache_max_entries
+
+        with self._model_cache_lock:
+            while max_entries is not None and len(self._model_cache) > max_entries:
+                evicted = self._evict_one_locked(exclude_keys, async_cleanups, reason="capacity")
+                if not evicted:
+                    break
+
+            if self.memory_monitor.is_memory_critical():
+                # Best-effort eviction if memory is critical
+                self._evict_one_locked(exclude_keys, async_cleanups, reason="memory")
+
+        return async_cleanups
+
+    def _evict_one_locked(self, exclude_keys: set[str], async_cleanups: list[Any], reason: str) -> bool:
+        """Evict a single oldest entry (lock must be held)."""
+        for key, entry in list(self._model_cache.items()):
+            if key in exclude_keys:
+                continue
+            _cleanup = self._evict_entry_locked(key, entry, reason)
+            if _cleanup is not None:
+                async_cleanups.append(_cleanup)
+            return True
+        return False
+
+    def _evict_entry_locked(self, cache_key: str, entry: ModelCacheEntry, reason: str) -> Optional[Any]:
+        """Remove cache entry and run cleanup (lock must be held)."""
+        self._model_cache.pop(cache_key, None)
+        self._model_cache_evictions += 1
+
+        provider = entry.provider
+        self._model_instances.pop(provider, None)
+        self._registered_models.pop(provider, None)
+
+        cleanup_cb = entry.cleanup_callback
+        logger.info(f"Evicting TTS model cache entry '{cache_key}' (reason={reason})")
+
+        if cleanup_cb is None:
+            self._cleanup_device_cache()
+            return None
+
+        if asyncio.iscoroutinefunction(cleanup_cb):
+            async def _wrapped():
+                try:
+                    await cleanup_cb()
+                except Exception as e:
+                    logger.error(f"Error cleaning model for {cache_key}: {e}")
+                finally:
+                    self._cleanup_device_cache()
+            return _wrapped()
+
+        try:
+            cleanup_cb()
+        except Exception as e:
+            logger.error(f"Error cleaning model for {cache_key}: {e}")
+        self._cleanup_device_cache()
+        return None
 
     def register_cleanup_handler(self, resource_type: ResourceType, handler: Callable):
         """Register cleanup handler for resource type"""
@@ -829,6 +1004,15 @@ class TTSResourceManager:
                 except Exception as e:
                     logger.error(f"Error in model cleanup for {provider}: {e}")
             logger.debug(f"Unregistered model for provider: {provider}")
+        # Drop any cached entries for this provider
+        with self._model_cache_lock:
+            keys_to_drop = [
+                key for key, cache_entry in self._model_cache.items()
+                if cache_entry.provider == provider
+            ]
+            for key in keys_to_drop:
+                self._model_cache.pop(key, None)
+        self._model_instances.pop(provider, None)
 
     async def create_streaming_session(self, provider: str) -> str:
         """Create a new streaming session
@@ -849,7 +1033,10 @@ class TTSResourceManager:
             "providers": list(self.connection_pool._clients.keys())
         }
         models = {
-            "registered": list(self._registered_models.keys())
+            "registered": list(self._registered_models.keys()),
+            "cache_size": len(self._model_cache),
+            "cache_max_entries": self._model_cache_max_entries,
+            "cache_evictions": self._model_cache_evictions,
         }
         sessions = {
             "active": len(self.session_manager._sessions),
@@ -923,6 +1110,47 @@ async def get_resource_manager(config: Optional[dict[str, Any]] = None) -> TTSRe
         TTSResourceManager instance
     """
     global _resource_manager
+
+    def _auto_model_cache_limit() -> int:
+        """Best-effort default cache size for mixed hardware deployments."""
+        try:
+            import torch
+        except Exception:
+            return 1
+        try:
+            if hasattr(torch, "backends") and torch.backends.mps.is_available():
+                return 1
+        except Exception:
+            pass
+        try:
+            if torch.cuda.is_available():
+                try:
+                    props = torch.cuda.get_device_properties(0)
+                    total_gb = float(getattr(props, "total_memory", 0)) / (1024 ** 3)
+                    return 2 if total_gb >= 16.0 else 1
+                except Exception:
+                    return 1
+        except Exception:
+            return 1
+        return 1
+
+    if config is None:
+        try:
+            from .tts_config import get_tts_config
+            tts_cfg = get_tts_config()
+            perf = tts_cfg.performance
+            cache_limit = getattr(perf, "model_cache_max_entries", None)
+            if cache_limit is None:
+                cache_limit = _auto_model_cache_limit()
+            config = {
+                "memory_warning_threshold": perf.memory_warning_threshold,
+                "memory_critical_threshold": perf.memory_critical_threshold,
+                "max_connections": perf.max_connections_per_provider,
+                "connection_timeout": perf.connection_timeout,
+                "model_cache_max_entries": cache_limit,
+            }
+        except Exception:
+            config = None
 
     if _resource_manager is None:
         async with _manager_lock:

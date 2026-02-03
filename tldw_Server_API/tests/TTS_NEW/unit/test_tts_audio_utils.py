@@ -1,0 +1,65 @@
+import numpy as np
+
+from tldw_Server_API.app.core.TTS.audio_utils import (
+    analyze_audio_signal,
+    compute_audio_peak,
+    compute_audio_rms,
+    crossfade_audio,
+    evaluate_audio_quality,
+    split_text_into_chunks,
+    trailing_silence_duration_ms,
+    trim_trailing_silence,
+)
+
+
+def test_split_text_into_chunks_basic():
+    text = "Hello world. This is a second sentence! And a third?"
+    chunks = split_text_into_chunks(text, target_chars=20, max_chars=30, min_chars=5)
+    assert chunks
+    assert all(isinstance(c, str) for c in chunks)
+    assert "Hello world." in chunks[0]
+
+
+def test_crossfade_audio_length():
+    left = np.ones(1000, dtype=np.int16) * 1000
+    right = np.ones(1000, dtype=np.int16) * 2000
+    merged = crossfade_audio(left, right, sample_rate=1000, crossfade_ms=100)
+    # 100 ms at 1kHz = 100 samples overlap
+    assert merged.shape[0] == (left.shape[0] + right.shape[0] - 100)
+    assert merged.dtype == np.int16
+
+
+def test_audio_metrics_and_trailing_silence():
+    audio = np.concatenate(
+        [np.ones(100, dtype=np.int16) * 1000, np.zeros(100, dtype=np.int16)]
+    )
+    rms = compute_audio_rms(audio)
+    peak = compute_audio_peak(audio)
+    trailing_ms = trailing_silence_duration_ms(audio, sample_rate=1000, threshold=0.01)
+    trimmed = trim_trailing_silence(audio, sample_rate=1000, threshold=0.01)
+    metrics = analyze_audio_signal(audio, sample_rate=1000, silence_threshold=0.01)
+
+    assert rms > 0
+    assert peak > 0
+    assert trailing_ms == 100
+    assert trimmed.shape[0] == 100
+    assert metrics["trailing_silence_ms"] == 100.0
+
+
+def test_evaluate_audio_quality_flags_silence_and_short_duration():
+    audio = np.zeros(200, dtype=np.int16)
+    metrics, warnings = evaluate_audio_quality(
+        audio,
+        sample_rate=1000,
+        text_length=120,
+        min_text_length=10,
+        min_rms=0.001,
+        min_peak=0.02,
+        trailing_silence_ms=50,
+        expected_chars_per_sec=10.0,
+        min_duration_ratio=0.5,
+        min_duration_seconds=0.4,
+    )
+    assert metrics["rms"] == 0.0
+    assert any("low_levels" in w for w in warnings)
+    assert any("trailing_silence_ms" in w for w in warnings)

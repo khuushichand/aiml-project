@@ -27,6 +27,7 @@ import { useQuery } from "@tanstack/react-query"
 import {
   chunkText,
   chunkFile,
+  processPdfForChunking,
   getChunkingCapabilities,
   listChunkingTemplates,
   getChunkingTemplate,
@@ -36,9 +37,9 @@ import {
   type ChunkingOptions,
   type ChunkingCapabilities,
   type ChunkingResponse,
-  type ChunkingTemplateListResponse,
-  type LLMOptionsForInternalSteps
+  type ChunkingTemplateListResponse
 } from "@/services/chunking"
+import { bgRequest } from "@/services/background-proxy"
 
 import { ChunkCardView } from "./ChunkCardView"
 import { ChunkInlineView } from "./ChunkInlineView"
@@ -49,12 +50,13 @@ import { ChunkingTemplatesPanel } from "./ChunkingTemplatesPanel"
 import { ChunkingCapabilitiesPanel } from "./ChunkingCapabilitiesPanel"
 import { SaveAsTemplateModal } from "./SaveAsTemplateModal"
 import { getLanguageOptions } from "./constants"
+import { SplitView } from "./SplitView"
 
 const { TextArea } = Input
 const { Text, Title } = Typography
 
-type InputSource = "paste" | "upload" | "sample" | "media"
-type ViewMode = "cards" | "inline"
+type InputSource = "paste" | "upload" | "sample" | "media" | "pdf"
+type ViewMode = "cards" | "inline" | "split"
 type PlaygroundMode = "single" | "compare" | "templates" | "capabilities"
 type RequestMode = "json" | "file"
 
@@ -72,61 +74,29 @@ export const ChunkingPlayground: React.FC<ChunkingPlaygroundProps> = ({
   const [inputText, setInputText] = useState("")
   const [inputFile, setInputFile] = useState<File | null>(null)
 
-  // Settings state
-  const [method, setMethod] = useState(DEFAULT_CHUNKING_OPTIONS.method!)
-  const [maxSize, setMaxSize] = useState(DEFAULT_CHUNKING_OPTIONS.max_size!)
-  const [overlap, setOverlap] = useState(DEFAULT_CHUNKING_OPTIONS.overlap!)
-  const [language, setLanguage] = useState(DEFAULT_CHUNKING_OPTIONS.language!)
+  // Settings state (schema-driven)
+  const [options, setOptions] = useState<ChunkingOptions>({
+    ...DEFAULT_CHUNKING_OPTIONS
+  })
   const [templateName, setTemplateName] = useState("")
-  const [tokenizerName, setTokenizerName] = useState(
-    DEFAULT_CHUNKING_OPTIONS.tokenizer_name_or_path ?? "gpt2"
+  const [pdfFile, setPdfFile] = useState<File | null>(null)
+  const [pdfUrl, setPdfUrl] = useState<string | null>(null)
+  const [pdfMetadata, setPdfMetadata] = useState<Record<string, any> | null>(
+    null
   )
-  const [adaptive, setAdaptive] = useState(
-    Boolean(DEFAULT_CHUNKING_OPTIONS.adaptive)
+  const [pdfParsingEngine, setPdfParsingEngine] = useState("pymupdf4llm")
+  const [enableOcr, setEnableOcr] = useState(false)
+  const [ocrBackend, setOcrBackend] = useState<string | undefined>(undefined)
+  const [ocrMode, setOcrMode] = useState<"always" | "fallback">("fallback")
+  const [ocrLang, setOcrLang] = useState("eng")
+  const [ocrDpi, setOcrDpi] = useState(300)
+  const [ocrMinPageTextChars, setOcrMinPageTextChars] = useState(40)
+  const [ocrOutputFormat, setOcrOutputFormat] = useState<string | undefined>(
+    undefined
   )
-  const [multiLevel, setMultiLevel] = useState(
-    Boolean(DEFAULT_CHUNKING_OPTIONS.multi_level)
+  const [ocrPromptPreset, setOcrPromptPreset] = useState<string | undefined>(
+    undefined
   )
-  const [codeMode, setCodeMode] = useState<"auto" | "ast" | "heuristic">(
-    "auto"
-  )
-  const [semanticSimilarityThreshold, setSemanticSimilarityThreshold] =
-    useState<number | null>(
-      DEFAULT_CHUNKING_OPTIONS.semantic_similarity_threshold ?? null
-    )
-  const [semanticOverlapSentences, setSemanticOverlapSentences] =
-    useState<number | null>(
-      DEFAULT_CHUNKING_OPTIONS.semantic_overlap_sentences ?? null
-    )
-  const [jsonChunkableDataKey, setJsonChunkableDataKey] = useState(
-    DEFAULT_CHUNKING_OPTIONS.json_chunkable_data_key ?? "data"
-  )
-  const [enableFrontmatterParsing, setEnableFrontmatterParsing] = useState(
-    DEFAULT_CHUNKING_OPTIONS.enable_frontmatter_parsing ?? true
-  )
-  const [frontmatterSentinelKey, setFrontmatterSentinelKey] = useState(
-    DEFAULT_CHUNKING_OPTIONS.frontmatter_sentinel_key ?? "__tldw_frontmatter__"
-  )
-  const [customChapterPattern, setCustomChapterPattern] = useState("")
-  const [summarizationDetail, setSummarizationDetail] = useState<number | null>(
-    DEFAULT_CHUNKING_OPTIONS.summarization_detail ?? null
-  )
-  const [propositionEngine, setPropositionEngine] = useState(
-    DEFAULT_CHUNKING_OPTIONS.proposition_engine ?? "heuristic"
-  )
-  const [propositionAggressiveness, setPropositionAggressiveness] =
-    useState<number | null>(
-      DEFAULT_CHUNKING_OPTIONS.proposition_aggressiveness ?? null
-    )
-  const [propositionMinLength, setPropositionMinLength] = useState<
-    number | null
-  >(DEFAULT_CHUNKING_OPTIONS.proposition_min_proposition_length ?? null)
-  const [propositionPromptProfile, setPropositionPromptProfile] = useState(
-    DEFAULT_CHUNKING_OPTIONS.proposition_prompt_profile ?? "generic"
-  )
-  const [llmTemperature, setLlmTemperature] = useState<number | null>(null)
-  const [llmSystemPrompt, setLlmSystemPrompt] = useState("")
-  const [llmMaxTokens, setLlmMaxTokens] = useState<number | null>(null)
 
   const [requestMode, setRequestMode] = useState<RequestMode>("json")
 
@@ -170,6 +140,17 @@ export const ChunkingPlayground: React.FC<ChunkingPlaygroundProps> = ({
     staleTime: 60 * 1000
   })
 
+  const { data: ocrBackends } = useQuery<Record<string, { available?: boolean }>>({
+    queryKey: ["ocr-backends"],
+    queryFn: async () => {
+      return await bgRequest<Record<string, { available?: boolean }>>({
+        path: "/api/v1/ocr/backends",
+        method: "GET"
+      })
+    },
+    staleTime: 5 * 60 * 1000
+  })
+
   const methodOptions = React.useMemo(() => {
     if (!capabilities?.methods) {
       return [
@@ -184,19 +165,30 @@ export const ChunkingPlayground: React.FC<ChunkingPlaygroundProps> = ({
     }))
   }, [capabilities])
 
+  const pdfMethodAllowlist = React.useMemo(
+    () =>
+      new Set([
+        "semantic",
+        "tokens",
+        "paragraphs",
+        "sentences",
+        "words",
+        "ebook_chapters",
+        "json",
+        "propositions"
+      ]),
+    []
+  )
+
+  const pdfMethodOptions = React.useMemo(
+    () =>
+      methodOptions.filter((option) =>
+        pdfMethodAllowlist.has(String(option.value))
+      ),
+    [methodOptions, pdfMethodAllowlist]
+  )
+
   const languageOptions = React.useMemo(() => getLanguageOptions(t), [t])
-  const codeModeOptions = React.useMemo(() => {
-    const available =
-      capabilities?.method_specific_options?.code?.code_mode ?? [
-        "auto",
-        "ast",
-        "heuristic"
-      ]
-    return available.map((mode) => ({
-      value: mode,
-      label: mode.toUpperCase()
-    }))
-  }, [capabilities])
   const templateOptions = React.useMemo(() => {
     return (
       templateList?.templates?.map((template) => ({
@@ -206,78 +198,155 @@ export const ChunkingPlayground: React.FC<ChunkingPlaygroundProps> = ({
     )
   }, [templateList])
 
+  const ocrBackendOptions = React.useMemo(() => {
+    if (!ocrBackends) return []
+    return Object.entries(ocrBackends).map(([name, info]) => ({
+      value: name,
+      label: info?.available === false ? `${name} (unavailable)` : name,
+      disabled: info?.available === false
+    }))
+  }, [ocrBackends])
+
+  const fallbackSchema = React.useMemo(() => {
+    const properties: Record<string, any> = {}
+    Object.entries(DEFAULT_CHUNKING_OPTIONS).forEach(([key, value]) => {
+      let type = "string"
+      if (typeof value === "number") {
+        type = Number.isInteger(value) ? "integer" : "number"
+      } else if (typeof value === "boolean") {
+        type = "boolean"
+      } else if (typeof value === "object" && value !== null) {
+        type = "object"
+      }
+      properties[key] = {
+        type,
+        default: value
+      }
+    })
+    return { type: "object", properties }
+  }, [])
+
+  const optionsSchema = React.useMemo(
+    () => capabilities?.options_schema ?? fallbackSchema,
+    [capabilities, fallbackSchema]
+  )
+  const schemaProps: Record<string, any> =
+    (optionsSchema as Record<string, any>)?.properties ?? {}
+  const schemaDefs: Record<string, any> =
+    (optionsSchema as Record<string, any>)?.$defs ??
+    (optionsSchema as Record<string, any>)?.definitions ??
+    {}
+
+  const setOptionValue = useCallback(
+    (name: string, value: any) => {
+      setOptions((prev) => ({
+        ...prev,
+        [name]: value
+      }))
+    },
+    [setOptions]
+  )
+
+  const setNestedOptionValue = useCallback(
+    (parent: string, child: string, value: any) => {
+      setOptions((prev) => ({
+        ...prev,
+        [parent]: {
+          ...(((prev as Record<string, any>)[parent] as Record<string, any>) ?? {}),
+          [child]: value
+        }
+      }))
+    },
+    [setOptions]
+  )
+
   const buildChunkingOptions = useCallback((): ChunkingOptions => {
-    const options: ChunkingOptions = {
-      method,
-      max_size: maxSize,
-      overlap,
-      language: language === "auto" ? undefined : language,
-      template_name: templateName.trim() || undefined,
-      tokenizer_name_or_path: tokenizerName.trim() || undefined,
-      adaptive,
-      multi_level: multiLevel,
-      json_chunkable_data_key: jsonChunkableDataKey.trim() || undefined,
-      enable_frontmatter_parsing: enableFrontmatterParsing,
-      frontmatter_sentinel_key: frontmatterSentinelKey.trim() || undefined,
-      custom_chapter_pattern: customChapterPattern.trim() || undefined,
-      semantic_similarity_threshold:
-        semanticSimilarityThreshold != null
-          ? semanticSimilarityThreshold
-          : undefined,
-      semantic_overlap_sentences:
-        semanticOverlapSentences != null ? semanticOverlapSentences : undefined,
-      summarization_detail:
-        summarizationDetail != null ? summarizationDetail : undefined,
-      proposition_engine: propositionEngine || undefined,
-      proposition_aggressiveness:
-        propositionAggressiveness != null ? propositionAggressiveness : undefined,
-      proposition_min_proposition_length:
-        propositionMinLength != null ? propositionMinLength : undefined,
-      proposition_prompt_profile: propositionPromptProfile || undefined
+    const base: ChunkingOptions = { ...options }
+    if (templateName.trim()) {
+      base.template_name = templateName.trim()
+    }
+    if (base.language === "auto") {
+      delete base.language
     }
 
-    if (method === "code") {
-      options.code_mode = codeMode
+    const cleanedEntries = Object.entries(base).filter(([, value]) => {
+      if (value === undefined || value === null) return false
+      if (typeof value === "string" && value.trim() === "") return false
+      return true
+    })
+    const cleaned = Object.fromEntries(cleanedEntries) as ChunkingOptions
+
+    if (cleaned.llm_options_for_internal_steps) {
+      const llm = cleaned.llm_options_for_internal_steps
+      const hasValues = Object.values(llm).some((v) => v != null && v !== "")
+      if (!hasValues) {
+        delete cleaned.llm_options_for_internal_steps
+      }
     }
 
-    const llmOptions: LLMOptionsForInternalSteps = {}
-    if (llmTemperature != null) llmOptions.temperature = llmTemperature
-    if (llmSystemPrompt.trim()) {
-      llmOptions.system_prompt_for_step = llmSystemPrompt.trim()
-    }
-    if (llmMaxTokens != null) llmOptions.max_tokens_per_step = llmMaxTokens
-    if (Object.keys(llmOptions).length > 0) {
-      options.llm_options_for_internal_steps = llmOptions
-    }
-
-    return options
-  }, [
-    method,
-    maxSize,
-    overlap,
-    language,
-    templateName,
-    tokenizerName,
-    adaptive,
-    multiLevel,
-    jsonChunkableDataKey,
-    enableFrontmatterParsing,
-    frontmatterSentinelKey,
-    customChapterPattern,
-    semanticSimilarityThreshold,
-    semanticOverlapSentences,
-    summarizationDetail,
-    propositionEngine,
-    propositionAggressiveness,
-    propositionMinLength,
-    propositionPromptProfile,
-    codeMode,
-    llmTemperature,
-    llmSystemPrompt,
-    llmMaxTokens
-  ])
+    return cleaned
+  }, [options, templateName])
 
   const handleChunk = useCallback(async () => {
+    if (inputSource === "pdf") {
+      if (!pdfFile || !pdfUrl) {
+        message.warning(
+          t("settings:chunkingPlayground.noPdf", "Please upload a PDF")
+        )
+        return
+      }
+
+      setIsLoading(true)
+      setError(null)
+      setChunks([])
+      setPdfMetadata(null)
+
+      const options = buildChunkingOptions()
+
+      try {
+        const response = await processPdfForChunking(pdfFile, options, {
+          pdf_parsing_engine: pdfParsingEngine,
+          enable_ocr: enableOcr,
+          ocr_backend: ocrBackend,
+          ocr_lang: ocrLang,
+          ocr_dpi: ocrDpi,
+          ocr_mode: ocrMode,
+          ocr_min_page_text_chars: ocrMinPageTextChars,
+          ocr_output_format: ocrOutputFormat,
+          ocr_prompt_preset: ocrPromptPreset
+        })
+        const result = response.results?.[0]
+        const status = String(result?.status || "").toLowerCase()
+        if (!result || status === "error") {
+          const errorMsg = result?.error || "PDF processing failed"
+          setError(errorMsg)
+          message.error(errorMsg)
+          setLastResponse(null)
+          return
+        }
+
+        const text =
+          (result.conversion_text ?? result.content ?? "") as string
+        setInputText(text)
+        setChunks(result.chunks ?? [])
+        setPdfMetadata(result.metadata ?? null)
+        setLastResponse({
+          chunks: result.chunks ?? [],
+          original_file_name: result.input_ref ?? pdfFile.name,
+          applied_options: options
+        })
+      } catch (err: unknown) {
+        const errorMsg =
+          err instanceof Error ? err.message : "PDF processing failed"
+        setError(errorMsg)
+        message.error(errorMsg)
+        setLastResponse(null)
+      } finally {
+        setIsLoading(false)
+      }
+      return
+    }
+
     if (!inputText.trim() && !inputFile) {
       message.warning(
         t("settings:chunkingPlayground.noInput", "Please provide text to chunk")
@@ -308,106 +377,33 @@ export const ChunkingPlayground: React.FC<ChunkingPlaygroundProps> = ({
     } finally {
       setIsLoading(false)
     }
-  }, [inputText, inputFile, requestMode, buildChunkingOptions, t])
+  }, [
+    inputSource,
+    pdfFile,
+    pdfUrl,
+    pdfParsingEngine,
+    enableOcr,
+    ocrBackend,
+    ocrLang,
+    ocrDpi,
+    ocrMode,
+    ocrMinPageTextChars,
+    ocrOutputFormat,
+    ocrPromptPreset,
+    inputText,
+    inputFile,
+    requestMode,
+    buildChunkingOptions,
+    t
+  ])
 
   const resetToDefaults = useCallback(() => {
     const defaults = capabilities?.default_options ?? DEFAULT_CHUNKING_OPTIONS
-    const normalizeNumber = (value: any, fallback: number) => {
-      const num = Number(value)
-      return Number.isFinite(num) ? num : fallback
-    }
-
-    setMethod(String(defaults.method ?? DEFAULT_CHUNKING_OPTIONS.method ?? "words"))
-    setMaxSize(
-      normalizeNumber(
-        defaults.max_size,
-        DEFAULT_CHUNKING_OPTIONS.max_size ?? 400
-      )
-    )
-    setOverlap(
-      normalizeNumber(
-        defaults.overlap,
-        DEFAULT_CHUNKING_OPTIONS.overlap ?? 0
-      )
-    )
-    setLanguage(String(defaults.language ?? DEFAULT_CHUNKING_OPTIONS.language ?? "en"))
-    setTokenizerName(
-      String(
-        defaults.tokenizer_name_or_path ??
-          DEFAULT_CHUNKING_OPTIONS.tokenizer_name_or_path ??
-          "gpt2"
-      )
-    )
-    setAdaptive(Boolean(defaults.adaptive ?? DEFAULT_CHUNKING_OPTIONS.adaptive))
-    setMultiLevel(
-      Boolean(defaults.multi_level ?? DEFAULT_CHUNKING_OPTIONS.multi_level)
-    )
-    setSemanticSimilarityThreshold(
-      defaults.semantic_similarity_threshold != null
-        ? Number(defaults.semantic_similarity_threshold)
-        : DEFAULT_CHUNKING_OPTIONS.semantic_similarity_threshold ?? null
-    )
-    setSemanticOverlapSentences(
-      defaults.semantic_overlap_sentences != null
-        ? Number(defaults.semantic_overlap_sentences)
-        : DEFAULT_CHUNKING_OPTIONS.semantic_overlap_sentences ?? null
-    )
-    setJsonChunkableDataKey(
-      String(
-        defaults.json_chunkable_data_key ??
-          DEFAULT_CHUNKING_OPTIONS.json_chunkable_data_key ??
-          "data"
-      )
-    )
-    setEnableFrontmatterParsing(
-      Boolean(
-        defaults.enable_frontmatter_parsing ??
-          DEFAULT_CHUNKING_OPTIONS.enable_frontmatter_parsing
-      )
-    )
-    setFrontmatterSentinelKey(
-      String(
-        defaults.frontmatter_sentinel_key ??
-          DEFAULT_CHUNKING_OPTIONS.frontmatter_sentinel_key ??
-          "__tldw_frontmatter__"
-      )
-    )
-    setSummarizationDetail(
-      defaults.summarization_detail != null
-        ? Number(defaults.summarization_detail)
-        : DEFAULT_CHUNKING_OPTIONS.summarization_detail ?? null
-    )
-    setPropositionEngine(
-      String(
-        defaults.proposition_engine ??
-          DEFAULT_CHUNKING_OPTIONS.proposition_engine ??
-          "heuristic"
-      )
-    )
-    setPropositionAggressiveness(
-      defaults.proposition_aggressiveness != null
-        ? Number(defaults.proposition_aggressiveness)
-        : DEFAULT_CHUNKING_OPTIONS.proposition_aggressiveness ?? null
-    )
-    setPropositionMinLength(
-      defaults.proposition_min_proposition_length != null
-        ? Number(defaults.proposition_min_proposition_length)
-        : DEFAULT_CHUNKING_OPTIONS.proposition_min_proposition_length ?? null
-    )
-    setPropositionPromptProfile(
-      String(
-        defaults.proposition_prompt_profile ??
-          DEFAULT_CHUNKING_OPTIONS.proposition_prompt_profile ??
-          "generic"
-      )
-    )
-
+    setOptions({
+      ...DEFAULT_CHUNKING_OPTIONS,
+      ...(defaults || {})
+    })
     setTemplateName("")
-    setCustomChapterPattern("")
-    setCodeMode("auto")
-    setLlmTemperature(null)
-    setLlmSystemPrompt("")
-    setLlmMaxTokens(null)
   }, [capabilities])
 
   const loadTemplateSettings = useCallback(async () => {
@@ -426,57 +422,25 @@ export const ChunkingPlayground: React.FC<ChunkingPlaygroundProps> = ({
       const template = await getChunkingTemplate(templateName.trim())
       const config = JSON.parse(template.template_json)
       const chunking = config.chunking || {}
+      const chunkingConfig = chunking.config || {}
 
-      // Map template config to form state
-      if (chunking.method) setMethod(String(chunking.method))
-      if (chunking.max_size != null) setMaxSize(Number(chunking.max_size))
-      if (chunking.overlap != null) setOverlap(Number(chunking.overlap))
-      if (chunking.language) setLanguage(String(chunking.language))
-      if (chunking.tokenizer_name_or_path) {
-        setTokenizerName(String(chunking.tokenizer_name_or_path))
+      const nextOptions: ChunkingOptions = {
+        ...options
       }
-      if (chunking.adaptive != null) setAdaptive(Boolean(chunking.adaptive))
-      if (chunking.multi_level != null) setMultiLevel(Boolean(chunking.multi_level))
-      if (chunking.code_mode) setCodeMode(chunking.code_mode)
-      if (chunking.semantic_similarity_threshold != null) {
-        setSemanticSimilarityThreshold(Number(chunking.semantic_similarity_threshold))
-      }
-      if (chunking.semantic_overlap_sentences != null) {
-        setSemanticOverlapSentences(Number(chunking.semantic_overlap_sentences))
-      }
-      if (chunking.json_chunkable_data_key) {
-        setJsonChunkableDataKey(String(chunking.json_chunkable_data_key))
-      }
-      if (chunking.enable_frontmatter_parsing != null) {
-        setEnableFrontmatterParsing(Boolean(chunking.enable_frontmatter_parsing))
-      }
-      if (chunking.frontmatter_sentinel_key) {
-        setFrontmatterSentinelKey(String(chunking.frontmatter_sentinel_key))
-      }
-      if (chunking.custom_chapter_pattern) {
-        setCustomChapterPattern(String(chunking.custom_chapter_pattern))
-      }
-      if (chunking.summarization_detail != null) {
-        setSummarizationDetail(Number(chunking.summarization_detail))
-      }
-      if (chunking.proposition_engine) {
-        setPropositionEngine(String(chunking.proposition_engine))
-      }
-      if (chunking.proposition_aggressiveness != null) {
-        setPropositionAggressiveness(Number(chunking.proposition_aggressiveness))
-      }
-      if (chunking.proposition_min_proposition_length != null) {
-        setPropositionMinLength(Number(chunking.proposition_min_proposition_length))
-      }
-      if (chunking.proposition_prompt_profile) {
-        setPropositionPromptProfile(String(chunking.proposition_prompt_profile))
-      }
+
+      if (chunking.method) nextOptions.method = String(chunking.method)
+      Object.entries(chunkingConfig).forEach(([key, value]) => {
+        if (value !== undefined) {
+          ;(nextOptions as Record<string, any>)[key] = value
+        }
+      })
       if (chunking.llm_options_for_internal_steps) {
-        const llmOpts = chunking.llm_options_for_internal_steps
-        if (llmOpts.temperature != null) setLlmTemperature(Number(llmOpts.temperature))
-        if (llmOpts.system_prompt_for_step) setLlmSystemPrompt(String(llmOpts.system_prompt_for_step))
-        if (llmOpts.max_tokens_per_step != null) setLlmMaxTokens(Number(llmOpts.max_tokens_per_step))
+        nextOptions.llm_options_for_internal_steps = {
+          ...(chunking.llm_options_for_internal_steps || {})
+        }
       }
+
+      setOptions(nextOptions)
 
       message.success(
         t(
@@ -490,11 +454,14 @@ export const ChunkingPlayground: React.FC<ChunkingPlaygroundProps> = ({
     } finally {
       setLoadingTemplate(false)
     }
-  }, [templateName, t])
+  }, [templateName, options, t])
 
   const handleSampleSelect = useCallback((text: string) => {
     setInputText(text)
     setInputFile(null)
+    setPdfFile(null)
+    setPdfUrl(null)
+    setPdfMetadata(null)
     setInputSource("paste")
     setChunks([])
     setLastResponse(null)
@@ -503,6 +470,9 @@ export const ChunkingPlayground: React.FC<ChunkingPlaygroundProps> = ({
   const handleMediaSelect = useCallback((content: string) => {
     setInputText(content)
     setInputFile(null)
+    setPdfFile(null)
+    setPdfUrl(null)
+    setPdfMetadata(null)
     setInputSource("paste")
     setChunks([])
     setLastResponse(null)
@@ -515,10 +485,41 @@ export const ChunkingPlayground: React.FC<ChunkingPlaygroundProps> = ({
   }, [inputSource, inputFile])
 
   useEffect(() => {
+    if (inputSource !== "pdf" && pdfFile) {
+      setPdfFile(null)
+      setPdfUrl(null)
+      setPdfMetadata(null)
+    }
+  }, [inputSource, pdfFile])
+
+  useEffect(() => {
+    if (inputSource === "pdf" && options.method) {
+      const methodValue = String(options.method)
+      if (!pdfMethodAllowlist.has(methodValue)) {
+        setOptionValue("method", "words")
+      }
+    }
+  }, [inputSource, options.method, pdfMethodAllowlist, setOptionValue])
+
+  useEffect(() => {
     if (!inputFile) {
       setRequestMode("json")
     }
   }, [inputFile])
+
+  useEffect(() => {
+    if (inputSource !== "pdf" && viewMode === "split") {
+      setViewMode("cards")
+    }
+  }, [inputSource, viewMode])
+
+  useEffect(() => {
+    return () => {
+      if (pdfUrl) {
+        URL.revokeObjectURL(pdfUrl)
+      }
+    }
+  }, [pdfUrl])
 
   const uploadProps: UploadProps = {
     accept: ".txt,.md,.text",
@@ -543,8 +544,40 @@ export const ChunkingPlayground: React.FC<ChunkingPlaygroundProps> = ({
     }
   }
 
+  const pdfUploadProps: UploadProps = {
+    accept: ".pdf",
+    maxCount: 1,
+    beforeUpload: (file) => {
+      if (pdfUrl) {
+        try {
+          URL.revokeObjectURL(pdfUrl)
+        } catch {}
+      }
+      const url = URL.createObjectURL(file)
+      setPdfFile(file)
+      setPdfUrl(url)
+      setPdfMetadata(null)
+      setInputText("")
+      setChunks([])
+      setLastResponse(null)
+      return false
+    },
+    onRemove: () => {
+      setPdfFile(null)
+      if (pdfUrl) {
+        try {
+          URL.revokeObjectURL(pdfUrl)
+        } catch {}
+      }
+      setPdfUrl(null)
+      setPdfMetadata(null)
+      setInputText("")
+      setLastResponse(null)
+    }
+  }
+
   const stats = React.useMemo(() => calculateChunkStats(chunks), [chunks])
-  const methodLower = String(method || "").toLowerCase()
+  const methodLower = String(options.method || "").toLowerCase()
   const isCodeMethod = methodLower === "code"
   const isSemanticMethod = methodLower === "semantic"
   const isJsonMethod = methodLower.includes("json")
@@ -552,7 +585,7 @@ export const ChunkingPlayground: React.FC<ChunkingPlaygroundProps> = ({
   const isPropositionMethod = methodLower === "propositions"
   const isChapterMethod = methodLower === "ebook_chapters"
   const llmRequired =
-    capabilities?.llm_required_methods?.includes(method) ?? false
+    capabilities?.llm_required_methods?.includes(options.method ?? "") ?? false
 
   const renderInputSection = () => (
     <div className="space-y-4">
@@ -567,6 +600,10 @@ export const ChunkingPlayground: React.FC<ChunkingPlaygroundProps> = ({
           {
             value: "upload",
             label: t("settings:chunkingPlayground.inputSource.upload", "Upload File")
+          },
+          {
+            value: "pdf",
+            label: t("settings:chunkingPlayground.inputSource.pdf", "Upload PDF")
           },
           {
             value: "sample",
@@ -624,6 +661,170 @@ export const ChunkingPlayground: React.FC<ChunkingPlaygroundProps> = ({
         </div>
       )}
 
+      {inputSource === "pdf" && (
+        <div className="space-y-3">
+          <Upload.Dragger {...pdfUploadProps}>
+            <p className="ant-upload-drag-icon">
+              <UploadOutlined />
+            </p>
+            <p className="ant-upload-text">
+              {t(
+                "settings:chunkingPlayground.pdfDragText",
+                "Click or drag PDF to upload"
+              )}
+            </p>
+            <p className="ant-upload-hint">
+              {t(
+                "settings:chunkingPlayground.pdfHint",
+                "PDF preview is required"
+              )}
+            </p>
+          </Upload.Dragger>
+          {pdfFile && (
+            <div className="text-xs text-text-muted">
+              {pdfFile.name}
+            </div>
+          )}
+          <Collapse
+            ghost
+            items={[
+              {
+                key: "pdf-options",
+                label: t(
+                  "settings:chunkingPlayground.pdfOptions",
+                  "PDF Parsing Options"
+                ),
+                children: (
+                  <div className="space-y-3">
+                    <Form layout="vertical" size="small">
+                      <Form.Item
+                        label={t(
+                          "settings:chunkingPlayground.pdfEngine",
+                          "Parsing Engine"
+                        )}>
+                        <Select
+                          value={pdfParsingEngine}
+                          onChange={(v) => setPdfParsingEngine(v)}
+                          options={[
+                            { value: "pymupdf4llm", label: "pymupdf4llm" },
+                            { value: "pymupdf", label: "pymupdf" },
+                            { value: "docling", label: "docling" }
+                          ]}
+                        />
+                      </Form.Item>
+                      <Form.Item
+                        label={t(
+                          "settings:chunkingPlayground.pdfEnableOcr",
+                          "Enable OCR"
+                        )}>
+                        <Switch checked={enableOcr} onChange={setEnableOcr} />
+                      </Form.Item>
+                      <Form.Item
+                        label={t(
+                          "settings:chunkingPlayground.pdfOcrMode",
+                          "OCR Mode"
+                        )}>
+                        <Select
+                          value={ocrMode}
+                          onChange={(v) => setOcrMode(v as "always" | "fallback")}
+                          options={[
+                            { value: "fallback", label: "Fallback (low-text pages)" },
+                            { value: "always", label: "Always" }
+                          ]}
+                          disabled={!enableOcr}
+                        />
+                      </Form.Item>
+                      <Form.Item
+                        label={t(
+                          "settings:chunkingPlayground.pdfOcrBackend",
+                          "OCR Backend"
+                        )}>
+                        <Select
+                          value={ocrBackend}
+                          onChange={(v) => setOcrBackend(v)}
+                          options={ocrBackendOptions}
+                          allowClear
+                          disabled={!enableOcr}
+                        />
+                      </Form.Item>
+                      <Form.Item
+                        label={t(
+                          "settings:chunkingPlayground.pdfOcrLang",
+                          "OCR Language"
+                        )}>
+                        <Input
+                          value={ocrLang}
+                          onChange={(e) => setOcrLang(e.target.value)}
+                          placeholder="eng"
+                          disabled={!enableOcr}
+                        />
+                      </Form.Item>
+                      <Form.Item
+                        label={t(
+                          "settings:chunkingPlayground.pdfOcrDpi",
+                          "OCR DPI"
+                        )}>
+                        <InputNumber
+                          value={ocrDpi}
+                          min={72}
+                          max={600}
+                          onChange={(v) => setOcrDpi(Number(v ?? 300))}
+                          className="w-full"
+                          disabled={!enableOcr}
+                        />
+                      </Form.Item>
+                      <Form.Item
+                        label={t(
+                          "settings:chunkingPlayground.pdfOcrMinPageTextChars",
+                          "Min chars per page (fallback)"
+                        )}>
+                        <InputNumber
+                          value={ocrMinPageTextChars}
+                          min={0}
+                          max={2000}
+                          onChange={(v) => setOcrMinPageTextChars(Number(v ?? 40))}
+                          className="w-full"
+                          disabled={!enableOcr}
+                        />
+                      </Form.Item>
+                      <Form.Item
+                        label={t(
+                          "settings:chunkingPlayground.pdfOcrOutputFormat",
+                          "OCR Output Format"
+                        )}>
+                        <Select
+                          value={ocrOutputFormat}
+                          onChange={(v) => setOcrOutputFormat(v)}
+                          allowClear
+                          options={[
+                            { value: "text", label: "text" },
+                            { value: "markdown", label: "markdown" },
+                            { value: "json", label: "json" }
+                          ]}
+                          disabled={!enableOcr}
+                        />
+                      </Form.Item>
+                      <Form.Item
+                        label={t(
+                          "settings:chunkingPlayground.pdfOcrPromptPreset",
+                          "OCR Prompt Preset"
+                        )}>
+                        <Input
+                          value={ocrPromptPreset}
+                          onChange={(e) => setOcrPromptPreset(e.target.value)}
+                          placeholder="general"
+                          disabled={!enableOcr}
+                        />
+                      </Form.Item>
+                    </Form>
+                  </div>
+                )
+              }
+            ]}
+          />
+        </div>
+      )}
+
       {inputSource === "sample" && (
         <SampleTexts onSelect={handleSampleSelect} />
       )}
@@ -645,7 +846,194 @@ export const ChunkingPlayground: React.FC<ChunkingPlaygroundProps> = ({
   )
 
   const renderSettingsSection = () => {
-    const llmOptionsDisabled = !isRollingMethod && !isPropositionMethod
+    const coreFields = ["method", "max_size", "overlap", "language"]
+    const hiddenFields = new Set(["template_name"])
+    const pdfFieldWhitelist = new Set([
+      "method",
+      "max_size",
+      "overlap",
+      "language",
+      "adaptive",
+      "multi_level",
+      "custom_chapter_pattern"
+    ])
+
+    const resolveSchema = (schema: any): any => {
+      if (!schema) return {}
+      if (schema.$ref) {
+        const refKey = String(schema.$ref)
+          .replace("#/$defs/", "")
+          .replace("#/definitions/", "")
+        return resolveSchema(schemaDefs[refKey])
+      }
+      if (schema.anyOf || schema.oneOf) {
+        const variants = schema.anyOf || schema.oneOf || []
+        const nonNull = variants.find((v: any) => v && v.type !== "null")
+        return resolveSchema(nonNull || variants[0])
+      }
+      if (schema.allOf && schema.allOf.length > 0) {
+        return resolveSchema(schema.allOf[0])
+      }
+      return schema
+    }
+
+    const isFieldDisabled = (fieldName: string) => {
+      if (fieldName === "code_mode") return !isCodeMethod
+      if (
+        fieldName === "semantic_similarity_threshold" ||
+        fieldName === "semantic_overlap_sentences"
+      ) {
+        return !isSemanticMethod
+      }
+      if (
+        fieldName === "json_chunkable_data_key" ||
+        fieldName === "enable_frontmatter_parsing" ||
+        fieldName === "frontmatter_sentinel_key"
+      ) {
+        return !isJsonMethod
+      }
+      if (fieldName === "summarization_detail") return !isRollingMethod
+      if (fieldName.startsWith("proposition_")) return !isPropositionMethod
+      return false
+    }
+
+    const renderField = (
+      name: string,
+      schema: any,
+      parent?: string
+    ): React.ReactNode => {
+      const resolved = resolveSchema(schema)
+      if (!resolved) return null
+
+      const fieldLabel =
+        resolved.title ||
+        name
+          .replace(/_/g, " ")
+          .replace(/\b\w/g, (c: string) => c.toUpperCase())
+      const description = resolved.description
+      const fieldKey = parent ? `${parent}.${name}` : name
+      const rawValue = parent
+        ? ((options as Record<string, any>)[parent] || {})[name]
+        : (options as Record<string, any>)[name]
+      const displayValue =
+        rawValue !== undefined && rawValue !== null ? rawValue : resolved.default
+
+      if (resolved.type === "object" && resolved.properties) {
+        const nestedProps = resolved.properties as Record<string, any>
+        return (
+          <div key={fieldKey} className="space-y-2">
+            <Text type="secondary" className="text-xs">
+              {fieldLabel}
+            </Text>
+            {description && (
+              <Text type="secondary" className="text-xs">
+                {description}
+              </Text>
+            )}
+            <div className="space-y-2 pl-2">
+              {Object.entries(nestedProps).map(([childName, childSchema]) =>
+                renderField(childName, childSchema, name)
+              )}
+            </div>
+          </div>
+        )
+      }
+
+      const disabled =
+        (parent === "llm_options_for_internal_steps" && !llmRequired) ||
+        isFieldDisabled(name)
+
+      if (resolved.enum || name === "method" || name === "language") {
+        const enumValues = resolved.enum as Array<string | number> | undefined
+        const selectOptions =
+          name === "method"
+            ? inputSource === "pdf"
+              ? pdfMethodOptions
+              : methodOptions
+            : name === "language"
+            ? languageOptions
+            : (enumValues || []).map((val) => ({
+                value: val,
+                label: String(val)
+              }))
+        return (
+          <Form.Item key={fieldKey} label={fieldLabel} help={description}>
+            <Select
+              value={displayValue}
+              onChange={(v) =>
+                parent
+                  ? setNestedOptionValue(parent, name, v)
+                  : setOptionValue(name, v)
+              }
+              options={selectOptions}
+              allowClear
+              disabled={disabled}
+            />
+          </Form.Item>
+        )
+      }
+
+      if (resolved.type === "boolean") {
+        return (
+          <Form.Item key={fieldKey} label={fieldLabel} help={description}>
+            <Switch
+              checked={Boolean(displayValue)}
+              onChange={(v) =>
+                parent
+                  ? setNestedOptionValue(parent, name, v)
+                  : setOptionValue(name, v)
+              }
+              disabled={disabled}
+            />
+          </Form.Item>
+        )
+      }
+
+      if (resolved.type === "integer" || resolved.type === "number") {
+        return (
+          <Form.Item key={fieldKey} label={fieldLabel} help={description}>
+            <InputNumber
+              value={displayValue}
+              onChange={(v) =>
+                parent
+                  ? setNestedOptionValue(parent, name, v)
+                  : setOptionValue(name, v)
+              }
+              min={resolved.minimum}
+              max={resolved.maximum}
+              step={resolved.type === "integer" ? 1 : resolved.multipleOf || 0.1}
+              className="w-full"
+              disabled={disabled}
+            />
+          </Form.Item>
+        )
+      }
+
+      return (
+        <Form.Item key={fieldKey} label={fieldLabel} help={description}>
+          <Input
+            value={displayValue ?? ""}
+            onChange={(e) =>
+              parent
+                ? setNestedOptionValue(parent, name, e.target.value)
+                : setOptionValue(name, e.target.value)
+            }
+            disabled={disabled}
+          />
+        </Form.Item>
+      )
+    }
+
+    const availableFields = Object.keys(schemaProps).filter(
+      (field) => !hiddenFields.has(field)
+    )
+    const visibleFields =
+      inputSource === "pdf"
+        ? availableFields.filter((f) => pdfFieldWhitelist.has(f))
+        : availableFields
+    const advancedFields = visibleFields.filter(
+      (field) => !coreFields.includes(field)
+    )
 
     return (
       <Card
@@ -653,15 +1041,9 @@ export const ChunkingPlayground: React.FC<ChunkingPlaygroundProps> = ({
         title={t("settings:chunkingPlayground.settingsTitle", "Settings")}
         className="h-full">
         <Form layout="vertical" size="small">
-          <Form.Item
-            label={t("settings:chunkingPlayground.methodLabel", "Chunking Method")}>
-            <Select
-              value={method}
-              onChange={setMethod}
-              options={methodOptions}
-              loading={capabilitiesLoading}
-            />
-          </Form.Item>
+          {coreFields
+            .filter((field) => visibleFields.includes(field))
+            .map((field) => renderField(field, schemaProps[field]))}
 
           {llmRequired && (
             <Text type="warning" className="text-xs">
@@ -671,40 +1053,6 @@ export const ChunkingPlayground: React.FC<ChunkingPlaygroundProps> = ({
               )}
             </Text>
           )}
-
-          <Form.Item
-            label={t(
-              "settings:chunkingPlayground.maxSizeLabel",
-              "Max Chunk Size"
-            )}>
-            <InputNumber
-              value={maxSize}
-              onChange={(v) => setMaxSize(v ?? 400)}
-              min={50}
-              max={10000}
-              className="w-full"
-            />
-          </Form.Item>
-
-          <Form.Item
-            label={t("settings:chunkingPlayground.overlapLabel", "Overlap")}>
-            <InputNumber
-              value={overlap}
-              onChange={(v) => setOverlap(v ?? 0)}
-              min={0}
-              max={maxSize - 1}
-              className="w-full"
-            />
-          </Form.Item>
-
-          <Form.Item
-            label={t("settings:chunkingPlayground.languageLabel", "Language")}>
-            <Select
-              value={language}
-              onChange={setLanguage}
-              options={languageOptions}
-            />
-          </Form.Item>
 
           <Collapse
             ghost
@@ -783,9 +1131,7 @@ export const ChunkingPlayground: React.FC<ChunkingPlaygroundProps> = ({
                         <Space direction="vertical" size={4} className="w-full">
                           <Segmented
                             value={requestMode}
-                            onChange={(v) =>
-                              setRequestMode(v as RequestMode)
-                            }
+                            onChange={(v) => setRequestMode(v as RequestMode)}
                             options={[
                               {
                                 value: "json",
@@ -815,272 +1161,9 @@ export const ChunkingPlayground: React.FC<ChunkingPlaygroundProps> = ({
 
                     <Divider className="my-2" />
 
-                    <Form.Item
-                      label={t(
-                        "settings:chunkingPlayground.advanced.tokenizerLabel",
-                        "Tokenizer"
-                      )}>
-                      <Input
-                        value={tokenizerName}
-                        onChange={(e) => setTokenizerName(e.target.value)}
-                        placeholder={t(
-                          "settings:chunkingPlayground.advanced.tokenizerPlaceholder",
-                          "Tokenizer name or path (e.g., gpt2)"
-                        )}
-                      />
-                    </Form.Item>
-
-                    <Form.Item
-                      label={t(
-                        "settings:chunkingPlayground.advanced.adaptiveLabel",
-                        "Adaptive chunking"
-                      )}>
-                      <Switch checked={adaptive} onChange={setAdaptive} />
-                    </Form.Item>
-
-                    <Form.Item
-                      label={t(
-                        "settings:chunkingPlayground.advanced.multiLevelLabel",
-                        "Multi-level chunking"
-                      )}>
-                      <Switch checked={multiLevel} onChange={setMultiLevel} />
-                    </Form.Item>
-
-                    <Form.Item
-                      label={t(
-                        "settings:chunkingPlayground.advanced.codeModeLabel",
-                        "Code mode"
-                      )}>
-                      <Space direction="vertical" size={4} className="w-full">
-                        <Select
-                          value={codeMode}
-                          onChange={(v) => setCodeMode(v)}
-                          options={codeModeOptions}
-                          disabled={!isCodeMethod}
-                        />
-                        <Text type="secondary" className="text-xs">
-                          {t(
-                            "settings:chunkingPlayground.advanced.codeModeHint",
-                            "Controls how code is parsed when method is 'code'."
-                          )}
-                        </Text>
-                      </Space>
-                    </Form.Item>
-
-                    <Divider className="my-2" />
-
-                    <Form.Item
-                      label={t(
-                        "settings:chunkingPlayground.advanced.semanticSimilarityLabel",
-                        "Semantic similarity threshold"
-                      )}>
-                      <InputNumber
-                        value={semanticSimilarityThreshold}
-                        onChange={(v) =>
-                          setSemanticSimilarityThreshold(v ?? null)
-                        }
-                        min={0}
-                        max={1}
-                        step={0.05}
-                        className="w-full"
-                        disabled={!isSemanticMethod}
-                      />
-                    </Form.Item>
-
-                    <Form.Item
-                      label={t(
-                        "settings:chunkingPlayground.advanced.semanticOverlapLabel",
-                        "Semantic overlap sentences"
-                      )}>
-                      <InputNumber
-                        value={semanticOverlapSentences}
-                        onChange={(v) => setSemanticOverlapSentences(v ?? null)}
-                        min={0}
-                        className="w-full"
-                        disabled={!isSemanticMethod}
-                      />
-                    </Form.Item>
-
-                    <Form.Item
-                      label={t(
-                        "settings:chunkingPlayground.advanced.jsonKeyLabel",
-                        "JSON chunkable key"
-                      )}>
-                      <Input
-                        value={jsonChunkableDataKey}
-                        onChange={(e) => setJsonChunkableDataKey(e.target.value)}
-                        disabled={!isJsonMethod}
-                      />
-                    </Form.Item>
-
-                    <Form.Item
-                      label={t(
-                        "settings:chunkingPlayground.advanced.frontmatterLabel",
-                        "Enable frontmatter parsing"
-                      )}>
-                      <Switch
-                        checked={enableFrontmatterParsing}
-                        onChange={setEnableFrontmatterParsing}
-                        disabled={!isJsonMethod}
-                      />
-                    </Form.Item>
-
-                    <Form.Item
-                      label={t(
-                        "settings:chunkingPlayground.advanced.frontmatterSentinelLabel",
-                        "Frontmatter sentinel key"
-                      )}>
-                      <Input
-                        value={frontmatterSentinelKey}
-                        onChange={(e) => setFrontmatterSentinelKey(e.target.value)}
-                        disabled={!isJsonMethod}
-                      />
-                    </Form.Item>
-
-                    <Form.Item
-                      label={t(
-                        "settings:chunkingPlayground.advanced.customChapterPatternLabel",
-                        "Custom chapter pattern"
-                      )}>
-                      <Input
-                        value={customChapterPattern}
-                        onChange={(e) => setCustomChapterPattern(e.target.value)}
-                        disabled={!isChapterMethod}
-                      />
-                    </Form.Item>
-
-                    <Divider className="my-2" />
-
-                    <Form.Item
-                      label={t(
-                        "settings:chunkingPlayground.advanced.summarizationDetailLabel",
-                        "Summarization detail"
-                      )}>
-                      <InputNumber
-                        value={summarizationDetail}
-                        onChange={(v) => setSummarizationDetail(v ?? null)}
-                        min={0}
-                        max={1}
-                        step={0.05}
-                        className="w-full"
-                        disabled={!isRollingMethod}
-                      />
-                    </Form.Item>
-
-                    <Divider orientation="left" className="my-2">
-                      {t(
-                        "settings:chunkingPlayground.advanced.llmOptionsTitle",
-                        "LLM Options (internal steps)"
-                      )}
-                    </Divider>
-
-                    <Form.Item
-                      label={t(
-                        "settings:chunkingPlayground.advanced.llmTemperatureLabel",
-                        "LLM temperature"
-                      )}>
-                      <InputNumber
-                        value={llmTemperature}
-                        onChange={(v) => setLlmTemperature(v ?? null)}
-                        min={0}
-                        max={2}
-                        step={0.1}
-                        className="w-full"
-                        disabled={llmOptionsDisabled}
-                      />
-                    </Form.Item>
-
-                    <Form.Item
-                      label={t(
-                        "settings:chunkingPlayground.advanced.llmSystemPromptLabel",
-                        "LLM system prompt"
-                      )}>
-                      <Input
-                        value={llmSystemPrompt}
-                        onChange={(e) => setLlmSystemPrompt(e.target.value)}
-                        disabled={llmOptionsDisabled}
-                      />
-                    </Form.Item>
-
-                    <Form.Item
-                      label={t(
-                        "settings:chunkingPlayground.advanced.llmMaxTokensLabel",
-                        "LLM max tokens"
-                      )}>
-                      <InputNumber
-                        value={llmMaxTokens}
-                        onChange={(v) => setLlmMaxTokens(v ?? null)}
-                        min={1}
-                        className="w-full"
-                        disabled={llmOptionsDisabled}
-                      />
-                    </Form.Item>
-
-                    <Divider className="my-2" />
-
-                    <Form.Item
-                      label={t(
-                        "settings:chunkingPlayground.advanced.propositionEngineLabel",
-                        "Proposition engine"
-                      )}>
-                      <Select
-                        value={propositionEngine}
-                        onChange={setPropositionEngine}
-                        options={[
-                          { value: "heuristic", label: "HEURISTIC" },
-                          { value: "spacy", label: "SPACY" },
-                          { value: "llm", label: "LLM" },
-                          { value: "auto", label: "AUTO" }
-                        ]}
-                        disabled={!isPropositionMethod}
-                      />
-                    </Form.Item>
-
-                    <Form.Item
-                      label={t(
-                        "settings:chunkingPlayground.advanced.propositionAggressivenessLabel",
-                        "Proposition aggressiveness"
-                      )}>
-                      <InputNumber
-                        value={propositionAggressiveness}
-                        onChange={(v) => setPropositionAggressiveness(v ?? null)}
-                        min={0}
-                        max={2}
-                        className="w-full"
-                        disabled={!isPropositionMethod}
-                      />
-                    </Form.Item>
-
-                    <Form.Item
-                      label={t(
-                        "settings:chunkingPlayground.advanced.propositionMinLengthLabel",
-                        "Min proposition length"
-                      )}>
-                      <InputNumber
-                        value={propositionMinLength}
-                        onChange={(v) => setPropositionMinLength(v ?? null)}
-                        min={0}
-                        className="w-full"
-                        disabled={!isPropositionMethod}
-                      />
-                    </Form.Item>
-
-                    <Form.Item
-                      label={t(
-                        "settings:chunkingPlayground.advanced.propositionPromptProfileLabel",
-                        "Proposition prompt profile"
-                      )}>
-                      <Select
-                        value={propositionPromptProfile}
-                        onChange={setPropositionPromptProfile}
-                        options={[
-                          { value: "generic", label: "GENERIC" },
-                          { value: "claimify", label: "CLAIMIFY" },
-                          { value: "gemma_aps", label: "GEMMA_APS" }
-                        ]}
-                        disabled={!isPropositionMethod}
-                      />
-                    </Form.Item>
+                    {advancedFields.map((field) =>
+                      renderField(field, schemaProps[field])
+                    )}
                   </div>
                 )
               }
@@ -1126,7 +1209,15 @@ export const ChunkingPlayground: React.FC<ChunkingPlaygroundProps> = ({
             {
               value: "inline",
               label: t("settings:chunkingPlayground.viewInline", "Inline")
-            }
+            },
+            ...(pdfUrl
+              ? [
+                  {
+                    value: "split",
+                    label: t("settings:chunkingPlayground.viewSplit", "Split")
+                  }
+                ]
+              : [])
           ]}
         />
 
@@ -1160,7 +1251,14 @@ export const ChunkingPlayground: React.FC<ChunkingPlaygroundProps> = ({
       {/* Results */}
       {!isLoading && chunks.length > 0 && (
         <>
-          {viewMode === "cards" ? (
+          {viewMode === "split" ? (
+            <SplitView
+              pdfUrl={pdfUrl}
+              chunks={chunks}
+              highlightedIndex={highlightedChunkIndex}
+              onChunkHover={setHighlightedChunkIndex}
+            />
+          ) : viewMode === "cards" ? (
             <ChunkCardView
               chunks={chunks}
               highlightedIndex={highlightedChunkIndex}
@@ -1214,6 +1312,26 @@ export const ChunkingPlayground: React.FC<ChunkingPlaygroundProps> = ({
         />
       )}
 
+      {!isLoading && pdfMetadata && (
+        <Collapse
+          ghost
+          items={[
+            {
+              key: "pdf-metadata",
+              label: t(
+                "settings:chunkingPlayground.extractionMetadata",
+                "Extraction metadata"
+              ),
+              children: (
+                <pre className="text-xs bg-surface2 rounded p-2 overflow-x-auto">
+                  {JSON.stringify(pdfMetadata, null, 2)}
+                </pre>
+              )
+            }
+          ]}
+        />
+      )}
+
       {/* Empty state */}
       {!isLoading && chunks.length === 0 && !error && (
         <div className="text-center py-8 text-text-muted ">
@@ -1240,7 +1358,11 @@ export const ChunkingPlayground: React.FC<ChunkingPlaygroundProps> = ({
           icon={<ScissorOutlined />}
           onClick={handleChunk}
           loading={isLoading}
-          disabled={!inputText.trim() && !inputFile}
+          disabled={
+            inputSource === "pdf"
+              ? !pdfFile
+              : !inputText.trim() && !inputFile
+          }
           size="large">
           {t("settings:chunkingPlayground.chunkButton", "Chunk Text")}
         </Button>

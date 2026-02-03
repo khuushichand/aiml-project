@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from datetime import datetime, timezone
-from typing import Any
+from typing import Any, Literal
 
 from fastapi import HTTPException, status
 from loguru import logger
@@ -332,7 +332,7 @@ async def test_shared_key(
 async def list_shared_keys(
     principal: AuthPrincipal,
     *,
-    scope_type: str | None,
+    scope_type: Literal["org", "team"] | None,
     scope_id: int | None,
     provider: str | None,
 ) -> SharedProviderKeysResponse:
@@ -370,7 +370,7 @@ async def list_shared_keys(
 
 async def delete_shared_key(
     principal: AuthPrincipal,
-    scope_type: str,
+    scope_type: Literal["org", "team"],
     scope_id: int,
     provider: str,
 ) -> None:

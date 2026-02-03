@@ -56,7 +56,9 @@ const normalizeModuleList = (modules: string[] | null | undefined): string[] => 
 
 const areModuleListsEqual = (left: string[], right: string[]): boolean => {
   if (left.length !== right.length) return false
-  return left.every((value, index) => value === right[index])
+  const leftSet = new Set(left)
+  if (leftSet.size !== right.length) return false
+  return right.every((value) => leftSet.has(value))
 }
 
 export const useMcpTools = (): McpToolsStatus => {

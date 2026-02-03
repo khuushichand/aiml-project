@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import asyncio
+import json
 import os
 import threading
 from pathlib import Path
@@ -8,6 +10,7 @@ from urllib.parse import urlparse
 
 from cachetools import LRUCache
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
+from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 
 try:
@@ -32,6 +35,7 @@ from tldw_Server_API.app.core.Ingestion_Media_Processing.Audio.Audio_Transcripti
     _get_allowed_media_base_dirs,
 )
 from tldw_Server_API.app.core.Jobs.manager import JobManager
+from tldw_Server_API.app.core.Streaming.streams import SSEStream
 from tldw_Server_API.app.core.Logging.log_context import ensure_request_id, ensure_traceparent, get_ps_logger
 from tldw_Server_API.app.core.Usage.audio_quota import (
     TIER_LIMITS,
@@ -278,6 +282,114 @@ async def get_audio_job(
             f"Failed to fetch job: job_id={job_id}, user_id={getattr(current_user, 'id', None)}"
         )
         raise HTTPException(status_code=500, detail="Failed to fetch job")
+
+
+@router.get("/jobs/{job_id}/progress/stream", summary="Stream audio job progress (SSE)")
+async def stream_audio_job_progress(
+    job_id: int,
+    current_user: Annotated[User, Depends(get_request_user)],
+    jm: Annotated[JobManager, Depends(get_job_manager)],
+    request: Request,
+    after_id: int = 0,
+):
+    job = jm.get_job(int(job_id))
+    if not job or str(job.get("domain") or "") != "audio":
+        raise HTTPException(status_code=404, detail="Job not found")
+    owner = str(job.get("owner_user_id") or "")
+    if owner != str(current_user.id):
+        raise HTTPException(status_code=403, detail="Not authorized for this job")
+
+    poll_interval = float(os.getenv("JOBS_EVENTS_POLL_INTERVAL", "1.0") or "1.0")
+    stream = SSEStream(
+        heartbeat_interval_s=poll_interval,
+        heartbeat_mode="data",
+        labels={"component": "jobs", "endpoint": "audio_job_progress_sse"},
+    )
+
+    async def _producer() -> None:
+        nonlocal after_id
+        try:
+            snapshot = {
+                "status": job.get("status"),
+                "progress_percent": job.get("progress_percent"),
+                "progress_message": job.get("progress_message"),
+            }
+            await stream.send_event("job", {"event": "job.snapshot", "attrs": snapshot})
+        except Exception:
+            pass
+
+        while True:
+            try:
+                if getattr(stream, "_closed", False):
+                    break
+            except Exception:
+                pass
+
+            conn = jm._connect()
+            rows = []
+            try:
+                if jm.backend == "postgres":
+                    with jm._pg_cursor(conn) as cur:
+                        cur.execute(
+                            "SELECT id, event_type, attrs_json FROM job_events WHERE job_id = %s AND id > %s ORDER BY id ASC LIMIT 200",
+                            (int(job_id), int(after_id)),
+                        )
+                        rows = cur.fetchall() or []
+                else:
+                    rows = conn.execute(
+                        "SELECT id, event_type, attrs_json FROM job_events WHERE job_id = ? AND id > ? ORDER BY id ASC LIMIT 200",
+                        (int(job_id), int(after_id)),
+                    ).fetchall() or []
+            except Exception:
+                rows = []
+            finally:
+                try:
+                    conn.close()
+                except Exception:
+                    pass
+
+            if rows:
+                for r in rows:
+                    if isinstance(r, dict):
+                        eid = int(r.get("id"))
+                        et = str(r.get("event_type"))
+                        attrs = r.get("attrs_json")
+                    else:
+                        eid = int(r[0])
+                        et = str(r[1])
+                        attrs = r[2]
+                    try:
+                        attrs_obj = json.loads(attrs) if isinstance(attrs, str) else (attrs or {})
+                    except Exception:
+                        attrs_obj = {}
+                    await stream.send_event("job", {"event": et, "attrs": attrs_obj}, event_id=str(eid))
+                    after_id = eid
+
+            job_row = jm.get_job(int(job_id))
+            status_val = (job_row or {}).get("status")
+            if status_val in {"completed", "failed", "cancelled"} and not rows:
+                break
+
+            await asyncio.sleep(poll_interval)
+
+    async def _gen():
+        prod_task = asyncio.create_task(_producer())
+        try:
+            async for ln in stream.iter_sse():
+                yield ln
+        finally:
+            if not prod_task.done():
+                try:
+                    prod_task.cancel()
+                except Exception:
+                    pass
+                try:
+                    await prod_task
+                except Exception:
+                    pass
+
+    sse_headers = {"Cache-Control": "no-cache", "X-Accel-Buffering": "no"}
+    return StreamingResponse(_gen(), media_type="text/event-stream", headers=sse_headers)
 
 
 class ListAudioJobsResponse(BaseModel):

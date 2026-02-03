@@ -246,6 +246,8 @@ class DockerRunner:
             else:
                 logger.info("Sandbox Docker egress allowlist requested but enforcement disabled; applying network=none")
                 cmd += ["--network", "none"]
+        elif net_policy == "allow_all":
+            pass
         # Resources
         try:
             pids_limit = int(getattr(app_settings, "SANDBOX_PIDS_LIMIT", 256))
@@ -258,8 +260,15 @@ class DockerRunner:
             cmd += ["--memory", f"{int(spec.memory_mb)}m"]
 
         # Hardened security flags
+        read_only_root = True
+        try:
+            if getattr(spec, "read_only_root", None) is not None:
+                read_only_root = bool(getattr(spec, "read_only_root"))
+        except Exception:
+            read_only_root = True
+        if read_only_root:
+            cmd += ["--read-only"]
         cmd += [
-            "--read-only",
             "--cap-drop", "ALL",
             "--security-opt", "no-new-privileges:true",
         ]
@@ -299,14 +308,27 @@ class DockerRunner:
             "--ulimit", "core=0:0",
         ]
 
-        # Random non-root UID/GID and tmpfs mounts with owners
+        # User and workspace mounts
         import random
-        uid = random.randint(10000, 60000)
-        gid = uid
-        cmd += ["--user", f"{uid}:{gid}"]
-        # tmpfs workdir and tmp
+        run_as_root = bool(getattr(spec, "run_as_root", None))
+        if not run_as_root:
+            uid = random.randint(10000, 60000)
+            gid = uid
+            cmd += ["--user", f"{uid}:{gid}"]
+        else:
+            uid = 0
+            gid = 0
+
+        bind_workspace = self._truthy(
+            os.getenv("SANDBOX_DOCKER_BIND_WORKSPACE")
+            or str(getattr(app_settings, "SANDBOX_DOCKER_BIND_WORKSPACE", ""))
+        )
+        # tmpfs workdir and tmp (skip workspace tmpfs when bind-mounting)
         ws_cap = int(getattr(app_settings, "SANDBOX_WORKSPACE_CAP_MB", 256))
-        cmd += ["--tmpfs", f"/workspace:rw,noexec,nodev,nosuid,uid={uid},gid={gid},size={ws_cap}m"]
+        if bind_workspace and session_workspace:
+            cmd += ["--mount", f"type=bind,src={session_workspace},dst=/workspace"]
+        else:
+            cmd += ["--tmpfs", f"/workspace:rw,noexec,nodev,nosuid,uid={uid},gid={gid},size={ws_cap}m"]
         cmd += ["--tmpfs", f"/tmp:rw,noexec,nodev,nosuid,uid={uid},gid={gid},size=64m"]
         # Working dir
         cmd += ["-w", "/workspace"]
@@ -317,6 +339,20 @@ class DockerRunner:
             # basic sanitization: avoid newlines
             val = str(v).replace("\n", " ")
             cmd += ["-e", f"{k}={val}"]
+
+        # Optional port mappings
+        try:
+            port_mappings = list(getattr(spec, "port_mappings", []) or [])
+        except Exception:
+            port_mappings = []
+        for mapping in port_mappings:
+            try:
+                host_ip = str(mapping.get("host_ip") or "127.0.0.1")
+                host_port = int(mapping.get("host_port"))
+                container_port = int(mapping.get("container_port"))
+            except Exception:
+                continue
+            cmd += ["-p", f"{host_ip}:{host_port}:{container_port}"]
 
         image = spec.base_image or "python:3.11-slim"
         cmd.append(image)
@@ -390,7 +426,7 @@ class DockerRunner:
         # Step 2: copy session workspace and inline files using docker cp
         try:
             # Ensure /workspace exists via create flags; proceed to cp
-            if session_workspace and os.path.isdir(session_workspace):
+            if session_workspace and os.path.isdir(session_workspace) and not bind_workspace:
                 remaining = max(1, int((deadline - datetime.utcnow()).total_seconds()))
                 subprocess.check_call(["docker", "cp", f"{session_workspace}/.", f"{cid}:/workspace/"], timeout=remaining)
             # Stage inline files into a temp dir and copy

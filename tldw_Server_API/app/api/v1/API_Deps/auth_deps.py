@@ -7,7 +7,7 @@ import os
 import re
 import threading
 import time
-from collections.abc import Awaitable, Mapping
+from collections.abc import AsyncGenerator, Awaitable, Mapping
 from datetime import datetime, timezone
 from typing import Any, Callable, Optional
 from weakref import WeakKeyDictionary
@@ -262,7 +262,7 @@ def _activate_scope_context(
             exc,
         )
 
-async def get_db_transaction():
+async def get_db_transaction() -> AsyncGenerator[Any, None]:
     """Get database connection in transaction mode.
 
     Always behaves as an async generator for FastAPI compatibility. In TEST_MODE/pytest,

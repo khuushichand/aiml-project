@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from typing import Any
+
 from fastapi import APIRouter, Depends, Query, Request
 from loguru import logger
 
@@ -58,7 +60,7 @@ async def admin_list_user_profiles(
     page: int = Query(1, ge=1),
     limit: int = Query(25, ge=1, le=100),
     principal: AuthPrincipal = Depends(get_auth_principal),
-    session_manager=Depends(get_session_manager_dep),
+    session_manager: Any = Depends(get_session_manager_dep),
 ) -> UserProfileBatchResponse:
     """Get batch profile summaries within admin scope."""
     response, audit_info = await admin_profiles_service.list_user_profiles(
@@ -106,7 +108,7 @@ async def admin_get_user_profile(
         True, description="Mask secret values in the response"
     ),
     principal: AuthPrincipal = Depends(get_auth_principal),
-    session_manager=Depends(get_session_manager_dep),
+    session_manager: Any = Depends(get_session_manager_dep),
 ) -> UserProfileResponse:
     """Get a unified user profile (admin scope)."""
     response, audit_info = await admin_profiles_service.get_user_profile(
@@ -132,7 +134,7 @@ async def admin_update_user_profile(
     payload: UserProfileUpdateRequest,
     http_request: Request,
     principal: AuthPrincipal = Depends(get_auth_principal),
-    db=Depends(get_db_transaction),
+    db: Any = Depends(get_db_transaction),
 ) -> UserProfileUpdateResponse:
     """Update a user's profile (admin scope)."""
     response, audit_info = await admin_profiles_service.update_user_profile(

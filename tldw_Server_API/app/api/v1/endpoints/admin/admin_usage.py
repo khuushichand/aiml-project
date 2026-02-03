@@ -1,7 +1,8 @@
 from __future__ import annotations
 
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Depends, HTTPException, Query, status
 from fastapi.responses import PlainTextResponse
+from loguru import logger
 
 from tldw_Server_API.app.api.v1.API_Deps.auth_deps import (
     get_auth_principal,
@@ -11,6 +12,7 @@ from tldw_Server_API.app.api.v1.schemas.admin_schemas import (
     LLMTopSpendersResponse,
     LLMUsageLogResponse,
     LLMUsageSummaryResponse,
+    UsageAggregateResponse,
     UsageDailyResponse,
     UsageTopResponse,
 )
@@ -64,9 +66,18 @@ async def get_usage_top(
     )
 
 
-@router.post("/usage/aggregate")
-async def run_usage_aggregate(day: str | None = Query(None, description="YYYY-MM-DD")) -> dict:
-    return await admin_usage_service.run_usage_aggregate(day)
+@router.post("/usage/aggregate", response_model=UsageAggregateResponse)
+async def run_usage_aggregate(day: str | None = Query(None, description="YYYY-MM-DD")) -> UsageAggregateResponse:
+    try:
+        return await admin_usage_service.run_usage_aggregate(day)
+    except HTTPException:
+        raise
+    except Exception as exc:
+        logger.error("Failed to run usage aggregate: {}", exc)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Failed to run usage aggregate",
+        ) from exc
 
 
 @router.get("/usage/daily/export.csv", response_class=PlainTextResponse)
@@ -127,9 +138,18 @@ async def export_usage_top_csv(
     return resp
 
 
-@router.post("/llm-usage/aggregate")
-async def run_llm_usage_aggregate(day: str | None = Query(None, description="YYYY-MM-DD")) -> dict:
-    return await admin_usage_service.run_llm_usage_aggregate(day)
+@router.post("/llm-usage/aggregate", response_model=UsageAggregateResponse)
+async def run_llm_usage_aggregate(day: str | None = Query(None, description="YYYY-MM-DD")) -> UsageAggregateResponse:
+    try:
+        return await admin_usage_service.run_llm_usage_aggregate(day)
+    except HTTPException:
+        raise
+    except Exception as exc:
+        logger.error("Failed to run LLM usage aggregate: {}", exc)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Failed to run LLM usage aggregate",
+        ) from exc
 
 
 @router.get("/llm-usage", response_model=LLMUsageLogResponse)

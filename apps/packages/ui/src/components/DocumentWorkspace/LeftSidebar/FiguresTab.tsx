@@ -5,6 +5,8 @@ import { Empty, Skeleton, Alert } from "antd"
 import { Image as ImageIcon } from "lucide-react"
 import { useDocumentWorkspaceStore } from "@/store/document-workspace"
 
+const MAX_THUMBNAILS = 24
+
 /**
  * FiguresTab - Displays page thumbnails for the current PDF document.
  *
@@ -77,6 +79,27 @@ export const FiguresTab: React.FC = () => {
     setCurrentPage(page)
   }
 
+  const safeCurrentPage =
+    typeof currentPage === "number" && currentPage > 0 ? currentPage : 1
+
+  const thumbnailRange = React.useMemo(() => {
+    if (pageCount <= 0) return null
+    if (pageCount <= MAX_THUMBNAILS) {
+      return { start: 1, end: pageCount, truncated: false }
+    }
+
+    const halfWindow = Math.floor(MAX_THUMBNAILS / 2)
+    let start = Math.max(1, safeCurrentPage - halfWindow)
+    let end = start + MAX_THUMBNAILS - 1
+
+    if (end > pageCount) {
+      end = pageCount
+      start = Math.max(1, end - MAX_THUMBNAILS + 1)
+    }
+
+    return { start, end, truncated: true }
+  }, [pageCount, safeCurrentPage])
+
   return (
     <div className="h-full overflow-auto p-3">
       <Document
@@ -110,34 +133,55 @@ export const FiguresTab: React.FC = () => {
               {t("option:documentWorkspace.pagesCount", "{{count}} pages", {
                 count: pageCount,
               })}
+              {thumbnailRange?.truncated
+                ? t(
+                    "option:documentWorkspace.pagesWindow",
+                    " · Showing {{start}}–{{end}}",
+                    {
+                      start: thumbnailRange.start,
+                      end: thumbnailRange.end,
+                    }
+                  )
+                : null}
             </div>
             <div className="grid grid-cols-2 gap-3">
-              {Array.from({ length: pageCount }, (_, index) => {
-                const pageNumber = index + 1
-                const isActive = pageNumber === currentPage
-                return (
-                  <button
-                    key={`thumb-${pageNumber}`}
-                    onClick={() => handleThumbnailClick(pageNumber)}
-                    className={`group relative overflow-hidden rounded border transition-all focus:outline-none focus:ring-2 focus:ring-primary ${
-                      isActive
-                        ? "border-primary shadow-md"
-                        : "border-border hover:border-primary"
-                    }`}
-                  >
-                    <Page
-                      pageNumber={pageNumber}
-                      scale={0.25}
-                      renderTextLayer={false}
-                      renderAnnotationLayer={false}
-                      loading=""
-                    />
-                    <span className="absolute bottom-1 left-1/2 -translate-x-1/2 rounded bg-black/70 px-2 py-0.5 text-xs text-white">
-                      {pageNumber}
-                    </span>
-                  </button>
-                )
-              })}
+              {thumbnailRange
+                ? Array.from(
+                    { length: thumbnailRange.end - thumbnailRange.start + 1 },
+                    (_, index) => {
+                      const pageNumber = thumbnailRange.start + index
+                      const isActive = pageNumber === currentPage
+                      return (
+                        <button
+                          key={`thumb-${pageNumber}`}
+                          onClick={() => handleThumbnailClick(pageNumber)}
+                          aria-label={t(
+                            "option:documentWorkspace.thumbnailAriaLabel",
+                            "Thumbnail, page {{pageNumber}}",
+                            { pageNumber }
+                          )}
+                          aria-current={isActive ? "page" : undefined}
+                          className={`group relative overflow-hidden rounded border transition-all focus:outline-none focus:ring-2 focus:ring-primary ${
+                            isActive
+                              ? "border-primary shadow-md"
+                              : "border-border hover:border-primary"
+                          }`}
+                        >
+                          <Page
+                            pageNumber={pageNumber}
+                            scale={0.25}
+                            renderTextLayer={false}
+                            renderAnnotationLayer={false}
+                            loading=""
+                          />
+                          <span className="absolute bottom-1 left-1/2 -translate-x-1/2 rounded bg-black/70 px-2 py-0.5 text-xs text-white">
+                            {pageNumber}
+                          </span>
+                        </button>
+                      )
+                    }
+                  )
+                : null}
             </div>
           </>
         ) : (

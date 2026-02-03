@@ -1,6 +1,9 @@
 from __future__ import annotations
 
+from typing import Any
+
 from fastapi import APIRouter, Depends, HTTPException, Query, status
+from loguru import logger
 
 from tldw_Server_API.app.api.v1.API_Deps.auth_deps import (
     get_db_transaction,
@@ -12,6 +15,7 @@ from tldw_Server_API.app.api.v1.schemas.admin_schemas import (
     ToolCatalogEntryResponse,
     ToolCatalogResponse,
 )
+from tldw_Server_API.app.core.exceptions import ToolCatalogConflictError
 from tldw_Server_API.app.services import admin_tool_catalog_service
 
 router = APIRouter()
@@ -34,7 +38,7 @@ async def list_tool_catalogs(
     team_id: int | None = Query(None),
     limit: int = Query(100, ge=1, le=1000),
     offset: int = Query(0, ge=0),
-    db=Depends(get_db_transaction),
+    db: Any = Depends(get_db_transaction),
 ) -> list[ToolCatalogResponse]:
     """List tool catalogs with optional org/team filtering."""
     try:
@@ -47,6 +51,7 @@ async def list_tool_catalogs(
         )
         return [ToolCatalogResponse(**r) for r in rows]
     except Exception as exc:
+        logger.error("Failed to list tool catalogs: {}", exc)
         raise HTTPException(status_code=500, detail="Failed to list tool catalogs") from exc
 
 
@@ -65,7 +70,7 @@ async def list_tool_catalogs(
 )
 async def create_tool_catalog(
     payload: ToolCatalogCreateRequest,
-    db=Depends(get_db_transaction),
+    db: Any = Depends(get_db_transaction),
 ) -> ToolCatalogResponse:
     """Create a tool catalog."""
     try:
@@ -83,13 +88,16 @@ async def create_tool_catalog(
             is_active=is_active,
         )
         return ToolCatalogResponse(**row)
+    except ToolCatalogConflictError as exc:
+        logger.warning("Tool catalog already exists: {}", payload.name)
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Catalog already exists") from exc
     except ValueError as exc:
-        if str(exc) == "Catalog already exists":
-            raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Catalog already exists") from exc
+        logger.warning("Invalid tool catalog payload: {}", exc)
         raise HTTPException(status_code=400, detail="Invalid tool catalog") from exc
     except HTTPException:
         raise
     except Exception as exc:
+        logger.error("Failed to create tool catalog: {}", exc)
         raise HTTPException(status_code=500, detail="Failed to create tool catalog") from exc
 
 
@@ -105,13 +113,19 @@ async def create_tool_catalog(
 )
 async def delete_tool_catalog(
     catalog_id: int,
-    db=Depends(get_db_transaction),
+    db: Any = Depends(get_db_transaction),
 ) -> dict:
     """Delete a tool catalog (entries cascade)."""
     try:
+        catalog = await admin_tool_catalog_service.get_tool_catalog(db, catalog_id)
+        if not catalog:
+            raise HTTPException(status_code=404, detail="Tool catalog not found")
         await admin_tool_catalog_service.delete_tool_catalog(db, catalog_id)
         return {"message": "Catalog deleted", "id": catalog_id}
+    except HTTPException:
+        raise
     except Exception as exc:
+        logger.error("Failed to delete tool catalog {}: {}", catalog_id, exc)
         raise HTTPException(status_code=500, detail="Failed to delete tool catalog") from exc
 
 
@@ -127,13 +141,26 @@ async def delete_tool_catalog(
 )
 async def list_tool_catalog_entries(
     catalog_id: int,
-    db=Depends(get_db_transaction),
+    limit: int = Query(100, ge=1, le=1000),
+    offset: int = Query(0, ge=0),
+    db: Any = Depends(get_db_transaction),
 ) -> list[ToolCatalogEntryResponse]:
     """List entries in a tool catalog."""
     try:
-        rows = await admin_tool_catalog_service.list_tool_catalog_entries(db, catalog_id)
+        catalog = await admin_tool_catalog_service.get_tool_catalog(db, catalog_id)
+        if not catalog:
+            raise HTTPException(status_code=404, detail="Tool catalog not found")
+        rows = await admin_tool_catalog_service.list_tool_catalog_entries(
+            db,
+            catalog_id,
+            limit=limit,
+            offset=offset,
+        )
         return [ToolCatalogEntryResponse(**r) for r in rows]
+    except HTTPException:
+        raise
     except Exception as exc:
+        logger.error("Failed to list tool catalog entries for {}: {}", catalog_id, exc)
         raise HTTPException(status_code=500, detail="Failed to list tool catalog entries") from exc
 
 
@@ -151,15 +178,21 @@ async def list_tool_catalog_entries(
 async def add_tool_catalog_entry(
     catalog_id: int,
     payload: ToolCatalogEntryCreateRequest,
-    db=Depends(get_db_transaction),
+    db: Any = Depends(get_db_transaction),
 ) -> ToolCatalogEntryResponse:
     """Add a tool entry to a catalog (idempotent)."""
     try:
+        catalog = await admin_tool_catalog_service.get_tool_catalog(db, catalog_id)
+        if not catalog:
+            raise HTTPException(status_code=404, detail="Tool catalog not found")
         tool = payload.tool_name.strip()
         module_id = payload.module_id.strip() if payload.module_id else None
         row = await admin_tool_catalog_service.add_tool_catalog_entry(db, catalog_id, tool, module_id)
         return ToolCatalogEntryResponse(**row)
+    except HTTPException:
+        raise
     except Exception as exc:
+        logger.error("Failed to add tool catalog entry to {}: {}", catalog_id, exc)
         raise HTTPException(status_code=500, detail="Failed to add tool catalog entry") from exc
 
 
@@ -175,11 +208,22 @@ async def add_tool_catalog_entry(
 async def delete_tool_catalog_entry(
     catalog_id: int,
     tool_name: str,
-    db=Depends(get_db_transaction),
+    db: Any = Depends(get_db_transaction),
 ) -> dict:
     """Remove a tool from a catalog."""
     try:
+        catalog = await admin_tool_catalog_service.get_tool_catalog(db, catalog_id)
+        if not catalog:
+            raise HTTPException(status_code=404, detail="Tool catalog not found")
         await admin_tool_catalog_service.delete_tool_catalog_entry(db, catalog_id, tool_name)
         return {"message": "Entry deleted", "catalog_id": catalog_id, "tool_name": tool_name}
+    except HTTPException:
+        raise
     except Exception as exc:
+        logger.error(
+            "Failed to delete tool catalog entry {} from {}: {}",
+            tool_name,
+            catalog_id,
+            exc,
+        )
         raise HTTPException(status_code=500, detail="Failed to delete tool catalog entry") from exc

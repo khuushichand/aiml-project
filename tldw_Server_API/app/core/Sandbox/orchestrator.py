@@ -503,6 +503,12 @@ class SandboxOrchestrator:
             root = Path(str(proj)) / "tmp_dir" / "sandbox"
         ws = Path(str(root)) / str(user_id) / "sessions" / session_id / "workspace"
         ws.mkdir(parents=True, exist_ok=True)
+        try:
+            bind_workspace = str(os.getenv("SANDBOX_DOCKER_BIND_WORKSPACE") or getattr(app_settings, "SANDBOX_DOCKER_BIND_WORKSPACE", "")).strip().lower() in {"1", "true", "yes", "on", "y"}
+            if bind_workspace:
+                os.chmod(ws, 0o777)
+        except Exception:
+            pass
         with self._lock:
             self._session_roots[session_id] = str(ws)
         return str(ws)

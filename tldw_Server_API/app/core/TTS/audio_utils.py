@@ -6,6 +6,7 @@ import asyncio
 import base64
 import importlib.util
 import tempfile
+import re
 from pathlib import Path
 from typing import Any, Optional
 
@@ -498,6 +499,236 @@ async def process_voice_reference_async(
     except Exception as e:
         logger.error(f"Failed to process voice reference (async): {e}")
         return None, str(e)
+
+def split_text_into_chunks(
+    text: str,
+    target_chars: int = 120,
+    max_chars: int = 150,
+    min_chars: int = 50,
+) -> list[str]:
+    """Split text into sentence-based chunks with soft length targets."""
+    if not isinstance(text, str):
+        text = str(text or "")
+    text = text.strip()
+    if not text:
+        return []
+
+    if len(text) <= max_chars:
+        return [text]
+
+    sentences = re.split(r"(?<=[.!?。！？])\s*", text)
+    sentences = [s.strip() for s in sentences if s and s.strip()]
+    if not sentences:
+        return [text]
+
+    chunks: list[str] = []
+    current = ""
+
+    for sentence in sentences:
+        if len(sentence) > max_chars:
+            if current:
+                chunks.append(current.strip())
+                current = ""
+            words = sentence.split()
+            buf = ""
+            for word in words:
+                if len(buf) + len(word) + 1 <= target_chars:
+                    buf = f"{buf} {word}".strip()
+                else:
+                    if buf:
+                        chunks.append(buf.strip())
+                    buf = word
+            if buf:
+                chunks.append(buf.strip())
+            continue
+
+        if len(current) + len(sentence) + 1 <= target_chars:
+            current = f"{current} {sentence}".strip()
+        else:
+            if current:
+                chunks.append(current.strip())
+            current = sentence
+
+    if current:
+        chunks.append(current.strip())
+
+    if len(chunks) >= 2 and len(chunks[-1]) < min_chars:
+        chunks[-2] = f"{chunks[-2]} {chunks[-1]}".strip()
+        chunks.pop()
+
+    return chunks
+
+
+def crossfade_audio(
+    left: np.ndarray,
+    right: np.ndarray,
+    sample_rate: int,
+    crossfade_ms: int = 50,
+) -> np.ndarray:
+    """Crossfade two audio arrays by a fixed duration."""
+    if left is None or left.size == 0:
+        return right
+    if right is None or right.size == 0:
+        return left
+
+    try:
+        fade_samples = int(sample_rate * (crossfade_ms / 1000.0))
+    except Exception:
+        fade_samples = 0
+    if fade_samples <= 0:
+        return np.concatenate([left, right])
+
+    fade_samples = min(fade_samples, left.shape[-1], right.shape[-1])
+    if fade_samples <= 0:
+        return np.concatenate([left, right])
+
+    def _to_float(audio: np.ndarray) -> np.ndarray:
+        if np.issubdtype(audio.dtype, np.integer):
+            return audio.astype(np.float32) / np.iinfo(audio.dtype).max
+        return audio.astype(np.float32)
+
+    left_f = _to_float(left)
+    right_f = _to_float(right)
+    t = np.linspace(0.0, 1.0, fade_samples, dtype=np.float32)
+    left_tail = left_f[-fade_samples:] * (1.0 - t)
+    right_head = right_f[:fade_samples] * t
+    merged = np.concatenate([left_f[:-fade_samples], left_tail + right_head, right_f[fade_samples:]])
+
+    if np.issubdtype(left.dtype, np.integer):
+        max_val = np.iinfo(left.dtype).max
+        merged = np.clip(merged, -1.0, 1.0) * max_val
+        return merged.astype(left.dtype)
+    return merged.astype(np.float32)
+
+
+def _to_float_mono(audio: np.ndarray) -> np.ndarray:
+    arr = np.asarray(audio)
+    if arr.ndim > 1:
+        if arr.shape[0] <= arr.shape[-1]:
+            arr = arr.mean(axis=0)
+        else:
+            arr = arr.mean(axis=1)
+    arr = arr.reshape(-1)
+    if np.issubdtype(arr.dtype, np.integer):
+        max_val = np.iinfo(arr.dtype).max
+        if max_val > 0:
+            return arr.astype(np.float32) / float(max_val)
+    return arr.astype(np.float32)
+
+
+def compute_audio_rms(audio: np.ndarray) -> float:
+    """Compute RMS for a PCM audio buffer."""
+    audio_f = _to_float_mono(audio)
+    if audio_f.size == 0:
+        return 0.0
+    return float(np.sqrt(np.mean(audio_f ** 2)))
+
+
+def compute_audio_peak(audio: np.ndarray) -> float:
+    """Compute peak absolute amplitude for a PCM audio buffer."""
+    audio_f = _to_float_mono(audio)
+    if audio_f.size == 0:
+        return 0.0
+    return float(np.max(np.abs(audio_f)))
+
+
+def trailing_silence_duration_ms(
+    audio: np.ndarray,
+    sample_rate: int,
+    threshold: float = 0.01,
+) -> int:
+    """Return trailing silence duration in milliseconds."""
+    if sample_rate <= 0:
+        return 0
+    audio_f = _to_float_mono(audio)
+    if audio_f.size == 0:
+        return 0
+    mask = np.abs(audio_f) > float(threshold)
+    if not np.any(mask):
+        return int(round((len(audio_f) / float(sample_rate)) * 1000))
+    last_idx = int(np.where(mask)[0][-1])
+    trailing_samples = len(audio_f) - last_idx - 1
+    return int(round((trailing_samples / float(sample_rate)) * 1000))
+
+
+def trim_trailing_silence(
+    audio: np.ndarray,
+    sample_rate: int,
+    threshold: float = 0.01,
+    min_silence_ms: int = 0,
+) -> np.ndarray:
+    """Trim trailing silence from a PCM buffer, preserving dtype."""
+    if sample_rate <= 0:
+        return audio
+    audio_f = _to_float_mono(audio)
+    if audio_f.size == 0:
+        return audio
+    mask = np.abs(audio_f) > float(threshold)
+    if not np.any(mask):
+        return audio
+    last_idx = int(np.where(mask)[0][-1])
+    trailing_samples = len(audio_f) - last_idx - 1
+    if min_silence_ms > 0:
+        min_samples = int(sample_rate * (min_silence_ms / 1000.0))
+        if trailing_samples < min_samples:
+            return audio
+    return np.asarray(audio).reshape(-1)[: last_idx + 1]
+
+
+def analyze_audio_signal(
+    audio: np.ndarray,
+    sample_rate: int,
+    silence_threshold: float = 0.01,
+) -> dict[str, float]:
+    """Compute basic audio metrics for quality checks."""
+    audio_f = _to_float_mono(audio)
+    duration_sec = len(audio_f) / float(sample_rate or 1)
+    rms = compute_audio_rms(audio_f)
+    peak = compute_audio_peak(audio_f)
+    trailing_ms = trailing_silence_duration_ms(audio_f, sample_rate, threshold=silence_threshold)
+    return {
+        "duration_sec": float(duration_sec),
+        "rms": float(rms),
+        "peak": float(peak),
+        "trailing_silence_ms": float(trailing_ms),
+    }
+
+
+def evaluate_audio_quality(
+    audio: np.ndarray,
+    sample_rate: int,
+    *,
+    text_length: int = 0,
+    min_text_length: int = 40,
+    min_rms: float = 0.001,
+    min_peak: float = 0.02,
+    silence_threshold: float = 0.01,
+    trailing_silence_ms: int = 800,
+    expected_chars_per_sec: float = 15.0,
+    min_duration_ratio: float = 0.5,
+    min_duration_seconds: float = 0.4,
+) -> tuple[dict[str, float], list[str]]:
+    """Evaluate audio quality and return metrics + warning codes."""
+    metrics = analyze_audio_signal(audio, sample_rate, silence_threshold=silence_threshold)
+    warnings: list[str] = []
+
+    if metrics["rms"] < min_rms or metrics["peak"] < min_peak:
+        warnings.append(
+            f"low_levels(rms={metrics['rms']:.4f}, peak={metrics['peak']:.4f})"
+        )
+
+    if trailing_silence_ms > 0 and metrics["trailing_silence_ms"] >= trailing_silence_ms:
+        warnings.append(f"trailing_silence_ms={metrics['trailing_silence_ms']:.0f}")
+
+    if expected_chars_per_sec > 0 and text_length >= min_text_length:
+        expected = text_length / float(expected_chars_per_sec)
+        min_expected = max(min_duration_seconds, expected * min_duration_ratio)
+        if metrics["duration_sec"] < min_expected:
+            warnings.append(
+                f"duration_short(actual={metrics['duration_sec']:.2f}s, expected>={min_expected:.2f}s)"
+            )
+
+    return metrics, warnings
 
 #
 # End of audio_utils.py

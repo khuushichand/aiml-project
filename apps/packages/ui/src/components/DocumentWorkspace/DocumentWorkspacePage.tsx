@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback, useRef } from "react"
+import React, { useState, useEffect, useCallback, useRef, Suspense } from "react"
 import { useTranslation } from "react-i18next"
 import { useStorage } from "@plasmohq/storage/hook"
 import { Alert, Drawer, Tabs, Tooltip } from "antd"
@@ -39,7 +39,6 @@ import { DocumentWorkspaceErrorBoundary } from "./DocumentWorkspaceErrorBoundary
 import { DocumentShortcutsModal } from "./DocumentShortcutsModal"
 import { DocumentTabBar } from "./DocumentTabBar"
 import { SyncStatusIndicator } from "./SyncStatusIndicator"
-import { DocumentPickerModal } from "./DocumentPickerModal"
 import { getDocumentMimeType, inferDocumentTypeFromMedia } from "./document-utils"
 import {
   useAnnotations,
@@ -50,7 +49,11 @@ import {
   useReadingProgressSaveOnClose,
 } from "@/hooks/document-workspace"
 
-// Left sidebar content
+const DocumentPickerModal = React.lazy(() => import("./DocumentPickerModal"))
+
+/**
+ * Left sidebar tab content for the document workspace layout.
+ */
 const LeftSidebarContent: React.FC<{ onHide?: () => void }> = ({ onHide }) => {
   const { t } = useTranslation(["option", "common"])
   const activeSidebarTab = useDocumentWorkspaceStore((s) => s.activeSidebarTab)
@@ -97,29 +100,34 @@ const LeftSidebarContent: React.FC<{ onHide?: () => void }> = ({ onHide }) => {
   ]
 
   return (
-    <div className="flex h-full flex-col">
+    <div className="flex h-full min-h-0 flex-col">
       <Tabs
         activeKey={activeSidebarTab}
         onChange={(key) => setActiveSidebarTab(key as SidebarTab)}
         items={sidebarTabs.map((tab) => ({
           key: tab.key,
           label: (
-            <span className="flex items-center gap-1.5">
-              {tab.icon}
-              <span className="hidden xl:inline">{tab.label}</span>
-            </span>
+            <Tooltip title={tab.label}>
+              <span className="flex items-center">{tab.icon}</span>
+            </Tooltip>
           ),
-          children: tab.children
+          children: (
+            <div className="h-full min-h-0 overflow-auto overscroll-contain">
+              {tab.children}
+            </div>
+          )
         }))}
         size="small"
-        className="flex-1 [&_.ant-tabs-content]:h-full [&_.ant-tabs-content-holder]:flex-1 [&_.ant-tabs-tabpane]:h-full"
+        className="flex-1 min-h-0 [&_.ant-tabs-content]:h-full [&_.ant-tabs-content]:min-h-0 [&_.ant-tabs-content-holder]:flex-1 [&_.ant-tabs-content-holder]:min-h-0 [&_.ant-tabs-tabpane]:h-full [&_.ant-tabs-tabpane]:min-h-0"
         tabBarStyle={{ marginBottom: 0, paddingLeft: 8, paddingRight: 8 }}
       />
     </div>
   )
 }
 
-// Right panel content
+/**
+ * Right panel tab content for chat, notes, citations, and quizzes.
+ */
 const RightPanelContent: React.FC<{ onHide?: () => void }> = ({ onHide }) => {
   const { t } = useTranslation(["option", "common"])
   const activeRightTab = useDocumentWorkspaceStore((s) => s.activeRightTab)
@@ -167,10 +175,9 @@ const RightPanelContent: React.FC<{ onHide?: () => void }> = ({ onHide }) => {
         items={rightTabs.map((tab) => ({
           key: tab.key,
           label: (
-            <span className="flex items-center gap-1.5">
-              {tab.icon}
-              {tab.label}
-            </span>
+            <Tooltip title={tab.label}>
+              <span className="flex items-center">{tab.icon}</span>
+            </Tooltip>
           ),
           children: tab.children
         }))}
@@ -182,7 +189,9 @@ const RightPanelContent: React.FC<{ onHide?: () => void }> = ({ onHide }) => {
   )
 }
 
-// Header component
+/**
+ * Header bar with pane toggles, status, and quick actions.
+ */
 const WorkspaceHeader: React.FC<{
   leftPaneOpen: boolean
   rightPaneOpen: boolean
@@ -212,21 +221,29 @@ const WorkspaceHeader: React.FC<{
     <header className="flex h-12 shrink-0 items-center justify-between border-b border-border bg-surface px-4">
       <div className="flex items-center gap-3">
         {!hideToggles && (
-          <button
-            onClick={onToggleLeftPane}
-            className="rounded p-1.5 hover:bg-hover"
+          <Tooltip
             title={
               leftPaneOpen
                 ? t("common:collapse", "Collapse")
                 : t("common:expand", "Expand")
             }
           >
-            {leftPaneOpen ? (
-              <PanelLeftClose className="h-5 w-5" />
-            ) : (
-              <PanelLeftOpen className="h-5 w-5" />
-            )}
-          </button>
+            <button
+              onClick={onToggleLeftPane}
+              className="rounded p-1.5 hover:bg-hover"
+              aria-label={
+                leftPaneOpen
+                  ? t("common:collapse", "Collapse")
+                  : t("common:expand", "Expand")
+              }
+            >
+              {leftPaneOpen ? (
+                <PanelLeftClose className="h-5 w-5" />
+              ) : (
+                <PanelLeftOpen className="h-5 w-5" />
+              )}
+            </button>
+          </Tooltip>
         )}
         <div className="flex items-center gap-2">
           <FileText className="h-5 w-5 text-primary" />
@@ -261,21 +278,29 @@ const WorkspaceHeader: React.FC<{
           </button>
         </Tooltip>
         {!hideToggles && (
-          <button
-            onClick={onToggleRightPane}
-            className="rounded p-1.5 hover:bg-hover"
+          <Tooltip
             title={
               rightPaneOpen
                 ? t("common:collapse", "Collapse")
                 : t("common:expand", "Expand")
             }
           >
-            {rightPaneOpen ? (
-              <PanelRightClose className="h-5 w-5" />
-            ) : (
-              <PanelRightOpen className="h-5 w-5" />
-            )}
-          </button>
+            <button
+              onClick={onToggleRightPane}
+              className="rounded p-1.5 hover:bg-hover"
+              aria-label={
+                rightPaneOpen
+                  ? t("common:collapse", "Collapse")
+                  : t("common:expand", "Expand")
+              }
+            >
+              {rightPaneOpen ? (
+                <PanelRightClose className="h-5 w-5" />
+              ) : (
+                <PanelRightOpen className="h-5 w-5" />
+              )}
+            </button>
+          </Tooltip>
         )}
       </div>
     </header>
@@ -284,6 +309,7 @@ const WorkspaceHeader: React.FC<{
 
 const STORAGE_KEY_LEFT_PANE = "document-workspace-left-pane"
 const STORAGE_KEY_RIGHT_PANE = "document-workspace-right-pane"
+const DOCUMENT_FILE_TIMEOUT_MS = 30 * 1000
 
 /**
  * DocumentWorkspacePage - Three-panel document reader interface
@@ -335,7 +361,9 @@ export const DocumentWorkspacePage: React.FC = () => {
   const [shortcutsModalOpen, setShortcutsModalOpen] = useState(false)
   const [pickerOpen, setPickerOpen] = useState(false)
   const [pickerTab, setPickerTab] = useState<"library" | "upload">("library")
+  const [loadingDocumentId, setLoadingDocumentId] = useState<number | null>(null)
   const blobUrlMapRef = useRef<Map<number, string>>(new Map())
+  const openDocumentRequestRef = useRef(0)
 
   const handleShowShortcuts = useCallback(() => {
     setShortcutsModalOpen(true)
@@ -430,6 +458,8 @@ export const DocumentWorkspacePage: React.FC = () => {
 
   const openDocumentById = useCallback(
     async (mediaId: number, docTypeHint?: "pdf" | "epub" | null) => {
+      const requestId = ++openDocumentRequestRef.current
+      setLoadingDocumentId(mediaId)
       try {
         const details = await tldwClient.getMediaDetails(mediaId, {
           include_content: false,
@@ -440,7 +470,13 @@ export const DocumentWorkspacePage: React.FC = () => {
           details?.processing?.safe_metadata,
           details?.content?.metadata,
           details?.metadata
-        ].filter(Boolean) as Array<Record<string, unknown>>
+        ]
+          .map((source) =>
+            typeof source === "object" && source !== null
+              ? (source as Record<string, unknown>)
+              : null
+          )
+          .filter((source): source is Record<string, unknown> => source !== null)
 
         const getMetadataValue = (keys: string[]): string | undefined => {
           for (const source of metadataSources) {
@@ -484,7 +520,7 @@ export const DocumentWorkspacePage: React.FC = () => {
             path: `/api/v1/media/${mediaId}/file`,
             method: "GET",
             responseType: "arrayBuffer",
-            timeoutMs: 60000
+            timeoutMs: DOCUMENT_FILE_TIMEOUT_MS
           })
         } catch (err: any) {
           const status = err?.status
@@ -493,6 +529,15 @@ export const DocumentWorkspacePage: React.FC = () => {
               t(
                 "option:documentWorkspace.missingFile",
                 "This item was ingested without keeping the original file. Re-ingest with “Keep original file” enabled."
+              )
+            )
+            return
+          }
+          if (status === 0) {
+            message.error(
+              t(
+                "option:documentWorkspace.fileTimeout",
+                "Document download timed out. Please try again."
               )
             )
             return
@@ -534,10 +579,32 @@ export const DocumentWorkspacePage: React.FC = () => {
                 "Failed to open document"
               )
         )
+      } finally {
+        if (openDocumentRequestRef.current === requestId) {
+          setLoadingDocumentId(null)
+        }
       }
     },
-    [message, openDocument, registerBlobUrl, t]
+    [message, openDocument, registerBlobUrl, setLoadingDocumentId, t]
   )
+
+  const loadingAlert =
+    loadingDocumentId !== null ? (
+      <div className="px-4 pt-2">
+        <Alert
+          type="info"
+          showIcon
+          message={t(
+            "option:documentWorkspace.loadingDocument",
+            "Loading document..."
+          )}
+          description={t(
+            "option:documentWorkspace.loadingDocumentHint",
+            "Fetching the document file. This can take a moment for large files."
+          )}
+        />
+      </div>
+    ) : null
 
   const healthIssues: string[] = []
   if (annotationsHealth === "error") {
@@ -630,7 +697,7 @@ export const DocumentWorkspacePage: React.FC = () => {
   if (isMobile) {
     return (
       <DocumentWorkspaceErrorBoundary>
-        <div className="flex h-full flex-col bg-bg text-text">
+        <div className="flex h-full min-h-0 flex-col bg-bg text-text">
           <WorkspaceHeader
             leftPaneOpen={false}
             rightPaneOpen={false}
@@ -645,12 +712,17 @@ export const DocumentWorkspacePage: React.FC = () => {
             open={shortcutsModalOpen}
             onClose={handleCloseShortcuts}
           />
-          <DocumentPickerModal
-            open={pickerOpen}
-            initialTab={pickerTab}
-            onClose={handleClosePicker}
-            onOpenDocument={openDocumentById}
-          />
+          <Suspense fallback={null}>
+            {pickerOpen && (
+              <DocumentPickerModal
+                open={pickerOpen}
+                initialTab={pickerTab}
+                onClose={handleClosePicker}
+                onOpenDocument={openDocumentById}
+              />
+            )}
+          </Suspense>
+          {loadingAlert}
           {healthAlert}
 
           <Tabs
@@ -671,7 +743,7 @@ export const DocumentWorkspacePage: React.FC = () => {
   // Tablet/Desktop layout
   return (
     <DocumentWorkspaceErrorBoundary>
-      <div className="flex h-full flex-col bg-bg text-text">
+      <div className="flex h-full min-h-0 flex-col bg-bg text-text">
         <WorkspaceHeader
           leftPaneOpen={!!leftPaneOpen}
           rightPaneOpen={!!rightPaneOpen}
@@ -685,12 +757,17 @@ export const DocumentWorkspacePage: React.FC = () => {
           open={shortcutsModalOpen}
           onClose={handleCloseShortcuts}
         />
-        <DocumentPickerModal
-          open={pickerOpen}
-          initialTab={pickerTab}
-          onClose={handleClosePicker}
-          onOpenDocument={openDocumentById}
-        />
+        <Suspense fallback={null}>
+          {pickerOpen && (
+            <DocumentPickerModal
+              open={pickerOpen}
+              initialTab={pickerTab}
+              onClose={handleClosePicker}
+              onOpenDocument={openDocumentById}
+            />
+          )}
+        </Suspense>
+        {loadingAlert}
         {healthAlert}
 
         {/* Document tabs - shown when multiple documents are open */}
@@ -699,7 +776,7 @@ export const DocumentWorkspacePage: React.FC = () => {
         <div className="flex min-h-0 flex-1">
           {/* Left pane - Sidebar (desktop) */}
           {leftPaneOpen && (
-            <aside className="hidden w-72 shrink-0 border-r border-border bg-surface lg:flex lg:flex-col">
+            <aside className="hidden h-full min-h-0 w-72 shrink-0 border-r border-border bg-surface lg:flex lg:flex-col">
               <LeftSidebarContent onHide={() => setLeftPaneOpen(false)} />
             </aside>
           )}
@@ -717,13 +794,13 @@ export const DocumentWorkspacePage: React.FC = () => {
             open={leftDrawerOpen}
             width={320}
             className="lg:hidden"
-            styles={{ body: { padding: 0 } }}
+            styles={{ body: { padding: 0, height: "100%", display: "flex", flexDirection: "column" } }}
           >
             <LeftSidebarContent />
           </Drawer>
 
           {/* Center pane - Document Viewer */}
-          <main className="flex min-w-0 flex-1 flex-col bg-bg">
+          <main className="flex min-h-0 min-w-0 flex-1 flex-col bg-bg">
             <DocumentViewer
               onOpenLibrary={() => handleOpenPicker("library")}
               onOpenUpload={() => handleOpenPicker("upload")}

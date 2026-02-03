@@ -11,7 +11,7 @@ export interface AnnotationResponse {
   text: string
   color: AnnotationColor
   note?: string
-  annotation_type: "highlight" | "page_note"
+  annotation_type: AnnotationType
   chapter_title?: string
   percentage?: number
   created_at: string
@@ -79,7 +79,7 @@ export function useAnnotations(mediaId: number | null) {
       } catch (error) {
         setAnnotationSyncStatus("error")
         const status = (error as { status?: number })?.status
-        if (status === 500) {
+        if (status && status >= 500) {
           setAnnotationsHealth("error")
         } else {
           setAnnotationsHealth("unknown")
@@ -99,7 +99,6 @@ export function useAnnotations(mediaId: number | null) {
  */
 export function useCreateAnnotation() {
   const queryClient = useQueryClient()
-  const addAnnotation = useDocumentWorkspaceStore((s) => s.addAnnotation)
   const setAnnotationSyncStatus = useDocumentWorkspaceStore(
     (s) => s.setAnnotationSyncStatus
   )
@@ -115,7 +114,7 @@ export function useCreateAnnotation() {
         text: string
         color?: AnnotationColor
         note?: string
-        annotation_type?: "highlight" | "page_note"
+        annotation_type?: AnnotationType
       }
     }) => {
       const response = await tldwClient.createAnnotation(mediaId, annotation)

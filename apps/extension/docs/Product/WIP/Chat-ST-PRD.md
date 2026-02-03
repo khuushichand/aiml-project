@@ -345,3 +345,108 @@ Legend:
 
 ### Extra:
 Allow for auto-summarization past a certain threshold, while also allowing for 'pinned' messages to be avoided in compression
+
+---
+
+# Addendum: Prose Dials (SillyTavern-style)
+
+## Overview
+Introduce lightweight, user-facing “Prose Dials” that shape output style (density, pacing, POV, etc.) without requiring manual prompt edits. Dials are stored per character (defaults) with per-chat overrides and can be applied as one-off macros on a single reply.
+
+## Goals
+- Provide 8 core Prose Dials as structured controls.
+- Allow per-character defaults + per-chat overrides + per-message macros.
+- Inject compact “style guide” text into prompt assembly with predictable precedence.
+- Surface dial state in Prompt Assembly Preview (Feature G).
+
+## Non-Goals
+- Full writing-assistant rewrite.
+- Complex template language beyond existing prompt templates.
+- Server-side enforcement for providers that lack parameters (default to prompt text).
+
+---
+
+## Feature Grouping K: Prose Dials
+
+### K1 (MVP)
+**Dials**
+1) Style Anchoring
+2) Prose Density (Sparse / Balanced / Dense)
+3) Vocabulary Range (Plain / Neutral / Ornate)
+4) Pacing Profile (Fast / Medium / Slow)
+5) Show vs Tell (Tell / Balanced / Show)
+6) POV Tightness (Distant / Close)
+7) Genre Flavor (tag list)
+8) Prose Example Shortcut (short sample)
+
+**Additional toggles (optional MVP if small):**
+- “Don’t narrate user actions/thoughts” (user-agency guardrail)
+
+**Behavior**
+- Each dial resolves to a single compact style clause.
+- Per-chat override wins over per-character default.
+- Per-message macro (Feature J2) applies only to the next response.
+
+### K2
+- “Author-style deconstruction” helper: allow storing 2–5 bullet principles instead of author names.
+- Dial presets (e.g., “Terse Noir”, “Cozy”, “High Fantasy”).
+
+---
+
+## Data & Persistence
+- Per-character defaults: store in `character.extensions.proseDials`.
+- Per-chat overrides: store in per-chat settings (local + server metadata, same storage strategy as Feature A/C/D/H).
+- Per-message macro: stored only in in-memory state (cleared after use).
+
+**Proposed shape**
+```json
+proseDials: {
+  styleAnchorLabel?: string,
+  stylePrinciples?: string[],
+  density?: "sparse"|"balanced"|"dense",
+  vocab?: "plain"|"neutral"|"ornate",
+  pacing?: "fast"|"medium"|"slow",
+  showTell?: "tell"|"balanced"|"show",
+  pov?: "distant"|"close",
+  genre?: string[],
+  exampleSnippet?: string,
+  userAgencyGuardrail?: boolean
+}
+```
+
+---
+
+## Prompt Assembly Integration
+- **Placement:** Inject as a small “Style Guide” block.
+- **Precedence:** per-message macro > per-chat override > per-character default.
+- **Ordering:** Apply after Feature B preset formatting, before Actor/World Book injections.
+- **Token budget:** Cap style guide at 120 tokens; truncate example snippet first.
+
+**Template example**
+```
+Style Guide:
+- Density: Dense
+- Vocabulary: Ornate
+- Pacing: Slow
+- Show vs Tell: Show
+- POV: Close
+- Genre: Gothic mystery
+- Style principles: [bullet1; bullet2]
+- Example (short): "..."
+- User agency: Do not narrate user actions or thoughts.
+```
+
+---
+
+## UI/UX
+- Add a “Prose Dials” section in Character Settings (defaults).
+- Add a “Prose Dials” tab/accordion in Chat Settings (overrides).
+- Add quick macros in composer (Feature J2): “Make it brisk”, “More showing”, “Simplify diction”, “Tight POV”.
+- Prompt Preview (Feature G) displays active Prose Dials and resulting style block.
+
+---
+
+## Testing
+- Unit: precedence resolution (message > chat > character).
+- Integration: prompt assembly includes style guide, respects budget and truncation.
+- UI: dial changes persist across refresh and character switch.

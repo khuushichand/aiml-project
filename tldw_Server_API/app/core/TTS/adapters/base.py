@@ -214,6 +214,8 @@ class TTSAdapter(ABC):
     Abstract base class for TTS provider adapters.
     All TTS providers must implement this interface.
     """
+    # Adapters can opt out of service-level chunking if they handle it internally.
+    handles_text_chunking: bool = False
 
     def __init__(self, config: Optional[dict[str, Any]] = None):
         """

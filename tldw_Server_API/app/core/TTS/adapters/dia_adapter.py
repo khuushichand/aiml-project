@@ -131,7 +131,8 @@ class DiaAdapter(TTSAdapter):
                 register_result = resource_manager.register_model(
                     provider=self.provider_name.lower(),
                     model_instance=self.model,
-                    cleanup_callback=self._cleanup_resources
+                    cleanup_callback=self._cleanup_resources,
+                    model_key=str(self.model_path),
                 )
                 if asyncio.iscoroutine(register_result):
                     await register_result
@@ -311,13 +312,21 @@ class DiaAdapter(TTSAdapter):
             ).to(self.device)
 
             # Set generation parameters
+            extras = request.extra_params or {}
+            if not isinstance(extras, dict):
+                extras = {}
             gen_kwargs = {
-                "max_new_tokens": 2000,
-                "temperature": 0.8,
+                "max_new_tokens": int(extras.get("max_new_tokens", 2000)),
+                "temperature": extras.get("temperature", 0.8),
                 "do_sample": True,
-                "top_p": 0.95,
-                "pad_token_id": self.processor.tokenizer.eos_token_id
+                "top_p": extras.get("top_p", 0.95),
+                "pad_token_id": self.processor.tokenizer.eos_token_id,
             }
+            if extras.get("min_new_tokens") is not None:
+                try:
+                    gen_kwargs["min_new_tokens"] = int(extras.get("min_new_tokens"))
+                except Exception:
+                    pass
 
             # Add seed for consistent voice if specified
             if request.seed:

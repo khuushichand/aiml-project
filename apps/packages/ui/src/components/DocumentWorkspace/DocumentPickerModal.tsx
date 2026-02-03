@@ -42,25 +42,61 @@ interface MediaListItem {
   filename?: string
 }
 
-const normalizeMediaItems = (response: any): MediaListItem[] => {
-  const items =
-    response?.items ||
-    response?.media ||
-    response?.results ||
-    response?.data ||
-    []
-  if (!Array.isArray(items)) return []
+type MediaListResponse = {
+  items?: unknown
+  media?: unknown
+  results?: unknown
+  data?: unknown
+}
+
+const asRecord = (value: unknown): Record<string, unknown> | null => {
+  if (!value || typeof value !== "object") return null
+  return value as Record<string, unknown>
+}
+
+const asString = (value: unknown): string | undefined => {
+  if (typeof value === "string") {
+    const trimmed = value.trim()
+    return trimmed ? trimmed : undefined
+  }
+  if (typeof value === "number" && Number.isFinite(value)) return String(value)
+  return undefined
+}
+
+const asStringArray = (value: unknown): string[] | undefined => {
+  if (!Array.isArray(value)) return undefined
+  const list = value
+    .map((entry) => asString(entry))
+    .filter((entry): entry is string => Boolean(entry))
+  return list.length > 0 ? list : undefined
+}
+
+const getResponseItems = (response: unknown): unknown[] => {
+  const record = asRecord(response) as MediaListResponse | null
+  if (!record) return []
+  const items = record.items ?? record.media ?? record.results ?? record.data ?? []
+  return Array.isArray(items) ? items : []
+}
+
+const normalizeMediaItems = (response: unknown): MediaListItem[] => {
+  const items = getResponseItems(response)
   return items
-    .map((item: any) => ({
-      id: Number(item.media_id ?? item.id),
-      title: item.title || item.name,
-      type: item.type || item.media_type,
-      created_at: item.created_at,
-      keywords: item.keywords,
-      url: item.url,
-      filename: item.filename || item.original_filename
-    }))
-    .filter((item: MediaListItem) => Number.isFinite(item.id))
+    .map((item) => {
+      const record = asRecord(item)
+      if (!record) return null
+      const id = Number(record.media_id ?? record.id)
+      if (!Number.isFinite(id)) return null
+      return {
+        id,
+        title: asString(record.title) ?? asString(record.name),
+        type: asString(record.type) ?? asString(record.media_type),
+        created_at: asString(record.created_at),
+        keywords: asStringArray(record.keywords),
+        url: asString(record.url),
+        filename: asString(record.filename) ?? asString(record.original_filename)
+      } satisfies MediaListItem
+    })
+    .filter((item): item is MediaListItem => item !== null)
 }
 
 const isSupportedDocType = (docType: DocumentType | null): docType is DocumentType =>
@@ -147,7 +183,7 @@ export const DocumentPickerModal: React.FC<DocumentPickerModalProps> = ({
   React.useEffect(() => {
     if (!open || activeTab !== "library") return
     void loadMedia(debouncedQuery)
-  }, [open, activeTab, debouncedQuery, loadMedia])
+  }, [open, activeTab, debouncedQuery, loadMedia, showAllMedia])
 
   const handleOpen = async (item: MediaListItem) => {
     if (!item?.id) return
@@ -163,6 +199,9 @@ export const DocumentPickerModal: React.FC<DocumentPickerModalProps> = ({
     setOpeningId(item.id)
     try {
       await onOpenDocument(item.id, docType)
+      onClose()
+    } catch (err) {
+      console.error("Failed to open document", err)
       onClose()
     } finally {
       setOpeningId(null)
@@ -367,7 +406,7 @@ export const DocumentPickerModal: React.FC<DocumentPickerModalProps> = ({
       footer={null}
       title={t("option:documentWorkspace.openDocument", "Open document")}
       width={720}
-      destroyOnHidden
+      destroyOnClose
     >
       {!isOnline && (
         <Alert
@@ -430,22 +469,30 @@ export const DocumentPickerModal: React.FC<DocumentPickerModalProps> = ({
   )
 }
 
-function extractMediaId(data: any, visited: WeakSet<object> = new WeakSet()): string | number | null {
+function extractMediaId(data: any): string | number | null {
+  const visited = new WeakSet<object>()
+  return extractMediaIdInternal(data, visited)
+}
+
+function extractMediaIdInternal(
+  data: any,
+  visited: WeakSet<object>
+): string | number | null {
   if (!data || typeof data !== "object") return null
   if (Array.isArray(data)) {
-    return data.length > 0 ? extractMediaId(data[0], visited) : null
+    return data.length > 0 ? extractMediaIdInternal(data[0], visited) : null
   }
   if (visited.has(data as object)) return null
   visited.add(data as object)
 
   if ("results" in data && Array.isArray((data as any).results) && (data as any).results.length > 0) {
-    return extractMediaId((data as any).results[0], visited)
+    return extractMediaIdInternal((data as any).results[0], visited)
   }
   if ("result" in data && (data as any).result) {
-    return extractMediaId((data as any).result, visited)
+    return extractMediaIdInternal((data as any).result, visited)
   }
   if ("media" in data && (data as any).media) {
-    return extractMediaId((data as any).media, visited)
+    return extractMediaIdInternal((data as any).media, visited)
   }
 
   const direct =

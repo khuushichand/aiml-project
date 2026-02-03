@@ -202,6 +202,10 @@ class ACPSessionNewResponse(BaseModel):
     name: str = Field(..., description="Session name (user-provided or auto-generated)")
     agent_type: ACPAgentType = Field(..., description="Type of agent used")
     agent_capabilities: dict[str, Any] | None = None
+    sandbox_session_id: str | None = Field(default=None, description="Sandbox session backing this ACP session")
+    sandbox_run_id: str | None = Field(default=None, description="Sandbox run backing this ACP session")
+    ssh_ws_url: str | None = Field(default=None, description="WebSocket URL for browser-based SSH")
+    ssh_user: str | None = Field(default=None, description="SSH username for this session")
 
 
 class ACPSessionPromptRequest(BaseModel):

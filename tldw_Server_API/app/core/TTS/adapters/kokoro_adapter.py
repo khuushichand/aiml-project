@@ -558,6 +558,22 @@ class KokoroAdapter(TTSAdapter):
             except Exception as _patch_exc:  # pragma: no cover - best-effort patch
                 logger.debug(f"{self.provider_name}: speed dtype patch skipped: {_patch_exc}")
 
+            # Register model with resource manager (best-effort)
+            try:
+                from ..tts_resource_manager import get_resource_manager
+                resource_manager = await get_resource_manager()
+                if self.kokoro_instance:
+                    register_result = resource_manager.register_model(
+                        provider=self.provider_name.lower(),
+                        model_instance=self.kokoro_instance,
+                        cleanup_callback=self._cleanup_resources,
+                        model_key=f"onnx:{self.model_path}",
+                    )
+                    if asyncio.iscoroutine(register_result):
+                        await register_result
+            except Exception:
+                pass
+
             logger.info(f"{self.provider_name}: ONNX model loaded successfully")
             return True
 
@@ -634,6 +650,21 @@ class KokoroAdapter(TTSAdapter):
             else:
                 self.kokoro_pt_model = self.kokoro_pt_model.cpu()
             logger.info(f"{self.provider_name}: Kokoro PyTorch model loaded on {dev} (t={time.time() - start:.2f}s)")
+            # Register model with resource manager (best-effort)
+            try:
+                from ..tts_resource_manager import get_resource_manager
+                resource_manager = await get_resource_manager()
+                if self.kokoro_pt_model is not None:
+                    register_result = resource_manager.register_model(
+                        provider=self.provider_name.lower(),
+                        model_instance=self.kokoro_pt_model,
+                        cleanup_callback=self._cleanup_resources,
+                        model_key=f"torch:{self.model_path}",
+                    )
+                    if asyncio.iscoroutine(register_result):
+                        await register_result
+            except Exception:
+                pass
             return True
         except ImportError:
             # Fallback: generic torch.load
@@ -647,6 +678,21 @@ class KokoroAdapter(TTSAdapter):
                 except Exception:
                     pass
                 logger.info(f"{self.provider_name}: Loaded generic PyTorch model on {self.device}")
+                # Register model with resource manager (best-effort)
+                try:
+                    from ..tts_resource_manager import get_resource_manager
+                    resource_manager = await get_resource_manager()
+                    if self.model_pt is not None:
+                        register_result = resource_manager.register_model(
+                            provider=self.provider_name.lower(),
+                            model_instance=self.model_pt,
+                            cleanup_callback=self._cleanup_resources,
+                            model_key=f"torch:{self.model_path}",
+                        )
+                        if asyncio.iscoroutine(register_result):
+                            await register_result
+                except Exception:
+                    pass
                 return True
             except Exception as e:
                 raise TTSModelLoadError(

@@ -2,7 +2,7 @@ import React, { useEffect } from "react"
 import { useTranslation } from "react-i18next"
 import { useStorage } from "@plasmohq/storage/hook"
 import { Drawer, Tabs } from "antd"
-import { Bot, MessageSquare, Wrench } from "lucide-react"
+import { Bot, MessageSquare, Wrench, Terminal } from "lucide-react"
 import { useMobile } from "@/hooks/useMediaQuery"
 import { useACPSessionsStore } from "@/store/acp-sessions"
 import { ACPPlaygroundHeader } from "./ACPPlaygroundHeader"
@@ -10,6 +10,7 @@ import { ACPSessionPanel } from "./ACPSessionPanel"
 import { ACPChatPanel } from "./ACPChatPanel"
 import { ACPToolsPanel } from "./ACPToolsPanel"
 import { ACPPermissionModal } from "./ACPPermissionModal"
+import { ACPWorkspacePanel } from "./ACPWorkspacePanel"
 
 const ACP_LEFT_PANE_KEY = "acp-playground-left-pane"
 const ACP_RIGHT_PANE_KEY = "acp-playground-right-pane"
@@ -37,7 +38,8 @@ export const ACPPlayground: React.FC = () => {
   const [rightDrawerOpen, setRightDrawerOpen] = React.useState(false)
 
   // Mobile tab state
-  const [activeTab, setActiveTab] = React.useState<"sessions" | "chat" | "tools">("chat")
+  const [activeTab, setActiveTab] = React.useState<"sessions" | "chat" | "tools" | "workspace">("chat")
+  const [rightTab, setRightTab] = React.useState<"tools" | "workspace">("tools")
 
   // Store
   const sessions = useACPSessionsStore((s) => s.getSessions())
@@ -108,6 +110,16 @@ export const ACPPlayground: React.FC = () => {
         </span>
       ),
       children: <ACPToolsPanel />,
+    },
+    {
+      key: "workspace",
+      label: (
+        <span className="flex items-center gap-1.5">
+          <Terminal className="h-4 w-4" />
+          <span>{t("playground:acp.workspace", "Workspace")}</span>
+        </span>
+      ),
+      children: <ACPWorkspacePanel />,
     },
   ]
 
@@ -181,7 +193,23 @@ export const ACPPlayground: React.FC = () => {
         {/* Right pane - Tools (desktop) */}
         {rightPaneOpen && (
           <aside className="hidden w-80 shrink-0 border-l border-border bg-surface lg:flex lg:flex-col">
-            <ACPToolsPanel onHide={() => setRightPaneOpen(false)} />
+            <Tabs
+              activeKey={rightTab}
+              onChange={(key) => setRightTab(key as typeof rightTab)}
+              items={[
+                {
+                  key: "tools",
+                  label: t("playground:acp.tools", "Tools"),
+                  children: <ACPToolsPanel onHide={() => setRightPaneOpen(false)} />,
+                },
+                {
+                  key: "workspace",
+                  label: t("playground:acp.workspace", "Workspace"),
+                  children: <ACPWorkspacePanel />,
+                },
+              ]}
+              className="h-full [&_.ant-tabs-content]:h-full [&_.ant-tabs-content-holder]:flex-1 [&_.ant-tabs-tabpane]:h-full"
+            />
           </aside>
         )}
 

@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from typing import Any
+
 from fastapi import APIRouter, Depends, Query, Request
 
 from tldw_Server_API.app.api.v1.API_Deps.auth_deps import (
@@ -80,7 +82,7 @@ async def admin_list_teams(
     limit: int = Query(100, ge=1, le=1000),
     offset: int = Query(0, ge=0),
     principal: AuthPrincipal = Depends(get_auth_principal),
-    db=Depends(get_db_transaction),
+    db: Any = Depends(get_db_transaction),
 ) -> list[TeamResponse]:
     return await admin_orgs_service.list_teams(
         org_id,
@@ -107,8 +109,8 @@ async def admin_update_org_watchlists_settings(
     org_id: int,
     payload: OrganizationWatchlistsSettingsUpdate,
     principal: AuthPrincipal = Depends(get_auth_principal),
-    db=Depends(get_db_transaction),
-):
+    db: Any = Depends(get_db_transaction),
+) -> OrganizationWatchlistsSettingsResponse:
     return await admin_orgs_service.update_org_watchlists_settings(
         org_id,
         payload,
@@ -124,7 +126,7 @@ async def admin_update_org_watchlists_settings(
 async def admin_get_org_watchlists_settings(
     org_id: int,
     principal: AuthPrincipal = Depends(get_auth_principal),
-    db=Depends(get_db_transaction),
+    db: Any = Depends(get_db_transaction),
 ) -> OrganizationWatchlistsSettingsResponse:
     return await admin_orgs_service.get_org_watchlists_settings(
         org_id,
@@ -162,10 +164,7 @@ async def admin_remove_team_member(
     request: Request,
     principal: AuthPrincipal = Depends(get_auth_principal),
 ) -> TeamMemberRemoveResponse:
-    res = await admin_orgs_service.remove_team_member(team_id, user_id, request, principal)
-    if "removed" not in res:
-        res["removed"] = False
-    return TeamMemberRemoveResponse(**res)
+    return await admin_orgs_service.remove_team_member(team_id, user_id, request, principal)
 
 
 @router.post("/orgs/{org_id}/members", response_model=OrgMemberResponse)
@@ -204,10 +203,7 @@ async def admin_remove_org_member(
     request: Request,
     principal: AuthPrincipal = Depends(get_auth_principal),
 ) -> OrgMemberRemoveResponse:
-    res = await admin_orgs_service.remove_org_member(org_id, user_id, request, principal)
-    if "removed" not in res:
-        res["removed"] = False
-    return OrgMemberRemoveResponse(**res)
+    return await admin_orgs_service.remove_org_member(org_id, user_id, request, principal)
 
 
 @router.patch("/orgs/{org_id}/members/{user_id}", response_model=OrgMemberResponse)

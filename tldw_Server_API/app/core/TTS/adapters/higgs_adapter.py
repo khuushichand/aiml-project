@@ -213,7 +213,8 @@ class HiggsAdapter(TTSAdapter):
                 register_result = resource_manager.register_model(
                     provider=self.provider_name.lower(),
                     model_instance=self.serve_engine,
-                    cleanup_callback=self._cleanup_resources
+                    cleanup_callback=self._cleanup_resources,
+                    model_key=str(self.model_path),
                 )
                 if asyncio.iscoroutine(register_result):
                     await register_result
@@ -357,14 +358,23 @@ class HiggsAdapter(TTSAdapter):
 
             # Generate with HiggsAudioServeEngine
             logger.info(f"{self.provider_name}: Starting generation...")
-            output: HiggsAudioResponse = self.serve_engine.generate(
-                chat_ml_sample=chat_ml_sample,
-                max_new_tokens=1024,
-                temperature=request.extra_params.get("temperature", 1.0),
-                top_p=request.extra_params.get("top_p", 0.95),
-                top_k=request.extra_params.get("top_k", 50),
-                stop_strings=["<|end_of_text|>", "<|eot_id|>"]
-            )
+            extras = request.extra_params or {}
+            if not isinstance(extras, dict):
+                extras = {}
+            gen_kwargs = {
+                "chat_ml_sample": chat_ml_sample,
+                "max_new_tokens": int(extras.get("max_new_tokens", 1024)),
+                "temperature": extras.get("temperature", 1.0),
+                "top_p": extras.get("top_p", 0.95),
+                "top_k": extras.get("top_k", 50),
+                "stop_strings": ["<|end_of_text|>", "<|eot_id|>"],
+            }
+            if extras.get("min_new_tokens") is not None:
+                try:
+                    gen_kwargs["min_new_tokens"] = int(extras.get("min_new_tokens"))
+                except Exception:
+                    pass
+            output: HiggsAudioResponse = self.serve_engine.generate(**gen_kwargs)
 
             # Convert numpy audio to tensor and back to numpy for processing
             audio_array = output.audio

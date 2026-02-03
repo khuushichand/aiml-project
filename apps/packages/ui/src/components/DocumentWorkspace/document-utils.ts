@@ -3,9 +3,15 @@ import type { DocumentType } from "./types"
 const PDF_EXTENSIONS = [".pdf"]
 const EPUB_EXTENSIONS = [".epub"]
 
+const normalizeFilename = (filename: string): string => {
+  const normalized = filename.trim().toLowerCase()
+  const separatorIndex = normalized.search(/[?#]/)
+  return separatorIndex === -1 ? normalized : normalized.slice(0, separatorIndex)
+}
+
 const inferFromFilename = (filename?: string): DocumentType | null => {
   if (!filename) return null
-  const name = filename.toLowerCase()
+  const name = normalizeFilename(filename)
   if (PDF_EXTENSIONS.some((ext) => name.endsWith(ext))) return "pdf"
   if (EPUB_EXTENSIONS.some((ext) => name.endsWith(ext))) return "epub"
   return null

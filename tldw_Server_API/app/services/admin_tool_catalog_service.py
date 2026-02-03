@@ -5,6 +5,7 @@ from typing import Any
 from loguru import logger
 
 from tldw_Server_API.app.core.AuthNZ.database import is_postgres_backend
+from tldw_Server_API.app.core.exceptions import ToolCatalogConflictError
 
 
 async def list_tool_catalogs(db, *, org_id: int | None, team_id: int | None, limit: int, offset: int) -> list[dict[str, Any]]:
@@ -52,7 +53,7 @@ async def create_tool_catalog(db, *, name: str, description: str | None, org_id:
                 name, org_id, team_id,
             )
             if exists:
-                raise ValueError("Catalog already exists")
+                raise ToolCatalogConflictError("Catalog already exists")
             await db.execute(
                 "INSERT INTO tool_catalogs (name, description, org_id, team_id, is_active) VALUES ($1,$2,$3,$4,$5)",
                 name, description, org_id, team_id, is_active,
@@ -68,7 +69,7 @@ async def create_tool_catalog(db, *, name: str, description: str | None, org_id:
             (name, None, org_id, None, team_id),
         )
         if await cur.fetchone():
-            raise ValueError("Catalog already exists")
+            raise ToolCatalogConflictError("Catalog already exists")
         await db.execute(
             "INSERT INTO tool_catalogs (name, description, org_id, team_id, is_active) VALUES (?, ?, ?, ?, ?)",
             (name, description, org_id, team_id, 1 if is_active else 0),
@@ -81,6 +82,37 @@ async def create_tool_catalog(db, *, name: str, description: str | None, org_id:
         return {"id": r[0], "name": r[1], "description": r[2], "org_id": r[3], "team_id": r[4], "is_active": bool(r[5]), "created_at": r[6], "updated_at": r[7]}
     except Exception as e:
         logger.error(f"admin_tool_catalog_service.create_tool_catalog failed: {e}")
+        raise
+
+
+async def get_tool_catalog(db, catalog_id: int) -> dict[str, Any] | None:
+    pg = await is_postgres_backend()
+    try:
+        if pg:
+            row = await db.fetchrow(
+                "SELECT id, name, description, org_id, team_id, COALESCE(is_active, TRUE) as is_active, created_at, updated_at FROM tool_catalogs WHERE id = $1",
+                catalog_id,
+            )
+            return dict(row) if row else None
+        cur = await db.execute(
+            "SELECT id, name, description, org_id, team_id, COALESCE(is_active,1), created_at, updated_at FROM tool_catalogs WHERE id = ?",
+            (catalog_id,),
+        )
+        r = await cur.fetchone()
+        if not r:
+            return None
+        return {
+            "id": r[0],
+            "name": r[1],
+            "description": r[2],
+            "org_id": r[3],
+            "team_id": r[4],
+            "is_active": bool(r[5]),
+            "created_at": r[6],
+            "updated_at": r[7],
+        }
+    except Exception as e:
+        logger.error(f"admin_tool_catalog_service.get_tool_catalog failed: {e}")
         raise
 
 
@@ -99,13 +131,26 @@ async def delete_tool_catalog(db, catalog_id: int) -> None:
         raise
 
 
-async def list_tool_catalog_entries(db, catalog_id: int) -> list[dict[str, Any]]:
+async def list_tool_catalog_entries(
+    db,
+    catalog_id: int,
+    limit: int = 100,
+    offset: int = 0,
+) -> list[dict[str, Any]]:
     pg = await is_postgres_backend()
     try:
         if pg:
-            rows = await db.fetch("SELECT catalog_id, tool_name, module_id FROM tool_catalog_entries WHERE catalog_id = $1 ORDER BY tool_name", catalog_id)
+            rows = await db.fetch(
+                "SELECT catalog_id, tool_name, module_id FROM tool_catalog_entries WHERE catalog_id = $1 ORDER BY tool_name LIMIT $2 OFFSET $3",
+                catalog_id,
+                limit,
+                offset,
+            )
             return [dict(r) for r in rows]
-        cur = await db.execute("SELECT catalog_id, tool_name, module_id FROM tool_catalog_entries WHERE catalog_id = ? ORDER BY tool_name", (catalog_id,))
+        cur = await db.execute(
+            "SELECT catalog_id, tool_name, module_id FROM tool_catalog_entries WHERE catalog_id = ? ORDER BY tool_name LIMIT ? OFFSET ?",
+            (catalog_id, limit, offset),
+        )
         rows = await cur.fetchall()
         return [{"catalog_id": r[0], "tool_name": r[1], "module_id": r[2]} for r in rows]
     except Exception as e:

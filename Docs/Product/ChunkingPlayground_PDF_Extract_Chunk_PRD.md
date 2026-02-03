@@ -52,7 +52,7 @@ The Chunking Playground currently chunks text from paste/upload (txt/md), sample
   - `metadata` (full extraction metadata; returned verbatim)
 
 **Required response shape (per result)**
-```
+```json
 {
   "status": "Success" | "Error",
   "processing_source": "...",

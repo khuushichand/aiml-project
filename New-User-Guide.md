@@ -76,6 +76,8 @@ Key fields to set:
 - `DATABASE_URL` (defaults to SQLite; use Postgres for multi-user production)
 - Provider keys (optional): `OPENAI_API_KEY`, `ANTHROPIC_API_KEY`, etc.
 
+For local multi-user SQLite, see `Docs/User_Guides/Multi-User_SQLite_Setup.md`.
+
 For a full provider list, see `tldw_Server_API/Config_Files/.env.template`. You can also keep large provider configs in `tldw_Server_API/Config_Files/config.txt`.
 
 > Important: Replace placeholder values with strong random keys before continuing.

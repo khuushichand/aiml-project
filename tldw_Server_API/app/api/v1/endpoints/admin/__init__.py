@@ -255,9 +255,9 @@ async def _ensure_sqlite_authnz_ready_if_test_mode() -> None:
                     row = await cur.fetchone()
                     if row:
                         return
-            except Exception:
-                # Proceed to ensure migrations
-                pass
+            except Exception as exc:
+                # Proceed to ensure migrations (best-effort check)
+                logger.debug("AuthNZ test ensure table check failed: {}", exc)
 
             from tldw_Server_API.app.core.AuthNZ.migrations import ensure_authnz_tables as _ensure
             db_path = getattr(pool, "_sqlite_fs_path", None) or getattr(pool, "db_path", None)
@@ -266,8 +266,12 @@ async def _ensure_sqlite_authnz_ready_if_test_mode() -> None:
                 # Best-effort: ensure parent directories exist to avoid path issues in CI
                 try:
                     path_obj.parent.mkdir(parents=True, exist_ok=True)
-                except Exception:
-                    pass
+                except Exception as exc:
+                    logger.debug(
+                        "AuthNZ test ensure mkdir failed for {}: {}",
+                        path_obj.parent,
+                        exc,
+                    )
                 await asyncio.to_thread(_ensure, path_obj)
     except Exception as _e:
         # Best-effort only; do not interfere with request handling
@@ -563,7 +567,7 @@ async def grant_tool_permission_to_role(role_id: int, payload: ToolPermissionGra
     """
     tool = payload.tool_name.strip()
     name = f"tools.execute:{'*' if tool == '*' else tool}"
-    desc = f"Wildcard tool execution" if tool == '*' else f"Execute tool {tool}"
+    desc = "Wildcard tool execution" if tool == '*' else f"Execute tool {tool}"
     try:
         perm = await svc_grant_tool_perm(db, role_id, name, desc)
         return ToolPermissionResponse(name=perm['name'], description=perm.get('description'), category=perm.get('category'))

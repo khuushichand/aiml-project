@@ -33,7 +33,9 @@ const collectCollections = (
     output.push({
       name: String(name),
       metadata:
-        record.metadata && typeof record.metadata === "object"
+        record.metadata &&
+        typeof record.metadata === "object" &&
+        !Array.isArray(record.metadata)
           ? (record.metadata as Record<string, unknown>)
           : undefined
     })
@@ -44,7 +46,7 @@ const collectCollections = (
   }
 
   for (const [key, value] of Object.entries(record)) {
-    if (key === "collections") continue
+    if (key === "collections" || key === "metadata") continue
     collectCollections(value, output)
   }
 }

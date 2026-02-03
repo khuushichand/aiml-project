@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import json
 from typing import Any
 
@@ -181,6 +182,107 @@ async def acp_session_stream(
             pass
         await stream.stop()
 
+
+@router.websocket("/sessions/{session_id}/ssh")
+async def acp_session_ssh(
+    websocket: WebSocket,
+    session_id: str,
+    token: str | None = Query(None),
+    api_key: str | None = Query(None),
+) -> None:
+    """WebSocket SSH proxy for an ACP sandbox session."""
+    user_id = await _authenticate_ws(websocket, token=token, api_key=api_key)
+    if user_id is None:
+        try:
+            await websocket.close(code=4401)
+        except Exception:
+            pass
+        return
+
+    try:
+        client = await get_runner_client()
+        if not hasattr(client, "get_ssh_info"):
+            await websocket.close(code=4404)
+            return
+        try:
+            ssh_info = await client.get_ssh_info(session_id, user_id=user_id)
+        except TypeError:
+            ssh_info = await client.get_ssh_info(session_id)
+        if not ssh_info:
+            await websocket.close(code=4404)
+            return
+        ssh_host, ssh_port, ssh_user, ssh_key = ssh_info
+    except Exception:
+        try:
+            await websocket.close(code=4404)
+        except Exception:
+            pass
+        return
+
+    await websocket.accept()
+    try:
+        import asyncssh  # type: ignore
+    except Exception as e:
+        await websocket.close(code=1011)
+        return
+
+    try:
+        key = asyncssh.import_private_key(ssh_key)
+        async with asyncssh.connect(
+            ssh_host,
+            port=int(ssh_port),
+            username=ssh_user,
+            client_keys=[key],
+            known_hosts=None,
+        ) as conn:
+            process = await conn.create_process(term_type="xterm", term_size=(80, 24))
+
+            async def _read_output(reader: Any) -> None:
+                while True:
+                    data = await reader.read(4096)
+                    if not data:
+                        return
+                    await websocket.send_bytes(data.encode() if isinstance(data, str) else data)
+
+            async def _write_input() -> None:
+                while True:
+                    try:
+                        msg = await websocket.receive()
+                    except WebSocketDisconnect:
+                        return
+                    if msg.get("type") == "websocket.disconnect":
+                        return
+                    if msg.get("text"):
+                        text = msg["text"]
+                        try:
+                            payload = json.loads(text)
+                        except Exception:
+                            payload = None
+                        if isinstance(payload, dict) and payload.get("type") == "resize":
+                            cols = int(payload.get("cols") or 0)
+                            rows = int(payload.get("rows") or 0)
+                            if cols > 0 and rows > 0:
+                                try:
+                                    process.set_term_size(cols, rows)
+                                except Exception:
+                                    pass
+                            continue
+                        process.stdin.write(text)
+                        await process.stdin.drain()
+                    elif msg.get("bytes"):
+                        process.stdin.write(msg["bytes"])
+                        await process.stdin.drain()
+
+            await asyncio.gather(
+                _read_output(process.stdout),
+                _read_output(process.stderr),
+                _write_input(),
+            )
+    except Exception:
+        try:
+            await websocket.close(code=1011)
+        except Exception:
+            pass
 
 async def _handle_client_message(
     client: Any,
@@ -379,20 +481,42 @@ async def acp_session_new(
 
     try:
         client = await get_runner_client()
-        session_id = await client.create_session(
-            payload.cwd,
-            mcp_servers_dicts,
-            agent_type=payload.agent_type.value,
-        )
+        try:
+            session_id = await client.create_session(
+                payload.cwd,
+                mcp_servers_dicts,
+                agent_type=payload.agent_type.value,
+                user_id=user.id,
+            )
+        except TypeError:
+            session_id = await client.create_session(
+                payload.cwd,
+                mcp_servers_dicts,
+                agent_type=payload.agent_type.value,
+            )
     except ACPResponseError as exc:
         logger.error("ACP session/new failed for user {}: {}", user.id, exc)
         raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=str(exc))
+
+    sandbox_meta = None
+    try:
+        if hasattr(client, "get_session_metadata"):
+            try:
+                sandbox_meta = await client.get_session_metadata(session_id, user_id=user.id)
+            except TypeError:
+                sandbox_meta = await client.get_session_metadata(session_id)
+    except Exception:
+        sandbox_meta = None
 
     return ACPSessionNewResponse(
         session_id=session_id,
         name=session_name,
         agent_type=payload.agent_type,
         agent_capabilities=client.agent_capabilities,
+        sandbox_session_id=(sandbox_meta or {}).get("sandbox_session_id") if sandbox_meta else None,
+        sandbox_run_id=(sandbox_meta or {}).get("sandbox_run_id") if sandbox_meta else None,
+        ssh_ws_url=(sandbox_meta or {}).get("ssh_ws_url") if sandbox_meta else None,
+        ssh_user=(sandbox_meta or {}).get("ssh_user") if sandbox_meta else None,
     )
 
 

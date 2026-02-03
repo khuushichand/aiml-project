@@ -395,11 +395,26 @@ class ACPRunnerClient:
 
 _runner_client: ACPRunnerClient | None = None
 _runner_lock = asyncio.Lock()
+_sandbox_client: Any | None = None
 
 
 async def get_runner_client() -> ACPRunnerClient:
     global _runner_client
+    global _sandbox_client
     async with _runner_lock:
+        try:
+            from tldw_Server_API.app.core.Agent_Client_Protocol.config import load_acp_sandbox_config
+            sb_cfg = load_acp_sandbox_config()
+        except Exception:
+            sb_cfg = None
+        if sb_cfg and getattr(sb_cfg, "enabled", False):
+            if _sandbox_client is None or not getattr(_sandbox_client, "is_running", True):
+                from tldw_Server_API.app.core.Agent_Client_Protocol.sandbox_runner_client import (
+                    ACPSandboxRunnerManager,
+                )
+                _sandbox_client = ACPSandboxRunnerManager(sb_cfg)
+                await _sandbox_client.start()
+            return _sandbox_client  # type: ignore[return-value]
         if _runner_client is None or not _runner_client.is_running:
             _runner_client = ACPRunnerClient.from_config()
             await _runner_client.start()

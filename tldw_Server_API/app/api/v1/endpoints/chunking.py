@@ -53,6 +53,7 @@ from tldw_Server_API.app.api.v1.schemas.chunking_schema import (
     ChunkingTextRequest,
     CodeMethodOptions,
     MethodSpecificOptions,
+    build_chunking_options_schema,
 )
 from tldw_Server_API.app.core.AuthNZ.byok_runtime import (
     record_byok_missing_credentials,
@@ -686,6 +687,7 @@ async def get_chunking_capabilities(
         "llm_required_methods": llm_required,
         "hierarchical_support": True,
         "notes": "Text chunking capabilities. For method='code', the option 'code_mode' controls routing: 'auto' (default), 'ast' (Python), or 'heuristic'. Ingestion-specific chunkers are configured via templates or step config.",
+        "options_schema": build_chunking_options_schema(),
         "method_specific_options": MethodSpecificOptions(
             code=CodeMethodOptions(
                 code_mode=["auto", "ast", "heuristic"],

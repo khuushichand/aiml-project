@@ -491,6 +491,20 @@ class ChatterboxAdapter(TTSAdapter):
                 if self.disable_watermark and hasattr(self.model_multi, 'watermarker'):
                     self.model_multi.watermarker = _NoopWatermarker()
                 self.sample_rate = int(getattr(self.model_multi, 'sr', 24000))
+                # Register model with resource manager (best-effort)
+                try:
+                    from ..tts_resource_manager import get_resource_manager
+                    resource_manager = await get_resource_manager()
+                    register_result = resource_manager.register_model(
+                        provider=self.provider_name.lower(),
+                        model_instance=self.model_multi,
+                        cleanup_callback=self._cleanup_resources,
+                        model_key=f"multi:{self.device}",
+                    )
+                    if asyncio.iscoroutine(register_result):
+                        await register_result
+                except Exception:
+                    pass
             return self.model_multi
         else:
             if self.model_en is None:
@@ -503,6 +517,20 @@ class ChatterboxAdapter(TTSAdapter):
                 if self.disable_watermark and hasattr(self.model_en, 'watermarker'):
                     self.model_en.watermarker = _NoopWatermarker()
                 self.sample_rate = int(getattr(self.model_en, 'sr', 24000))
+                # Register model with resource manager (best-effort)
+                try:
+                    from ..tts_resource_manager import get_resource_manager
+                    resource_manager = await get_resource_manager()
+                    register_result = resource_manager.register_model(
+                        provider=self.provider_name.lower(),
+                        model_instance=self.model_en,
+                        cleanup_callback=self._cleanup_resources,
+                        model_key=f"en:{self.device}",
+                    )
+                    if asyncio.iscoroutine(register_result):
+                        await register_result
+                except Exception:
+                    pass
             return self.model_en
 
 #

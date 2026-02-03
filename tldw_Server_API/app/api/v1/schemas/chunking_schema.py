@@ -194,6 +194,15 @@ class ChunkingCapabilitiesResponse(BaseModel):
     hierarchical_support: bool
     notes: Optional[str] = None
     method_specific_options: Optional[MethodSpecificOptions] = None
+    options_schema: Optional[dict[str, Any]] = None
+
+
+def build_chunking_options_schema() -> dict[str, Any]:
+    """Return a JSON-schema payload for ChunkingOptionsRequest."""
+    try:
+        return ChunkingOptionsRequest.model_json_schema()
+    except Exception:
+        return {}
 
 #
 # End of chunking_schema.py

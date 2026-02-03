@@ -114,6 +114,10 @@ class AdminDataOpsError(ValueError):
     """Base exception for admin data ops validation errors."""
 
 
+class ToolCatalogConflictError(AdminDataOpsError):
+    """Raised when a tool catalog already exists."""
+
+
 class UnknownBackupDatasetError(AdminDataOpsError):
     """Raised when a backup request references an unknown dataset."""
 

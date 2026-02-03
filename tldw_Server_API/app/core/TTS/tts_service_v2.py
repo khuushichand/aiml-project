@@ -8,12 +8,14 @@ import copy
 import inspect
 import os
 import time
+from dataclasses import replace
 from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager
 from typing import Any, Optional
 
 #
 # Third-party Imports
+import numpy as np
 from loguru import logger
 
 #
@@ -23,7 +25,14 @@ from tldw_Server_API.app.core.Metrics import get_metrics_registry
 from tldw_Server_API.app.core.Metrics.metrics_manager import MetricDefinition, MetricType
 
 from .adapter_registry import TTSAdapterFactory, TTSProvider, close_tts_factory, get_tts_factory
-from .adapters.base import AudioFormat, TTSAdapter, TTSRequest, TTSResponse
+from .adapters.base import AudioFormat, TTSCapabilities, TTSAdapter, TTSRequest, TTSResponse
+from .audio_utils import (
+    crossfade_audio,
+    evaluate_audio_quality,
+    split_text_into_chunks,
+    trim_trailing_silence,
+)
+from .streaming_audio_writer import AudioNormalizer, StreamingAudioWriter
 from .circuit_breaker import CircuitBreakerManager, CircuitOpenError, get_circuit_manager
 from .realtime_session import (
     BufferedRealtimeSession,
@@ -40,11 +49,13 @@ from .tts_exceptions import (
     TTSProviderNotConfiguredError,
     TTSResourceError,
     TTSValidationError,
+    TTSAudioQualityError,
     categorize_error,
     is_retryable_error,
 )
 from .tts_resource_manager import get_resource_manager
 from .tts_validation import validate_text_input, validate_tts_request
+from .utils import estimate_max_new_tokens, parse_bool
 
 #
 #######################################################################################################################
@@ -157,6 +168,580 @@ class TTSServiceV2:
             return None
         return None
 
+    def _get_performance_config(self) -> dict[str, Any]:
+        """Return performance config dict (best-effort)."""
+        cfg = self._get_validation_config()
+        if isinstance(cfg, dict):
+            perf = cfg.get("performance")
+            if isinstance(perf, dict):
+                return perf
+        return {}
+
+    def _apply_token_defaults(self, request: TTSRequest) -> None:
+        """Apply max/min token defaults when not explicitly provided."""
+        extras = request.extra_params if isinstance(request.extra_params, dict) else {}
+        perf = self._get_performance_config()
+
+        enabled = perf.get("token_estimation_enabled", True)
+        if parse_bool(extras.get("disable_token_estimation"), default=False):
+            enabled = False
+        if not enabled:
+            request.extra_params = extras
+            return
+
+        def _coerce_int(value: Any) -> Optional[int]:
+            try:
+                if value is None:
+                    return None
+                return int(value)
+            except Exception:
+                return None
+
+        max_new = _coerce_int(extras.get("max_new_tokens"))
+        if max_new is None:
+            max_new = estimate_max_new_tokens(
+                request.text,
+                tokens_per_char=perf.get("token_estimate_per_char", 2.5),
+                safety=perf.get("token_estimate_safety", 1.3),
+                min_tokens=perf.get("token_estimate_min_tokens", 256),
+                max_cap=perf.get("max_new_tokens_cap", 4096),
+            )
+            extras["max_new_tokens"] = max_new
+
+        min_new = _coerce_int(extras.get("min_new_tokens"))
+        if min_new is None:
+            min_default = _coerce_int(perf.get("min_new_tokens_default", 60))
+            if min_default is not None and min_default > 0:
+                extras["min_new_tokens"] = min_default
+                min_new = min_default
+
+        try:
+            if min_new is not None and max_new is not None and min_new > max_new:
+                extras["min_new_tokens"] = max_new
+        except Exception:
+            pass
+
+        request.extra_params = extras
+
+    def _resolve_chunking_params(self, extras: dict[str, Any]) -> tuple[bool, int, int, int, int]:
+        """Resolve chunking parameters from extras with conservative defaults."""
+        if not isinstance(extras, dict):
+            return False, 0, 0, 0, 0
+
+        def _pick_int(keys: tuple[str, ...], default: int) -> int:
+            for key in keys:
+                if key in extras and extras.get(key) is not None:
+                    try:
+                        return int(extras.get(key))
+                    except Exception:
+                        continue
+            return default
+
+        enabled: Optional[bool] = None
+        if "chunking_service" in extras:
+            enabled = parse_bool(extras.get("chunking_service"), default=False)
+        elif "chunking" in extras:
+            enabled = parse_bool(extras.get("chunking"), default=False)
+        else:
+            for key in ("chunk_target_chars", "chunk_max_chars", "chunk_min_chars", "chunk_crossfade_ms"):
+                if key in extras:
+                    enabled = True
+                    break
+
+        if not enabled:
+            return False, 0, 0, 0, 0
+
+        target = _pick_int(("chunk_target_chars", "chunk_target", "chunk_chars_target"), 120)
+        max_chars = _pick_int(("chunk_max_chars", "chunk_max", "chunk_chars_max"), 150)
+        min_chars = _pick_int(("chunk_min_chars", "chunk_min", "chunk_chars_min"), 50)
+        crossfade_ms = _pick_int(("chunk_crossfade_ms", "crossfade_ms"), 50)
+        if max_chars <= 0:
+            return False, 0, 0, 0, 0
+        if target > max_chars:
+            target = max_chars
+        if min_chars > max_chars:
+            min_chars = max_chars
+        return True, target, max_chars, min_chars, crossfade_ms
+
+    def _resolve_audio_check_params(
+        self,
+        extras: dict[str, Any],
+        *,
+        default_enabled: bool = True,
+        default_per_chunk: bool = False,
+    ) -> dict[str, Any]:
+        if not isinstance(extras, dict):
+            extras = {}
+
+        def _pick_float(keys: tuple[str, ...], default: float) -> float:
+            for key in keys:
+                if key in extras and extras.get(key) is not None:
+                    try:
+                        return float(extras.get(key))
+                    except Exception:
+                        continue
+            return default
+
+        def _pick_int(keys: tuple[str, ...], default: int) -> int:
+            for key in keys:
+                if key in extras and extras.get(key) is not None:
+                    try:
+                        return int(extras.get(key))
+                    except Exception:
+                        continue
+            return default
+
+        def _pick_bool(keys: tuple[str, ...], default: bool) -> bool:
+            for key in keys:
+                if key in extras:
+                    return parse_bool(extras.get(key), default=default)
+            return default
+
+        return {
+            "enabled": _pick_bool(("audio_checks", "audio_quality_checks"), default_enabled),
+            "strict": _pick_bool(("audio_checks_strict", "audio_quality_strict"), False),
+            "per_chunk": _pick_bool(("audio_checks_per_chunk",), default_per_chunk),
+            "trim_trailing_silence": _pick_bool(
+                ("audio_trim_trailing_silence", "trim_trailing_silence"),
+                False,
+            ),
+            "min_rms": _pick_float(("audio_min_rms", "min_rms"), 0.001),
+            "min_peak": _pick_float(("audio_min_peak", "min_peak"), 0.02),
+            "silence_threshold": _pick_float(("audio_silence_threshold", "silence_threshold"), 0.01),
+            "trailing_silence_ms": _pick_int(
+                ("audio_trailing_silence_ms", "trailing_silence_ms", "silence_tail_ms"),
+                800,
+            ),
+            "expected_chars_per_sec": _pick_float(
+                ("audio_expected_chars_per_sec", "expected_chars_per_sec", "chars_per_sec"),
+                15.0,
+            ),
+            "min_duration_ratio": _pick_float(
+                ("audio_min_duration_ratio", "min_duration_ratio"),
+                0.5,
+            ),
+            "min_duration_seconds": _pick_float(
+                ("audio_min_duration_seconds", "min_duration_seconds"),
+                0.4,
+            ),
+            "min_text_length": _pick_int(
+                ("audio_min_text_length", "min_text_length"),
+                40,
+            ),
+        }
+
+    def _build_silence_for_text(
+        self,
+        text: str,
+        sample_rate: int,
+        expected_chars_per_sec: float,
+        min_duration_seconds: float,
+    ) -> np.ndarray:
+        try:
+            sample_rate = int(sample_rate)
+        except Exception:
+            sample_rate = 24000
+        if sample_rate <= 0:
+            sample_rate = 24000
+        duration = max(min_duration_seconds, 0.0)
+        if expected_chars_per_sec > 0:
+            duration = max(duration, len(text or "") / float(expected_chars_per_sec))
+        samples = int(sample_rate * duration)
+        if samples <= 0:
+            return np.zeros(0, dtype=np.int16)
+        return np.zeros(samples, dtype=np.int16)
+
+    def _convert_pcm_to_format(
+        self,
+        audio: np.ndarray,
+        *,
+        target_format: AudioFormat,
+        sample_rate: int,
+    ) -> bytes:
+        normalizer = AudioNormalizer()
+        writer = StreamingAudioWriter(
+            format=target_format.value,
+            sample_rate=sample_rate,
+            channels=1,
+        )
+        try:
+            if audio.dtype != np.int16:
+                audio = normalizer.normalize(audio, target_dtype=np.int16)
+            chunk_bytes = writer.write_chunk(audio) or b""
+            final_bytes = writer.write_chunk(finalize=True) or b""
+            if target_format == AudioFormat.PCM:
+                return chunk_bytes
+            return chunk_bytes + final_bytes
+        finally:
+            writer.close()
+
+    def _resolve_segment_retry_params(self, extras: dict[str, Any]) -> dict[str, Any]:
+        if not isinstance(extras, dict):
+            extras = {}
+
+        def _pick_int(keys: tuple[str, ...], default: int) -> int:
+            for key in keys:
+                if key in extras and extras.get(key) is not None:
+                    try:
+                        return int(extras.get(key))
+                    except Exception:
+                        continue
+            return default
+
+        def _pick_float(keys: tuple[str, ...], default: float) -> float:
+            for key in keys:
+                if key in extras and extras.get(key) is not None:
+                    try:
+                        return float(extras.get(key))
+                    except Exception:
+                        continue
+            return default
+
+        def _pick_bool(keys: tuple[str, ...], default: bool) -> bool:
+            for key in keys:
+                if key in extras:
+                    return parse_bool(extras.get(key), default=default)
+            return default
+
+        return {
+            "max_retries": _pick_int(("segment_retry_max", "segment_retries"), 2),
+            "backoff_ms": _pick_int(("segment_retry_backoff_ms", "segment_backoff_ms"), 250),
+            "backoff_factor": _pick_float(("segment_retry_backoff_factor", "segment_backoff_factor"), 2.0),
+            "max_backoff_ms": _pick_int(("segment_retry_max_backoff_ms", "segment_backoff_max_ms"), 4000),
+            "allow_partial": _pick_bool(("segment_allow_partial", "chunk_allow_partial"), True),
+            "silence_on_fail": _pick_bool(("segment_silence_on_fail", "chunk_silence_on_fail"), True),
+        }
+
+    def _is_retryable_segment_error(self, error: Exception) -> bool:
+        if isinstance(error, TTSError):
+            return is_retryable_error(error)
+        return False
+
+    def _apply_audio_quality_checks(
+        self,
+        *,
+        audio: np.ndarray,
+        text: str,
+        sample_rate: int,
+        params: dict[str, Any],
+        provider_key: str,
+        context: str,
+    ) -> tuple[np.ndarray, dict[str, float], list[str]]:
+        if not params.get("enabled", True):
+            return audio, {}, []
+
+        metrics, warnings = evaluate_audio_quality(
+            audio,
+            sample_rate,
+            text_length=len(text or ""),
+            min_text_length=int(params["min_text_length"]),
+            min_rms=float(params["min_rms"]),
+            min_peak=float(params["min_peak"]),
+            silence_threshold=float(params["silence_threshold"]),
+            trailing_silence_ms=int(params["trailing_silence_ms"]),
+            expected_chars_per_sec=float(params["expected_chars_per_sec"]),
+            min_duration_ratio=float(params["min_duration_ratio"]),
+            min_duration_seconds=float(params["min_duration_seconds"]),
+        )
+
+        if params.get("trim_trailing_silence") and params["trailing_silence_ms"] > 0:
+            if metrics.get("trailing_silence_ms", 0.0) >= params["trailing_silence_ms"]:
+                trimmed = trim_trailing_silence(
+                    audio,
+                    sample_rate,
+                    threshold=float(params["silence_threshold"]),
+                    min_silence_ms=int(params["trailing_silence_ms"]),
+                )
+                if trimmed.shape[0] < np.asarray(audio).reshape(-1).shape[0]:
+                    audio = trimmed
+                    metrics, warnings = evaluate_audio_quality(
+                        audio,
+                        sample_rate,
+                        text_length=len(text or ""),
+                        min_text_length=int(params["min_text_length"]),
+                        min_rms=float(params["min_rms"]),
+                        min_peak=float(params["min_peak"]),
+                        silence_threshold=float(params["silence_threshold"]),
+                        trailing_silence_ms=int(params["trailing_silence_ms"]),
+                        expected_chars_per_sec=float(params["expected_chars_per_sec"]),
+                        min_duration_ratio=float(params["min_duration_ratio"]),
+                        min_duration_seconds=float(params["min_duration_seconds"]),
+                    )
+
+        if warnings:
+            details = {
+                "context": context,
+                "metrics": metrics,
+                "warnings": warnings,
+            }
+            if params.get("strict"):
+                raise TTSAudioQualityError(
+                    "TTS audio failed quality checks",
+                    provider=provider_key,
+                    details=details,
+                )
+            logger.warning(
+                f"{provider_key}: audio checks flagged ({context}): {', '.join(warnings)}"
+            )
+        return audio, metrics, warnings
+
+    def _should_service_chunk(self, request: TTSRequest, adapter: TTSAdapter) -> tuple[bool, int, int, int, int]:
+        if request.stream:
+            return False, 0, 0, 0, 0
+        if getattr(adapter, "handles_text_chunking", False):
+            return False, 0, 0, 0, 0
+        extras = request.extra_params if isinstance(request.extra_params, dict) else {}
+        enabled, target, max_chars, min_chars, crossfade_ms = self._resolve_chunking_params(extras)
+        if not enabled:
+            return False, 0, 0, 0, 0
+        if not request.text:
+            return False, 0, 0, 0, 0
+        if len(request.text) <= max_chars:
+            return False, 0, 0, 0, 0
+        return True, target, max_chars, min_chars, crossfade_ms
+
+    async def _generate_chunked_response(
+        self,
+        adapter: TTSAdapter,
+        request: TTSRequest,
+        provider_key: str,
+        target_chars: int,
+        max_chars: int,
+        min_chars: int,
+        crossfade_ms: int,
+    ) -> Optional[TTSResponse]:
+        extras = request.extra_params if isinstance(request.extra_params, dict) else {}
+        check_params = self._resolve_audio_check_params(
+            extras,
+            default_enabled=True,
+            default_per_chunk=True,
+        )
+        retry_params = self._resolve_segment_retry_params(extras)
+        caps = None
+        try:
+            caps = getattr(adapter, "_capabilities", None)
+            if caps is None or not isinstance(caps, TTSCapabilities):
+                caps = await adapter.get_capabilities()
+        except Exception:
+            caps = None
+        if not isinstance(caps, TTSCapabilities) or AudioFormat.PCM not in caps.supported_formats:
+            logger.debug(
+                f"{provider_key}: chunking requested but PCM not supported; skipping service-level chunking"
+            )
+            return None
+        try:
+            max_len = getattr(caps, "max_text_length", None)
+            if isinstance(max_len, int) and max_len > 0:
+                max_chars = min(max_chars, max_len)
+        except Exception:
+            pass
+        if max_chars <= 0:
+            return None
+        if target_chars > max_chars:
+            target_chars = max_chars
+        if min_chars > max_chars:
+            min_chars = max_chars
+
+        chunks = split_text_into_chunks(
+            request.text,
+            target_chars=target_chars,
+            max_chars=max_chars,
+            min_chars=min_chars,
+        )
+        if len(chunks) <= 1:
+            return None
+
+        chunk_extras = dict(extras)
+        for key in (
+            "chunking_service",
+            "chunking",
+            "chunk_target_chars",
+            "chunk_target",
+            "chunk_chars_target",
+            "chunk_max_chars",
+            "chunk_max",
+            "chunk_chars_max",
+            "chunk_min_chars",
+            "chunk_min",
+            "chunk_chars_min",
+            "chunk_crossfade_ms",
+            "crossfade_ms",
+        ):
+            chunk_extras.pop(key, None)
+
+        base_request = replace(request, stream=False, format=AudioFormat.PCM)
+        base_request.extra_params = chunk_extras
+
+        audio_parts: list[np.ndarray] = []
+        sample_rate: Optional[int] = None
+        quality_events: list[dict[str, Any]] = []
+        segment_events: list[dict[str, Any]] = []
+        last_error: Optional[Exception] = None
+        fallback_sample_rate = getattr(adapter, "sample_rate", 24000)
+        for chunk_idx, chunk_text in enumerate(chunks):
+            chunk_request = replace(base_request, text=chunk_text)
+            attempts = 0
+            last_error = None
+            max_attempts = max(1, int(retry_params["max_retries"]))
+            backoff_ms = max(0, int(retry_params["backoff_ms"]))
+            backoff_factor = float(retry_params["backoff_factor"]) if retry_params["backoff_factor"] else 1.0
+            max_backoff_ms = max(backoff_ms, int(retry_params["max_backoff_ms"]))
+
+            while True:
+                attempts += 1
+                try:
+                    response = await adapter.generate(chunk_request)
+                    pcm_bytes = response.audio_data or response.audio_content
+                    if pcm_bytes is None and response.audio_stream is not None:
+                        collected = bytearray()
+                        async for data in response.audio_stream:
+                            if data:
+                                collected.extend(data)
+                        pcm_bytes = bytes(collected)
+                    if not pcm_bytes:
+                        raise TTSGenerationError(
+                            f"{provider_key} returned empty audio for chunked request",
+                            provider=provider_key,
+                        )
+                    pcm = np.frombuffer(pcm_bytes, dtype=np.int16)
+                    if sample_rate is None:
+                        sample_rate = response.sample_rate or getattr(adapter, "sample_rate", None)
+                    if check_params.get("enabled") and check_params.get("per_chunk"):
+                        pcm, metrics, warnings = self._apply_audio_quality_checks(
+                            audio=pcm,
+                            text=chunk_text,
+                            sample_rate=sample_rate or fallback_sample_rate,
+                            params=check_params,
+                            provider_key=provider_key,
+                            context="chunk",
+                        )
+                        if warnings:
+                            quality_events.append(
+                                {
+                                    "context": "chunk",
+                                    "chunk_index": len(audio_parts),
+                                    "warnings": warnings,
+                                    "metrics": metrics,
+                                }
+                            )
+                    audio_parts.append(pcm)
+                    segment_events.append(
+                        {
+                            "index": chunk_idx,
+                            "status": "success",
+                            "attempts": attempts,
+                        }
+                    )
+                    break
+                except Exception as exc:
+                    last_error = exc
+                    retryable = self._is_retryable_segment_error(exc)
+                    if attempts >= max_attempts or not retryable:
+                        segment_events.append(
+                            {
+                                "index": chunk_idx,
+                                "status": "failed",
+                                "attempts": attempts,
+                                "error": str(exc),
+                                "error_type": exc.__class__.__name__,
+                                "retryable": retryable,
+                                "details": getattr(exc, "details", None),
+                            }
+                        )
+                        break
+                    delay_ms = int(backoff_ms * (backoff_factor ** (attempts - 1)))
+                    delay_ms = min(delay_ms, max_backoff_ms)
+                    if delay_ms > 0:
+                        await asyncio.sleep(delay_ms / 1000.0)
+
+            if last_error is not None and segment_events[-1]["status"] == "failed":
+                if not retry_params.get("allow_partial", True):
+                    raise last_error
+                if retry_params.get("silence_on_fail", True):
+                    silence_rate = sample_rate or fallback_sample_rate
+                    silence = self._build_silence_for_text(
+                        chunk_text,
+                        silence_rate,
+                        expected_chars_per_sec=float(check_params["expected_chars_per_sec"]),
+                        min_duration_seconds=float(check_params["min_duration_seconds"]),
+                    )
+                    if silence.size:
+                        audio_parts.append(silence)
+                # Continue to next chunk; partial success is allowed if at least one segment succeeded.
+                continue
+
+        if not audio_parts:
+            if last_error:
+                raise last_error
+            return None
+        if sample_rate is None:
+            sample_rate = fallback_sample_rate
+
+        merged = audio_parts[0]
+        for part in audio_parts[1:]:
+            merged = crossfade_audio(
+                merged,
+                part,
+                sample_rate=sample_rate,
+                crossfade_ms=crossfade_ms,
+            )
+
+        if check_params.get("enabled"):
+            merged, metrics, warnings = self._apply_audio_quality_checks(
+                audio=merged,
+                text=request.text,
+                sample_rate=sample_rate,
+                params=check_params,
+                provider_key=provider_key,
+                context="merged",
+            )
+            if warnings:
+                quality_events.append(
+                    {
+                        "context": "merged",
+                        "warnings": warnings,
+                        "metrics": metrics,
+                    }
+                )
+
+        audio_bytes: Optional[bytes] = None
+        try:
+            if hasattr(adapter, "convert_audio_format"):
+                maybe = adapter.convert_audio_format(  # type: ignore[call-arg]
+                    merged,
+                    source_format=AudioFormat.PCM,
+                    target_format=request.format,
+                    sample_rate=sample_rate,
+                )
+                if asyncio.iscoroutine(maybe):
+                    audio_bytes = await maybe
+                elif isinstance(maybe, (bytes, bytearray)):
+                    audio_bytes = bytes(maybe)
+        except Exception:
+            audio_bytes = None
+        if audio_bytes is None:
+            audio_bytes = self._convert_pcm_to_format(
+                merged,
+                target_format=request.format,
+                sample_rate=sample_rate,
+            )
+
+        return TTSResponse(
+            audio_data=audio_bytes,
+            format=request.format,
+            sample_rate=sample_rate,
+            provider=provider_key,
+            model=request.model,
+            metadata={
+                "chunked": True,
+                "chunk_count": len(chunks),
+                "chunk_crossfade_ms": crossfade_ms,
+                "audio_quality_warnings": quality_events,
+                "segments": segment_events,
+                "partial": any(seg.get("status") == "failed" for seg in segment_events),
+            },
+        )
+
     def _get_provider_concurrency_limit(self, provider_key: str) -> Optional[int]:
         """Resolve provider-specific concurrency limit from config (if set)."""
         cfg = self._get_validation_config()
@@ -256,6 +841,10 @@ class TTSServiceV2:
         try:
             resource_mgr = await get_resource_manager()
             try:
+                resource_mgr.touch_model(provider, getattr(request, "model", None))
+            except Exception:
+                pass
+            try:
                 ok = await resource_mgr.check_resources()
             except TypeError:
                 # Some mocks are non-async
@@ -287,6 +876,12 @@ class TTSServiceV2:
                 adapter = None
         if adapter is None:
             raise TTSProviderNotConfiguredError(f"Provider not found: {provider}")
+
+        try:
+            resource_mgr = await get_resource_manager()
+            resource_mgr.touch_model(provider, getattr(request, "model", None))
+        except Exception:
+            pass
 
         # Adapter is expected to expose `generate_stream` in legacy tests
         stream = await adapter.generate_stream(request)  # type: ignore[attr-defined]
@@ -656,6 +1251,7 @@ class TTSServiceV2:
                 provider_hint = None
 
         await self._apply_custom_voice_reference(tts_request, user_id, provider_hint)
+        self._apply_token_defaults(tts_request)
 
         # Validate the request first
         try:
@@ -686,6 +1282,12 @@ class TTSServiceV2:
             raise error
 
         provider_key = self._resolve_provider_key(adapter)
+        # Update model usage for LRU cache tracking (best-effort)
+        try:
+            resource_mgr = await get_resource_manager()
+            resource_mgr.touch_model(provider_key, getattr(tts_request, "model", None))
+        except Exception:
+            pass
 
         # Track metrics
         start_time = time.time()
@@ -753,9 +1355,29 @@ class TTSServiceV2:
 
                     # Generate response (with or without circuit breaker)
                     response: Optional[TTSResponse] = None
+
+                    async def _generate_with_adapter() -> TTSResponse:
+                        should_chunk, target_chars, max_chars, min_chars, crossfade_ms = self._should_service_chunk(
+                            request_for_provider,
+                            adapter,
+                        )
+                        if should_chunk:
+                            chunked = await self._generate_chunked_response(
+                                adapter=adapter,
+                                request=request_for_provider,
+                                provider_key=provider_key,
+                                target_chars=target_chars,
+                                max_chars=max_chars,
+                                min_chars=min_chars,
+                                crossfade_ms=crossfade_ms,
+                            )
+                            if chunked is not None:
+                                return chunked
+                        return await adapter.generate(request_for_provider)
+
                     if circuit_breaker:
                         try:
-                            response = await circuit_breaker.call(adapter.generate, request_for_provider)
+                            response = await circuit_breaker.call(_generate_with_adapter)
                         except CircuitOpenError as e:
                             logger.warning(f"Circuit open for {provider_key}: {e}")
                             if fallback:
@@ -774,7 +1396,7 @@ class TTSServiceV2:
                                     details={"circuit_state": "open"}
                                 )
                     else:
-                        response = await adapter.generate(request_for_provider)
+                        response = await _generate_with_adapter()
 
                     if fallback_plan is None and response is not None:
                         if response.metadata:

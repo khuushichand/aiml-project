@@ -2,6 +2,7 @@
 # Description:
 #
 # Imports
+import asyncio
 import pytest
 from fastapi.testclient import TestClient
 from pathlib import Path
@@ -77,8 +78,7 @@ def client(test_user, test_api_token):
         # `close_all_cached_prompts_db_instances()` at the end is important.
 
     def teardown_test_db_environment():
-
-        close_all_cached_prompts_db_instances()  # Important
+        asyncio.run(close_all_cached_prompts_db_instances())  # Important
         if temp_test_user_db_base_dir.exists():
             shutil.rmtree(temp_test_user_db_base_dir)
 

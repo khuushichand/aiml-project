@@ -127,6 +127,19 @@ class IndexTTS2Adapter(TTSAdapter):
             self._status = ProviderStatus.INITIALIZING
             engine = await asyncio.to_thread(self._create_engine)
             self._engine = engine
+            try:
+                from ..tts_resource_manager import get_resource_manager
+                resource_manager = await get_resource_manager()
+                register_result = resource_manager.register_model(
+                    provider=self.provider_name.lower(),
+                    model_instance=engine,
+                    cleanup_callback=lambda: setattr(self, "_engine", None),
+                    model_key=str(self.model_dir),
+                )
+                if asyncio.iscoroutine(register_result):
+                    await register_result
+            except Exception:
+                pass
 
             # Cache capabilities for later use
             self._capabilities = await self.get_capabilities()

@@ -97,6 +97,9 @@ def normalise_pdf_result(item: dict[str, Any], original_ref: str) -> dict[str, A
 
     # Keys that can be None
     item.setdefault("content", None)
+    # Surface extracted text explicitly for clients that prefer a dedicated field
+    if item.get("conversion_text") is None:
+        item["conversion_text"] = item.get("content")
     item.setdefault("chunks", None)
     item.setdefault("analysis", None)
     item.setdefault("warnings", None)

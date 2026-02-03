@@ -15,6 +15,12 @@ export default defineConfig({
       page: "options.html",
       open_in_tab: true
     },
+    web_accessible_resources: [
+      {
+        resources: ["pdf.worker.min.mjs"],
+        matches: ["<all_urls>"]
+      }
+    ],
     permissions: [
       "storage",
       "contextMenus",

@@ -157,6 +157,19 @@ class Supertonic2OnnxAdapter(TTSAdapter):
 
         self._engine = engine
         self._load_voice_style = vendor.load_voice_style
+        try:
+            from ..tts_resource_manager import get_resource_manager
+            resource_manager = await get_resource_manager()
+            register_result = resource_manager.register_model(
+                provider=self.PROVIDER_KEY,
+                model_instance=self._engine,
+                cleanup_callback=lambda: setattr(self, "_engine", None),
+                model_key=str(self.onnx_dir),
+            )
+            if asyncio.iscoroutine(register_result):
+                await register_result
+        except Exception:
+            pass
 
         try:
             self.sample_rate = int(getattr(self._engine, "sample_rate", self.sample_rate))

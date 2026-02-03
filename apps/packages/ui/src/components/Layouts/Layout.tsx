@@ -107,6 +107,7 @@ const OptionLayoutInner: React.FC<OptionLayoutProps> = ({
   const { demoEnabled } = useDemoMode()
   const [showChatSidebar] = useChatSidebar()
   const location = useLocation()
+  const isDocumentWorkspace = location.pathname === "/document-workspace"
   const { clearChat, useOCR, chatMode, setChatMode, webSearch, setWebSearch } =
     useMessageOption()
   const queryClient = useQueryClient()
@@ -254,7 +255,12 @@ const OptionLayoutInner: React.FC<OptionLayoutProps> = ({
   return (
     <>
       <OptionLayoutEffects />
-      <div className="flex min-h-screen w-full">
+      <div
+        className={classNames(
+          "flex w-full",
+          isDocumentWorkspace ? "h-screen min-h-0" : "min-h-screen"
+        )}
+      >
       {/* Persistent ChatSidebar when feature flag enabled */}
       {showChatSidebar && !hideHeader && (
         <ChatSidebar
@@ -265,7 +271,7 @@ const OptionLayoutInner: React.FC<OptionLayoutProps> = ({
       )}
       <main
         className={classNames(
-          "relative flex-1 flex flex-col",
+          "relative flex min-h-0 flex-1 flex-col",
           hideHeader ? "bg-bg " : ""
         )}
         data-demo-mode={demoEnabled ? "on" : "off"}>
@@ -275,7 +281,12 @@ const OptionLayoutInner: React.FC<OptionLayoutProps> = ({
             {shortcutLoading && renderShortcutOverlay()}
           </div>
         ) : (
-          <div className="relative flex min-h-[135vh] flex-col pt-2 sm:pt-3">
+          <div
+            className={classNames(
+              "relative flex flex-col pt-2 sm:pt-3",
+              isDocumentWorkspace ? "min-h-0 flex-1" : "min-h-[135vh]"
+            )}
+          >
             <div className="relative z-20 w-full">
               <Header
                 onToggleSidebar={toggleSidebar}

@@ -29,13 +29,26 @@ MAX_ENRICHMENT_REFS = 20
 SEMANTIC_SCHOLAR_DELAY = 0.2  # 200ms = max 5 requests/sec
 
 # Reference section detection patterns
+REFERENCES_PARSER_VERSION = "3"
 REFERENCE_SECTION_PATTERNS = [
+    # Common headings (optional numbering/roman numerals, optional colon)
+    r"(?im)^\s*(?:\d+|[IVXLC]+)?(?:\.\d+)?\s*references?\s*:?\s*$",
+    r"(?im)^\s*(?:\d+|[IVXLC]+)?(?:\.\d+)?\s*bibliography\s*:?\s*$",
+    r"(?im)^\s*(?:\d+|[IVXLC]+)?(?:\.\d+)?\s*works\s+cited\s*:?\s*$",
+    r"(?im)^\s*(?:\d+|[IVXLC]+)?(?:\.\d+)?\s*literature\s+cited\s*:?\s*$",
+    r"(?im)^\s*(?:\d+|[IVXLC]+)?(?:\.\d+)?\s*cited\s+references?\s*:?\s*$",
+    # Markdown-style headings
     r"(?im)^#+\s*references?\s*$",
-    r"(?im)^references?\s*$",
-    r"(?im)^bibliography\s*$",
-    r"(?im)^works\s+cited\s*$",
-    r"(?im)^literature\s+cited\s*$",
-    r"(?im)^cited\s+references?\s*$",
+    r"(?im)^#+\s*bibliography\s*$",
+]
+
+# Looser fallback headings (allow trailing text like "References and Notes")
+REFERENCE_SECTION_FALLBACK_PATTERNS = [
+    r"(?im)^\s*(?:\d+|[IVXLC]+)?(?:\.\d+)?\s*references?\b.*$",
+    r"(?im)^\s*(?:\d+|[IVXLC]+)?(?:\.\d+)?\s*bibliography\b.*$",
+    r"(?im)^\s*(?:\d+|[IVXLC]+)?(?:\.\d+)?\s*works\s+cited\b.*$",
+    r"(?im)^\s*(?:\d+|[IVXLC]+)?(?:\.\d+)?\s*literature\s+cited\b.*$",
+    r"(?im)^\s*(?:\d+|[IVXLC]+)?(?:\.\d+)?\s*cited\s+references?\b.*$",
 ]
 
 # DOI/arXiv extraction patterns
@@ -62,7 +75,10 @@ def _build_references_cache_key(
 ) -> str:
     scope_str = f"user:{user_id}:db:{db_scope}"
     enrich_flag = "enrich" if enrich else "basic"
-    return f"cache:/api/v1/media/{media_id}/references:{scope_str}:{enrich_flag}"
+    return (
+        f"cache:/api/v1/media/{media_id}/references:"
+        f"{scope_str}:{enrich_flag}:v{REFERENCES_PARSER_VERSION}"
+    )
 
 
 def _parse_year_from_date(date_str: str | None) -> int | None:
@@ -79,23 +95,40 @@ def _parse_year_from_date(date_str: str | None) -> int | None:
 
 def _find_reference_section(content: str) -> str | None:
     """Find and extract the references section from document content."""
+    matches: list[re.Match[str]] = []
     for pattern in REFERENCE_SECTION_PATTERNS:
-        match = re.search(pattern, content)
-        if match:
-            # Extract everything after the references heading
-            start = match.end()
-            # Try to find the next section heading to limit scope
-            next_section = re.search(r"(?im)^#+\s*\w", content[start:])
-            if next_section:
-                end = start + next_section.start()
-                return content[start:end].strip()
-            return content[start:].strip()
-    return None
+        matches.extend(re.finditer(pattern, content))
+    if not matches:
+        for pattern in REFERENCE_SECTION_FALLBACK_PATTERNS:
+            matches.extend(re.finditer(pattern, content))
+    if not matches:
+        # Fallback: look for the last occurrence of the word "References"
+        fallback_matches = list(re.finditer(r"(?i)\breferences\b", content))
+        if not fallback_matches:
+            return None
+        match = fallback_matches[-1]
+        start = match.end()
+        return content[start:].strip()
+
+    # Use the last match to avoid earlier "References" mentions (e.g., TOC).
+    match = max(matches, key=lambda m: m.start())
+
+    # Extract everything after the references heading
+    start = match.end()
+    # Try to find the next section heading to limit scope
+    next_section = re.search(r"(?im)^\s*(?:\d+|[IVXLC]+)?(?:\.\d+)?\s*[A-Z][\w\s\-]{2,}$", content[start:])
+    if next_section:
+        end = start + next_section.start()
+        return content[start:end].strip()
+    return content[start:].strip()
 
 
 def _split_references(refs_text: str) -> list[str]:
     """Split references section into individual references."""
     references: list[str] = []
+    # Fix common PDF hyphenation across line breaks
+    refs_text = re.sub(r"(\w)-\n(\w)", r"\1\2", refs_text)
+    refs_text = refs_text.replace("\r\n", "\n").replace("\r", "\n")
 
     # Try numbered list format: [1], 1., 1), etc.
     numbered_pattern = r"(?m)^\s*(?:\[\d+\]|\d+[\.\)])\s+"
@@ -104,34 +137,61 @@ def _split_references(refs_text: str) -> list[str]:
         references = [p.strip() for p in parts if p.strip() and len(p.strip()) > 20]
     else:
         # Try double newline as separator
-        parts = refs_text.split("\n\n")
+        parts = re.split(r"\n\s*\n", refs_text)
         references = [p.strip().replace("\n", " ") for p in parts if p.strip() and len(p.strip()) > 20]
 
-    # If still no good split, try single newlines but only if lines are long
-    if len(references) < 2:
-        lines = refs_text.split("\n")
+    def _looks_like_new_reference(line: str) -> bool:
+        if re.match(r"^\s*(?:\[\d+\]|\d+[\.\)])\s+", line):
+            return True
+        # Author list starting pattern: "Surname, A." or "First Last, ..."
+        if re.search(
+            r"^[A-Z][A-Za-z'’.\-]+(?:\s+[A-Z][A-Za-z'’.\-]+){0,2},\s*[A-Z]",
+            line,
+        ):
+            return True
+        # "Surname et al." pattern
+        if re.search(r"^[A-Z][A-Za-z'’.\-]+(?:\s+et\s+al\.)\b", line):
+            return True
+        return False
+
+    # If still no good split, try single newlines with heuristics
+    if len(references) < 5:
+        lines = [ln.strip() for ln in refs_text.split("\n")]
         potential_refs = []
         current_ref = ""
         for line in lines:
-            line = line.strip()
             if not line:
                 if current_ref and len(current_ref) > 30:
-                    potential_refs.append(current_ref)
+                    potential_refs.append(current_ref.strip())
                 current_ref = ""
             else:
                 # Check if this looks like a new reference (starts with author pattern)
-                if current_ref and (
-                    re.match(r"^[A-Z][a-z]+,?\s+[A-Z]", line) or
-                    re.match(r"^\[\d+\]", line) or
-                    re.match(r"^\d+[\.\)]", line)
-                ):
+                if current_ref and _looks_like_new_reference(line):
                     if len(current_ref) > 30:
-                        potential_refs.append(current_ref)
+                        potential_refs.append(current_ref.strip())
                     current_ref = line
                 else:
                     current_ref = (current_ref + " " + line).strip() if current_ref else line
         if current_ref and len(current_ref) > 30:
-            potential_refs.append(current_ref)
+            potential_refs.append(current_ref.strip())
+        if len(potential_refs) > len(references):
+            references = potential_refs
+
+    # Additional pass: split on author-start lines when refs are still few
+    if len(references) < 5:
+        lines = [ln.strip() for ln in refs_text.split("\n") if ln.strip()]
+        potential_refs = []
+        current_ref = ""
+        for line in lines:
+            is_author_line = _looks_like_new_reference(line)
+            has_year = re.search(YEAR_PATTERN, current_ref) is not None
+            if current_ref and is_author_line and has_year:
+                potential_refs.append(current_ref.strip())
+                current_ref = line
+            else:
+                current_ref = (current_ref + " " + line).strip() if current_ref else line
+        if current_ref and len(current_ref) > 30:
+            potential_refs.append(current_ref.strip())
         if len(potential_refs) > len(references):
             references = potential_refs
 
@@ -599,9 +659,10 @@ async def get_document_references(
     if not content.strip():
         content = get_latest_transcription(db, media_id) or ""
 
-    # Normalize escaped newlines if content appears to be serialized
+    # Normalize escaped and platform-specific newlines
     if "\\n" in content and "\n" not in content:
         content = content.replace("\\r\\n", "\n").replace("\\n", "\n").replace("\\r", "\n")
+    content = content.replace("\r\n", "\n").replace("\r", "\n")
 
     content = content.strip()
     if not content:

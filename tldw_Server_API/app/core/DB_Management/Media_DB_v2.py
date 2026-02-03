@@ -1341,7 +1341,7 @@ class MediaDatabase:
             return BackendCursorAdapter(result)
         except BackendDatabaseError as exc:
             logging.error(
-                "Backend execute failed: %s... Error: %s",
+                "Backend execute failed: {}... Error: {}",
                 prepared_query[:200],
                 exc,
                 exc_info=True,
@@ -1370,7 +1370,7 @@ class MediaDatabase:
             return BackendCursorAdapter(result)
         except BackendDatabaseError as exc:
             logging.error(
-                "Backend execute_many failed: %s... Error: %s",
+                "Backend execute_many failed: {}... Error: {}",
                 prepared_query[:200],
                 exc,
                 exc_info=True,
@@ -1596,10 +1596,10 @@ class MediaDatabase:
                 if "sync error" in msg:
                     logging.error(f"Sync Validation Failed: {e}")
                     raise e
-                logging.error("Integrity error executing query: %s", e, exc_info=True)
+                logging.error("Integrity error executing query: {}", e, exc_info=True)
                 raise DatabaseError(f"Integrity constraint violation: {e}") from e
             except sqlite3.Error as e:
-                logging.error("SQLite query failed: %s", e, exc_info=True)
+                logging.error("SQLite query failed: {}", e, exc_info=True)
                 raise DatabaseError(f"Query execution failed: {e}") from e
 
         try:
@@ -1614,7 +1614,7 @@ class MediaDatabase:
                         raise DatabaseError(f"Backend commit failed: {exc}") from exc
             return BackendCursorAdapter(result)
         except BackendDatabaseError as exc:
-            logging.error("Backend query failed: %s", exc, exc_info=True)
+            logging.error("Backend query failed: {}", exc, exc_info=True)
             raise DatabaseError(f"Backend query execution failed: {exc}") from exc
 
     def execute_many(
@@ -1689,13 +1689,13 @@ class MediaDatabase:
                     result = QueryResult(rows=[], rowcount=cur.rowcount, lastrowid=cur.lastrowid, description=cur.description)
                     return BackendCursorAdapter(result)
             except sqlite3.IntegrityError as e:
-                logging.error("Integrity error during execute_many: %s", e, exc_info=True)
+                logging.error("Integrity error during execute_many: {}", e, exc_info=True)
                 raise DatabaseError(f"Integrity constraint violation during batch: {e}") from e
             except sqlite3.Error as e:
-                logging.error("SQLite execute_many failed: %s", e, exc_info=True)
+                logging.error("SQLite execute_many failed: {}", e, exc_info=True)
                 raise DatabaseError(f"Execute Many failed: {e}") from e
             except TypeError as te:
-                logging.error("TypeError during execute_many: %s", te, exc_info=True)
+                logging.error("TypeError during execute_many: {}", te, exc_info=True)
                 raise TypeError(f"Parameter list format error: {te}") from te
 
         try:
@@ -1710,7 +1710,7 @@ class MediaDatabase:
                         raise DatabaseError(f"Backend batch commit failed: {exc}") from exc
             return BackendCursorAdapter(result)
         except BackendDatabaseError as exc:
-            logging.error("Backend execute_many failed: %s", exc, exc_info=True)
+            logging.error("Backend execute_many failed: {}", exc, exc_info=True)
             raise DatabaseError(f"Backend execute_many failed: {exc}") from exc
 
     # -------------------------
@@ -2247,7 +2247,7 @@ class MediaDatabase:
                     conn.commit()
                     logging.debug("Committed SQLite transaction.")
             except Exception as e:
-                logging.error("SQLite transaction failed, rolling back: %s", e)
+                logging.error("SQLite transaction failed, rolling back: {}", e)
                 if outermost:
                     try:
                         conn.rollback()
@@ -2461,17 +2461,17 @@ class MediaDatabase:
             version_in_db = cursor_check.fetchone()
             if not version_in_db or version_in_db['version'] != self._CURRENT_SCHEMA_VERSION:
                 logging.error(
-                    "[Schema V1] Version check failed after schema script. Found: %s",
+                    "[Schema V1] Version check failed after schema script. Found: {}",
                     version_in_db['version'] if version_in_db else 'None',
                 )
                 raise SchemaError("Schema version update did not take effect after schema script.")
             logging.debug(
-                "[Schema V1] Version check confirmed version is %s.",
+                "[Schema V1] Version check confirmed version is {}.",
                 self._CURRENT_SCHEMA_VERSION,
             )
 
             logging.info(
-                "[Schema V1] Core Schema V1 (incl. version update) applied successfully for DB: %s.",
+                "[Schema V1] Core Schema V1 (incl. version update) applied successfully for DB: {}.",
                 self.db_path_str,
             )
 
@@ -3044,7 +3044,7 @@ class MediaDatabase:
             missing = [t for t in must_tables if not backend.table_exists(t, connection=conn)]
             if missing:
                 logger.warning(
-                    "Postgres schema_version exists but base tables missing: %s. Applying base schema.", missing
+                    "Postgres schema_version exists but base tables missing: {}. Applying base schema.", missing
                 )
                 self._apply_schema_v1_postgres(conn)
                 current_version = target_version  # base schema applies current version
@@ -3483,11 +3483,11 @@ class MediaDatabase:
                     self.backend.execute(stmt, connection=conn)
                 except BackendDatabaseError as exc:
                     logger.warning(
-                        "Could not apply MediaFiles migration statement on PostgreSQL: %s",
+                        "Could not apply MediaFiles migration statement on PostgreSQL: {}",
                         exc,
                     )
         except Exception as exc:  # pragma: no cover - defensive
-            logger.warning("MediaFiles Postgres migration v11 failed: %s", exc)
+            logger.warning("MediaFiles Postgres migration v11 failed: {}", exc)
 
     def _postgres_migrate_to_v12(self, conn) -> None:
         """Ensure collections and content item tables exist (PostgreSQL)."""
@@ -3834,7 +3834,7 @@ class MediaDatabase:
                 self.backend.execute(stmt, connection=conn)
             except BackendDatabaseError as exc:
                 logger.warning(
-                    "Could not ensure Data Tables base table on PostgreSQL: %s",
+                    "Could not ensure Data Tables base table on PostgreSQL: {}",
                     exc,
                 )
 
@@ -3847,7 +3847,7 @@ class MediaDatabase:
                 self.backend.execute(stmt, connection=conn)
             except BackendDatabaseError as exc:
                 logger.warning(
-                    "Could not ensure Data Tables index/statement on PostgreSQL: %s",
+                    "Could not ensure Data Tables index/statement on PostgreSQL: {}",
                     exc,
                 )
 
@@ -3872,7 +3872,7 @@ class MediaDatabase:
                 for row in backend.get_table_info(table, connection=conn)
             }
         except BackendDatabaseError as exc:
-            logger.warning("Could not introspect PostgreSQL table %s: %s", table, exc)
+            logger.warning("Could not introspect PostgreSQL table {}: {}", table, exc)
             return
 
         for column, definition in column_defs.items():
@@ -3886,7 +3886,7 @@ class MediaDatabase:
                 )
             except BackendDatabaseError as exc:
                 logger.warning(
-                    "Could not add PostgreSQL column %s.%s: %s",
+                    "Could not add PostgreSQL column {}.{}: {}",
                     table,
                     column,
                     exc,
@@ -3973,7 +3973,7 @@ class MediaDatabase:
                 )
         except BackendDatabaseError as exc:
             logger.warning(
-                "Could not ensure late Data Tables columns/indexes on PostgreSQL: %s",
+                "Could not ensure late Data Tables columns/indexes on PostgreSQL: {}",
                 exc,
             )
 
@@ -3988,7 +3988,7 @@ class MediaDatabase:
             try:
                 self.backend.execute(stmt, connection=conn)
             except BackendDatabaseError as exc:
-                logger.warning("Could not ensure Claims base table on PostgreSQL: %s", exc)
+                logger.warning("Could not ensure Claims base table on PostgreSQL: {}", exc)
 
         # Claims extensions add late columns before index creation.
         self._ensure_postgres_claims_extensions(conn)
@@ -3997,7 +3997,7 @@ class MediaDatabase:
             try:
                 self.backend.execute(stmt, connection=conn)
             except BackendDatabaseError as exc:
-                logger.warning("Could not ensure Claims index/statement on PostgreSQL: %s", exc)
+                logger.warning("Could not ensure Claims index/statement on PostgreSQL: {}", exc)
 
     def _ensure_postgres_collections_tables(self, conn) -> None:
         """Ensure collections/content item tables exist on PostgreSQL."""
@@ -4091,7 +4091,7 @@ class MediaDatabase:
                 connection=conn,
             )
         except BackendDatabaseError as exc:
-            logger.warning("Could not ensure collections tables on PostgreSQL: %s", exc)
+            logger.warning("Could not ensure collections tables on PostgreSQL: {}", exc)
 
     def _ensure_postgres_source_hash_column(self, conn) -> None:
         """Ensure Media.source_hash column and index exist on PostgreSQL."""
@@ -7153,7 +7153,7 @@ class MediaDatabase:
                             "INSERT INTO claims_fts(claims_fts) VALUES ('delete-all')",
                         )
                     except sqlite3.Error as sqlite_err:
-                        logging.warning("claims_fts table missing during rebuild; recreating. Error: %s", sqlite_err)
+                        logging.warning("claims_fts table missing during rebuild; recreating. Error: {}", sqlite_err)
                         self._execute_with_connection(
                             conn,
                             """
@@ -7386,7 +7386,7 @@ class MediaDatabase:
                         row_dict.setdefault('relevance_score', 0.0)
                         results.append(row_dict)
         except Exception as exc:
-            logging.error("Failed to search claims: %s", exc, exc_info=True)
+            logging.error("Failed to search claims: {}", exc, exc_info=True)
             return []
         return results
 
@@ -8731,9 +8731,9 @@ class MediaDatabase:
                     "INSERT OR REPLACE INTO media_fts (rowid, title, content) VALUES (?, ?, ?)",
                     (media_id, title, f"{content}{exp_str}"),
                 )
-                logging.debug("Updated SQLite FTS entry for Media ID %s", media_id)
+                logging.debug("Updated SQLite FTS entry for Media ID {}", media_id)
             except sqlite3.Error as e:
-                logging.error("Failed to update media_fts for Media ID %s: %s", media_id, e, exc_info=True)
+                logging.error("Failed to update media_fts for Media ID {}: {}", media_id, e, exc_info=True)
                 raise DatabaseError(f"Failed to update FTS for Media ID {media_id}: {e}") from e
             return
 
@@ -8766,9 +8766,9 @@ class MediaDatabase:
                         "ELSE NULL END WHERE id = ?"
                     )
                 self._execute_with_connection(conn, sql, (media_id,))
-                logging.debug("Updated PostgreSQL FTS vector for Media ID %s", media_id)
+                logging.debug("Updated PostgreSQL FTS vector for Media ID {}", media_id)
             except DatabaseError as exc:
-                logging.error("Failed to update PostgreSQL FTS for Media ID %s: %s", media_id, exc, exc_info=True)
+                logging.error("Failed to update PostgreSQL FTS for Media ID {}: {}", media_id, exc, exc_info=True)
                 raise
             return
 
@@ -8790,9 +8790,9 @@ class MediaDatabase:
         if self.backend_type == BackendType.SQLITE:
             try:
                 conn.execute("DELETE FROM media_fts WHERE rowid = ?", (media_id,))
-                logging.debug("Deleted SQLite FTS entry for Media ID %s", media_id)
+                logging.debug("Deleted SQLite FTS entry for Media ID {}", media_id)
             except sqlite3.Error as e:
-                logging.error("Failed to delete from media_fts for Media ID %s: %s", media_id, e, exc_info=True)
+                logging.error("Failed to delete from media_fts for Media ID {}: {}", media_id, e, exc_info=True)
                 raise DatabaseError(f"Failed to delete FTS for Media ID {media_id}: {e}") from e
             return
 
@@ -8803,9 +8803,9 @@ class MediaDatabase:
                     "UPDATE media SET media_fts_tsv = NULL WHERE id = ?",
                     (media_id,),
                 )
-                logging.debug("Cleared PostgreSQL FTS vector for Media ID %s", media_id)
+                logging.debug("Cleared PostgreSQL FTS vector for Media ID {}", media_id)
             except DatabaseError as exc:
-                logging.error("Failed to clear PostgreSQL FTS for Media ID %s: %s", media_id, exc, exc_info=True)
+                logging.error("Failed to clear PostgreSQL FTS for Media ID {}: {}", media_id, exc, exc_info=True)
                 raise
             return
 
@@ -8830,9 +8830,9 @@ class MediaDatabase:
                     "INSERT OR REPLACE INTO keyword_fts (rowid, keyword) VALUES (?, ?)",
                     (keyword_id, keyword),
                 )
-                logging.debug("Updated SQLite FTS entry for Keyword ID %s", keyword_id)
+                logging.debug("Updated SQLite FTS entry for Keyword ID {}", keyword_id)
             except sqlite3.Error as e:
-                logging.error("Failed to update keyword_fts for Keyword ID %s: %s", keyword_id, e, exc_info=True)
+                logging.error("Failed to update keyword_fts for Keyword ID {}: {}", keyword_id, e, exc_info=True)
                 raise DatabaseError(f"Failed to update FTS for Keyword ID {keyword_id}: {e}") from e
             return
 
@@ -8847,9 +8847,9 @@ class MediaDatabase:
                     ),
                     (keyword_id,),
                 )
-                logging.debug("Updated PostgreSQL FTS vector for Keyword ID %s", keyword_id)
+                logging.debug("Updated PostgreSQL FTS vector for Keyword ID {}", keyword_id)
             except DatabaseError as exc:
-                logging.error("Failed to update PostgreSQL FTS for Keyword ID %s: %s", keyword_id, exc, exc_info=True)
+                logging.error("Failed to update PostgreSQL FTS for Keyword ID {}: {}", keyword_id, exc, exc_info=True)
                 raise
             return
 
@@ -8871,9 +8871,9 @@ class MediaDatabase:
         if self.backend_type == BackendType.SQLITE:
             try:
                 conn.execute("DELETE FROM keyword_fts WHERE rowid = ?", (keyword_id,))
-                logging.debug("Deleted SQLite FTS entry for Keyword ID %s", keyword_id)
+                logging.debug("Deleted SQLite FTS entry for Keyword ID {}", keyword_id)
             except sqlite3.Error as e:
-                logging.error("Failed to delete from keyword_fts for Keyword ID %s: %s", keyword_id, e, exc_info=True)
+                logging.error("Failed to delete from keyword_fts for Keyword ID {}: {}", keyword_id, e, exc_info=True)
                 raise DatabaseError(f"Failed to delete FTS for Keyword ID {keyword_id}: {e}") from e
             return
 
@@ -8884,9 +8884,9 @@ class MediaDatabase:
                     "UPDATE keywords SET keyword_fts_tsv = NULL WHERE id = ?",
                     (keyword_id,),
                 )
-                logging.debug("Cleared PostgreSQL FTS vector for Keyword ID %s", keyword_id)
+                logging.debug("Cleared PostgreSQL FTS vector for Keyword ID {}", keyword_id)
             except DatabaseError as exc:
-                logging.error("Failed to clear PostgreSQL FTS for Keyword ID %s: %s", keyword_id, exc, exc_info=True)
+                logging.error("Failed to clear PostgreSQL FTS for Keyword ID {}: {}", keyword_id, exc, exc_info=True)
                 raise
             return
 
@@ -9004,7 +9004,7 @@ class MediaDatabase:
                 max_chars = 1000
             if isinstance(search_query, str) and len(search_query) > max_chars:
                 logging.warning(
-                    "Clamping search_query from %s to %s chars for FTS hardening",
+                    "Clamping search_query from {} to {} chars for FTS hardening",
                     len(search_query),
                     max_chars,
                 )
@@ -9211,7 +9211,7 @@ class MediaDatabase:
                         logging.debug("PostgreSQL tsquery normalization produced empty output; falling back to LIKE-only search.")
                         fts_search_active = False
                 else:
-                    logging.warning("FTS requested for unsupported backend %s", self.backend_type)
+                    logging.warning("FTS requested for unsupported backend {}", self.backend_type)
                     fts_search_active = False
 
                 title_content_like_parts: list[str] = []
@@ -10355,7 +10355,7 @@ class MediaDatabase:
         # Determine the final chunk status before any DB operation
         final_chunk_status = "completed" if chunks is not None else "pending"
 
-        logging.info("add_media_with_keywords: url=%s, title=%s, client=%s", url, title, client_id)
+        logging.info("add_media_with_keywords: url={}, title={}, client={}", url, title, client_id)
         # Topic monitoring (non-blocking) for ingestion text (bounded at service level)
         try:
             from tldw_Server_API.app.core.Monitoring.topic_monitoring_service import get_topic_monitoring_service
@@ -10444,7 +10444,7 @@ class MediaDatabase:
             created = self._get_current_utc_timestamp_str()
             for idx, ch in enumerate(chunks):
                 if not isinstance(ch, dict) or ch.get("text") is None:
-                    logging.warning("Skipping invalid chunk index %s for media_id %s", idx, media_id)
+                    logging.warning("Skipping invalid chunk index {} for media_id {}", idx, media_id)
                     continue
 
                 chunk_uuid = self._generate_uuid()
@@ -10907,7 +10907,7 @@ class MediaDatabase:
                         except Exception as _si_err:
                             logging.warning(f"Structure index population failed (non-fatal): {_si_err}")
                     if chunk_options:
-                        logging.info("chunk_options ignored (placeholder): %s", chunk_options)
+                        logging.info("chunk_options ignored (placeholder): {}", chunk_options)
 
                     return media_id, media_uuid, f"Media '{title}' added."
 
@@ -12492,7 +12492,7 @@ class MediaDatabase:
                 )
                 deleted = cursor.rowcount if cursor.rowcount is not None else 0
             logger.info(
-                "Cleared %s unvectorized chunks for media %s.",
+                "Cleared {} unvectorized chunks for media {}.",
                 deleted,
                 media_id,
             )
@@ -13447,13 +13447,13 @@ def _backup_non_sqlite_database(self, backup_file_path: str) -> bool:
     if self.backend_type == BackendType.POSTGRESQL:
         logging.warning(
             "Automatic backups are not implemented inside MediaDatabase for PostgreSQL. "
-            "Use DB_Backups.create_postgres_backup(backend, backup_dir) to invoke pg_dump. Target requested: %s",
+            "Use DB_Backups.create_postgres_backup(backend, backup_dir) to invoke pg_dump. Target requested: {}",
             backup_file_path,
         )
         return False
 
     logging.warning(
-        "Automatic backups are only supported for SQLite. Backend %s is not handled (target: %s).",
+        "Automatic backups are only supported for SQLite. Backend {} is not handled (target: {}).",
         self.backend_type,
         backup_file_path,
     )
@@ -13780,7 +13780,7 @@ def batch_insert_chunks(self, media_id: int, chunks: list[dict]) -> int:
                 start_index = metadata.get('start_index')
                 end_index = metadata.get('end_index')
                 if chunk_text is None or start_index is None or end_index is None:
-                    logger.warning("Skipping chunk for media %s due to missing text/start/end metadata.", media_id)
+                    logger.warning("Skipping chunk for media {} due to missing text/start/end metadata.", media_id)
                     continue
 
                 provided_chunk_id = chunk_dict.get('chunk_id') or metadata.get('chunk_id')
@@ -13828,7 +13828,7 @@ def batch_insert_chunks(self, media_id: int, chunks: list[dict]) -> int:
                 )
 
             if not params_list:
-                logger.warning("No valid chunks prepared for batch insert media %s.", media_id)
+                logger.warning("No valid chunks prepared for batch insert media {}.", media_id)
                 return 0
 
             self._executemany_with_connection(

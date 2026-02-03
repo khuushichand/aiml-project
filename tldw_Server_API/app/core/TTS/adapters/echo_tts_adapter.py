@@ -54,6 +54,7 @@ class EchoTTSAdapter(TTSAdapter):
     """Adapter for Echo-TTS (CUDA-only, speaker reference required)."""
 
     PROVIDER_KEY = "echo_tts"
+    handles_text_chunking = True
     SUPPORTED_FORMATS: set[AudioFormat] = {
         AudioFormat.MP3,
         AudioFormat.WAV,
@@ -511,10 +512,14 @@ class EchoTTSAdapter(TTSAdapter):
             # Register model for memory monitoring (best-effort)
             try:
                 resource_manager = await get_resource_manager()
-                resource_manager.memory_monitor.register_model(
-                    self._model,
+                register_result = resource_manager.register_model(
+                    provider=self.PROVIDER_KEY,
+                    model_instance=self._model,
                     cleanup_callback=self._cleanup_resources,
+                    model_key=str(self.model_repo),
                 )
+                if asyncio.iscoroutine(register_result):
+                    await register_result
             except Exception:
                 pass
 

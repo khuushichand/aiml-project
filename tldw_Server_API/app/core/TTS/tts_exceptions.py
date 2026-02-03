@@ -172,6 +172,11 @@ class TTSVoiceCloningError(TTSGenerationError):
     pass
 
 
+class TTSAudioQualityError(TTSProviderError):
+    """Generated audio failed quality checks (silent/truncated)"""
+    pass
+
+
 # Circuit Breaker and Fallback Errors
 class TTSCircuitOpenError(TTSProviderError):
     """Circuit breaker is open for provider"""
@@ -320,6 +325,7 @@ ERROR_STATUS_CODES = {
     TTSRateLimitError: 429,
     TTSQuotaExceededError: 429,
     TTSProviderError: 502,
+    TTSAudioQualityError: 502,
     TTSProviderUnavailableError: 503,
     TTSProviderNotConfiguredError: 503,
     TTSResourceError: 503,

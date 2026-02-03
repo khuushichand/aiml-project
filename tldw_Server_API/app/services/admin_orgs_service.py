@@ -13,11 +13,13 @@ from tldw_Server_API.app.api.v1.schemas.org_team_schemas import (
     OrganizationWatchlistsSettingsUpdate,
     OrgMemberAddRequest,
     OrgMemberListItem,
+    OrgMemberRemoveResponse,
     OrgMemberResponse,
     OrgMemberRoleUpdateRequest,
     OrgMembershipItem,
     TeamCreateRequest,
     TeamMemberAddRequest,
+    TeamMemberRemoveResponse,
     TeamMemberResponse,
     TeamResponse,
 )
@@ -442,17 +444,18 @@ async def remove_team_member(
     user_id: int,
     request,
     principal: AuthPrincipal,
-) -> dict[str, Any]:
+) -> TeamMemberRemoveResponse:
     try:
         await admin_scope_service.get_scoped_team(team_id, principal, require_admin=True)
         res = await core_remove_team_member(team_id=team_id, user_id=user_id)
-        if not res.get("removed"):
-            return {
-                "message": "No membership found",
-                "team_id": team_id,
-                "user_id": user_id,
-                "removed": False,
-            }
+        removed = bool(res.get("removed"))
+        if not removed:
+            return TeamMemberRemoveResponse(
+                message="No membership found",
+                team_id=int(res.get("team_id", team_id)),
+                user_id=int(res.get("user_id", user_id)),
+                removed=False,
+            )
         await _emit_membership_audit_event(
             request,
             resource_type="team",
@@ -461,7 +464,12 @@ async def remove_team_member(
             event_type_name="DATA_DELETE",
             metadata={"target_user_id": user_id},
         )
-        return {"message": "Team member removed", **res}
+        return TeamMemberRemoveResponse(
+            message="Team member removed",
+            team_id=int(res.get("team_id", team_id)),
+            user_id=int(res.get("user_id", user_id)),
+            removed=True,
+        )
     except HTTPException:
         raise
     except Exception as exc:
@@ -533,7 +541,7 @@ async def remove_org_member(
     user_id: int,
     request,
     principal: AuthPrincipal,
-) -> dict[str, Any]:
+) -> OrgMemberRemoveResponse:
     try:
         await admin_scope_service.enforce_admin_org_access(principal, org_id, require_admin=True)
         res = await core_remove_org_member(org_id=org_id, user_id=user_id)
@@ -542,13 +550,14 @@ async def remove_org_member(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail="Organization must retain at least one owner",
             )
-        if not res.get("removed"):
-            return {
-                "message": "No membership found",
-                "org_id": org_id,
-                "user_id": user_id,
-                "removed": False,
-            }
+        removed = bool(res.get("removed"))
+        if not removed:
+            return OrgMemberRemoveResponse(
+                message="No membership found",
+                org_id=int(res.get("org_id", org_id)),
+                user_id=int(res.get("user_id", user_id)),
+                removed=False,
+            )
         await _emit_membership_audit_event(
             request,
             resource_type="organization",
@@ -557,7 +566,12 @@ async def remove_org_member(
             event_type_name="DATA_DELETE",
             metadata={"target_user_id": user_id},
         )
-        return {"message": "Org member removed", **res}
+        return OrgMemberRemoveResponse(
+            message="Org member removed",
+            org_id=int(res.get("org_id", org_id)),
+            user_id=int(res.get("user_id", user_id)),
+            removed=True,
+        )
     except HTTPException:
         raise
     except Exception as exc:

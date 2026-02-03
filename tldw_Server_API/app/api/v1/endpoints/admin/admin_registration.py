@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from typing import Any
+
 from fastapi import APIRouter, Depends, Query, Request
 from loguru import logger
 
@@ -43,7 +45,7 @@ async def create_registration_code(
     request: RegistrationCodeRequest,
     http_request: Request,
     principal: AuthPrincipal = Depends(get_auth_principal),
-    db=Depends(get_db_transaction),
+    db: Any = Depends(get_db_transaction),
 ) -> RegistrationCodeResponse:
     response, audit_info = await admin_registration_service.create_registration_code(
         request=request,
@@ -61,7 +63,7 @@ async def create_registration_code(
 @router.get("/registration-codes", response_model=RegistrationCodeListResponse)
 async def list_registration_codes(
     include_expired: bool = Query(False),
-    db=Depends(get_db_transaction),
+    db: Any = Depends(get_db_transaction),
 ) -> RegistrationCodeListResponse:
     return await admin_registration_service.list_registration_codes(include_expired, db)
 
@@ -71,8 +73,8 @@ async def delete_registration_code(
     code_id: int,
     http_request: Request,
     principal: AuthPrincipal = Depends(get_auth_principal),
-    db=Depends(get_db_transaction),
-):
+    db: Any = Depends(get_db_transaction),
+) -> dict[str, str]:
     response, audit_info = await admin_registration_service.delete_registration_code(code_id, db)
     if audit_info:
         try:

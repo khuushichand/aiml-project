@@ -82,6 +82,19 @@ class NeuTTSAdapter(TTSAdapter):
                 codec_device=self.codec_device,
                 auto_download=auto_download,
             )
+            try:
+                from ..tts_resource_manager import get_resource_manager
+                resource_manager = await get_resource_manager()
+                register_result = resource_manager.register_model(
+                    provider=self.provider_name.lower(),
+                    model_instance=self._engine,
+                    cleanup_callback=lambda: setattr(self, "_engine", None),
+                    model_key=f"{self.backbone_repo}:{self.codec_repo}",
+                )
+                if asyncio.iscoroutine(register_result):
+                    await register_result
+            except Exception:
+                pass
 
             # Detect capabilities from engine flags
             self._is_quantized_model = getattr(self._engine, "_is_quantized_model", False)

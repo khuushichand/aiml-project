@@ -114,8 +114,11 @@ ALL_SUPPORTED_PROVIDER_NAMES_LIST: list[str] = [
     "tabbyapi",
     "vllm",
     "local-llm",
+    "aphrodite",
     "custom-openai-api",
     "custom-openai-api-2",
+    "moonshot",
+    "zai",
 ]
 
 
@@ -191,8 +194,11 @@ SUPPORTED_API_ENDPOINTS = Literal[
     "tabbyapi",
     "vllm",
     "local-llm",
+    "aphrodite",
     "custom-openai-api",
     "custom-openai-api-2",
+    "moonshot",
+    "zai",
 ]
 
 
