@@ -1,7 +1,5 @@
 from __future__ import annotations
 
-from typing import Any
-
 from fastapi import APIRouter, Depends, Query, Request
 
 from tldw_Server_API.app.api.v1.API_Deps.auth_deps import (
@@ -11,16 +9,19 @@ from tldw_Server_API.app.api.v1.API_Deps.auth_deps import (
 )
 from tldw_Server_API.app.api.v1.schemas.org_team_schemas import (
     OrganizationCreateRequest,
+    OrganizationListResponse,
     OrganizationResponse,
     OrganizationWatchlistsSettingsResponse,
     OrganizationWatchlistsSettingsUpdate,
     OrgMemberAddRequest,
     OrgMemberListItem,
+    OrgMemberRemoveResponse,
     OrgMemberResponse,
     OrgMemberRoleUpdateRequest,
     OrgMembershipItem,
     TeamCreateRequest,
     TeamMemberAddRequest,
+    TeamMemberRemoveResponse,
     TeamMemberResponse,
     TeamResponse,
 )
@@ -45,24 +46,21 @@ async def admin_create_org(
     return await admin_orgs_service.create_org(payload, principal)
 
 
-@router.get("/orgs")
+@router.get("/orgs", response_model=OrganizationListResponse)
 async def admin_list_orgs(
-    request: Request,
     principal: AuthPrincipal = Depends(get_auth_principal),
     limit: int = Query(100, ge=1, le=1000),
     offset: int = Query(0, ge=0),
     q: str | None = Query(None),
     org_id: int | None = Query(None),
-) -> Any:
-    qp = request.query_params
-    wants_wrapper = any(k in qp for k in ("limit", "offset", "q"))
+) -> OrganizationListResponse:
     return await admin_orgs_service.list_orgs(
         principal=principal,
         limit=limit,
         offset=offset,
         q=q,
         org_id=org_id,
-        wants_wrapper=wants_wrapper,
+        wants_wrapper=True,
     )
 
 
@@ -157,14 +155,17 @@ async def admin_list_team_members(
     return await admin_orgs_service.list_team_members(team_id, principal=principal)
 
 
-@router.delete("/teams/{team_id}/members/{user_id}")
+@router.delete("/teams/{team_id}/members/{user_id}", response_model=TeamMemberRemoveResponse)
 async def admin_remove_team_member(
     team_id: int,
     user_id: int,
     request: Request,
     principal: AuthPrincipal = Depends(get_auth_principal),
-) -> dict:
-    return await admin_orgs_service.remove_team_member(team_id, user_id, request, principal)
+) -> TeamMemberRemoveResponse:
+    res = await admin_orgs_service.remove_team_member(team_id, user_id, request, principal)
+    if "removed" not in res:
+        res["removed"] = False
+    return TeamMemberRemoveResponse(**res)
 
 
 @router.post("/orgs/{org_id}/members", response_model=OrgMemberResponse)
@@ -196,14 +197,17 @@ async def admin_list_org_members(
     )
 
 
-@router.delete("/orgs/{org_id}/members/{user_id}")
+@router.delete("/orgs/{org_id}/members/{user_id}", response_model=OrgMemberRemoveResponse)
 async def admin_remove_org_member(
     org_id: int,
     user_id: int,
     request: Request,
     principal: AuthPrincipal = Depends(get_auth_principal),
-) -> dict:
-    return await admin_orgs_service.remove_org_member(org_id, user_id, request, principal)
+) -> OrgMemberRemoveResponse:
+    res = await admin_orgs_service.remove_org_member(org_id, user_id, request, principal)
+    if "removed" not in res:
+        res["removed"] = False
+    return OrgMemberRemoveResponse(**res)
 
 
 @router.patch("/orgs/{org_id}/members/{user_id}", response_model=OrgMemberResponse)

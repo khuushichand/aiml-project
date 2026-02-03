@@ -74,6 +74,7 @@ export interface Annotation {
 }
 
 export type AnnotationSyncStatus = "synced" | "pending" | "error"
+export type WorkspaceHealthStatus = "unknown" | "ok" | "error"
 
 export interface InsightSection {
   key: string
@@ -181,6 +182,10 @@ export interface DocumentWorkspaceState {
   annotations: Annotation[]
   pendingAnnotations: Annotation[]
   annotationSyncStatus: AnnotationSyncStatus
+
+  // Server health (document workspace tables)
+  annotationsHealth: WorkspaceHealthStatus
+  progressHealth: WorkspaceHealthStatus
 }
 
 // Store actions interface
@@ -225,6 +230,8 @@ export interface DocumentWorkspaceActions {
   removeAnnotation: (id: string) => void
   setAnnotations: (annotations: Annotation[]) => void
   setAnnotationSyncStatus: (status: AnnotationSyncStatus) => void
+  setAnnotationsHealth: (status: WorkspaceHealthStatus) => void
+  setProgressHealth: (status: WorkspaceHealthStatus) => void
 
   // Reset
   reset: () => void
@@ -262,5 +269,7 @@ export const DEFAULT_DOCUMENT_WORKSPACE_STATE: DocumentWorkspaceState = {
   activeSearchIndex: 0,
   annotations: [],
   pendingAnnotations: [],
-  annotationSyncStatus: "synced"
+  annotationSyncStatus: "synced",
+  annotationsHealth: "unknown",
+  progressHealth: "unknown"
 }

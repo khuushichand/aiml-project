@@ -1956,6 +1956,33 @@ const pollForWorldBookByName = async (
   return null
 }
 
+const pollForDictionaryByName = async (
+  serverUrl: string,
+  apiKey: string,
+  name: string,
+  timeoutMs = 30000
+) => {
+  const normalized = serverUrl.replace(/\/$/, "")
+  const deadline = Date.now() + timeoutMs
+  while (Date.now() < deadline) {
+    const listRes = await fetchWithKey(
+      `${normalized}/api/v1/chat/dictionaries?include_inactive=true`,
+      apiKey
+    ).catch(() => null)
+    if (listRes?.ok) {
+      const payload = await listRes.json().catch(() => [])
+      const dictionaries = parseListPayload(payload, ["dictionaries"])
+      const match = dictionaries.find((item: any) => {
+        const candidate = item?.name ?? item?.title ?? ""
+        return String(candidate) === String(name)
+      })
+      if (match) return match
+    }
+    await new Promise((r) => setTimeout(r, 1000))
+  }
+  return null
+}
+
 const normalizeMessageContent = (value: unknown) =>
   String(value || "").replace(/\s+/g, " ").trim()
 
@@ -5158,6 +5185,87 @@ test.describe("Real server end-to-end workflows", () => {
       logStep("generated test identifiers", { unique, dictionaryName })
 
       let row: Locator | null = null
+      const debugDictionaryTableState = async (label: string) => {
+        const tableRows = await page
+          .locator(".ant-table-tbody tr")
+          .count()
+          .catch(() => -1)
+        const matchingRows = await page
+          .locator(".ant-table-tbody tr")
+          .filter({ hasText: dictionaryName })
+          .count()
+          .catch(() => -1)
+        const tableVisible = await page
+          .locator("table")
+          .isVisible()
+          .catch(() => false)
+        logStep("dictionary table state", {
+          label,
+          tableVisible,
+          totalRows: tableRows,
+          matchingRows,
+          dictionaryName
+        })
+      }
+
+      const resolveDictionaryRow = async (label: string) => {
+        await expect
+          .poll(async () => {
+            await debugDictionaryTableState(label)
+            const rows = await page.locator(".ant-table-tbody tr").count()
+            return rows
+          }, { timeout: 30000, intervals: [500, 1000, 2000] })
+          .toBeGreaterThan(0)
+
+        const findRowOnCurrentPage = async () => {
+          const candidate = page
+            .locator(".ant-table-tbody tr")
+            .filter({ hasText: dictionaryName })
+            .first()
+          if ((await candidate.count()) > 0) return candidate
+          return null
+        }
+
+        const findRowAcrossPages = async () => {
+          const direct = await findRowOnCurrentPage()
+          if (direct) return direct
+          const paginationItems = page.locator(".ant-pagination-item")
+          const totalPages = await paginationItems.count().catch(() => 0)
+          for (let i = 0; i < totalPages; i += 1) {
+            const item = paginationItems.nth(i)
+            const classes = (await item.getAttribute("class")) || ""
+            if (!classes.includes("ant-pagination-item-active")) {
+              await item.click()
+              await page.waitForTimeout(500)
+            }
+            const candidate = await findRowOnCurrentPage()
+            if (candidate) return candidate
+          }
+          return null
+        }
+
+        let candidate = await findRowAcrossPages()
+        if (!candidate) {
+          await driver.goto(page, "/dictionaries", {
+            waitUntil: "domcontentloaded"
+          })
+          await waitForConnected(page, `workflow-dictionaries-reload-${label}`)
+          candidate = await findRowAcrossPages()
+        }
+        if (!candidate) {
+          const sampleRows = await page
+            .locator(".ant-table-tbody tr")
+            .allTextContents()
+            .catch(() => [])
+          throw new Error(
+            `Dictionary row not found in UI (${label}). name="${dictionaryName}" sampleRows="${sampleRows
+              .slice(0, 3)
+              .join(" | ")}"`
+          )
+        }
+        await candidate.scrollIntoViewIfNeeded().catch(() => {})
+        return candidate
+      }
 
       try {
         const granted = await step("grant host permission", async () => {
@@ -5196,10 +5304,22 @@ test.describe("Real server end-to-end workflows", () => {
             .fill("Dictionary created by Playwright.")
           await createModal.getByRole("button", { name: /^Create$/i }).click()
 
-          row = page
-            .locator("tr")
-            .filter({ hasText: dictionaryName })
-            .first()
+          // Wait for modal to close
+          await expect(createModal).toBeHidden({ timeout: 10000 }).catch(() => {})
+
+          const createdDictionary = await pollForDictionaryByName(
+            normalizedServerUrl,
+            apiKey,
+            dictionaryName,
+            30000
+          )
+          if (!createdDictionary) {
+            throw new Error(
+              `Dictionary not found on server after create: "${dictionaryName}"`
+            )
+          }
+
+          row = await resolveDictionaryRow("after-create")
           await expect(row).toBeVisible({ timeout: 20000 })
           logStep("dictionary row visible", {
             rowText: await row.textContent().catch(() => null)
@@ -5212,10 +5332,32 @@ test.describe("Real server end-to-end workflows", () => {
         }
 
         await step("manage entries", async () => {
-          const entriesButton = row!.getByRole("button", {
-            name: /^Entries$/i
-          })
-          await entriesButton.click()
+          let lastClickError: unknown = null
+          for (let attempt = 1; attempt <= 3; attempt += 1) {
+            row = await resolveDictionaryRow(`manage-entries-${attempt}`)
+            const entriesButton = row!.getByRole("button", {
+              name: /^Entries$/i
+            })
+            try {
+              await entriesButton.scrollIntoViewIfNeeded().catch(() => {})
+              await expect(entriesButton).toBeVisible({ timeout: 15000 })
+              await entriesButton.click({ timeout: 15000 })
+              lastClickError = null
+              break
+            } catch (error) {
+              lastClickError = error
+              logStep("entries click retry", {
+                attempt,
+                error: String(error)
+              })
+              await page.waitForTimeout(1000)
+            }
+          }
+          if (lastClickError) {
+            throw new Error(
+              `Entries button not clickable after retries: ${String(lastClickError)}`
+            )
+          }
           const entriesModal = page.getByRole("dialog", {
             name: /Manage Entries/i
           })

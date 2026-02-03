@@ -8,6 +8,7 @@ import type {
   ViewMode,
   Annotation,
   AnnotationSyncStatus,
+  WorkspaceHealthStatus,
   SearchResult,
   EpubTheme,
   EpubScrollMode,
@@ -81,6 +82,8 @@ export const useDocumentWorkspaceStore = create<DocumentWorkspaceStore>(
     annotations: [],
     pendingAnnotations: [],
     annotationSyncStatus: "synced",
+    annotationsHealth: "unknown",
+    progressHealth: "unknown",
 
     // Document management
     openDocument: (doc: OpenDocument) => {
@@ -412,6 +415,12 @@ export const useDocumentWorkspaceStore = create<DocumentWorkspaceStore>(
         set({ pendingAnnotations: [] })
       }
     },
+    setAnnotationsHealth: (status: WorkspaceHealthStatus) => {
+      set({ annotationsHealth: status })
+    },
+    setProgressHealth: (status: WorkspaceHealthStatus) => {
+      set({ progressHealth: status })
+    },
 
     // Reset
     reset: () => {
@@ -439,7 +448,9 @@ export const useDocumentWorkspaceStore = create<DocumentWorkspaceStore>(
         activeSearchIndex: 0,
         annotations: [],
         pendingAnnotations: [],
-        annotationSyncStatus: "synced"
+        annotationSyncStatus: "synced",
+        annotationsHealth: "unknown",
+        progressHealth: "unknown"
       })
     }
   })

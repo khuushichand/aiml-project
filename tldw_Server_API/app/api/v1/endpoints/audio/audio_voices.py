@@ -227,7 +227,7 @@ async def preview_voice(
             model=voice.provider, input=text, voice=f"custom:{voice_id}", response_format="mp3", stream=True
         )
 
-        audio_stream = tts_service.generate_speech(
+        audio_stream = await tts_service.generate_speech(
             preview_request,
             provider=None,
             fallback=True,

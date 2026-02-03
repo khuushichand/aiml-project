@@ -2833,6 +2833,7 @@ def speech_to_text(
     input_sample_rate: Optional[int] = None,
     base_dir: Optional[Path] = None,
     cancel_check: Optional[Callable[[], bool]] = None,
+    include_metadata_header: bool = True,
 ) -> Union[list[dict[str, Any]], tuple[list[dict[str, Any]], Optional[str]]]:
     """
     Canonical file/segment-based speech-to-text helper.
@@ -2876,8 +2877,9 @@ def speech_to_text(
         - "Text" (str): The transcribed text of the segment.
         - Optional "words" (list): When word_timestamps=True, a list of
           {"start": float, "end": float, "word": str} entries per segment.
-        The first segment may include metadata about the transcription model
-        and detected language prepended to its "Text" field.
+        When `include_metadata_header` is True, the first segment includes a
+        header with the transcription model and detected language prepended
+        to its "Text" field.
 
         When `return_language` is True, returns a tuple of
         `(segments, language_or_none)` for all providers. For Whisper,
@@ -3193,7 +3195,7 @@ def speech_to_text(
             segments.append(chunk)
             logging.debug(f"Segment: [{chunk['start_seconds']:.2f}-{chunk['end_seconds']:.2f}] {chunk['Text'][:100]}...")
 
-        if segments:
+        if segments and include_metadata_header:
             segments[0]["Text"] = (
                 f"This text was transcribed using whisper model: {whisper_model}\n"
                 f"Detected language: {detected_lang}\n\n"

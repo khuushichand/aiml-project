@@ -58,6 +58,13 @@ class TeamMemberResponse(BaseModel):
     org_id: int | None = None
 
 
+class TeamMemberRemoveResponse(BaseModel):
+    team_id: int
+    user_id: int
+    removed: bool
+    message: str
+
+
 class VirtualKeyCreateRequest(BaseModel):
     name: str | None = None
     description: str | None = None
@@ -91,6 +98,13 @@ class OrgMemberResponse(BaseModel):
     org_id: int
     user_id: int
     role: str
+
+
+class OrgMemberRemoveResponse(BaseModel):
+    org_id: int
+    user_id: int
+    removed: bool
+    message: str
 
 
 class OrgMemberRoleUpdateRequest(BaseModel):

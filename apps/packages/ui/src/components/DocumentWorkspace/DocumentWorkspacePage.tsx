@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useCallback, useRef } from "react"
 import { useTranslation } from "react-i18next"
 import { useStorage } from "@plasmohq/storage/hook"
-import { Drawer, Tabs, Tooltip } from "antd"
+import { Alert, Drawer, Tabs, Tooltip } from "antd"
 import {
   FileText,
   MessageSquare,
@@ -302,16 +302,18 @@ export const DocumentWorkspacePage: React.FC = () => {
   const activeDocumentId = useDocumentWorkspaceStore((s) => s.activeDocumentId)
   const openDocuments = useDocumentWorkspaceStore((s) => s.openDocuments)
   const openDocument = useDocumentWorkspaceStore((s) => s.openDocument)
+  const annotationsHealth = useDocumentWorkspaceStore((s) => s.annotationsHealth)
+  const progressHealth = useDocumentWorkspaceStore((s) => s.progressHealth)
 
   // Initialize annotation fetching and sync
   useAnnotations(activeDocumentId)
-  const { retrySync } = useAnnotationSync(activeDocumentId)
-  useAnnotationSyncOnClose(activeDocumentId)
+  const { retrySync, forceSync } = useAnnotationSync(activeDocumentId)
+  useAnnotationSyncOnClose(activeDocumentId, forceSync)
 
   // Initialize reading progress loading and auto-save
   useReadingProgress(activeDocumentId)
-  useReadingProgressAutoSave(activeDocumentId, 5000) // Save every 5 seconds
-  useReadingProgressSaveOnClose(activeDocumentId)
+  const { forceSave } = useReadingProgressAutoSave(activeDocumentId, 5000) // Save every 5 seconds
+  useReadingProgressSaveOnClose(activeDocumentId, forceSave)
 
   // Pane state with persistence
   const [leftPaneOpen, setLeftPaneOpen] = useStorage(STORAGE_KEY_LEFT_PANE, true)
@@ -501,6 +503,53 @@ export const DocumentWorkspacePage: React.FC = () => {
     [message, openDocument, registerBlobUrl, t]
   )
 
+  const healthIssues: string[] = []
+  if (annotationsHealth === "error") {
+    healthIssues.push(
+      t(
+        "option:documentWorkspace.annotationsUnavailable",
+        "Annotations storage is unavailable on the server."
+      )
+    )
+  }
+  if (progressHealth === "error") {
+    healthIssues.push(
+      t(
+        "option:documentWorkspace.progressUnavailable",
+        "Reading progress storage is unavailable on the server."
+      )
+    )
+  }
+
+  const healthAlert =
+    healthIssues.length > 0 ? (
+      <div className="px-4 pt-2">
+        <Alert
+          type="warning"
+          showIcon
+          message={t(
+            "option:documentWorkspace.healthWarningTitle",
+            "Document workspace storage unavailable"
+          )}
+          description={
+            <div className="space-y-1">
+              <ul className="list-disc pl-5">
+                {healthIssues.map((issue, index) => (
+                  <li key={`${index}-${issue}`}>{issue}</li>
+                ))}
+              </ul>
+              <div className="text-xs text-text-muted">
+                {t(
+                  "option:documentWorkspace.healthWarningHint",
+                  "Restart the server or run the latest migrations to create the missing tables."
+                )}
+              </div>
+            </div>
+          }
+        />
+      </div>
+    ) : null
+
   // Mobile tab items
   const mobileTabItems = [
     {
@@ -565,6 +614,7 @@ export const DocumentWorkspacePage: React.FC = () => {
             onClose={handleClosePicker}
             onOpenDocument={openDocumentById}
           />
+          {healthAlert}
 
           <Tabs
             activeKey={activeTab}
@@ -604,6 +654,7 @@ export const DocumentWorkspacePage: React.FC = () => {
           onClose={handleClosePicker}
           onOpenDocument={openDocumentById}
         />
+        {healthAlert}
 
         {/* Document tabs - shown when multiple documents are open */}
         <DocumentTabBar onOpenPicker={() => handleOpenPicker("library")} />

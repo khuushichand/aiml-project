@@ -57,6 +57,9 @@ export function useAnnotations(mediaId: number | null) {
   const setAnnotationSyncStatus = useDocumentWorkspaceStore(
     (s) => s.setAnnotationSyncStatus
   )
+  const setAnnotationsHealth = useDocumentWorkspaceStore(
+    (s) => s.setAnnotationsHealth
+  )
 
   return useQuery<AnnotationsListResponse | null>({
     queryKey: ["document-annotations", mediaId],
@@ -71,9 +74,16 @@ export function useAnnotations(mediaId: number | null) {
         setAnnotations(annotations)
         setAnnotationSyncStatus("synced")
 
+        setAnnotationsHealth("ok")
         return response
       } catch (error) {
         setAnnotationSyncStatus("error")
+        const status = (error as { status?: number })?.status
+        if (status === 500) {
+          setAnnotationsHealth("error")
+        } else {
+          setAnnotationsHealth("unknown")
+        }
         throw error
       }
     },

@@ -46,16 +46,16 @@ def _ensure_progress_table(db: MediaDatabase) -> None:
     )
     """
     try:
-        with db.transaction() as cursor:
-            cursor.execute(create_sql)
+        with db.transaction() as conn:
+            conn.execute(create_sql)
             # Migration: add cfi column if missing
-            cursor.execute(f"PRAGMA table_info({PROGRESS_TABLE})")
+            cursor = conn.execute(f"PRAGMA table_info({PROGRESS_TABLE})")
             columns = {row["name"] for row in cursor.fetchall()}
             if "cfi" not in columns:
-                cursor.execute(f"ALTER TABLE {PROGRESS_TABLE} ADD COLUMN cfi TEXT")
+                conn.execute(f"ALTER TABLE {PROGRESS_TABLE} ADD COLUMN cfi TEXT")
                 logger.info("Added cfi column to reading progress table")
             if "percentage" not in columns:
-                cursor.execute(f"ALTER TABLE {PROGRESS_TABLE} ADD COLUMN percentage REAL")
+                conn.execute(f"ALTER TABLE {PROGRESS_TABLE} ADD COLUMN percentage REAL")
                 logger.info("Added percentage column to reading progress table")
     except Exception as e:
         logger.warning("Could not create reading progress table (may already exist): {}", e)
@@ -112,8 +112,8 @@ async def get_reading_progress(
     WHERE media_id = ? AND user_id = ?
     """
     try:
-        with db.transaction() as cursor:
-            cursor.execute(query, (media_id, user_id))
+        with db.transaction() as conn:
+            cursor = conn.execute(query, (media_id, user_id))
             row = cursor.fetchone()
     except Exception as e:
         logger.error("Error fetching reading progress: {}", e)
@@ -199,8 +199,8 @@ async def update_reading_progress(
     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
     """
     try:
-        with db.transaction() as cursor:
-            cursor.execute(
+        with db.transaction() as conn:
+            conn.execute(
                 upsert_sql,
                 (
                     media_id,

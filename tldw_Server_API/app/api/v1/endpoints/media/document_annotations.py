@@ -55,19 +55,19 @@ def _ensure_annotations_table(db: MediaDatabase) -> None:
     ON {ANNOTATIONS_TABLE}(media_id, user_id, deleted)
     """
     try:
-        with db.transaction() as cursor:
-            cursor.execute(create_sql)
-            cursor.execute(index_sql)
+        with db.transaction() as conn:
+            conn.execute(create_sql)
+            conn.execute(index_sql)
             # Migration: add chapter_title column if missing
-            cursor.execute(f"PRAGMA table_info({ANNOTATIONS_TABLE})")
+            cursor = conn.execute(f"PRAGMA table_info({ANNOTATIONS_TABLE})")
             columns = {row["name"] for row in cursor.fetchall()}
             if "chapter_title" not in columns:
-                cursor.execute(
+                conn.execute(
                     f"ALTER TABLE {ANNOTATIONS_TABLE} ADD COLUMN chapter_title TEXT"
                 )
                 logger.info("Added chapter_title column to annotations table")
             if "percentage" not in columns:
-                cursor.execute(
+                conn.execute(
                     f"ALTER TABLE {ANNOTATIONS_TABLE} ADD COLUMN percentage REAL"
                 )
                 logger.info("Added percentage column to annotations table")
@@ -149,8 +149,8 @@ async def list_annotations(
     ORDER BY created_at DESC
     """
     try:
-        with db.transaction() as cursor:
-            cursor.execute(query, (media_id, user_id))
+        with db.transaction() as conn:
+            cursor = conn.execute(query, (media_id, user_id))
             rows = cursor.fetchall()
     except Exception as e:
         logger.error("Error fetching annotations: {}", e)
@@ -218,8 +218,8 @@ async def create_annotation(
     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     """
     try:
-        with db.transaction() as cursor:
-            cursor.execute(
+        with db.transaction() as conn:
+            conn.execute(
                 insert_sql,
                 (
                     annotation_id,
@@ -298,8 +298,8 @@ async def update_annotation(
     WHERE id = ? AND media_id = ? AND user_id = ? AND deleted = 0
     """
     try:
-        with db.transaction() as cursor:
-            cursor.execute(select_sql, (annotation_id, media_id, user_id))
+        with db.transaction() as conn:
+            cursor = conn.execute(select_sql, (annotation_id, media_id, user_id))
             row = cursor.fetchone()
     except Exception as e:
         logger.error("Error fetching annotation: {}", e)
@@ -349,8 +349,8 @@ async def update_annotation(
     WHERE id = ? AND media_id = ? AND user_id = ? AND deleted = 0
     """
     try:
-        with db.transaction() as cursor:
-            cursor.execute(update_sql, tuple(params))
+        with db.transaction() as conn:
+            conn.execute(update_sql, tuple(params))
     except Exception as e:
         logger.error("Error updating annotation: {}", e)
         raise HTTPException(
@@ -400,8 +400,8 @@ async def delete_annotation(
     WHERE id = ? AND media_id = ? AND user_id = ? AND deleted = 0
     """
     try:
-        with db.transaction() as cursor:
-            cursor.execute(delete_sql, (now, annotation_id, media_id, user_id))
+        with db.transaction() as conn:
+            cursor = conn.execute(delete_sql, (now, annotation_id, media_id, user_id))
             if cursor.rowcount == 0:
                 raise HTTPException(
                     status_code=status.HTTP_404_NOT_FOUND,
@@ -471,12 +471,12 @@ async def sync_annotations(
     """
 
     try:
-        with db.transaction() as cursor:
+        with db.transaction() as conn:
             for i, annotation in enumerate(body.annotations):
                 annotation_id = _generate_annotation_id()
                 now = _now_iso()
 
-                cursor.execute(
+                conn.execute(
                     insert_sql,
                     (
                         annotation_id,

@@ -48,6 +48,7 @@ if not SERVER_CLIENT_ID:
 # --- Global Cache for Prompts DB Instances (managed by prompts_interop, but we track paths) ---
 MAX_CACHED_PROMPTS_DB_INSTANCES = settings.get("MAX_CACHED_PROMPTS_DB_INSTANCES", 20)
 _prompts_db_paths_cache: LRUCache = LRUCache(maxsize=MAX_CACHED_PROMPTS_DB_INSTANCES)
+_prompts_cache_lock = asyncio.Lock()
 
 # --- Helper Functions ---
 
@@ -187,9 +188,10 @@ async def get_prompts_db_for_user(
     cache_key = (user_id, salt)
 
     # Get or create a lock for this specific user_id
-    user_specific_lock = _user_db_locks.get(cache_key)
-    if user_specific_lock is None:
-        user_specific_lock = asyncio.Lock()
+    async with _prompts_cache_lock:
+        user_specific_lock = _user_db_locks.get(cache_key)
+        if user_specific_lock is None:
+            user_specific_lock = asyncio.Lock()
         _user_db_locks[cache_key] = user_specific_lock
 
     async with user_specific_lock:
@@ -213,15 +215,21 @@ async def get_prompts_db_for_user(
         #           The `prompts_interop.py` utility functions that take `db_instance` can still be used.
         #           The interop's own instance-based methods will be bypassed.
 
-        db_instance = _user_db_instances.get(cache_key)
+        async with _prompts_cache_lock:
+            try:
+                db_instance = _user_db_instances[cache_key]
+            except KeyError:
+                db_instance = None
         if db_instance:
             is_alive = await asyncio.to_thread(_is_db_instance_alive, db_instance)
             if is_alive:
                 logger.debug(f"Using cached PromptsDatabase instance for user_id: {user_id}")
-                _user_db_locks[cache_key] = user_specific_lock
+                async with _prompts_cache_lock:
+                    _user_db_locks[cache_key] = user_specific_lock
                 return db_instance
             logger.warning(f"Cached PromptsDatabase for user {user_id} inactive. Re-creating.")
-            _user_db_instances.pop(cache_key, None)
+            async with _prompts_cache_lock:
+                _user_db_instances.pop(cache_key, None)
             await asyncio.to_thread(
                 _close_prompts_db_instance,
                 cache_key,
@@ -247,8 +255,9 @@ async def get_prompts_db_for_user(
             # If you need to track the specific end-user initiating the change,
             # that would be a different field, or SERVER_CLIENT_ID could be user-specific.
             # For now, using a global server client ID.
-            _user_db_instances[cache_key] = db_instance # Cache it for this user/app salt
-            _user_db_locks[cache_key] = user_specific_lock
+            async with _prompts_cache_lock:
+                _user_db_instances[cache_key] = db_instance # Cache it for this user/app salt
+                _user_db_locks[cache_key] = user_specific_lock
             logger.info(f"PromptsDatabase instance created and cached for user {user_id} (salt={salt or 'none'}) at {db_path}")
             return db_instance
 

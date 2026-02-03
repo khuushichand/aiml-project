@@ -137,7 +137,7 @@ class CircuitBreaker:
             self._record_success()
             return result
 
-        except Exception as e:
+        except Exception:  # noqa: BLE001 - record failure for any exception before re-raising
             # Record failure
             self._record_failure()
             raise
@@ -197,7 +197,7 @@ class CircuitBreaker:
             for callback in self.on_open_callbacks:
                 try:
                     callback(self)
-                except Exception as e:
+                except Exception as e:  # noqa: BLE001 - callback best-effort
                     logger.error(f"Error in open callback: {e}")
 
     def _transition_to_closed(self):
@@ -212,7 +212,7 @@ class CircuitBreaker:
             for callback in self.on_close_callbacks:
                 try:
                     callback(self)
-                except Exception as e:
+                except Exception as e:  # noqa: BLE001 - callback best-effort
                     logger.error(f"Error in close callback: {e}")
 
     def _transition_to_half_open(self):
@@ -227,7 +227,7 @@ class CircuitBreaker:
             for callback in self.on_half_open_callbacks:
                 try:
                     callback(self)
-                except Exception as e:
+                except Exception as e:  # noqa: BLE001 - callback best-effort
                     logger.error(f"Error in half-open callback: {e}")
 
     def reset(self):
@@ -296,7 +296,7 @@ class RetryPolicy:
 
                 return cast(T, result)
 
-            except Exception as e:
+            except Exception as e:  # noqa: BLE001 - retry policy inspects all exceptions
                 last_exception = e
 
                 # Check if we should retry this exception
@@ -386,7 +386,7 @@ class FallbackChain:
                 return await primary_func(*args, **kwargs)
             else:
                 return await asyncio.to_thread(primary_func, *args, **kwargs)
-        except Exception as primary_error:
+        except Exception as primary_error:  # noqa: BLE001 - fallback chain best-effort
             logger.warning(f"Primary function failed: {primary_error}")
 
             # Try fallback strategies
@@ -400,7 +400,7 @@ class FallbackChain:
                         else:
                             return await asyncio.to_thread(fallback_func, *args, **kwargs)
 
-                    except Exception as fallback_error:
+                    except Exception as fallback_error:  # noqa: BLE001 - fallback chain best-effort
                         logger.warning(f"Fallback failed: {fallback_error}")
                         continue
 
@@ -459,7 +459,7 @@ class HealthMonitor:
             try:
                 await self.check_all_health()
                 await asyncio.sleep(self.check_interval)
-            except Exception as e:
+            except Exception as e:  # noqa: BLE001 - keep monitoring loop alive
                 logger.error(f"Error in health monitoring: {e}")
                 await asyncio.sleep(self.check_interval)
 
@@ -480,7 +480,7 @@ class HealthMonitor:
                 if not is_healthy and component.critical:
                     logger.error(f"Critical component '{name}' is unhealthy")
 
-            except Exception as e:
+            except Exception as e:  # noqa: BLE001 - health checks are best-effort
                 logger.error(f"Health check failed for '{name}': {e}")
                 component.update_health(False)
                 results[name] = HealthStatus.UNKNOWN
@@ -743,7 +743,7 @@ async def check_component_health(
         if not is_healthy and kwargs.get("critical", False):
             raise Exception(f"Critical component '{component}' is unhealthy")
 
-    except Exception as e:
+    except Exception as e:  # noqa: BLE001 - health checks are best-effort
         logger.error(f"Health check failed for '{component}': {e}")
         context.metadata[f"health_{component}"] = "unknown"
 

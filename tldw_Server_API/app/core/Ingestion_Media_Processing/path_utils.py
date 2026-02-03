@@ -44,7 +44,7 @@ def resolve_safe_local_path(path: Path, base_dir: Path) -> Path | None:
         if common_real == base_real:
             return Path(path_real)
         logger.warning(
-            "Rejected path outside of base directory for local media source: %s (base: %s)",
+            "Rejected path outside of base directory for local media source: {} (base: {})",
             path_resolved,
             base_resolved,
         )

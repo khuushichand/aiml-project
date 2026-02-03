@@ -9,3 +9,11 @@ script = ""
 name = "Install"
 icon = "run"
 command = "uv pip install -e ."
+
+[[actions]]
+name = "run webui-e2e"
+icon = "test"
+command = '''
+nvm use --lts
+bun run test:e23
+'''

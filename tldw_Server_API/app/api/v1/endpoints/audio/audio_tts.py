@@ -1,8 +1,9 @@
 # audio_tts.py
 # Description: Audio TTS endpoints and helpers.
 import base64
+import inspect
 import json
-from typing import Optional
+from typing import Any, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import JSONResponse, Response, StreamingResponse
@@ -485,15 +486,81 @@ async def reset_tts_metrics(
 
     Args:
         provider: Optional provider name to reset metrics for. If not provided, resets all metrics.
+        tts_service: TTS service instance (accesses tts_service.metrics when available).
+
+    Raises:
+        HTTPException: 501 when the requested metrics reset API is not implemented.
     """
+    async def _call_reset(method, *args) -> None:
+        result = method(*args)
+        if inspect.isawaitable(result):
+            await result
+
+    def _can_call_with_provider(method) -> bool:
+        try:
+            sig = inspect.signature(method)
+        except (TypeError, ValueError):
+            return True
+        params = list(sig.parameters.values())
+        if any(p.kind in (p.VAR_POSITIONAL, p.VAR_KEYWORD) for p in params):
+            return True
+        positional = [p for p in params if p.kind in (p.POSITIONAL_ONLY, p.POSITIONAL_OR_KEYWORD)]
+        return len(positional) >= 1
+
+    def _can_call_without_args(method) -> bool:
+        try:
+            sig = inspect.signature(method)
+        except (TypeError, ValueError):
+            return True
+        required = [
+            p for p in sig.parameters.values()
+            if p.kind in (p.POSITIONAL_ONLY, p.POSITIONAL_OR_KEYWORD)
+            and p.default is p.empty
+        ]
+        return len(required) == 0
+
     try:
-        if hasattr(tts_service, "metrics"):
-            if provider:
-                logger.info(f"Resetting metrics for provider: {provider}")
-                return {"message": f"Metrics reset for provider {provider}"}
-            logger.info("Resetting all TTS metrics")
-            return {"message": "All TTS metrics reset"}
-        return {"message": "Metrics not available"}
+        metrics = getattr(tts_service, "metrics", None)
+        if provider:
+            provider_methods: list[tuple[str, Any]] = []
+            if hasattr(tts_service, "reset_metrics"):
+                provider_methods.append(("tts_service.reset_metrics", getattr(tts_service, "reset_metrics")))
+            if metrics is not None:
+                for name in ("reset", "clear"):
+                    if hasattr(metrics, name):
+                        provider_methods.append((f"tts_service.metrics.{name}", getattr(metrics, name)))
+
+            for name, method in provider_methods:
+                if _can_call_with_provider(method):
+                    await _call_reset(method, provider)
+                    logger.info("reset_tts_metrics: reset metrics for provider=%s via %s", provider, name)
+                    return {"message": f"Metrics reset for provider {provider}"}
+
+            raise HTTPException(
+                status_code=status.HTTP_501_NOT_IMPLEMENTED,
+                detail="Provider-specific TTS metrics reset not supported",
+            )
+
+        global_methods: list[tuple[str, Any]] = []
+        if hasattr(tts_service, "reset_metrics"):
+            global_methods.append(("tts_service.reset_metrics", getattr(tts_service, "reset_metrics")))
+        if metrics is not None:
+            for name in ("reset_all", "clear_all", "reset", "clear"):
+                if hasattr(metrics, name):
+                    global_methods.append((f"tts_service.metrics.{name}", getattr(metrics, name)))
+
+        for name, method in global_methods:
+            if _can_call_without_args(method):
+                await _call_reset(method)
+                logger.info("reset_tts_metrics: reset all TTS metrics via %s", name)
+                return {"message": "All TTS metrics reset"}
+
+        raise HTTPException(
+            status_code=status.HTTP_501_NOT_IMPLEMENTED,
+            detail="TTS metrics reset API is not available on this service",
+        )
+    except HTTPException:
+        raise
     except Exception as e:
         logger.error(f"Error resetting metrics: {e}", exc_info=True)
         request_id = ensure_request_id(request)

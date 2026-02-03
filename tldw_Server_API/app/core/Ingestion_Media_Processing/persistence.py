@@ -722,8 +722,8 @@ async def add_media_orchestrate(
                         results.append(result)
 
             # --- 6a. Store Original Files if Requested ---
-            # For PDFs and documents, save originals to permanent storage when keep_original_file=True
-            if form_data.keep_original_file and form_data.media_type in ["pdf", "document"]:
+            # For PDFs, documents, and ebooks, save originals to permanent storage when keep_original_file=True
+            if form_data.keep_original_file and form_data.media_type in ["pdf", "document", "ebook"]:
                 try:
                     from tldw_Server_API.app.core.Storage import get_storage_backend
 
@@ -736,7 +736,7 @@ async def add_media_orchestrate(
 
                         media_id = result["db_id"]
                         input_ref = result.get("input_ref")
-                        source_path = result.get("processing_source")
+                        source_path = result.get("original_processing_source") or result.get("processing_source")
 
                         # Only store uploaded files, not URLs
                         if not source_path or input_ref in url_list:
@@ -768,7 +768,12 @@ async def add_media_orchestrate(
                             # Get file info
                             file_size = source_file.stat().st_size
                             original_filename = input_ref or source_file.name
-                            mime_type = "application/pdf" if form_data.media_type == "pdf" else "application/octet-stream"
+                            if form_data.media_type == "pdf":
+                                mime_type = "application/pdf"
+                            elif form_data.media_type == "ebook":
+                                mime_type = "application/epub+zip"
+                            else:
+                                mime_type = "application/octet-stream"
 
                             # Check storage quota before storing
                             try:
@@ -2716,6 +2721,17 @@ async def process_document_like_item(
                     raise TypeError(
                         f"Processor '{func_name}' returned non-dict: "
                         f"{type(process_result_dict)}",
+                    )
+                if (
+                    isinstance(process_result_dict, dict)
+                    and process_result_dict.get("processing_source")
+                    and final_result.get("processing_source")
+                    and final_result.get("processing_source")
+                    != process_result_dict.get("processing_source")
+                ):
+                    final_result.setdefault(
+                        "original_processing_source",
+                        final_result.get("processing_source"),
                     )
                 final_result.update(process_result_dict)
                 final_result["status"] = process_result_dict.get(

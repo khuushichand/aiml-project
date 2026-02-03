@@ -551,7 +551,12 @@ export const EpubViewer: React.FC<EpubViewerProps> = ({
       {/* Loading overlay */}
       {isLoading && (
         <div className="absolute inset-0 z-10 flex items-center justify-center bg-surface/80">
-          <Spin size="large" tip={t("option:documentWorkspace.loading", "Loading...")} />
+          <div className="flex flex-col items-center gap-2">
+            <Spin size="large" />
+            <div className="text-sm text-text-muted">
+              {t("option:documentWorkspace.loading", "Loading...")}
+            </div>
+          </div>
         </div>
       )}
 

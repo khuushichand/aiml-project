@@ -66,7 +66,6 @@ import { isFireFoxPrivateMode } from "@/utils/is-private-mode"
 import { CurrentChatModelSettings } from "@/components/Common/Settings/CurrentChatModelSettings"
 import { ActorPopout } from "@/components/Common/Settings/ActorPopout"
 import { PromptSelect } from "@/components/Common/PromptSelect"
-import { ModelSelect } from "@/components/Common/ModelSelect"
 import {
   PromptInsertModal,
   type PromptInsertItem
@@ -395,6 +394,13 @@ export const PlaygroundForm = ({ droppedFiles }: Props) => {
     React.useState(false)
   const [voiceModeSelectorOpen, setVoiceModeSelectorOpen] = React.useState(false)
   const [promptInsertOpen, setPromptInsertOpen] = React.useState(false)
+  const [mcpPopoverOpen, setMcpPopoverOpen] = React.useState(false)
+  const [toolsPopoverOpen, setToolsPopoverOpen] = React.useState(false)
+  const [attachmentMenuOpen, setAttachmentMenuOpen] = React.useState(false)
+  const [sendMenuOpen, setSendMenuOpen] = React.useState(false)
+  const [composerHovering, setComposerHovering] = React.useState(false)
+  const [composerFocusWithin, setComposerFocusWithin] = React.useState(false)
+  const [actionBarVisible, setActionBarVisible] = React.useState(true)
   const [promptInsertChoice, setPromptInsertChoice] =
     React.useState<PromptInsertItem | null>(null)
   const [documentGeneratorSeed, setDocumentGeneratorSeed] = React.useState<{
@@ -1425,99 +1431,99 @@ export const PlaygroundForm = ({ droppedFiles }: Props) => {
       })
     : t("playground:imageBackend.noneBadge", "Image: none")
 
-  const showModelLabel = !isProMode
-  const modelUsageBadge = (
-    <div className="inline-flex items-center gap-2">
-      {showModelLabel && (
-        <Dropdown
-          open={modelDropdownOpen}
-          onOpenChange={(open) => {
-            setModelDropdownOpen(open)
-            if (!open) {
-              setModelSearchQuery("")
-            }
-          }}
-          menu={{
-            items: modelDropdownMenuItems,
-            className: "no-scrollbar",
-            activeKey: selectedModel ?? undefined
-          }}
-          dropdownRender={(menu) => (
-            <div className="bg-surface rounded-lg shadow-lg border border-border">
-              <div className="p-2 border-b border-border flex items-center gap-2">
-                <Input
-                  size="small"
-                  placeholder={t("playground:composer.modelSearchPlaceholder", "Search models")}
-                  value={modelSearchQuery}
-                  allowClear
-                  className="flex-1"
-                  onChange={(event) => setModelSearchQuery(event.target.value)}
-                  onKeyDown={(event) => event.stopPropagation()}
-                />
-                <Select
-                  size="small"
-                  value={modelSortMode}
-                  onChange={(value) => setModelSortMode(value as ModelSortMode)}
-                  options={[
-                    { value: "favorites", label: t("playground:composer.sort.favorites", "Favorites") },
-                    { value: "az", label: t("playground:composer.sort.az", "A-Z") },
-                    { value: "provider", label: t("playground:composer.sort.provider", "Provider") },
-                    { value: "localFirst", label: t("playground:composer.sort.localFirst", "Local-first") }
-                  ]}
-                  className="min-w-[120px]"
-                  onKeyDown={(event) => event.stopPropagation()}
-                />
-              </div>
-              <div className="max-h-[400px] overflow-y-auto no-scrollbar">
-                {menu}
-              </div>
-              <div className="p-2 border-t border-border">
-                <Link
-                  to="/docs/models"
-                  className="flex items-center gap-1.5 text-xs text-primary hover:text-primary/80 transition-colors"
-                  onClick={() => setModelDropdownOpen(false)}
-                >
-                  <HelpCircle className="h-3.5 w-3.5" />
-                  <span>{t("playground:composer.helpMeChoose", "Help me choose a model")}</span>
-                  <ArrowRight className="h-3 w-3" />
-                </Link>
-              </div>
-            </div>
-          )}
-          trigger={["click"]}
-          placement="topLeft"
-        >
-          <Tooltip title={modelSelectorWarning ? t("playground:composer.selectModelTooltip", "Click to select a model") : apiModelLabel} placement="top">
-            <button
-              type="button"
-              title={apiModelLabel}
-              aria-label={apiModelLabel}
-              data-testid="model-selector"
-              className={`inline-flex min-w-0 items-center gap-1 rounded-full border px-2 h-9 text-[10px] cursor-pointer transition-colors ${
-                modelSelectorWarning
-                  ? "border-warn/50 bg-warn/10 text-warn hover:bg-warn/20"
-                  : "border-border bg-surface hover:bg-surface-hover"
-              }`}
+  const modelSelectButton = (
+    <Dropdown
+      open={modelDropdownOpen}
+      onOpenChange={(open) => {
+        setModelDropdownOpen(open)
+        if (!open) {
+          setModelSearchQuery("")
+        }
+      }}
+      menu={{
+        items: modelDropdownMenuItems,
+        className: "no-scrollbar",
+        activeKey: selectedModel ?? undefined
+      }}
+      dropdownRender={(menu) => (
+        <div className="bg-surface rounded-lg shadow-lg border border-border">
+          <div className="p-2 border-b border-border flex items-center gap-2">
+            <Input
+              size="small"
+              placeholder={t("playground:composer.modelSearchPlaceholder", "Search models")}
+              value={modelSearchQuery}
+              allowClear
+              className="flex-1"
+              onChange={(event) => setModelSearchQuery(event.target.value)}
+              onKeyDown={(event) => event.stopPropagation()}
+            />
+            <Select
+              size="small"
+              value={modelSortMode}
+              onChange={(value) => setModelSortMode(value as ModelSortMode)}
+              options={[
+                { value: "favorites", label: t("playground:composer.sort.favorites", "Favorites") },
+                { value: "az", label: t("playground:composer.sort.az", "A-Z") },
+                { value: "provider", label: t("playground:composer.sort.provider", "Provider") },
+                { value: "localFirst", label: t("playground:composer.sort.localFirst", "Local-first") }
+              ]}
+              className="min-w-[120px]"
+              onKeyDown={(event) => event.stopPropagation()}
+            />
+          </div>
+          <div className="max-h-[400px] overflow-y-auto no-scrollbar">
+            {menu}
+          </div>
+          <div className="p-2 border-t border-border">
+            <Link
+              to="/docs/models"
+              className="flex items-center gap-1.5 text-xs text-primary hover:text-primary/80 transition-colors"
+              onClick={() => setModelDropdownOpen(false)}
             >
-              <ProviderIcons
-                provider={resolvedProviderKey}
-                className={`h-3 w-3 ${modelSelectorWarning ? "text-warn" : "text-text-subtle"}`}
-              />
-              <span className="truncate max-w-[120px]">
-                {apiModelLabel}
-              </span>
-            </button>
-          </Tooltip>
-        </Dropdown>
+              <HelpCircle className="h-3.5 w-3.5" />
+              <span>{t("playground:composer.helpMeChoose", "Help me choose a model")}</span>
+              <ArrowRight className="h-3 w-3" />
+            </Link>
+          </div>
+        </div>
       )}
-      <TokenProgressBar
-        conversationTokens={conversationTokenCount}
-        draftTokens={draftTokenCount}
-        maxTokens={resolvedMaxContext}
-        modelLabel={isProMode ? apiModelLabel : undefined}
-        compact={!isProMode}
-      />
-    </div>
+      trigger={["click"]}
+      placement="topLeft"
+    >
+      <Tooltip title={modelSelectorWarning ? t("playground:composer.selectModelTooltip", "Click to select a model") : apiModelLabel} placement="top">
+        <button
+          type="button"
+          title={apiModelLabel}
+          aria-label={apiModelLabel}
+          aria-haspopup="listbox"
+          aria-expanded={modelDropdownOpen}
+          data-testid="model-selector"
+          className={`inline-flex min-w-0 items-center gap-1 rounded-full border px-2 min-h-[44px] text-[10px] cursor-pointer transition-colors ${
+            modelSelectorWarning
+              ? "border-warn/50 bg-warn/10 text-warn hover:bg-warn/20"
+              : "border-border bg-surface hover:bg-surface-hover"
+          }`}
+        >
+          <ProviderIcons
+            provider={resolvedProviderKey}
+            className={`h-3 w-3 ${modelSelectorWarning ? "text-warn" : "text-text-subtle"}`}
+          />
+          <span className="truncate max-w-[120px]">
+            {apiModelLabel}
+          </span>
+        </button>
+      </Tooltip>
+    </Dropdown>
+  )
+
+  const modelUsageBadge = (
+    <TokenProgressBar
+      conversationTokens={conversationTokenCount}
+      draftTokens={draftTokenCount}
+      maxTokens={resolvedMaxContext}
+      modelLabel={isProMode ? apiModelLabel : undefined}
+      compact={!isProMode}
+    />
   )
   const imageProviderControl = (
     <Dropdown
@@ -3532,6 +3538,32 @@ export const PlaygroundForm = ({ droppedFiles }: Props) => {
 
   // State for collapsible advanced section in tools popover
   const [advancedToolsExpanded, setAdvancedToolsExpanded] = React.useState(isProMode)
+  const [mcpSettingsOpen, setMcpSettingsOpen] = React.useState(false)
+  const actionBarCollapseTimerRef = React.useRef<number | null>(null)
+  const actionBarPinnedRef = React.useRef(false)
+  const composerHoveringRef = React.useRef(false)
+
+  const clearActionBarCollapseTimer = React.useCallback(() => {
+    if (actionBarCollapseTimerRef.current !== null) {
+      window.clearTimeout(actionBarCollapseTimerRef.current)
+      actionBarCollapseTimerRef.current = null
+    }
+  }, [])
+
+  const showActionBar = React.useCallback(() => {
+    clearActionBarCollapseTimer()
+    setActionBarVisible(true)
+  }, [clearActionBarCollapseTimer])
+
+  const scheduleActionBarCollapse = React.useCallback(() => {
+    clearActionBarCollapseTimer()
+    if (actionBarPinnedRef.current) return
+    actionBarCollapseTimerRef.current = window.setTimeout(() => {
+      if (!actionBarPinnedRef.current && !composerHoveringRef.current) {
+        setActionBarVisible(false)
+      }
+    }, 800)
+  }, [clearActionBarCollapseTimer])
 
   const moreToolsContent = React.useMemo(
     () => (
@@ -3614,156 +3646,6 @@ export const PlaygroundForm = ({ droppedFiles }: Props) => {
 
             {imageProviderControl}
 
-            {/* MCP Tools Summary */}
-            {hasMcp && (
-              <div className="px-2 py-1">
-                <div className="text-xs font-semibold text-text-muted mb-1">
-                  {t("playground:composer.mcpToolsLabel", "MCP tools")}
-                </div>
-                <span className="text-xs text-text-muted">
-                  {mcpToolsLoading
-                    ? t("playground:composer.mcpToolsLoading", "Loading tools...")
-                    : t("playground:tools.mcpSummary", "{{count}} tools available", { count: mcpTools.length })}
-                </span>
-                <div className="mt-2 flex flex-col gap-2">
-                  <div className="flex flex-col gap-1">
-                    <label className="text-[11px] text-text-muted">
-                      {t("playground:composer.mcpCatalogLabel", "Catalog")}
-                    </label>
-                    <Select
-                      size="small"
-                      allowClear
-                      showSearch
-                      loading={mcpCatalogsLoading}
-                      value={toolCatalogId ?? undefined}
-                      placeholder={t("playground:composer.mcpCatalogSelectPlaceholder", "Select a catalog")}
-                      onChange={(value) => handleCatalogSelect(value as number | undefined)}
-                      optionFilterProp="label"
-                      className="w-full"
-                    >
-                      {catalogGroups.team.length > 0 && (
-                        <Select.OptGroup label={t("playground:composer.mcpCatalogTeam", "Team catalogs")}>
-                          {catalogGroups.team.map((catalog) => (
-                            <Select.Option
-                              key={`team-${catalog.id}`}
-                              value={catalog.id}
-                              label={catalog.name}
-                            >
-                              <div className="flex flex-col">
-                                <span className="text-sm">{catalog.name}</span>
-                                <span className="text-[11px] text-text-muted">ID {catalog.id}</span>
-                              </div>
-                            </Select.Option>
-                          ))}
-                        </Select.OptGroup>
-                      )}
-                      {catalogGroups.org.length > 0 && (
-                        <Select.OptGroup label={t("playground:composer.mcpCatalogOrg", "Org catalogs")}>
-                          {catalogGroups.org.map((catalog) => (
-                            <Select.Option
-                              key={`org-${catalog.id}`}
-                              value={catalog.id}
-                              label={catalog.name}
-                            >
-                              <div className="flex flex-col">
-                                <span className="text-sm">{catalog.name}</span>
-                                <span className="text-[11px] text-text-muted">ID {catalog.id}</span>
-                              </div>
-                            </Select.Option>
-                          ))}
-                        </Select.OptGroup>
-                      )}
-                      {catalogGroups.global.length > 0 && (
-                        <Select.OptGroup label={t("playground:composer.mcpCatalogGlobal", "Global catalogs")}>
-                          {catalogGroups.global.map((catalog) => (
-                            <Select.Option
-                              key={`global-${catalog.id}`}
-                              value={catalog.id}
-                              label={catalog.name}
-                            >
-                              <div className="flex flex-col">
-                                <span className="text-sm">{catalog.name}</span>
-                                <span className="text-[11px] text-text-muted">ID {catalog.id}</span>
-                              </div>
-                            </Select.Option>
-                          ))}
-                        </Select.OptGroup>
-                      )}
-                    </Select>
-                    <Input
-                      size="small"
-                      placeholder={t("playground:composer.mcpCatalogPlaceholder", "catalog name")}
-                      value={catalogDraft}
-                      onChange={(e) => setCatalogDraft(e.target.value)}
-                      onBlur={commitCatalog}
-                      onPressEnter={commitCatalog}
-                    />
-                  </div>
-                  <div className="flex flex-col gap-1">
-                    <label className="text-[11px] text-text-muted">
-                      {t("playground:composer.mcpCatalogIdLabel", "Catalog ID")}
-                    </label>
-                    <InputNumber
-                      size="small"
-                      min={0}
-                      value={toolCatalogId ?? undefined}
-                      onChange={(value) =>
-                        setToolCatalogId(
-                          typeof value === "number" && Number.isFinite(value)
-                            ? value
-                            : null
-                        )
-                      }
-                      placeholder={t("playground:composer.mcpCatalogIdPlaceholder", "optional")}
-                      className="w-full"
-                    />
-                  </div>
-                  <div className="flex items-center justify-between gap-2">
-                    <span className="text-[11px] text-text-muted">
-                      {t("playground:composer.mcpCatalogStrictLabel", "Strict catalog filter")}
-                    </span>
-                    <Switch
-                      size="small"
-                      checked={toolCatalogStrict}
-                      onChange={(checked) => setToolCatalogStrict(checked)}
-                    />
-                  </div>
-                  <div className="flex flex-col gap-1">
-                    <label className="text-[11px] text-text-muted">
-                      {t("playground:composer.mcpModuleLabel", "Module")}
-                    </label>
-                    <Select
-                      size="small"
-                      allowClear
-                      showSearch
-                      mode="multiple"
-                      loading={moduleOptionsLoading}
-                      disabled={moduleOptionsLoading || moduleOptions.length === 0}
-                      value={toolModules.length > 0 ? toolModules : undefined}
-                      placeholder={t("playground:composer.mcpModuleSelectPlaceholder", "Select modules")}
-                      onChange={(value) => handleModuleSelect(value as string[] | undefined)}
-                      optionFilterProp="label"
-                      className="w-full"
-                    >
-                      {moduleOptions.map((moduleId) => (
-                        <Select.Option key={moduleId} value={moduleId} label={moduleId}>
-                          <span className="text-sm">{moduleId}</span>
-                        </Select.Option>
-                      ))}
-                    </Select>
-                  </div>
-                  {isSmallModel && (
-                    <div className="rounded-md border border-border bg-surface2/60 px-2 py-1 text-[11px] text-text-muted">
-                      {t(
-                        "playground:composer.mcpSmallModelHint",
-                        "Small/fast model: use catalog/module filters or the discovery tools (mcp.catalogs.list → mcp.modules.list → mcp.tools.list) to keep tool context light."
-                      )}
-                    </div>
-                  )}
-                </div>
-              </div>
-            )}
-
           </div>
         )}
 
@@ -3792,13 +3674,6 @@ export const PlaygroundForm = ({ droppedFiles }: Props) => {
     ),
     [
       advancedToolsExpanded,
-      catalogDraft,
-      catalogGroups,
-      moduleOptions,
-      moduleOptionsLoading,
-      handleCatalogSelect,
-      handleModuleSelect,
-      commitCatalog,
       handleClearContext,
       openKnowledgePanel,
       handleVoiceChatToggle,
@@ -3808,22 +3683,11 @@ export const PlaygroundForm = ({ droppedFiles }: Props) => {
       useOCR,
       setUseOCR,
       t,
-      toolCatalogStrict,
-      setToolCatalogStrict,
-      toolCatalogId,
-      toolModules,
-      setToolCatalogId,
       voiceChatAvailable,
       voiceChatEnabled,
       voiceChat.state,
       voiceChatSettingsFields,
-      voiceChatStatusLabel,
-      hasMcp,
-      mcpCatalogsLoading,
-      mcpHealthState,
-      mcpTools,
-      mcpToolsLoading,
-      isSmallModel
+      voiceChatStatusLabel
     ]
   )
 
@@ -4199,6 +4063,85 @@ export const PlaygroundForm = ({ droppedFiles }: Props) => {
     }
   }, [])
 
+  const actionBarPinned = React.useMemo(
+    () =>
+      composerFocusWithin ||
+      contextToolsOpen ||
+      promptInsertOpen ||
+      Boolean(promptInsertChoice) ||
+      mcpSettingsOpen ||
+      openModelSettings ||
+      openActorSettings ||
+      documentGeneratorOpen ||
+      voiceModeSelectorOpen ||
+      modelDropdownOpen ||
+      mcpPopoverOpen ||
+      toolsPopoverOpen ||
+      attachmentMenuOpen ||
+      sendMenuOpen,
+    [
+      attachmentMenuOpen,
+      composerFocusWithin,
+      contextToolsOpen,
+      documentGeneratorOpen,
+      mcpPopoverOpen,
+      mcpSettingsOpen,
+      modelDropdownOpen,
+      openActorSettings,
+      openModelSettings,
+      promptInsertOpen,
+      promptInsertChoice,
+      sendMenuOpen,
+      toolsPopoverOpen,
+      voiceModeSelectorOpen
+    ]
+  )
+
+  React.useEffect(() => {
+    actionBarPinnedRef.current = actionBarPinned
+  }, [actionBarPinned])
+
+  React.useEffect(() => {
+    composerHoveringRef.current = composerHovering
+  }, [composerHovering])
+
+  React.useEffect(() => {
+    if (actionBarPinned) {
+      showActionBar()
+      return
+    }
+    if (!composerHovering) {
+      scheduleActionBarCollapse()
+    }
+  }, [actionBarPinned, composerHovering, scheduleActionBarCollapse, showActionBar])
+
+  React.useEffect(() => clearActionBarCollapseTimer, [clearActionBarCollapseTimer])
+
+  const handleComposerMouseEnter = React.useCallback(() => {
+    setComposerHovering(true)
+    showActionBar()
+  }, [showActionBar])
+
+  const handleComposerMouseLeave = React.useCallback(() => {
+    setComposerHovering(false)
+    scheduleActionBarCollapse()
+  }, [scheduleActionBarCollapse])
+
+  const handleComposerFocusCapture = React.useCallback(() => {
+    setComposerFocusWithin(true)
+    showActionBar()
+  }, [showActionBar])
+
+  const handleComposerBlurCapture = React.useCallback(
+    (event: React.FocusEvent<HTMLDivElement>) => {
+      const next = event.relatedTarget as Node | null
+      if (next && event.currentTarget.contains(next)) return
+      setComposerFocusWithin(false)
+      scheduleActionBarCollapse()
+    },
+    [scheduleActionBarCollapse]
+  )
+
   const mcpDisabledReason = React.useMemo(() => {
     if (!hasMcp) {
       return t("playground:composer.mcpToolsUnavailable", "MCP tools unavailable")
@@ -4215,6 +4158,12 @@ export const PlaygroundForm = ({ droppedFiles }: Props) => {
     return ""
   }, [hasMcp, mcpHealthState, mcpToolsLoading, mcpTools.length, t])
 
+  React.useEffect(() => {
+    if (!hasMcp || mcpHealthState === "unhealthy") {
+      setMcpPopoverOpen(false)
+    }
+  }, [hasMcp, mcpHealthState])
+
   const mcpChoiceLabel = React.useMemo(() => {
     switch (toolChoice) {
       case "required":
@@ -4227,11 +4176,35 @@ export const PlaygroundForm = ({ droppedFiles }: Props) => {
     }
   }, [toolChoice, t])
 
+  const mcpAriaLabel = React.useMemo(() => {
+    if (!hasMcp) {
+      return t("playground:composer.mcpAriaUnavailable", "MCP tools unavailable")
+    }
+    const countLabel = mcpToolsLoading
+      ? t("playground:composer.mcpToolsLoading", "Loading tools...")
+      : t("playground:tools.mcpSummary", "{{count}} tools", { count: mcpTools.length })
+    return t(
+      "playground:composer.mcpAriaLabel",
+      "MCP tools: {{choice}}, {{summary}}",
+      { choice: mcpChoiceLabel, summary: countLabel }
+    )
+  }, [hasMcp, mcpChoiceLabel, mcpTools.length, mcpToolsLoading, t])
+
   const mcpSummaryLabel = React.useMemo(() => {
     if (!hasMcp) return t("playground:composer.mcpToolsUnavailable", "MCP unavailable")
     if (mcpToolsLoading) return t("playground:composer.mcpToolsLoading", "Loading tools...")
     return t("playground:tools.mcpSummary", "{{count}} tools", { count: mcpTools.length })
   }, [hasMcp, mcpToolsLoading, mcpTools.length, t])
+
+  const mcpStatusLabel = React.useMemo(() => {
+    if (!hasMcp) {
+      return t("playground:composer.mcpToolsUnavailable", "MCP tools unavailable")
+    }
+    if (mcpHealthState === "unhealthy") {
+      return t("playground:composer.mcpToolsUnhealthy", "MCP tools are offline")
+    }
+    return mcpSummaryLabel
+  }, [hasMcp, mcpHealthState, mcpSummaryLabel, t])
 
   const mcpControlContent = (
     <div className="flex w-64 flex-col gap-2 p-2">
@@ -4266,6 +4239,16 @@ export const PlaygroundForm = ({ droppedFiles }: Props) => {
             {t("playground:composer.toolChoiceNone", "None")}
           </Radio.Button>
         </Radio.Group>
+        <button
+          type="button"
+          onClick={() => {
+            setMcpPopoverOpen(false)
+            setMcpSettingsOpen(true)
+          }}
+          className="mt-1 inline-flex w-fit items-center gap-1 text-xs font-medium text-primary hover:text-primaryStrong"
+        >
+          {t("playground:composer.mcpConfigure", "Configure tools")}
+        </button>
       </div>
     </div>
   )
@@ -4273,12 +4256,12 @@ export const PlaygroundForm = ({ droppedFiles }: Props) => {
   const mcpControlButton = (
     <TldwButton
       variant="outline"
-      size="sm"
+      size="md"
       shape="pill"
-      ariaLabel={t("playground:composer.mcpToolsLabel", "MCP tools") as string}
-      title={mcpSummaryLabel}
+      ariaLabel={mcpAriaLabel}
+      title={mcpAriaLabel}
       disabled={!hasMcp || mcpHealthState === "unhealthy"}
-      className="gap-1.5"
+      className="gap-1.5 min-h-[44px]"
     >
       <span className="inline-flex items-center gap-1.5">
         <span className="text-[11px] font-semibold">MCP</span>
@@ -4299,7 +4282,13 @@ export const PlaygroundForm = ({ droppedFiles }: Props) => {
         <span>{mcpControlButton}</span>
       </Tooltip>
     ) : (
-      <Popover trigger="click" placement="topRight" content={mcpControlContent}>
+      <Popover
+        trigger="click"
+        placement="topRight"
+        content={mcpControlContent}
+        open={mcpPopoverOpen}
+        onOpenChange={setMcpPopoverOpen}
+      >
         {mcpControlButton}
       </Popover>
     )
@@ -4339,7 +4328,9 @@ export const PlaygroundForm = ({ droppedFiles }: Props) => {
       trigger="click"
       placement="topRight"
       content={moreToolsContent}
-      overlayClassName="playground-more-tools">
+      overlayClassName="playground-more-tools"
+      open={toolsPopoverOpen}
+      onOpenChange={setToolsPopoverOpen}>
       <TldwButton
         variant="outline"
         size="sm"
@@ -4422,6 +4413,7 @@ export const PlaygroundForm = ({ droppedFiles }: Props) => {
             disabled={chatMode === "rag"}
             data-testid="attachment-button"
             onClick={handleImageUpload}
+            className="rounded-r-none"
           >
             {isProMode ? (
               <span className="inline-flex items-center gap-1.5">
@@ -4444,6 +4436,8 @@ export const PlaygroundForm = ({ droppedFiles }: Props) => {
         placement="topRight"
         content={attachmentMenu}
         overlayClassName="playground-attachment-menu"
+        open={attachmentMenuOpen}
+        onOpenChange={setAttachmentMenuOpen}
       >
         <TldwButton
           variant="outline"
@@ -4463,6 +4457,8 @@ export const PlaygroundForm = ({ droppedFiles }: Props) => {
   const sendControl = !isSending ? (
     <Dropdown.Button
       size={isProMode ? "middle" : "small"}
+      open={sendMenuOpen}
+      onOpenChange={(open) => setSendMenuOpen(open)}
       htmlType="submit"
       disabled={isSending || !isConnectionReady}
       title={
@@ -4560,6 +4556,10 @@ export const PlaygroundForm = ({ droppedFiles }: Props) => {
     </Tooltip>
   )
 
+  const actionBarVisibilityClass = actionBarVisible
+    ? "max-h-[480px] opacity-100 visible"
+    : "max-h-0 opacity-0 invisible pointer-events-none"
+
   return (
     <div className="flex w-full flex-col items-center px-4 pb-6">
       <div
@@ -4569,6 +4569,10 @@ export const PlaygroundForm = ({ droppedFiles }: Props) => {
         <div className="relative flex w-full flex-row justify-center">
           <div
             data-istemporary-chat={temporaryChat}
+            onMouseEnter={handleComposerMouseEnter}
+            onMouseLeave={handleComposerMouseLeave}
+            onFocusCapture={handleComposerFocusCapture}
+            onBlurCapture={handleComposerBlurCapture}
             className={`relative w-full rounded-3xl border border-border/80 bg-surface/95 p-3 text-text shadow-card backdrop-blur-lg transition-all duration-200 data-[istemporary-chat='true']:border-t-4 data-[istemporary-chat='true']:border-t-purple-500 data-[istemporary-chat='true']:border-dashed data-[istemporary-chat='true']:opacity-90 ${
               !isConnectionReady ? "opacity-80" : ""
             }`}>
@@ -5032,6 +5036,10 @@ export const PlaygroundForm = ({ droppedFiles }: Props) => {
                         ) : null}
                       </div>
                     )}
+                    <div
+                      className={`transition-all duration-200 overflow-hidden ${actionBarVisibilityClass}`}
+                      aria-hidden={!actionBarVisible}
+                    >
                     {isProMode ? (
                       <div className="mt-2 flex flex-col gap-1">
                         <div className="mt-1 flex flex-col gap-2">
@@ -5043,7 +5051,7 @@ export const PlaygroundForm = ({ droppedFiles }: Props) => {
                             iconClassName="h-4 w-4"
                             className="text-text-muted hover:text-text"
                           />
-                          <ModelSelect iconClassName="h-4 w-4" showSelectedName />
+                          {modelSelectButton}
                           <CharacterSelect
                             iconClassName="h-4 w-4"
                             className="text-text-muted hover:text-text"
@@ -5082,6 +5090,17 @@ export const PlaygroundForm = ({ droppedFiles }: Props) => {
                                     }
                                     disabled={privateChatLocked || isFireFoxPrivateMode}
                                     aria-pressed={temporaryChat}
+                                    aria-label={
+                                      temporaryChat
+                                        ? (t(
+                                            "playground:composer.ephemeralLabel",
+                                            "Ephemeral"
+                                          ) as string)
+                                        : (t(
+                                            "playground:composer.savedLabel",
+                                            "Saved"
+                                          ) as string)
+                                    }
                                     className={`inline-flex items-center gap-1 rounded-full border px-2 py-0.5 text-[11px] font-medium transition ${
                                       temporaryChat
                                         ? "border-accent bg-surface2 text-accent hover:bg-surface"
@@ -5116,6 +5135,17 @@ export const PlaygroundForm = ({ droppedFiles }: Props) => {
                                 }
                                 aria-pressed={contextToolsOpen}
                                 aria-expanded={contextToolsOpen}
+                                aria-label={
+                                  contextToolsOpen
+                                    ? (t(
+                                        "playground:composer.contextKnowledgeClose",
+                                        "Close Search & Context"
+                                      ) as string)
+                                    : (t(
+                                        "playground:composer.contextKnowledge",
+                                        "Search & Context"
+                                      ) as string)
+                                }
                                 className={`inline-flex items-center gap-1 rounded-full border px-2 py-0.5 text-[11px] font-medium transition ${
                                   contextToolsOpen
                                     ? "border-accent bg-surface2 text-accent hover:bg-surface"
@@ -5140,6 +5170,11 @@ export const PlaygroundForm = ({ droppedFiles }: Props) => {
                                   type="button"
                                   onClick={() => setWebSearch(!webSearch)}
                                   aria-pressed={webSearch}
+                                  aria-label={
+                                    webSearch
+                                      ? (t("playground:actions.webSearchOn", "Web search on") as string)
+                                      : (t("playground:actions.webSearchOff", "Web search off") as string)
+                                  }
                                   title={t("playground:actions.webSearchOff", "Web search") as string}
                                   className={`inline-flex items-center gap-1 rounded-full border px-2 py-0.5 text-[11px] font-medium transition ${
                                     webSearch
@@ -5391,7 +5426,7 @@ export const PlaygroundForm = ({ droppedFiles }: Props) => {
                             iconClassName="h-4 w-4"
                             className="text-text-muted hover:text-text"
                           />
-                          <ModelSelect iconClassName="h-4 w-4" />
+                          {modelSelectButton}
                           <CharacterSelect
                             showLabel={false}
                             className="text-text-muted hover:text-text"
@@ -5410,6 +5445,17 @@ export const PlaygroundForm = ({ droppedFiles }: Props) => {
                                   }
                                   disabled={privateChatLocked || isFireFoxPrivateMode}
                                   aria-pressed={temporaryChat}
+                                  aria-label={
+                                    temporaryChat
+                                      ? (t(
+                                          "playground:composer.ephemeralLabel",
+                                          "Ephemeral"
+                                        ) as string)
+                                      : (t(
+                                          "playground:composer.savedLabel",
+                                          "Saved"
+                                        ) as string)
+                                  }
                                   className={`inline-flex items-center gap-1 rounded-full border px-2 py-1 text-[11px] font-medium transition ${
                                     temporaryChat
                                       ? "border-accent bg-surface2 text-accent hover:bg-surface"
@@ -5444,6 +5490,17 @@ export const PlaygroundForm = ({ droppedFiles }: Props) => {
                               }
                               aria-pressed={contextToolsOpen}
                               aria-expanded={contextToolsOpen}
+                              aria-label={
+                                contextToolsOpen
+                                  ? (t(
+                                      "playground:composer.contextKnowledgeClose",
+                                      "Close Search & Context"
+                                    ) as string)
+                                  : (t(
+                                      "playground:composer.contextKnowledge",
+                                      "Search & Context"
+                                    ) as string)
+                              }
                               className={`inline-flex min-w-0 max-w-[140px] items-center gap-1 rounded-full border px-2 py-1 text-[11px] font-medium transition ${
                                 contextToolsOpen
                                   ? "border-accent bg-surface2 text-accent hover:bg-surface"
@@ -5468,6 +5525,11 @@ export const PlaygroundForm = ({ droppedFiles }: Props) => {
                                 type="button"
                                 onClick={() => setWebSearch(!webSearch)}
                                 aria-pressed={webSearch}
+                                aria-label={
+                                  webSearch
+                                    ? (t("playground:actions.webSearchOn", "Web search on") as string)
+                                    : (t("playground:actions.webSearchOff", "Web search off") as string)
+                                }
                                 title={t("playground:actions.webSearchOff", "Web search") as string}
                                 className={`inline-flex items-center gap-1 rounded-full border px-2 py-1 text-[11px] font-medium transition ${
                                   webSearch
@@ -5586,6 +5648,7 @@ export const PlaygroundForm = ({ droppedFiles }: Props) => {
                         </div>
                       </div>
                     )}
+                    </div>
                     {showConnectBanner && !isConnectionReady && (
                       <div className="mt-2 flex flex-wrap items-center justify-between gap-2 rounded-md border border-amber-300 bg-amber-50 px-3 py-2 text-xs text-amber-900 dark:border-amber-500 dark:bg-[#2a2310] dark:text-amber-100">
                         <p className="max-w-xs text-left">
@@ -5758,6 +5821,159 @@ export const PlaygroundForm = ({ droppedFiles }: Props) => {
               })}
             </Button>
           </div>
+        </div>
+      </Modal>
+      <Modal
+        open={mcpSettingsOpen}
+        onCancel={() => setMcpSettingsOpen(false)}
+        footer={null}
+        width={560}
+        title={t("playground:composer.mcpSettingsTitle", "MCP tool settings")}
+      >
+        <div className="flex flex-col gap-4">
+          <div className="text-xs text-text-muted">{mcpStatusLabel}</div>
+          {!hasMcp ? (
+            <div className="text-sm text-text-muted">
+              {t("playground:composer.mcpToolsUnavailable", "MCP tools unavailable")}
+            </div>
+          ) : (
+            <div className="flex flex-col gap-3">
+              <div className="flex flex-col gap-1">
+                <label className="text-xs text-text-muted">
+                  {t("playground:composer.mcpCatalogLabel", "Catalog")}
+                </label>
+                <Select
+                  size="small"
+                  allowClear
+                  showSearch
+                  loading={mcpCatalogsLoading}
+                  value={toolCatalogId ?? undefined}
+                  placeholder={t("playground:composer.mcpCatalogSelectPlaceholder", "Select a catalog")}
+                  onChange={(value) => handleCatalogSelect(value as number | undefined)}
+                  optionFilterProp="label"
+                  className="w-full"
+                >
+                  {catalogGroups.team.length > 0 && (
+                    <Select.OptGroup label={t("playground:composer.mcpCatalogTeam", "Team catalogs")}>
+                      {catalogGroups.team.map((catalog) => (
+                        <Select.Option
+                          key={`team-${catalog.id}`}
+                          value={catalog.id}
+                          label={catalog.name}
+                        >
+                          <div className="flex flex-col">
+                            <span className="text-sm">{catalog.name}</span>
+                            <span className="text-[11px] text-text-muted">ID {catalog.id}</span>
+                          </div>
+                        </Select.Option>
+                      ))}
+                    </Select.OptGroup>
+                  )}
+                  {catalogGroups.org.length > 0 && (
+                    <Select.OptGroup label={t("playground:composer.mcpCatalogOrg", "Org catalogs")}>
+                      {catalogGroups.org.map((catalog) => (
+                        <Select.Option
+                          key={`org-${catalog.id}`}
+                          value={catalog.id}
+                          label={catalog.name}
+                        >
+                          <div className="flex flex-col">
+                            <span className="text-sm">{catalog.name}</span>
+                            <span className="text-[11px] text-text-muted">ID {catalog.id}</span>
+                          </div>
+                        </Select.Option>
+                      ))}
+                    </Select.OptGroup>
+                  )}
+                  {catalogGroups.global.length > 0 && (
+                    <Select.OptGroup label={t("playground:composer.mcpCatalogGlobal", "Global catalogs")}>
+                      {catalogGroups.global.map((catalog) => (
+                        <Select.Option
+                          key={`global-${catalog.id}`}
+                          value={catalog.id}
+                          label={catalog.name}
+                        >
+                          <div className="flex flex-col">
+                            <span className="text-sm">{catalog.name}</span>
+                            <span className="text-[11px] text-text-muted">ID {catalog.id}</span>
+                          </div>
+                        </Select.Option>
+                      ))}
+                    </Select.OptGroup>
+                  )}
+                </Select>
+                <Input
+                  size="small"
+                  placeholder={t("playground:composer.mcpCatalogPlaceholder", "catalog name")}
+                  value={catalogDraft}
+                  onChange={(e) => setCatalogDraft(e.target.value)}
+                  onBlur={commitCatalog}
+                  onPressEnter={commitCatalog}
+                />
+              </div>
+              <div className="flex flex-col gap-1">
+                <label className="text-xs text-text-muted">
+                  {t("playground:composer.mcpCatalogIdLabel", "Catalog ID")}
+                </label>
+                <InputNumber
+                  size="small"
+                  min={0}
+                  value={toolCatalogId ?? undefined}
+                  onChange={(value) =>
+                    setToolCatalogId(
+                      typeof value === "number" && Number.isFinite(value)
+                        ? value
+                        : null
+                    )
+                  }
+                  placeholder={t("playground:composer.mcpCatalogIdPlaceholder", "optional")}
+                  className="w-full"
+                />
+              </div>
+              <div className="flex items-center justify-between gap-2">
+                <span className="text-xs text-text-muted">
+                  {t("playground:composer.mcpCatalogStrictLabel", "Strict catalog filter")}
+                </span>
+                <Switch
+                  size="small"
+                  checked={toolCatalogStrict}
+                  onChange={(checked) => setToolCatalogStrict(checked)}
+                />
+              </div>
+              <div className="flex flex-col gap-1">
+                <label className="text-xs text-text-muted">
+                  {t("playground:composer.mcpModuleLabel", "Module")}
+                </label>
+                <Select
+                  size="small"
+                  allowClear
+                  showSearch
+                  mode="multiple"
+                  loading={moduleOptionsLoading}
+                  disabled={moduleOptionsLoading || moduleOptions.length === 0}
+                  value={toolModules.length > 0 ? toolModules : undefined}
+                  placeholder={t("playground:composer.mcpModuleSelectPlaceholder", "Select modules")}
+                  onChange={(value) => handleModuleSelect(value as string[] | undefined)}
+                  optionFilterProp="label"
+                  className="w-full"
+                >
+                  {moduleOptions.map((moduleId) => (
+                    <Select.Option key={moduleId} value={moduleId} label={moduleId}>
+                      <span className="text-sm">{moduleId}</span>
+                    </Select.Option>
+                  ))}
+                </Select>
+              </div>
+              {isSmallModel && (
+                <div className="rounded-md border border-border bg-surface2/60 px-2 py-1 text-[11px] text-text-muted">
+                  {t(
+                    "playground:composer.mcpSmallModelHint",
+                    "Small/fast model: use catalog/module filters or the discovery tools (mcp.catalogs.list → mcp.modules.list → mcp.tools.list) to keep tool context light."
+                  )}
+                </div>
+              )}
+            </div>
+          )}
         </div>
       </Modal>
       <CurrentChatModelSettings

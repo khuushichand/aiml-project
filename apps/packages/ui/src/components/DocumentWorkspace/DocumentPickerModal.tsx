@@ -367,7 +367,7 @@ export const DocumentPickerModal: React.FC<DocumentPickerModalProps> = ({
       footer={null}
       title={t("option:documentWorkspace.openDocument", "Open document")}
       width={720}
-      destroyOnClose
+      destroyOnHidden
     >
       {!isOnline && (
         <Alert

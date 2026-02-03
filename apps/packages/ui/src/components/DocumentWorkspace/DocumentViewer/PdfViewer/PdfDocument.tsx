@@ -1,6 +1,8 @@
 import React, { useCallback, useState, useRef, useEffect } from "react"
 import { Document, pdfjs } from "react-pdf"
 import type { DocumentProps } from "react-pdf"
+import "react-pdf/dist/esm/Page/AnnotationLayer.css"
+import "react-pdf/dist/esm/Page/TextLayer.css"
 import { Spin, Alert } from "antd"
 import { PdfPage } from "./PdfPage"
 import { TextSelectionPopover } from "../TextSelectionPopover"
@@ -13,18 +15,22 @@ import type { ViewMode } from "../../types"
 // For development: Uses CDN for simplicity
 function getPdfWorkerSrc(): string {
   // CDN fallback URL
-  const cdnUrl = `//unpkg.com/pdfjs-dist@${pdfjs.version}/build/pdf.worker.min.mjs`
+  const cdnUrl = `https://unpkg.com/pdfjs-dist@${pdfjs.version}/build/pdf.worker.min.mjs`
 
   // SSR check
   if (typeof window === "undefined") {
     return cdnUrl
   }
 
-  // In extension runtime, always use CDN (local worker is not bundled)
+  // In extension runtime, use the packaged worker file from the extension bundle.
   const isExtensionRuntime =
     typeof (window as any).chrome?.runtime?.id === "string" ||
     typeof (window as any).browser?.runtime?.id === "string"
   if (isExtensionRuntime) {
+    const runtime = (window as any).browser?.runtime || (window as any).chrome?.runtime
+    if (runtime?.getURL) {
+      return runtime.getURL("pdf.worker.min.mjs")
+    }
     return cdnUrl
   }
 
@@ -194,8 +200,9 @@ export const PdfDocument: React.FC<PdfDocumentProps> = ({
         onLoadSuccess={handleDocumentLoadSuccess}
         onLoadError={handleDocumentLoadError}
         loading={
-          <div className="flex h-64 w-full items-center justify-center">
-            <Spin size="large" tip="Loading document..." />
+          <div className="flex h-64 w-full flex-col items-center justify-center gap-2">
+            <Spin size="large" />
+            <div className="text-sm text-text-muted">Loading document…</div>
           </div>
         }
         error={

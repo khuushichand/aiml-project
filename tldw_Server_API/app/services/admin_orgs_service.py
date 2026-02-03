@@ -447,7 +447,12 @@ async def remove_team_member(
         await admin_scope_service.get_scoped_team(team_id, principal, require_admin=True)
         res = await core_remove_team_member(team_id=team_id, user_id=user_id)
         if not res.get("removed"):
-            return {"message": "No membership found", "team_id": team_id, "user_id": user_id}
+            return {
+                "message": "No membership found",
+                "team_id": team_id,
+                "user_id": user_id,
+                "removed": False,
+            }
         await _emit_membership_audit_event(
             request,
             resource_type="team",
@@ -538,7 +543,12 @@ async def remove_org_member(
                 detail="Organization must retain at least one owner",
             )
         if not res.get("removed"):
-            return {"message": "No membership found", "org_id": org_id, "user_id": user_id}
+            return {
+                "message": "No membership found",
+                "org_id": org_id,
+                "user_id": user_id,
+                "removed": False,
+            }
         await _emit_membership_audit_event(
             request,
             resource_type="organization",
