@@ -17,11 +17,15 @@ from typing import Any, Optional
 
 from loguru import logger
 
-from tldw_Server_API.app.core.Skills.skill_executor import SKILL_TOOL_DEFINITION, SkillExecutor
+from tldw_Server_API.app.core.Skills.skill_executor import (
+    SKILL_TOOL_DEFINITION,
+    RequestContext,
+    SkillExecutor,
+)
 from tldw_Server_API.app.core.Skills.skills_service import SkillsService
 
 
-def get_skills_context_text(user_id: int, base_path: Path) -> str:
+def get_skills_context_text(user_id: int, base_path: Path, db: Any | None = None) -> str:
     """
     Get formatted skills context for injection into system message.
 
@@ -33,7 +37,7 @@ def get_skills_context_text(user_id: int, base_path: Path) -> str:
         Formatted skills context string, or empty string if no skills
     """
     try:
-        service = SkillsService(user_id=user_id, base_path=base_path)
+        service = SkillsService(user_id=user_id, base_path=base_path, db=db)
         payload = service.get_context_payload()
         return payload.get("context_text", "")
     except Exception as e:
@@ -45,6 +49,7 @@ def build_system_message_with_skills(
     base_system_message: Optional[str],
     user_id: int,
     base_path: Path,
+    db: Any | None = None,
 ) -> str:
     """
     Build a system message that includes available skills.
@@ -57,7 +62,7 @@ def build_system_message_with_skills(
     Returns:
         System message with skills context appended
     """
-    skills_context = get_skills_context_text(user_id, base_path)
+    skills_context = get_skills_context_text(user_id, base_path, db=db)
 
     parts = []
     if base_system_message:
@@ -83,6 +88,8 @@ async def handle_skill_tool_call(
     args: str,
     user_id: int,
     base_path: Path,
+    db: Any | None = None,
+    request_context: RequestContext | None = None,
 ) -> dict[str, Any]:
     """
     Handle a Skill tool invocation from the LLM.
@@ -99,13 +106,14 @@ async def handle_skill_tool_call(
     from tldw_Server_API.app.core.Skills.exceptions import SkillNotFoundError, SkillsError
 
     try:
-        service = SkillsService(user_id=user_id, base_path=base_path)
+        service = SkillsService(user_id=user_id, base_path=base_path, db=db)
         skill_data = await service.get_skill(skill_name)
 
         executor = SkillExecutor()
         result = await executor.execute(
             skill_data=skill_data,
             arguments=args or "",
+            context=request_context,
         )
 
         return {
@@ -135,6 +143,7 @@ def add_skill_tool_to_tools_list(
     tools: Optional[list[dict[str, Any]]],
     user_id: int,
     base_path: Path,
+    db: Any | None = None,
 ) -> list[dict[str, Any]]:
     """
     Add the Skill tool to a tools list if the user has skills.
@@ -151,12 +160,20 @@ def add_skill_tool_to_tools_list(
 
     # Check if user has any skills
     try:
-        service = SkillsService(user_id=user_id, base_path=base_path)
+        service = SkillsService(user_id=user_id, base_path=base_path, db=db)
         skills = service.get_context_payload().get("available_skills", [])
         if skills:
             # Add Skill tool if not already present
             skill_tool = get_skill_tool_definition()
-            tool_names = [t.get("function", {}).get("name") for t in result]
+            tool_names = []
+            for tool in result:
+                if not isinstance(tool, dict):
+                    continue
+                func = tool.get("function")
+                if isinstance(func, dict) and func.get("name"):
+                    tool_names.append(func.get("name"))
+                elif tool.get("name"):
+                    tool_names.append(tool.get("name"))
             if "Skill" not in tool_names:
                 result.append(skill_tool)
     except Exception as e:

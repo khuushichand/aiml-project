@@ -4,7 +4,11 @@
 #
 import pytest
 
-from tldw_Server_API.app.core.Skills.skill_executor import SkillExecutor, SKILL_TOOL_DEFINITION
+from tldw_Server_API.app.core.Skills.skill_executor import (
+    RequestContext,
+    SkillExecutor,
+    SKILL_TOOL_DEFINITION,
+)
 
 
 class TestSkillExecutor:
@@ -232,7 +236,7 @@ class TestSkillExecution:
         assert "Read" in result.allowed_tools
 
     @pytest.mark.asyncio
-    async def test_execute_fork(self, executor):
+    async def test_execute_fork(self, executor, monkeypatch):
         """Test fork execution mode."""
         skill_data = {
             "name": "fork-skill",
@@ -242,12 +246,33 @@ class TestSkillExecution:
             "model": "gpt-4",
         }
 
-        result = await executor.execute(skill_data, "task-args")
+        async def _fake_chat_call(**_kwargs):
+            return {"choices": [{"message": {"content": "fork output"}}]}
+
+        from tldw_Server_API.app.core.Chat import chat_service as chat_service_mod
+        monkeypatch.setattr(chat_service_mod, "perform_chat_api_call_async", _fake_chat_call)
+
+        class _ToolExecutorStub:
+            async def list_tools(self, *, user_id=None, client_id=None):
+                return {"tools": []}
+
+            async def execute(self, **_kwargs):
+                return {"ok": True}
+
+        ctx = RequestContext(
+            user_id=1,
+            default_provider="openai",
+            tool_executor=_ToolExecutorStub(),
+            tool_definitions=[],
+        )
+
+        result = await executor.execute(skill_data, "task-args", context=ctx)
 
         assert result.skill_name == "fork-skill"
         assert result.execution_mode == "fork"
-        assert result.model_override == "gpt-4"
-        assert "Forked task: task-args" in result.rendered_prompt
+        assert result.model_override is None
+        assert result.rendered_prompt == "Forked task: task-args"
+        assert result.fork_output == "fork output"
 
     @pytest.mark.asyncio
     async def test_execute_with_model_override(self, executor):

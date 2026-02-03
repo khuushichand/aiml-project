@@ -2,6 +2,7 @@
 Backend factory for automatic detection and instantiation.
 """
 
+import importlib
 from typing import Optional
 
 from loguru import logger
@@ -46,7 +47,7 @@ def create_backend(config: Optional[SchedulerConfig] = None) -> QueueBackend:
 
         # Check if asyncpg is available
         try:
-            import asyncpg
+            importlib.import_module("asyncpg")
         except ImportError:
             raise BackendError(
                 "PostgreSQL backend requires asyncpg. "
@@ -62,7 +63,7 @@ def create_backend(config: Optional[SchedulerConfig] = None) -> QueueBackend:
 
         # Check if aiosqlite is available
         try:
-            import aiosqlite
+            importlib.import_module("aiosqlite")
         except ImportError:
             raise BackendError(
                 "SQLite backend requires aiosqlite. "

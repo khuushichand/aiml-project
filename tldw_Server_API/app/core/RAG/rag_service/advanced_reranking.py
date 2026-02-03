@@ -69,12 +69,31 @@ def _hf_trusts_remote_code(model_name: str, patterns: Optional[Iterable[Any]]) -
         return False
     model_l = str(model_name).lower()
     for pat in pats:
-        try:
-            if fnmatch(model_name, pat) or fnmatch(model_l, str(pat).lower()):
-                return True
-        except Exception:
-            continue
+        if fnmatch(model_name, pat) or fnmatch(model_l, str(pat).lower()):
+            return True
     return False
+
+
+class LlamaEmbeddingError(RuntimeError):
+    """Raised when llama-embedding returns an error."""
+
+    def __init__(self) -> None:
+        super().__init__("llama-embedding error")
+
+
+class LlamaEmbeddingParseError(ValueError):
+    """Raised when no embeddings can be parsed from llama-embedding output."""
+
+    def __init__(self) -> None:
+        super().__init__("No embeddings parsed from llama-embedding output")
+
+
+def _raise_llama_embedding_error() -> None:
+    raise LlamaEmbeddingError()
+
+
+def _raise_llama_embedding_parse_error() -> None:
+    raise LlamaEmbeddingParseError()
 
 
 @dataclass
@@ -239,7 +258,7 @@ class FlashRankReranker(BaseReranker):
 
             return scored_docs[:self.config.top_k]
 
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001 - fallback to original order
             logger.error(f"FlashRank reranking failed: {e}")
             # Fallback to original order
             return [
@@ -268,7 +287,7 @@ class LlamaCppReranker(BaseReranker):
         try:
             from tldw_Server_API.app.core.config import load_and_log_configs
             _cfg = load_and_log_configs() or {}
-        except Exception:
+        except Exception:  # noqa: BLE001 - config load best-effort
             _cfg = {}
 
         self.binary = (
@@ -295,7 +314,7 @@ class LlamaCppReranker(BaseReranker):
                     )
                 )
             )
-        except Exception:
+        except (TypeError, ValueError):
             self.ngl = 0
         cfg_output = _cfg.get("RAG_LLAMA_RERANKER_OUTPUT", "json+")
         if not isinstance(cfg_output, str):
@@ -316,7 +335,7 @@ class LlamaCppReranker(BaseReranker):
                     )
                 )
             )
-        except Exception:
+        except (TypeError, ValueError):
             self.normalize = -1
         try:
             self.max_doc_chars = (
@@ -327,7 +346,7 @@ class LlamaCppReranker(BaseReranker):
                     )
                 )
             )
-        except Exception:
+        except (TypeError, ValueError):
             self.max_doc_chars = 2000
 
         # Template mode and prefixes
@@ -412,12 +431,12 @@ class LlamaCppReranker(BaseReranker):
             out_b, err_b = await proc.communicate()
             if proc.returncode != 0:
                 logger.error(f"llama-embedding failed (code {proc.returncode}): {err_b.decode('utf-8', 'ignore')[:500]}")
-                raise RuntimeError("llama-embedding error")
+                _raise_llama_embedding_error()
 
             raw = out_b.decode("utf-8", "ignore")
             embs = self._parse_embeddings_output(raw)
             if not embs or len(embs) < 2:
-                raise ValueError("No embeddings parsed from llama-embedding output")
+                _raise_llama_embedding_parse_error()
 
             # Compute cosine similarity to first vector (query)
             q = np.asarray(embs[0], dtype=float)
@@ -444,7 +463,7 @@ class LlamaCppReranker(BaseReranker):
             scored.sort(key=lambda x: x.rerank_score, reverse=True)
             return scored[: self.config.top_k]
 
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001 - fallback to original order
             logger.error(f"LlamaCppReranker failed: {e}")
             return [
                 ScoredDocument(
@@ -489,7 +508,7 @@ class LlamaCppReranker(BaseReranker):
                         out.append(list(map(float, item["embedding"])))
                 if out:
                     return out
-        except Exception:
+        except (json.JSONDecodeError, TypeError, ValueError):
             pass
 
         # Fallback: regex extract arrays of floats; keep reasonably long ones
@@ -499,7 +518,7 @@ class LlamaCppReranker(BaseReranker):
                 vec = json.loads(m.group(0))
                 if isinstance(vec, list) and len(vec) >= 8:
                     arrays.append([float(x) for x in vec])
-            except Exception:
+            except (json.JSONDecodeError, TypeError, ValueError):
                 continue
         return arrays if arrays else None
 
@@ -525,7 +544,7 @@ class TransformersCrossEncoderReranker(BaseReranker):
                 from tldw_Server_API.app.core.config import load_and_log_configs
                 _cfg = load_and_log_configs() or {}
                 model_id = _cfg.get("RAG_TRANSFORMERS_RERANKER_MODEL")
-            except Exception:
+            except Exception:  # noqa: BLE001 - config load best-effort
                 model_id = None
         # Auto-enable trust_remote_code for known reranker families that require it,
         # unless explicitly overridden by request config.
@@ -534,7 +553,7 @@ class TransformersCrossEncoderReranker(BaseReranker):
                 from tldw_Server_API.app.core.config import load_and_log_configs
                 _cfg = load_and_log_configs() or {}
                 allowlist = _cfg.get("TRUSTED_HF_REMOTE_CODE_MODELS") or []
-            except Exception:
+            except Exception:  # noqa: BLE001 - config load best-effort
                 allowlist = []
             allowlist = list(allowlist) + list(_RERANKER_TRUST_REMOTE_CODE_PATTERNS)
             if _hf_trusts_remote_code(model_id, allowlist):
@@ -548,7 +567,7 @@ class TransformersCrossEncoderReranker(BaseReranker):
                     self._ce = CrossEncoder(model_id, device=None if self._device == "auto" else self._device, trust_remote_code=self._trust_remote_code)
                     self._using_st = True
                     logger.info(f"Loaded CrossEncoder model via sentence-transformers: {model_id}")
-                except Exception:
+                except Exception:  # noqa: BLE001 - fallback to transformers
                     # Fallback: raw transformers pipeline if provided
                     import torch
                     from transformers import AutoModelForSequenceClassification, AutoTokenizer
@@ -559,7 +578,7 @@ class TransformersCrossEncoderReranker(BaseReranker):
                     if self._device != "auto":
                         self._model.to(self._device)
                     logger.info(f"Loaded cross-encoder model via transformers: {model_id}")
-            except Exception as e:
+            except Exception as e:  # noqa: BLE001 - model loading best-effort
                 logger.warning(f"Failed to load transformers reranker model '{model_id}': {e}")
 
     async def rerank(
@@ -621,7 +640,7 @@ class TransformersCrossEncoderReranker(BaseReranker):
                 mn, mx = min(scores), max(scores)
                 if mx > mn:
                     scores = [(s - mn) / (mx - mn) for s in scores]
-            except Exception:
+            except (ValueError, TypeError):
                 pass
 
             scored_out: list[ScoredDocument] = []
@@ -636,7 +655,7 @@ class TransformersCrossEncoderReranker(BaseReranker):
                 ))
             scored_out.sort(key=lambda x: x.rerank_score, reverse=True)
             return scored_out[: self.config.top_k]
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001 - fallback to original order
             logger.error(f"Transformers cross-encoder reranking failed: {e}")
             return [
                 ScoredDocument(
@@ -676,7 +695,7 @@ class Qwen3CausalLMReranker(BaseReranker):
         if self._device != "auto":
             try:
                 self.model.to(self._device)
-            except Exception:
+            except Exception:  # noqa: BLE001 - device move best-effort
                 pass
 
         # Yes/No token ids
@@ -694,7 +713,7 @@ class Qwen3CausalLMReranker(BaseReranker):
         )
         try:
             system_text = load_prompt("rag", "qwen3_reranker_system") or default_system_text
-        except Exception:
+        except Exception:  # noqa: BLE001 - prompt load best-effort
             system_text = default_system_text
         self.system_text = system_text
         self.prefix = (
@@ -766,7 +785,7 @@ class Qwen3CausalLMReranker(BaseReranker):
         # Prefer unique YAML override for Qwen3 reranker, else fallback to default
         try:
             instruction_text = load_prompt("rag", "qwen3_reranker_instruction")
-        except Exception:
+        except Exception:  # noqa: BLE001 - prompt load best-effort
             instruction_text = None
         if not instruction_text:
             instruction_text = None
@@ -809,7 +828,7 @@ def rerank_by_similarity(documents: list[Document], top_k: int = 10) -> list[Doc
     def score_of(d: Document) -> float:
         try:
             return float(d.metadata.get('score', d.score))
-        except Exception:
+        except (AttributeError, TypeError, ValueError):
             return getattr(d, 'score', 0.0)
     return sorted(documents, key=score_of, reverse=True)[:top_k]
 
@@ -1192,7 +1211,7 @@ class LLMReranker(BaseReranker):
         sgl: Optional[Any] = None
         try:
             import tldw_Server_API.app.core.LLM_Calls.Summarization_General_Lib as sgl
-        except Exception:
+        except ImportError:
             sgl = None
 
         instruction = load_prompt("rag", "reranking_instruction") or (
@@ -1204,7 +1223,7 @@ class LLMReranker(BaseReranker):
             try:
                 from .metrics_collector import get_metrics_collector  # lazy import to avoid heavy deps when unused
                 get_metrics_collector().increment(name, value)
-            except Exception:
+            except Exception:  # noqa: BLE001 - metrics best-effort
                 pass
             # Also export to central metrics registry (Prometheus/OTel) when available
             try:
@@ -1218,19 +1237,19 @@ class LLMReranker(BaseReranker):
                 metric_name = mapping.get(name)
                 if metric_name:
                     increment_counter(metric_name, value, labels={"strategy": "llm_scoring"})
-            except Exception:
+            except Exception:  # noqa: BLE001 - metrics best-effort
                 pass
         try:
             per_call_timeout = float(os.getenv("RAG_LLM_RERANK_TIMEOUT_SEC", "10"))
-        except Exception:
+        except (TypeError, ValueError):
             per_call_timeout = 10.0
         try:
             total_budget = float(os.getenv("RAG_LLM_RERANK_TOTAL_BUDGET_SEC", "20"))
-        except Exception:
+        except (TypeError, ValueError):
             total_budget = 20.0
         try:
             max_docs_env = int(os.getenv("RAG_LLM_RERANK_MAX_DOCS", "20"))
-        except Exception:
+        except (TypeError, ValueError):
             max_docs_env = 20
         # Also respect config.top_k to avoid excessive LLM calls
         safe_limit = max(1, min(len(documents), self.config.top_k or len(documents), max_docs_env))
@@ -1253,7 +1272,7 @@ class LLMReranker(BaseReranker):
                 except asyncio.TimeoutError:
                     _inc_counter("reranker.llm.timeouts")
                     score_val = 0.5
-                except Exception:
+                except Exception:  # noqa: BLE001 - LLM scoring best-effort
                     _inc_counter("reranker.llm.exceptions")
                     score_val = 0.5
             elif sgl is not None:
@@ -1275,7 +1294,7 @@ class LLMReranker(BaseReranker):
                 except asyncio.TimeoutError:
                     _inc_counter("reranker.llm.timeouts")
                     score_val = 0.5
-                except Exception:
+                except Exception:  # noqa: BLE001 - LLM scoring best-effort
                     _inc_counter("reranker.llm.exceptions")
                     score_val = 0.5
             scores.append(score_val)
@@ -1288,7 +1307,7 @@ class LLMReranker(BaseReranker):
         # Number of documents scored (for visibility)
         try:
             _inc_counter("reranker.llm.docs_scored", len(scores))
-        except Exception:
+        except Exception:  # noqa: BLE001 - metrics best-effort
             pass
 
         # Normalize to [0,1]
@@ -1296,24 +1315,24 @@ class LLMReranker(BaseReranker):
             mn, mx = min(scores), max(scores)
             if mx > mn:
                 scores = [(s - mn) / (mx - mn) for s in scores]
-        except Exception:
+        except (ValueError, TypeError):
             pass
         return scores
 
 
 def _parse_float_score(text: Any, default: float = 0.5) -> float:
-    try:
-        s = str(text).strip()
-        # Extract first float-like token
-        import re
-        m = re.search(r"([01](?:\.\d+)?|0?\.\d+)", s)
-        if m:
+    s = str(text).strip()
+    # Extract first float-like token
+    import re
+    m = re.search(r"([01](?:\.\d+)?|0?\.\d+)", s)
+    if m:
+        try:
             val = float(m.group(1))
-            # Clamp to [0,1]
-            return max(0.0, min(1.0, val))
-        return default
-    except Exception:
-        return default
+        except (TypeError, ValueError):
+            return default
+        # Clamp to [0,1]
+        return max(0.0, min(1.0, val))
+    return default
 
 
 def create_reranker(strategy: RerankingStrategy, config: Optional[RerankingConfig] = None, llm_client=None) -> BaseReranker:
@@ -1343,10 +1362,7 @@ def create_reranker(strategy: RerankingStrategy, config: Optional[RerankingConfi
     elif strategy == RerankingStrategy.CROSS_ENCODER:
         # Auto-detect Qwen3-Reranker generative models and route to the
         # specialized CausalLM-based reranker that uses the official prompt.
-        try:
-            model_l = str(config.model_name or "").lower()
-        except Exception:
-            model_l = ""
+        model_l = str(config.model_name or "").lower()
         if ("qwen3" in model_l and "reranker" in model_l) or model_l.startswith("qwen/qwen3-reranker"):
             return Qwen3CausalLMReranker(config)
         return TransformersCrossEncoderReranker(config)
@@ -1380,12 +1396,12 @@ class TwoTierReranker(BaseReranker):
         # Determine shortlist sizes (stage1 >> stage2)
         try:
             stage2_top_k = int(max(1, self.config.top_k))
-        except Exception:
+        except (TypeError, ValueError):
             stage2_top_k = 10
         try:
             # default stage1 to max(50, 5x stage2) but bounded by 100
             stage1_top_k = min(100, max(50, stage2_top_k * 5))
-        except Exception:
+        except (TypeError, ValueError):
             stage1_top_k = 50
 
         self.stage1_top_k = stage1_top_k
@@ -1402,7 +1418,7 @@ class TwoTierReranker(BaseReranker):
             try:
                 from tldw_Server_API.app.core.config import load_and_log_configs
                 cfg = load_and_log_configs() or {}
-            except Exception:
+            except Exception:  # noqa: BLE001 - config load best-effort
                 cfg = {}
             model_id = self.config.model_name or cfg.get("RAG_TRANSFORMERS_RERANKER_MODEL") or "BAAI/bge-reranker-v2-m3"
             ce_cfg = RerankingConfig(
@@ -1471,7 +1487,7 @@ class TwoTierReranker(BaseReranker):
         try:
             from tldw_Server_API.app.core.Metrics.metrics_manager import observe_histogram
             observe_histogram("rag_phase_duration_seconds", ce_dt, labels={"phase": "rerank_fast", "difficulty": "na"})
-        except Exception:
+        except Exception:  # noqa: BLE001 - metrics best-effort
             pass
 
         # Track CE scores in a map, and record sentinel CE score
@@ -1500,7 +1516,7 @@ class TwoTierReranker(BaseReranker):
         try:
             from tldw_Server_API.app.core.Metrics.metrics_manager import observe_histogram
             observe_histogram("rag_phase_duration_seconds", llm_dt, labels={"phase": "rerank_llm", "difficulty": "na"})
-        except Exception:
+        except Exception:  # noqa: BLE001 - metrics best-effort
             pass
 
         # Map LLM scores and capture sentinel
@@ -1524,7 +1540,7 @@ class TwoTierReranker(BaseReranker):
         def _logistic(x: float) -> float:
             try:
                 return 1.0 / (1.0 + math.exp(-x))
-            except Exception:
+            except OverflowError:
                 # Safe fallback
                 return 0.5
 
@@ -1537,7 +1553,7 @@ class TwoTierReranker(BaseReranker):
             # Simple bounded normalization for orig
             try:
                 orig_n = max(0.0, min(1.0, orig))
-            except Exception:
+            except (TypeError, ValueError):
                 orig_n = 0.0
             logit = (w0 + (w1 * orig_n) + (w2 * ce) + (w3 * llm_score))
             prob = float(_logistic(logit))

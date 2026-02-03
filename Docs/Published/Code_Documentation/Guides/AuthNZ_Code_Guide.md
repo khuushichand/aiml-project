@@ -21,7 +21,7 @@ See also: `tldw_Server_API/app/core/AuthNZ/README.md` and `Docs/Code_Documentati
 - Auth flows/support: `tldw_Server_API/app/core/AuthNZ/password_service.py`, `tldw_Server_API/app/core/AuthNZ/mfa_service.py`, `tldw_Server_API/app/core/AuthNZ/email_service.py`
 - Endpoint DI (use these): `tldw_Server_API/app/api/v1/API_Deps/auth_deps.py`
 - Auth endpoints: `tldw_Server_API/app/api/v1/endpoints/auth.py`
-- Admin + RBAC mgmt: `tldw_Server_API/app/api/v1/endpoints/admin.py`, `.../users.py`, `.../privileges.py`, `.../register.py`
+- Admin + RBAC mgmt: `tldw_Server_API/app/api/v1/endpoints/admin/__init__.py` plus split modules in `tldw_Server_API/app/api/v1/endpoints/admin/` (`admin_user.py`, `admin_api_keys.py`, `admin_profiles.py`, `admin_sessions_mfa.py`, `admin_byok.py`, `admin_llm_providers.py`, `admin_orgs.py`, `admin_settings.py`, `admin_registration.py`, `admin_system.py`, `admin_usage.py`, `admin_budgets.py`, `admin_tools.py`, `admin_personalization.py`, `admin_network.py`), along with `.../users.py`, `.../privileges.py`, `.../register.py`
 - Debug helpers: `tldw_Server_API/app/api/v1/endpoints/authnz_debug.py`
 
 ## New endpoints checklist (AuthNZ + RG)
@@ -536,7 +536,7 @@ async def mint_vk(user=Depends(get_current_user)):
 ## Extending AuthNZ
 
 - Add new permissions in `permissions.py` and seed mapping in RBAC migrations/seeders.
-- New admin surfaces belong under `.../endpoints/admin.py` or feature-specific admin routes and should be guarded using claim-first dependencies:
+- New admin surfaces belong under `.../endpoints/admin/` (router + shared helpers) or a feature-specific `admin_<feature>.py` module and should be guarded using claim-first dependencies:
   - Prefer `principal: AuthPrincipal = Depends(get_auth_principal)` together with `dependencies=[Depends(require_roles("admin"))]` (and `require_permissions(...)` where appropriate).
 - For new guardrails, prefer middleware with settings gating, and expose DI helpers to keep endpoints simple.
 - Keep both SQLite and Postgres code paths working; use `DatabasePool` helpers to normalize placeholders across backends when needed.

@@ -31,7 +31,7 @@ ClaimsEngine: Optional[type[ClaimsEngineType]] = None
 try:
     from . import claims as _claims_mod
     ClaimsEngine = cast(Optional[type[ClaimsEngineType]], getattr(_claims_mod, "ClaimsEngine", None))
-except Exception:
+except ImportError:
     ClaimsEngine = None
 
 
@@ -193,7 +193,7 @@ def _extract_stream_text(chunk: Any) -> Optional[str]:
     if isinstance(chunk, (bytes, bytearray)):
         try:
             chunk = chunk.decode("utf-8", errors="ignore")
-        except Exception:
+        except UnicodeDecodeError:
             return None
     if isinstance(chunk, str):
         stripped = chunk.strip()
@@ -205,13 +205,13 @@ def _extract_stream_text(chunk: Any) -> Optional[str]:
                 return None
             try:
                 payload = json.loads(data)
-            except Exception:
+            except json.JSONDecodeError:
                 return data or None
             return _extract_openai_content(payload) or None
         return stripped
     try:
         return str(chunk)
-    except Exception:
+    except (TypeError, ValueError):
         return None
 
 
@@ -546,7 +546,7 @@ class AnswerGenerator:
         try:
             from tldw_Server_API.app.core.config import load_and_log_configs
             cfg = load_and_log_configs() or {}
-        except Exception:
+        except Exception:  # noqa: BLE001 - config load best-effort
             cfg = {}
         self.provider = (provider or cfg.get("RAG_DEFAULT_LLM_PROVIDER") or "openai").strip()
         self.model = (model or cfg.get("RAG_DEFAULT_LLM_MODEL") or "gpt-4o-mini").strip()
@@ -605,7 +605,7 @@ async def generate_streaming_response(context: Any, **kwargs) -> Any:
     claims_max = int(kwargs.get("claims_max", 10))
     try:
         claims_concurrency = int(kwargs.get("claims_concurrency", 8))
-    except Exception:
+    except (TypeError, ValueError):
         claims_concurrency = 8
 
     if enable_claims and ClaimsEngine is not None:
@@ -652,13 +652,13 @@ async def generate_streaming_response(context: Any, **kwargs) -> Any:
                             context.metadata["claims_overlay"] = claims_out
                             last_emit = len(buffer)
                             last_emit_time = now
-                        except Exception:
+                        except Exception:  # noqa: BLE001 - claims overlay best-effort
                             pass
                 # done
                 return
 
             context.stream_generator = _wrapped_stream()
-        except Exception:
+        except Exception:  # noqa: BLE001 - fallback to base stream
             context.stream_generator = base_stream
     else:
         context.stream_generator = base_stream

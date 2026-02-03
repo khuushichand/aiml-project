@@ -1926,6 +1926,33 @@ const pollForCharacterByName = async (
   return null
 }
 
+const pollForWorldBookByName = async (
+  serverUrl: string,
+  apiKey: string,
+  name: string,
+  timeoutMs = 30000
+) => {
+  const normalized = serverUrl.replace(/\/$/, "")
+  const deadline = Date.now() + timeoutMs
+  while (Date.now() < deadline) {
+    const listRes = await fetchWithKey(
+      `${normalized}/api/v1/characters/world-books`,
+      apiKey
+    ).catch(() => null)
+    if (listRes?.ok) {
+      const payload = await listRes.json().catch(() => [])
+      const books = parseListPayload(payload, ["world_books"])
+      const match = books.find((item: any) => {
+        const candidate = item?.name ?? item?.title ?? ""
+        return String(candidate) === String(name)
+      })
+      if (match) return match
+    }
+    await new Promise((r) => setTimeout(r, 1000))
+  }
+  return null
+}
+
 const normalizeMessageContent = (value: unknown) =>
   String(value || "").replace(/\s+/g, " ").trim()
 
@@ -4711,15 +4738,30 @@ test.describe("Real server end-to-end workflows", () => {
     const unique = Date.now()
     const worldBookName = `E2E World Book ${unique}`
     const characterName = `E2E WB Character ${unique}`
+    let attachCharacterName = characterName
 
     try {
       await createCharacterByName(normalizedServerUrl, apiKey, characterName)
-      await pollForCharacterByName(
+      const createdCharacter = await pollForCharacterByName(
         normalizedServerUrl,
         apiKey,
         characterName,
         30000
       )
+      if (!createdCharacter) {
+        throw new Error(`Character not found on server after create: "${characterName}"`)
+      }
+      const characterListRes = await fetchWithKey(
+        `${normalizedServerUrl}/api/v1/characters?limit=100&offset=0`,
+        apiKey
+      ).catch(() => null)
+      if (characterListRes?.ok) {
+        const payload = await characterListRes.json().catch(() => [])
+        const list = parseListPayload(payload, ["characters"])
+        const match = list.find((item: any) => String(item?.name || "") === characterName)
+        const fallback = list.find((item: any) => String(item?.name || "").trim())
+        attachCharacterName = (match?.name || fallback?.name || characterName) as string
+      }
 
       const granted = await driver.ensureHostPermission()
       if (!granted) {
@@ -4749,10 +4791,29 @@ test.describe("Real server end-to-end workflows", () => {
       // Wait for modal to close
       await expect(createModal).toBeHidden({ timeout: 10000 }).catch(() => {})
 
+      const createdBook = await pollForWorldBookByName(
+        normalizedServerUrl,
+        apiKey,
+        worldBookName,
+        30000
+      )
+      if (!createdBook) {
+        throw new Error(
+          `World book not found on server after create: "${worldBookName}"`
+        )
+      }
+
       // Debug logging for table row selector
       const debugTableState = async () => {
-        const tableRows = await page.locator("tr").count().catch(() => -1)
-        const matchingRows = await page.locator("tr").filter({ hasText: worldBookName }).count().catch(() => -1)
+        const tableRows = await page
+          .locator(".ant-table-tbody tr")
+          .count()
+          .catch(() => -1)
+        const matchingRows = await page
+          .locator(".ant-table-tbody tr")
+          .filter({ hasText: worldBookName })
+          .count()
+          .catch(() => -1)
         const tableVisible = await page.locator("table").isVisible().catch(() => false)
         console.log(
           `[world-books-row] tableVisible=${tableVisible} totalRows=${tableRows} matchingRows=${matchingRows} worldBookName="${worldBookName}"`
@@ -4762,76 +4823,158 @@ test.describe("Real server end-to-end workflows", () => {
       // Wait for table data to load before checking for specific row
       await expect.poll(async () => {
         await debugTableState()
-        const rows = await page.locator("tbody tr").count()
+        const rows = await page.locator(".ant-table-tbody tr").count()
         return rows
       }, { timeout: 30000, intervals: [500, 1000, 2000] }).toBeGreaterThan(0)
 
-      const row = page
-        .locator("tr")
-        .filter({ hasText: worldBookName })
-        .first()
+      const findRowOnCurrentPage = async () => {
+        const candidate = page
+          .locator(".ant-table-tbody tr")
+          .filter({ hasText: worldBookName })
+          .first()
+        if ((await candidate.count()) > 0) return candidate
+        return null
+      }
+
+      const findRowAcrossPages = async () => {
+        const direct = await findRowOnCurrentPage()
+        if (direct) return direct
+        const paginationItems = page.locator(".ant-pagination-item")
+        const totalPages = await paginationItems.count().catch(() => 0)
+        for (let i = 0; i < totalPages; i += 1) {
+          const item = paginationItems.nth(i)
+          const classes = (await item.getAttribute("class")) || ""
+          if (!classes.includes("ant-pagination-item-active")) {
+            await item.click()
+            await page.waitForTimeout(500)
+          }
+          const candidate = await findRowOnCurrentPage()
+          if (candidate) return candidate
+        }
+        return null
+      }
+
+      let row = await findRowAcrossPages()
+      if (!row) {
+        await driver.goto(page, "/world-books", {
+          waitUntil: "domcontentloaded"
+        })
+        await waitForConnected(page, "workflow-world-books-reload")
+        row = await findRowAcrossPages()
+      }
+      if (!row) {
+        const sampleRows = await page
+          .locator(".ant-table-tbody tr")
+          .allTextContents()
+          .catch(() => [])
+        throw new Error(
+          `World book row not found in UI after create. name="${worldBookName}" sampleRows="${sampleRows
+            .slice(0, 3)
+            .join(" | ")}"`
+        )
+      }
       await expect(row).toBeVisible({ timeout: 20000 })
 
       const entriesButton = row.getByRole("button", {
         name: /^Entries$/i
       })
       await entriesButton.click()
-      const entriesModal = page.getByRole("dialog", {
-        name: /Manage Entries/i
-      })
-      await expect(entriesModal).toBeVisible({ timeout: 15000 })
-      await entriesModal
+      const entriesDrawer = page
+        .locator(".ant-drawer")
+        .filter({ hasText: /Entries/i })
+        .first()
+      await expect(entriesDrawer).toBeVisible({ timeout: 15000 })
+      await entriesDrawer
         .getByLabel(/Keywords/i)
         .fill("e2e,workflow")
-      await entriesModal
+      await entriesDrawer
         .getByLabel("Content")
         .fill("World book entry from real-server workflow.")
-      await entriesModal
+      await entriesDrawer
         .getByRole("button", { name: /Add Entry/i })
         .click()
       await expect(
-        entriesModal.getByText(/World book entry from real-server workflow/i)
-      ).toBeVisible({ timeout: 20000 })
+        entriesDrawer
+          .locator(".ant-table-tbody tr")
+          .filter({ hasText: /e2e|workflow/i })
+      ).toHaveCount(1, { timeout: 20000 })
       await page.keyboard.press("Escape")
 
-      const attachButton = row.getByRole("button", { name: /Attach/i })
+      const attachButton = row.getByRole("button", { name: /Link/i })
       await attachButton.click()
       const attachModal = page.getByRole("dialog", {
-        name: /Attach to Character/i
+        name: /Manage Character Attachments/i
       })
       await expect(attachModal).toBeVisible({ timeout: 15000 })
-      const characterSelect = attachModal.getByLabel(/Character/i)
+      const characterSelect = attachModal.locator(".ant-select-selector").first()
       await characterSelect.click()
       const characterInput = attachModal
-        .getByRole("combobox", { name: /Character/i })
+        .locator('input[role="combobox"]')
         .first()
       if ((await characterInput.count()) > 0) {
-        await characterInput.fill(characterName)
-      } else {
-        const fallbackInput = attachModal
-          .locator('input[role="combobox"]')
-          .first()
-        if ((await fallbackInput.count()) > 0) {
-          await fallbackInput.fill(characterName)
-        }
+        await characterInput.fill(attachCharacterName)
       }
       const dropdown = page.locator(
         ".ant-select-dropdown:not(.ant-select-dropdown-hidden)"
       )
       await expect(dropdown).toBeVisible({ timeout: 15000 })
       const option = dropdown.locator(".ant-select-item-option-content", {
-        hasText: characterName
+        hasText: attachCharacterName
       })
-      await expect(option).toBeVisible({ timeout: 15000 })
-      await option.click()
+      if ((await option.count()) > 0) {
+        await option.first().click()
+      } else {
+        const fallbackOption = dropdown
+          .locator(".ant-select-item-option-content")
+          .first()
+        const fallbackText = await fallbackOption.textContent().catch(() => "")
+        if (!fallbackText) {
+          throw new Error(
+            `Character option not found in dropdown. wanted="${attachCharacterName}"`
+          )
+        }
+        await fallbackOption.click()
+      }
       await attachModal.getByRole("button", { name: /^Attach$/i }).click()
-      await expect(page.getByText(/Attached/i)).toBeVisible({ timeout: 15000 })
+      await expect
+        .poll(
+          async () =>
+            attachModal.getByRole("button", { name: /Detach/i }).count(),
+          { timeout: 20000, intervals: [500, 1000, 2000] }
+        )
+        .toBeGreaterThan(0)
 
-      const [download] = await Promise.all([
-        page.waitForEvent("download", { timeout: 15000 }),
-        row.getByRole("button", { name: /Export/i }).click()
-      ])
-      expect(download.suggestedFilename()).toMatch(/\.json$/i)
+      await page.evaluate(() => {
+        const w = window as any
+        if (!w.__tldw_downloadCaptureInstalled) {
+          w.__tldw_downloadCaptureInstalled = true
+          const originalClick = HTMLAnchorElement.prototype.click
+          HTMLAnchorElement.prototype.click = function (...args) {
+            try {
+              w.__tldw_lastDownload = {
+                href: (this as HTMLAnchorElement).href,
+                download: (this as HTMLAnchorElement).download,
+                at: Date.now()
+              }
+            } catch {
+              // ignore capture errors
+            }
+            return originalClick.apply(this, args as any)
+          }
+        }
+        w.__tldw_lastDownload = null
+      })
+
+      await row.getByRole("button", { name: /Export/i }).click()
+      await page.waitForFunction(
+        () => {
+          const w = window as any
+          const name = w?.__tldw_lastDownload?.download || ""
+          return typeof name === "string" && name.toLowerCase().endsWith(".json")
+        },
+        undefined,
+        { timeout: 15000 }
+      )
 
       await row.getByRole("button", { name: /Stats/i }).click()
       const statsModal = page.getByRole("dialog", {

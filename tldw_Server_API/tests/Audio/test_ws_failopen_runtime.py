@@ -18,7 +18,7 @@ async def test_ws_failopen_cap_exhausted_sends_error_and_closes(monkeypatch):
     - Assert the server emits a structured quota error and closes the socket.
     """
     from tldw_Server_API.app.main import app
-    import tldw_Server_API.app.api.v1.endpoints.audio as audio_ep
+    import tldw_Server_API.app.api.v1.endpoints.audio.audio as audio_ep
     from tldw_Server_API.app.core.AuthNZ.settings import get_settings
 
     # Tiny cap: 0.0003 minutes (~18ms). Two 10ms chunks should exceed it.

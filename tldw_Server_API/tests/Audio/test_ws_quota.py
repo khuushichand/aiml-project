@@ -10,7 +10,7 @@ async def test_ws_quota_exceeded_structured_error(monkeypatch):
     """Ensure WS sends structured quota error and closes with code 4003."""
     from tldw_Server_API.app.main import app
     from tldw_Server_API.app.core.AuthNZ.settings import get_settings
-    import tldw_Server_API.app.api.v1.endpoints.audio as audio_ep
+    import tldw_Server_API.app.api.v1.endpoints.audio.audio as audio_ep
 
     # Monkeypatch quota check to immediately deny any minutes
     async def _deny(user_id: int, minutes_requested: float):

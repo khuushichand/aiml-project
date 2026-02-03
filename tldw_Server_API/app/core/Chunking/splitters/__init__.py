@@ -6,7 +6,6 @@ and an optional BlingFire-backed splitter when available.
 """
 from __future__ import annotations
 
-from typing import List, Optional, Tuple
 
 
 class SentenceSplitter:

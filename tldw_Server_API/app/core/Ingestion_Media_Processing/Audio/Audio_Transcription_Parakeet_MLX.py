@@ -15,6 +15,7 @@
 #
 ####################
 
+import importlib.util
 import logging
 import os
 import subprocess
@@ -42,22 +43,18 @@ def check_mlx_available() -> bool:
         logger.debug("MLX is only available on macOS")
         return False
 
-    try:
-        import mlx
-        import mlx.core as mx
-        return True
-    except ImportError:
+    if importlib.util.find_spec("mlx") is None:
         logger.debug("MLX not installed")
         return False
+    if importlib.util.find_spec("mlx.core") is None:
+        logger.debug("MLX core not available")
+        return False
+    return True
 
 
 def check_parakeet_mlx_installed() -> bool:
     """Check if parakeet-mlx is installed."""
-    try:
-        import parakeet_mlx
-        return True
-    except ImportError:
-        return False
+    return importlib.util.find_spec("parakeet_mlx") is not None
 
 
 def install_parakeet_mlx() -> bool:

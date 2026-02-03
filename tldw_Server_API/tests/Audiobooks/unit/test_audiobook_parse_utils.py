@@ -1,6 +1,6 @@
 import pytest
 
-from tldw_Server_API.app.api.v1.endpoints.audiobooks import _detect_chapters, _normalize_subtitles
+from tldw_Server_API.app.api.v1.endpoints.audio.audiobooks import _detect_chapters, _normalize_subtitles
 from tldw_Server_API.app.core.Chunking.exceptions import ProcessingError
 
 pytestmark = pytest.mark.unit

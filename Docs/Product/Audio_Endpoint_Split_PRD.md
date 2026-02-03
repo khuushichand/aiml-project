@@ -166,14 +166,10 @@ Minimal scaffolding for the new modules (placeholders; actual logic moved verbat
 ```python
 # tldw_Server_API/app/api/v1/endpoints/audio.py
 from fastapi import APIRouter
-from tldw_Server_API.app.api.v1.endpoints import (
-    audio_tts,
-    audio_tokenizer,
-    audio_transcriptions,
-    audio_streaming,
-    audio_health,
-    audio_voices,
-)
+from tldw_Server_API.app.api.v1.endpoints.audio import audio_health, audio_transcriptions, audio_streaming, audio_tts,
+
+audio_voices
+audio_tokenizer
 from tldw_Server_API.app.core.Usage.audio_quota import (
     can_start_job as can_start_job,
     finish_job as finish_job,

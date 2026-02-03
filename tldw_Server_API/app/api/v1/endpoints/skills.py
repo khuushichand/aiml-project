@@ -41,6 +41,8 @@ from tldw_Server_API.app.api.v1.schemas.skills_schemas import (
     SkillUpdate,
 )
 from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import User, get_request_user
+from tldw_Server_API.app.api.v1.API_Deps.ChaCha_Notes_DB_Deps import get_chacha_db_for_user
+from tldw_Server_API.app.core.DB_Management.ChaChaNotes_DB import CharactersRAGDB
 from tldw_Server_API.app.core.DB_Management.db_path_utils import DatabasePaths
 from tldw_Server_API.app.core.Skills.exceptions import (
     SkillConflictError,
@@ -48,13 +50,16 @@ from tldw_Server_API.app.core.Skills.exceptions import (
     SkillsError,
     SkillValidationError,
 )
-from tldw_Server_API.app.core.Skills.skill_executor import SkillExecutor
+from tldw_Server_API.app.core.Skills.skill_executor import RequestContext, SkillExecutor
 from tldw_Server_API.app.core.Skills.skills_service import SkillsService
 
 router = APIRouter()
 
 
-async def get_skills_service(current_user: User = Depends(get_request_user)) -> SkillsService:
+async def get_skills_service(
+    current_user: User = Depends(get_request_user),
+    chacha_db: CharactersRAGDB = Depends(get_chacha_db_for_user),
+) -> SkillsService:
     """
     FastAPI dependency to get the SkillsService instance for the identified user.
     """
@@ -67,7 +72,7 @@ async def get_skills_service(current_user: User = Depends(get_request_user)) -> 
     user_id = current_user.id
     user_base_dir = DatabasePaths.get_user_base_directory(user_id)
 
-    return SkillsService(user_id=user_id, base_path=user_base_dir)
+    return SkillsService(user_id=user_id, base_path=user_base_dir, db=chacha_db)
 
 
 def _skill_data_to_response(skill_data: dict) -> SkillResponse:
@@ -439,9 +444,16 @@ async def execute_skill(
         skill_data = await service.get_skill(skill_name)
 
         executor = SkillExecutor()
+        ctx = None
+        if current_user and getattr(current_user, "id", None) is not None:
+            ctx = RequestContext(
+                user_id=current_user.id,
+                client_id=getattr(service.db, "client_id", None) if getattr(service, "db", None) else None,
+            )
         result = await executor.execute(
             skill_data=skill_data,
             arguments=request.args or "",
+            context=ctx,
         )
 
         return SkillExecutionResult(

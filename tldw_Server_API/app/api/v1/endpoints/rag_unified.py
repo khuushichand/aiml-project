@@ -110,7 +110,7 @@ def _sync_retriever_overrides_to_pipeline() -> None:
         # RetrievalConfig should normally already be set, but be defensive.
         if getattr(up, "RetrievalConfig", None) is None and RetrievalConfig is not None:
             up.RetrievalConfig = RetrievalConfig  # type: ignore[assignment]
-    except Exception:
+    except (ImportError, AttributeError, TypeError):
         logger.debug("Failed to sync retriever overrides to unified pipeline", exc_info=True)
 
 
@@ -126,7 +126,7 @@ def _resolve_kanban_db_path(current_user: Optional[User], request_user_id: Optio
                     break
         elif request_user_id:
             user_id = request_user_id
-    except Exception:
+    except (AttributeError, TypeError):
         logger.debug("Failed to resolve user_id for kanban DB path", exc_info=True)
         if current_user is None:
             user_id = request_user_id
@@ -135,12 +135,12 @@ def _resolve_kanban_db_path(current_user: Optional[User], request_user_id: Optio
     if user_id is None:
         try:
             user_id = DatabasePaths.get_single_user_id()
-        except Exception:
+        except (RuntimeError, ValueError, OSError, TypeError):
             logger.debug("Failed to resolve single-user ID for kanban DB path", exc_info=True)
             return None
     try:
         return str(DatabasePaths.get_kanban_db_path(user_id))
-    except Exception:
+    except (RuntimeError, ValueError, OSError, TypeError):
         logger.debug("Failed to resolve kanban DB path", exc_info=True)
         return None
 
@@ -158,7 +158,7 @@ def _normalize_documents_for_generation(docs: list[Any]) -> list[Document]:
             if source_val is not None:
                 try:
                     source = DataSource(str(source_val))
-                except Exception:
+                except (ValueError, TypeError):
                     source = DataSource.MEDIA_DB
             normalized.append(
                 Document(
@@ -203,9 +203,9 @@ async def _log_rag_queries_for_org(
                     org_id_candidate = org_ids[0]
                     try:
                         org_id = int(org_id_candidate)
-                    except Exception:
+                    except (TypeError, ValueError):
                         org_id = None
-        except Exception:
+        except (AttributeError, TypeError):
             org_id = None
 
         # Fallback: derive org_id from AuthNZ org memberships.
@@ -221,7 +221,7 @@ async def _log_rag_queries_for_org(
                     candidate = memberships[0].get("org_id")
                     if candidate is not None:
                         org_id = int(candidate)
-            except Exception:
+            except Exception:  # noqa: BLE001 - best-effort fallback for org lookup
                 org_id = None
 
         if org_id is None:
@@ -248,10 +248,10 @@ async def _log_rag_queries_for_org(
                 occurred_at=now,
             )
             await ledger.add(entry)
-        except Exception:
+        except Exception:  # noqa: BLE001 - ledger failures must not impact requests
             # Ledger write failures must never impact request flow.
             logger.debug("RAG query ledger write failed; continuing without usage record", exc_info=True)
-    except Exception:
+    except Exception:  # noqa: BLE001 - guard against unexpected failures in logging helper
         # Guard against any unexpected failure paths.
         logger.debug("RAG query logging failed; continuing without usage record", exc_info=True)
 
@@ -271,7 +271,7 @@ def convert_result_to_response(result: UnifiedSearchResult) -> UnifiedRAGRespons
         if hasattr(obj, key):
             try:
                 return getattr(obj, key)
-            except Exception:
+            except Exception:  # noqa: BLE001 - accessor may raise; ignore to continue fallbacks
                 pass
         # Nested `.document` attribute that may itself be an object
         if hasattr(obj, 'document'):
@@ -283,7 +283,7 @@ def convert_result_to_response(result: UnifiedSearchResult) -> UnifiedRAGRespons
                 if hasattr(doc_obj, key):
                     try:
                         return getattr(doc_obj, key)
-                    except Exception:
+                    except Exception:  # noqa: BLE001 - accessor may raise; ignore to continue fallbacks
                         pass
         # Dict access (obj may be a dict)
         if isinstance(obj, dict):
@@ -307,7 +307,7 @@ def convert_result_to_response(result: UnifiedSearchResult) -> UnifiedRAGRespons
         if not isinstance(metadata, dict):
             try:
                 metadata = dict(metadata)  # best effort
-            except Exception:
+            except (TypeError, ValueError):
                 metadata = {"value": str(metadata)}
 
         documents.append({
@@ -340,7 +340,7 @@ def convert_result_to_response(result: UnifiedSearchResult) -> UnifiedRAGRespons
 # =============== Ablation helper ===============
 try:
     from pydantic import BaseModel, Field
-except Exception:
+except ImportError:
     BaseModel = object  # type: ignore
     def Field(*a, **k):  # type: ignore
         return None
@@ -852,7 +852,7 @@ async def list_vlm_backends():
     try:
         from tldw_Server_API.app.core.Ingestion_Media_Processing.VLM.registry import list_backends as _list
         backends = _list() or {}
-    except Exception:
+    except Exception:  # noqa: BLE001 - optional registry failures should not break endpoint
         backends = {}
     return {"backends": backends}
 
@@ -925,7 +925,7 @@ async def unified_search_endpoint(
                 if hasattr(request_raw, 'state'):
                     team_ids = getattr(request_raw.state, 'team_ids', None)
                     org_ids = getattr(request_raw.state, 'org_ids', None)
-            except Exception:
+            except Exception:  # noqa: BLE001 - topic monitoring should not break requests
                 pass
             if request.query:
                 mon.schedule_evaluate_and_alert(
@@ -937,7 +937,7 @@ async def unified_search_endpoint(
                     team_ids=team_ids,
                     org_ids=org_ids,
                 )
-        except Exception:
+        except Exception:  # noqa: BLE001 - topic monitoring should not break requests
             pass
 
         # Set up database paths
@@ -1022,7 +1022,7 @@ async def unified_search_endpoint(
                     adaptive_unsupported_threshold=float(getattr(request, 'adaptive_unsupported_threshold', 0.15) or 0.15),
                     low_confidence_behavior=str(getattr(request, 'low_confidence_behavior', 'continue')),
                 )
-            except Exception as exc:
+            except Exception as exc:  # noqa: BLE001 - agentic pipeline fallback must be resilient
                 logger.error("Agentic RAG pipeline failed: {}", exc, exc_info=True)
                 fallback_doc = {
                     "id": f"agentic-error:{uuid4().hex[:8]}",
@@ -1073,16 +1073,16 @@ async def unified_search_endpoint(
         if result.errors and request.debug_mode:
             logger.warning(f"Errors during processing: {result.errors}")
 
-        return response
-
-    except Exception as e:
+    except Exception as e:  # noqa: BLE001 - surface as HTTP 500 with context
         logger.error(f"Unified search error: {e}", exc_info=True)
         import traceback
         logger.error(f"Full traceback: {traceback.format_exc()}")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Search failed due to an internal error."
-        )
+        ) from e
+    else:
+        return response
 
 
 @router.post(
@@ -1115,10 +1115,11 @@ async def rag_implicit_feedback(
             message_id=request.message_id,
             dwell_ms=request.dwell_ms,
         )
-        return {"ok": True}
-    except Exception as e:
+    except Exception as e:  # noqa: BLE001 - feedback should surface as 400
         logger.warning(f"Failed to record implicit feedback: {e}")
-        raise HTTPException(status_code=400, detail="Could not record feedback")
+        raise HTTPException(status_code=400, detail="Could not record feedback") from e
+    else:
+        return {"ok": True}
 
 
 @router.post(
@@ -1222,12 +1223,12 @@ async def unified_batch_endpoint(
             total_time=total_time
         )
 
-    except Exception as e:
+    except Exception as e:  # noqa: BLE001 - surface as HTTP 500 with context
         logger.error(f"Batch search error: {e}")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Batch search failed due to an internal error."
-        )
+        ) from e
 
 
 @router.get(
@@ -1264,7 +1265,7 @@ async def simple_search_endpoint(
         try:
             _qh = hashlib.md5((query or "").encode("utf-8")).hexdigest()[:8]
             logger.info(f"Simple search: query_hash={_qh} len={len(query or '')}")
-        except Exception:
+        except (AttributeError, TypeError, ValueError):
             logger.info("Simple search request received")
         # Topic monitoring (non-blocking)
         try:
@@ -1278,7 +1279,7 @@ async def simple_search_endpoint(
                 scope_type="user",
                 scope_id=uid,
             )
-        except Exception:
+        except Exception:  # noqa: BLE001 - topic monitoring should not break requests
             pass
 
         # Use the simple_search wrapper
@@ -1322,12 +1323,12 @@ async def simple_search_endpoint(
             "count": len(normalized_docs)
         }
 
-    except Exception as e:
+    except Exception as e:  # noqa: BLE001 - surface as HTTP 500 with context
         logger.error(f"Simple search error: {e}")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Search failed due to an internal error."
-        )
+        ) from e
 
 
 @router.post(
@@ -1388,7 +1389,7 @@ async def unified_search_stream_endpoint(
                     docs = _normalize_documents_for_generation(
                         getattr(retrieval_result, "documents", []) or []
                     )
-            except Exception:
+            except Exception:  # noqa: BLE001 - streaming prefetch should be best-effort
                 docs = []
 
             # If strategy=agentic, assemble ephemeral chunk and emit plan + spans first
@@ -1451,7 +1452,7 @@ async def unified_search_stream_endpoint(
                         yield json.dumps({"type": "spans", "count": len(prov), "provenance": prov[:50]}) + "\n"
                     # Use synthetic chunk as the sole document for streaming generation
                     docs = _normalize_documents_for_generation(ares.documents)
-                except Exception:
+                except Exception:  # noqa: BLE001 - agentic streaming should be best-effort
                     pass
 
             # Emit initial contexts (top-k with minimal fields) + a safe rationale plan (standard path)
@@ -1470,7 +1471,7 @@ async def unified_search_stream_endpoint(
                 def _safe_float(x):
                     try:
                         return float(x)
-                    except Exception:
+                    except (TypeError, ValueError):
                         return 0.0
                 scores = [_safe_float(getattr(d, 'score', (getattr(d, 'metadata', {}) or {}).get('score', 0.0))) for d in (docs or [])]
                 topicality = 0.0
@@ -1493,21 +1494,18 @@ async def unified_search_stream_endpoint(
                     ]
                 }
                 yield json.dumps({"type": "reasoning", **rationale}) + "\n"
-            except Exception:
+            except Exception:  # noqa: BLE001 - safe rationale should never break stream
                 pass
 
             # Minimal context for generation
             try:
                 from tldw_Server_API.app.core.config import load_and_log_configs  # type: ignore
                 cfg = load_and_log_configs() or {}
-            except Exception:
+            except Exception:  # noqa: BLE001 - config load is best-effort in streaming path
                 cfg = {}
 
-            try:
-                import os as _os
-                env_provider = _os.getenv("RAG_DEFAULT_LLM_PROVIDER")
-            except Exception:
-                env_provider = None
+            import os as _os
+            env_provider = _os.getenv("RAG_DEFAULT_LLM_PROVIDER")
             provider_value = env_provider if env_provider is not None else cfg.get("RAG_DEFAULT_LLM_PROVIDER")
             provider = (
                 provider_value.strip()
@@ -1517,10 +1515,7 @@ async def unified_search_stream_endpoint(
 
             model_value = request.generation_model if isinstance(request.generation_model, str) else None
             if not model_value:
-                try:
-                    env_model = _os.getenv("RAG_DEFAULT_LLM_MODEL")
-                except Exception:
-                    env_model = None
+                env_model = _os.getenv("RAG_DEFAULT_LLM_MODEL")
                 model_value = env_model if env_model is not None else cfg.get("RAG_DEFAULT_LLM_MODEL")
             model = (
                 model_value.strip()
@@ -1573,7 +1568,7 @@ async def unified_search_stream_endpoint(
             if final_overlay:
                 yield json.dumps({"type": "final_claims", **final_overlay}) + "\n"
 
-        except Exception:
+        except Exception:  # noqa: BLE001 - streaming should surface error payload instead of crashing
             yield json.dumps({"type": "error", "message": "Search failed due to an internal error."}) + "\n"
 
     return StreamingResponse(event_stream(), media_type="application/x-ndjson")
@@ -1621,7 +1616,7 @@ async def advanced_search_endpoint(
                 scope_type="user",
                 scope_id=uid,
             )
-        except Exception:
+        except Exception:  # noqa: BLE001 - topic monitoring should not break requests
             pass
 
         # Set up database paths
@@ -1643,12 +1638,12 @@ async def advanced_search_endpoint(
 
         return convert_result_to_response(result)
 
-    except Exception as e:
+    except Exception as e:  # noqa: BLE001 - surface as HTTP 500 with context
         logger.error(f"Advanced search error: {e}")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Search failed due to an internal error."
-        )
+        ) from e
 
 
 @router.get(
@@ -1754,7 +1749,7 @@ async def unified_health_simple(request: Request):
             "version": "1.0.0",
             "test_successful": len(test_result) >= 0
         }
-    except Exception as e:
+    except Exception as e:  # noqa: BLE001 - health check should not fail unexpectedly
         logger.error(f"Health check failed: {e}")
         return {
             "status": "unhealthy",

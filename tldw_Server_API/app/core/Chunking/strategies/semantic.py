@@ -4,6 +4,7 @@ Semantic chunking strategy.
 Groups text based on semantic similarity using TF-IDF vectors and cosine similarity.
 """
 
+import importlib
 import threading
 from collections.abc import Generator
 
@@ -50,8 +51,8 @@ class SemanticChunkingStrategy(BaseChunkingStrategy):
         """Check if required dependencies are available."""
         # Check scikit-learn
         try:
-            from sklearn.feature_extraction.text import TfidfVectorizer
-            from sklearn.metrics.pairwise import cosine_similarity
+            importlib.import_module("sklearn.feature_extraction.text")
+            importlib.import_module("sklearn.metrics.pairwise")
             self._sklearn_available = True
         except ImportError:
             self._sklearn_available = False

@@ -247,7 +247,7 @@ def flatten_hierarchical(tree: dict) -> list:
 # Enhanced chunk support for RAG integration
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import Any, Dict, Optional
+from typing import Any, Optional
 
 
 class ChunkType(Enum):

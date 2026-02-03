@@ -4,7 +4,7 @@ from fastapi.testclient import TestClient
 
 from tldw_Server_API.app.api.v1.API_Deps import auth_deps
 from tldw_Server_API.app.api.v1.API_Deps.personalization_deps import get_usage_event_logger
-from tldw_Server_API.app.api.v1.endpoints.audio import get_tts_service, router as audio_router
+from tldw_Server_API.app.api.v1.endpoints.audio.audio import get_tts_service, router as audio_router
 from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import User, get_request_user
 from tldw_Server_API.app.core.AuthNZ.database import get_db_pool
 

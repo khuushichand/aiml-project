@@ -30,6 +30,7 @@ and this project adheres to Some kind of Versioning
 
 ### Fixed
 - CodeQL Bugfixes
+- ruff and mypy fixes
 
 ## [0.1.19] 2026-01-31
 

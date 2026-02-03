@@ -268,6 +268,28 @@ from tldw_Server_API.app.core.Workflows.adapters.video import (
 )
 
 __all__ = [
+    # Compatibility exports
+    "asyncio",
+    "AdapterError",
+    "_wf_create_client",
+    "_artifacts_base_dir",
+    "_async_file_writer",
+    "_extract_mcp_policy",
+    "_extract_openai_content",
+    "_extract_tool_scopes",
+    "_format_time_srt",
+    "_format_time_vtt",
+    "_is_subpath",
+    "_normalize_str_list",
+    "_resolve_artifact_filename",
+    "_resolve_artifacts_dir",
+    "_resolve_context_user_id",
+    "_resolve_workflow_file_path",
+    "_resolve_workflow_file_uri",
+    "_sanitize_path_component",
+    "_tool_matches_allowlist",
+    "_unsafe_file_access_allowed",
+    "_workflow_file_base_dir",
     # Registry
     "registry",
     "get_adapter",

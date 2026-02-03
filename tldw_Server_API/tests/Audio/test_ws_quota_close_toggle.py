@@ -12,7 +12,7 @@ def test_ws_quota_close_code_toggle_to_1008(monkeypatch):
     """When AUDIO_WS_QUOTA_CLOSE_1008=1, quota closes should use code 1008 instead of legacy 4003."""
     from tldw_Server_API.app.main import app
     from tldw_Server_API.app.core.AuthNZ.settings import get_settings
-    import tldw_Server_API.app.api.v1.endpoints.audio as audio_ep
+    import tldw_Server_API.app.api.v1.endpoints.audio.audio as audio_ep
 
     # Enable new close code policy
     monkeypatch.setenv("AUDIO_WS_QUOTA_CLOSE_1008", "1")

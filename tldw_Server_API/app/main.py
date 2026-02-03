@@ -5,6 +5,7 @@
 import asyncio
 import logging
 import os
+import os as _env_os
 
 #
 # Local Imports
@@ -795,8 +796,8 @@ if _ULTRA_MINIMAL_APP:
 else:
     # Audio Endpoint (includes WebSocket streaming transcription)
     try:
-        from tldw_Server_API.app.api.v1.endpoints.audio import router as audio_router
-        from tldw_Server_API.app.api.v1.endpoints.audio import ws_router as audio_ws_router
+        from tldw_Server_API.app.api.v1.endpoints.audio.audio import router as audio_router
+        from tldw_Server_API.app.api.v1.endpoints.audio.audio import ws_router as audio_ws_router
 
         _HAS_AUDIO = True
     except Exception as _audio_err:  # noqa: BLE001 - guard non-critical endpoints in tests
@@ -804,7 +805,7 @@ else:
         _HAS_AUDIO = False
     # Guard audio_jobs import to avoid unrelated test breakages
     try:
-        from tldw_Server_API.app.api.v1.endpoints.audio_jobs import router as audio_jobs_router
+        from tldw_Server_API.app.api.v1.endpoints.audio.audio_jobs import router as audio_jobs_router
 
         _HAS_AUDIO_JOBS = True
     except Exception as _audio_jobs_err:  # noqa: BLE001
@@ -932,14 +933,14 @@ else:
 
     # Kanban Board endpoints
     try:
-        from tldw_Server_API.app.api.v1.endpoints.kanban_boards import router as kanban_boards_router
-        from tldw_Server_API.app.api.v1.endpoints.kanban_cards import router as kanban_cards_router
-        from tldw_Server_API.app.api.v1.endpoints.kanban_checklists import router as kanban_checklists_router
-        from tldw_Server_API.app.api.v1.endpoints.kanban_comments import router as kanban_comments_router
-        from tldw_Server_API.app.api.v1.endpoints.kanban_labels import router as kanban_labels_router
-        from tldw_Server_API.app.api.v1.endpoints.kanban_links import router as kanban_links_router
-        from tldw_Server_API.app.api.v1.endpoints.kanban_lists import router as kanban_lists_router
-        from tldw_Server_API.app.api.v1.endpoints.kanban_search import router as kanban_search_router
+        from tldw_Server_API.app.api.v1.endpoints.kanban.kanban_boards import router as kanban_boards_router
+        from tldw_Server_API.app.api.v1.endpoints.kanban.kanban_cards import router as kanban_cards_router
+        from tldw_Server_API.app.api.v1.endpoints.kanban.kanban_checklists import router as kanban_checklists_router
+        from tldw_Server_API.app.api.v1.endpoints.kanban.kanban_comments import router as kanban_comments_router
+        from tldw_Server_API.app.api.v1.endpoints.kanban.kanban_labels import router as kanban_labels_router
+        from tldw_Server_API.app.api.v1.endpoints.kanban.kanban_links import router as kanban_links_router
+        from tldw_Server_API.app.api.v1.endpoints.kanban.kanban_lists import router as kanban_lists_router
+        from tldw_Server_API.app.api.v1.endpoints.kanban.kanban_search import router as kanban_search_router
 
         _HAS_KANBAN = True
     except ImportError as _kanban_err:
@@ -3542,7 +3543,6 @@ async def lifespan(app: FastAPI):
 # Create FastAPI app with lifespan
 # --- OpenAPI / Docs configuration ---
 # Curated tag metadata to improve /docs grouping and clarity
-import os as _env_os  # ensure available for _ext_url during module import
 
 from fastapi.openapi.utils import get_openapi
 
@@ -4552,8 +4552,8 @@ elif _MINIMAL_TEST_APP:
     app.include_router(character_messages_router, prefix=f"{API_V1_PREFIX}", tags=["character-messages"])
     # Include audio endpoints (REST + WebSocket) for e2e middleware/header tests
     try:
-        from tldw_Server_API.app.api.v1.endpoints.audio import router as audio_router
-        from tldw_Server_API.app.api.v1.endpoints.audio import ws_router as audio_ws_router
+        from tldw_Server_API.app.api.v1.endpoints.audio.audio import router as audio_router
+        from tldw_Server_API.app.api.v1.endpoints.audio.audio import ws_router as audio_ws_router
 
         # Mount under /api/v1/audio to match test expectations and non-minimal routing
         app.include_router(audio_router, prefix=f"{API_V1_PREFIX}/audio", tags=["audio"])
@@ -4778,14 +4778,14 @@ elif _MINIMAL_TEST_APP:
         logger.debug(f"Skipping slides router in minimal test app: {_slides_min_err}")
     # Kanban Board endpoints
     try:
-        from tldw_Server_API.app.api.v1.endpoints.kanban_boards import router as kanban_boards_router
-        from tldw_Server_API.app.api.v1.endpoints.kanban_cards import router as kanban_cards_router
-        from tldw_Server_API.app.api.v1.endpoints.kanban_checklists import router as kanban_checklists_router
-        from tldw_Server_API.app.api.v1.endpoints.kanban_comments import router as kanban_comments_router
-        from tldw_Server_API.app.api.v1.endpoints.kanban_labels import router as kanban_labels_router
-        from tldw_Server_API.app.api.v1.endpoints.kanban_links import router as kanban_links_router
-        from tldw_Server_API.app.api.v1.endpoints.kanban_lists import router as kanban_lists_router
-        from tldw_Server_API.app.api.v1.endpoints.kanban_search import router as kanban_search_router
+        from tldw_Server_API.app.api.v1.endpoints.kanban.kanban_boards import router as kanban_boards_router
+        from tldw_Server_API.app.api.v1.endpoints.kanban.kanban_cards import router as kanban_cards_router
+        from tldw_Server_API.app.api.v1.endpoints.kanban.kanban_checklists import router as kanban_checklists_router
+        from tldw_Server_API.app.api.v1.endpoints.kanban.kanban_comments import router as kanban_comments_router
+        from tldw_Server_API.app.api.v1.endpoints.kanban.kanban_labels import router as kanban_labels_router
+        from tldw_Server_API.app.api.v1.endpoints.kanban.kanban_links import router as kanban_links_router
+        from tldw_Server_API.app.api.v1.endpoints.kanban.kanban_lists import router as kanban_lists_router
+        from tldw_Server_API.app.api.v1.endpoints.kanban.kanban_search import router as kanban_search_router
 
         app.include_router(kanban_boards_router, prefix=f"{API_V1_PREFIX}/kanban", tags=["kanban"])
         app.include_router(kanban_lists_router, prefix=f"{API_V1_PREFIX}/kanban", tags=["kanban"])
@@ -4824,7 +4824,7 @@ elif _MINIMAL_TEST_APP:
         logger.debug(f"Skipping jobs_admin router in minimal test app: {_e}")
     # Include Audio Jobs (admin + listing) for tests under minimal mode
     try:
-        from tldw_Server_API.app.api.v1.endpoints.audio_jobs import router as audio_jobs_router
+        from tldw_Server_API.app.api.v1.endpoints.audio.audio_jobs import router as audio_jobs_router
 
         app.include_router(audio_jobs_router, prefix=f"{API_V1_PREFIX}/audio", tags=["audio-jobs"])
     except Exception as _audio_jobs_min_err:
@@ -5179,7 +5179,7 @@ else:
         logger.warning(f"Outputs endpoint not available: {_e}")
     try:
         # Optional audiobook creation endpoint
-        from tldw_Server_API.app.api.v1.endpoints.audiobooks import router as audiobooks_router
+        from tldw_Server_API.app.api.v1.endpoints.audio.audiobooks import router as audiobooks_router
 
         _include_if_enabled(
             "audiobooks",

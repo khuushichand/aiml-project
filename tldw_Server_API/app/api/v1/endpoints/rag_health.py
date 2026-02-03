@@ -89,7 +89,7 @@ async def health_check() -> dict[str, Any]:
                 "hit_rate": cache_stats.get("hit_rate", 0),
                 "size": cache_stats.get("size", 0)
             }
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001 - health checks should not fail on unexpected errors
             logger.error(f"Cache health check failed: {e}")
             health_status["components"]["cache"] = {
                 "status": "unhealthy",
@@ -106,7 +106,7 @@ async def health_check() -> dict[str, Any]:
                 "status": "healthy" if metrics_healthy else "unhealthy",
                 "recent_queries": current_metrics.get("recent_queries", 0)
             }
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001 - health checks should not fail on unexpected errors
             logger.error(f"Metrics health check failed: {e}")
             health_status["components"]["metrics"] = {
                 "status": "unhealthy",
@@ -124,7 +124,7 @@ async def health_check() -> dict[str, Any]:
                 "active_jobs": len(batch.active_jobs),
                 "success_rate": batch_stats.get("job_success_rate", 0)
             }
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001 - health checks should not fail on unexpected errors
             logger.error(f"Batch processor health check failed: {e}")
             health_status["components"]["batch_processor"] = {
                 "status": "unhealthy",
@@ -147,15 +147,15 @@ async def health_check() -> dict[str, Any]:
         elif not all_healthy:
             health_status["status"] = "degraded"
 
-        return health_status
-
-    except Exception as e:
+    except Exception as e:  # noqa: BLE001 - health checks should not fail on unexpected errors
         logger.error(f"Health check error: {e}")
         return {
             "status": "unhealthy",
             "timestamp": datetime.now().isoformat(),
             "error": "Error occured during RAG health check"
         }
+    else:
+        return health_status
 
 
 @router.get("/health/live", summary="Simple liveness check")
@@ -184,11 +184,11 @@ async def readiness_check() -> dict[str, Any]:
             "status": "ready",
             "timestamp": datetime.now().isoformat()
         }
-    except Exception as e:
+    except Exception as e:  # noqa: BLE001 - readiness should return 503 on any failure
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail=f"Service not ready: {str(e)}"
-        )
+        ) from e
 
 
 @router.get(
@@ -231,12 +231,12 @@ async def get_cache_statistics() -> dict[str, Any]:
                 "statistics": stats
             }
 
-    except Exception as e:
+    except Exception as e:  # noqa: BLE001 - surface as HTTP 500 with context
         logger.error(f"Failed to get cache statistics: {e}")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Failed to retrieve cache statistics: {str(e)}"
-        )
+        ) from e
 
 
 @router.post(
@@ -261,12 +261,12 @@ async def clear_cache() -> dict[str, str]:
             "message": "Cache cleared successfully",
             "timestamp": datetime.now().isoformat()
         }
-    except Exception as e:
+    except Exception as e:  # noqa: BLE001 - surface as HTTP 500 with context
         logger.error(f"Failed to clear cache: {e}")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Failed to clear cache: {str(e)}"
-        )
+        ) from e
 
 
 @router.get(
@@ -293,12 +293,12 @@ async def get_cache_warming_status() -> dict[str, Any]:
                 "message": "Cache warming not configured"
             }
 
-    except Exception as e:
+    except Exception as e:  # noqa: BLE001 - surface as HTTP 500 with context
         logger.error(f"Failed to get warming status: {e}")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=str(e)
-        )
+        ) from e
 
 
 @router.get(
@@ -330,14 +330,14 @@ async def get_metrics_summary() -> dict[str, Any]:
             } if aggregated else None
         }
 
-        return summary
-
-    except Exception as e:
+    except Exception as e:  # noqa: BLE001 - surface as HTTP 500 with context
         logger.error(f"Failed to get metrics summary: {e}")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=str(e)
-        )
+        ) from e
+    else:
+        return summary
 
 
 @router.get(
@@ -351,7 +351,7 @@ async def get_cost_summary() -> dict[str, Any]:
         # Lazy import to avoid hard dependency during module import
         try:
             from ....core.RAG.rag_service.quick_wins import get_cost_tracker  # type: ignore
-        except Exception:
+        except ImportError:
             # Cost tracking not available; return minimal summary
             return {
                 "timestamp": datetime.now().isoformat(),
@@ -378,12 +378,12 @@ async def get_cost_summary() -> dict[str, Any]:
             "warnings": budget_warnings
         }
 
-    except Exception as e:
+    except Exception as e:  # noqa: BLE001 - surface as HTTP 500 with context
         logger.error(f"Failed to get cost summary: {e}")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=str(e)
-        )
+        ) from e
 
 
 @router.get(
@@ -417,12 +417,12 @@ async def get_batch_jobs() -> dict[str, Any]:
             "jobs": jobs[:20]  # Last 20 jobs
         }
 
-    except Exception as e:
+    except Exception as e:  # noqa: BLE001 - surface as HTTP 500 with context
         logger.error(f"Failed to get batch jobs: {e}")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=str(e)
-        )
+        ) from e
 
 
 def _get_cache_recommendations(stats: dict[str, Any]) -> list:

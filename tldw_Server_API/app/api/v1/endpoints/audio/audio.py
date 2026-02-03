@@ -2,20 +2,16 @@
 # Description: Aggregate audio endpoints and WebSocket routes.
 import asyncio as asyncio
 import os
+from pathlib import Path as PathLib
 from typing import Optional
+
+import soundfile as sf
 
 from fastapi import APIRouter, HTTPException
 from loguru import logger
 from starlette import status
 
-from tldw_Server_API.app.api.v1.endpoints import (
-    audio_health,
-    audio_streaming,
-    audio_tokenizer,
-    audio_transcriptions,
-    audio_tts,
-    audio_voices,
-)
+from . import audio_health, audio_streaming, audio_tokenizer, audio_transcriptions, audio_tts, audio_voices
 
 router = APIRouter(
     tags=["Audio"],
@@ -66,6 +62,7 @@ get_tts_service = audio_tts.get_tts_service
 
 # Shared helper re-exports used in tests
 from tldw_Server_API.app.core.Audio.tts_service import (
+    _sanitize_speech_request,
     _tts_fallback_resolver,
 )
 from tldw_Server_API.app.core.AuthNZ.byok_runtime import (
@@ -142,7 +139,13 @@ def _get_failopen_cap_minutes() -> float:
         except (ValueError, TypeError) as exc:
             logger.debug(f"AUDIO_FAILOPEN_CAP_MINUTES parse failed: {exc}")
     try:
-        cfg = load_comprehensive_config()
+        try:
+            from tldw_Server_API.app.api.v1.endpoints import audio as _audio_pkg
+
+            cfg_loader = getattr(_audio_pkg, "load_comprehensive_config", load_comprehensive_config)
+        except Exception:
+            cfg_loader = load_comprehensive_config
+        cfg = cfg_loader()
         if cfg is not None:
             if cfg.has_section("Audio-Quota"):
                 try:
@@ -181,11 +184,19 @@ SileroTurnDetector = audio_streaming.SileroTurnDetector
 
 # Re-export quota helpers for tests/monkeypatching
 from tldw_Server_API.app.core.Usage.audio_quota import (
-    can_start_stream,
-    finish_stream,
-    check_daily_minutes_allow,
-    add_daily_minutes,
-    bytes_to_seconds,
+    add_daily_minutes as add_daily_minutes,
+)
+from tldw_Server_API.app.core.Usage.audio_quota import (
+    bytes_to_seconds as bytes_to_seconds,
+)
+from tldw_Server_API.app.core.Usage.audio_quota import (
+    can_start_stream as can_start_stream,
+)
+from tldw_Server_API.app.core.Usage.audio_quota import (
+    check_daily_minutes_allow as check_daily_minutes_allow,
+)
+from tldw_Server_API.app.core.Usage.audio_quota import (
+    finish_stream as finish_stream,
 )
 
 # Optional helpers for status/limits and TTL heartbeat

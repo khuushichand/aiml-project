@@ -16,6 +16,7 @@
 ####################
 
 import asyncio
+import importlib
 import base64
 import copy
 import json
@@ -1239,13 +1240,17 @@ class ParakeetStreamingTranscriber(BaseStreamingTranscriber):
             # MLX model is loaded on-demand in transcribe function
             # First check if MLX dependencies are available
             try:
-                from .Audio_Transcription_Parakeet_MLX import transcribe_with_parakeet_mlx
+                importlib.import_module(
+                    "tldw_Server_API.app.core.Ingestion_Media_Processing.Audio.Audio_Transcription_Parakeet_MLX"
+                )
                 logger.info("Using Parakeet MLX variant (lazy loading)")
                 self.model = "mlx"  # Placeholder to indicate MLX is ready
                 return  # Success
             except ImportError as e:
                 logger.error(f"Failed to import Parakeet MLX: {e}")
-                raise RuntimeError(f"Parakeet MLX dependencies not available. Install with: pip install mlx mlx-lm")
+                raise RuntimeError(
+                    "Parakeet MLX dependencies not available. Install with: pip install mlx mlx-lm"
+                )
         else:
             # Load standard or ONNX variant (requires Nemo)
             try:
@@ -1304,10 +1309,9 @@ class ParakeetStreamingTranscriber(BaseStreamingTranscriber):
                     )
                     # Try to fallback to MLX variant
                     try:
-                        from .Audio_Transcription_Parakeet_MLX import (
-                            transcribe_with_parakeet_mlx,
+                        importlib.import_module(
+                            "tldw_Server_API.app.core.Ingestion_Media_Processing.Audio.Audio_Transcription_Parakeet_MLX"
                         )
-
                         logger.info(
                             "Falling back to Parakeet MLX variant due to missing Nemo"
                         )

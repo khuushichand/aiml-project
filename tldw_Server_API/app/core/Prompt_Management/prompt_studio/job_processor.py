@@ -23,7 +23,7 @@ from .test_case_manager import TestCaseManager
 
 try:
     # Import connection manager used by WebSocket endpoints
-    from tldw_Server_API.app.api.v1.endpoints.prompt_studio_websocket import connection_manager as ws_connection_manager
+    from tldw_Server_API.app.api.v1.endpoints.prompt_studio.prompt_studio_websocket import connection_manager as ws_connection_manager
 except Exception:
     ws_connection_manager = None
 

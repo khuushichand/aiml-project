@@ -4,7 +4,7 @@ import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
-from tldw_Server_API.app.api.v1.endpoints.evaluations_unified import router as evals_router
+from tldw_Server_API.app.api.v1.endpoints.evaluations.evaluations_unified import router as evals_router
 from tldw_Server_API.app.core.AuthNZ.settings import get_settings, reset_settings
 from tldw_Server_API.app.core.config import settings as app_settings
 import tldw_Server_API.app.core.Evaluations.embeddings_abtest_jobs_worker as worker

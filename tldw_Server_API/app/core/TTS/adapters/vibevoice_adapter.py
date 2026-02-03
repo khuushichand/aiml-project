@@ -3,6 +3,7 @@
 #
 # Imports
 import asyncio
+import importlib.util
 import gc
 import os
 import re
@@ -1237,28 +1238,22 @@ class VibeVoiceAdapter(TTSAdapter):
 
     def _is_attention_available(self, attn_type: str) -> bool:
         """Check if a specific attention implementation is available."""
-        try:
-            if attn_type == "flash_attention_2":
-                # Check for flash attention support
-                if self.device == "cuda":
-                    import flash_attn
-                    return True
-            elif attn_type == "sage":
-                # Check for SageAttention
-                if self.enable_sage:
-                    try:
-                        import sageattention
-                        return True
-                    except ImportError:
-                        logger.debug("SageAttention not available")
-            elif attn_type == "sdpa":
-                # SDPA is generally available in newer PyTorch
-                return hasattr(torch.nn.functional, 'scaled_dot_product_attention')
-            elif attn_type == "eager":
-                # Always available
+        if attn_type == "flash_attention_2":
+            # Check for flash attention support
+            if self.device == "cuda" and importlib.util.find_spec("flash_attn") is not None:
                 return True
-        except ImportError:
-            pass
+        elif attn_type == "sage":
+            # Check for SageAttention
+            if self.enable_sage:
+                if importlib.util.find_spec("sageattention") is not None:
+                    return True
+                logger.debug("SageAttention not available")
+        elif attn_type == "sdpa":
+            # SDPA is generally available in newer PyTorch
+            return hasattr(torch.nn.functional, "scaled_dot_product_attention")
+        elif attn_type == "eager":
+            # Always available
+            return True
         return False
 
     def _calculate_quantization_savings(self):

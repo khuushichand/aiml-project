@@ -27,9 +27,6 @@ from tldw_Server_API.app.core.Evaluations.response_quality_evaluator import Resp
 from tldw_Server_API.app.core.Evaluations.unified_evaluation_service import UnifiedEvaluationService
 from tldw_Server_API.app.core.Evaluations.connection_pool import ConnectionPool
 from tldw_Server_API.app.core.Evaluations.circuit_breaker import CircuitBreaker
-from tldw_Server_API.app.core.Evaluations.webhook_manager import webhook_manager
-from tldw_Server_API.app.core.Evaluations.user_rate_limiter import get_user_rate_limiter_for_user
-from tldw_Server_API.app.core.DB_Management.migrations import create_evaluations_migrations
 
 
 # ============================================================================
@@ -396,7 +393,6 @@ def mock_llm_analyze(monkeypatch):
 
     Use this fixture explicitly in unit tests that need to mock LLM calls.
     """
-    from unittest.mock import AsyncMock
 
     # Create a mock analyze function that returns realistic scores
     # The actual signature: analyze(api_name, input_data, custom_prompt_arg, api_key="", system_message="", temp=0.1)
@@ -591,7 +587,7 @@ async def unified_service_with_webhooks(temp_db_path) -> AsyncGenerator[UnifiedE
 def override_unified_service(temp_db_path, monkeypatch):
     """Force API endpoints to use an isolated evaluations database."""
     from tldw_Server_API.app.core.Evaluations import unified_evaluation_service as service_module
-    from tldw_Server_API.app.api.v1.endpoints import evaluations_unified as router_module
+    from tldw_Server_API.app.api.v1.endpoints.evaluations import evaluations_unified as router_module
 
     try:
         from tldw_Server_API.app.core.DB_Management.db_path_utils import DatabasePaths as _DP
@@ -956,7 +952,6 @@ def evaluation_data_generator():
 @pytest.fixture
 def mock_rag_evaluator(monkeypatch):
     """Mock RAGEvaluator for unit tests."""
-    from unittest.mock import AsyncMock
 
     # Mock the LLM analyze function for RAG tests
     def mock_analyze(*args, **kwargs):
@@ -1010,8 +1005,6 @@ def auto_mock_llm_for_unit_tests(request, monkeypatch):
 def mock_llm_for_requires_llm(request, monkeypatch):
     """Automatically mock LLM calls for tests marked with requires_llm."""
     if "requires_llm" in [m.name for m in request.node.iter_markers()]:
-        from unittest.mock import MagicMock, AsyncMock
-
         # Mock the run_geval function to return proper structured data
         def mock_run_geval(*args, **kwargs):
             return {

@@ -6,6 +6,7 @@ Provides dependencies for checking and enforcing subscription limits.
 """
 from __future__ import annotations
 
+import importlib
 import os
 import threading
 import time
@@ -756,10 +757,7 @@ async def check_billing_with_rg(
     Falls back to direct enforcement if RG is not available.
     """
     try:
-        from tldw_Server_API.app.core.Resource_Governance.governor import (
-            MemoryResourceGovernor,
-            ResourceGovernor,
-        )
+        importlib.import_module("tldw_Server_API.app.core.Resource_Governance.governor")
 
         # Try to get RG from app state (if we're in a request context)
         # Otherwise use a local instance

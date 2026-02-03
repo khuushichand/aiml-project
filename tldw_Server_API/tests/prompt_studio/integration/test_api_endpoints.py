@@ -2,15 +2,10 @@
 # Integration tests for Prompt Studio API endpoints
 
 import pytest
-import json
 from fastapi import status
 from fastapi.testclient import TestClient
-from typing import Dict, Any
-import uuid
 import tempfile
-import os
-from pathlib import Path
-from unittest.mock import patch, Mock
+from unittest.mock import patch
 
 # Disable CSRF for testing
 import os
@@ -421,7 +416,7 @@ class TestEvaluationEndpoints:
     def test_missing_provider_credentials_returns_503(self, client, auth_headers, mock_user, monkeypatch):
 
         """Missing provider credentials should return 503 with error code."""
-        from tldw_Server_API.app.api.v1.endpoints import prompt_studio_evaluations as ps_eval
+        from tldw_Server_API.app.api.v1.endpoints.prompt_studio import prompt_studio_evaluations as ps_eval
         from tldw_Server_API.app.core.AuthNZ.byok_runtime import ResolvedByokCredentials
 
         async def _missing(provider, *args, **kwargs):

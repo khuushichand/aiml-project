@@ -40,7 +40,18 @@ router = APIRouter(
 
 def _audio_shim_attr(name: str):
     from tldw_Server_API.app.api.v1.endpoints import audio as audio_shim
+    try:
+        if name in getattr(audio_shim, "__dict__", {}):
+            return getattr(audio_shim, name)
+    except Exception:
+        pass
+    try:
+        from tldw_Server_API.app.api.v1.endpoints.audio import audio as audio_mod
 
+        if hasattr(audio_mod, name):
+            return getattr(audio_mod, name)
+    except Exception:
+        pass
     if not hasattr(audio_shim, name):
         raise NameError(name)
     return getattr(audio_shim, name)

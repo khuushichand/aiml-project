@@ -15,9 +15,7 @@ Provides:
 - Context payload generation for LLM injection
 """
 
-import json
 import shutil
-import uuid
 import zipfile
 from datetime import datetime, timezone
 from io import BytesIO
@@ -26,6 +24,12 @@ from typing import Any, Optional
 
 from loguru import logger
 
+from tldw_Server_API.app.core.DB_Management.ChaChaNotes_DB import (
+    CharactersRAGDB,
+    CharactersRAGDBError,
+    ConflictError,
+    InputError,
+)
 from tldw_Server_API.app.core.Skills.exceptions import (
     SkillConflictError,
     SkillNotFoundError,
@@ -34,9 +38,6 @@ from tldw_Server_API.app.core.Skills.exceptions import (
     SkillValidationError,
 )
 from tldw_Server_API.app.core.Skills.skill_parser import SkillFrontmatter, SkillParser
-
-# Simple JSON metadata file for tracking skill metadata
-SKILLS_INDEX_FILE = "_skills_index.json"
 
 
 class SkillMetadata:
@@ -123,19 +124,22 @@ class SkillMetadata:
 class SkillsService:
     """Central service for skill management."""
 
-    def __init__(self, user_id: int, base_path: Path):
+    def __init__(self, user_id: int, base_path: Path, db: CharactersRAGDB | None = None):
         """
         Initialize the SkillsService.
 
         Args:
             user_id: The user ID for skill isolation
             base_path: Base path for user databases (e.g., Databases/user_databases/{user_id}/)
+            db: CharactersRAGDB instance for skill registry persistence
         """
         self.user_id = user_id
         self.base_path = Path(base_path)
         self.skills_dir = self.base_path / "skills"
+        self.db = db
         self._parser = SkillParser()
         self._ensure_skills_directory()
+        self._ensure_registry_ready()
 
     def _ensure_skills_directory(self) -> None:
         """Ensure the skills directory exists."""
@@ -147,45 +151,164 @@ class SkillsService:
                 path=str(self.skills_dir),
             )
 
-    def _get_index_path(self) -> Path:
-        """Get the path to the skills index file."""
-        return self.skills_dir / SKILLS_INDEX_FILE
-
-    def _load_index(self) -> dict[str, SkillMetadata]:
-        """Load the skills index from disk."""
-        index_path = self._get_index_path()
-        if not index_path.exists():
-            return {}
-
+    def _ensure_registry_ready(self) -> None:
+        """Ensure the skill registry table is available."""
+        if self.db is None:
+            raise SkillsError("SkillsService requires a database instance for registry operations.")
         try:
-            with open(index_path, "r", encoding="utf-8") as f:
-                data = json.load(f)
-            return {
-                name: SkillMetadata.from_dict(skill_data)
-                for name, skill_data in data.get("skills", {}).items()
-            }
-        except (json.JSONDecodeError, OSError) as e:
-            logger.warning(f"Failed to load skills index: {e}")
-            return {}
+            self.db._ensure_skill_registry_table()
+        except CharactersRAGDBError as e:
+            raise SkillsError(f"Failed to ensure skill registry table: {e}") from e
 
-    def _save_index(self, index: dict[str, SkillMetadata]) -> None:
-        """Save the skills index to disk."""
-        index_path = self._get_index_path()
-        try:
-            data = {
-                "version": 1,
-                "updated_at": datetime.now(timezone.utc).isoformat(),
-                "skills": {name: meta.to_dict() for name, meta in index.items()},
-            }
-            with open(index_path, "w", encoding="utf-8") as f:
-                json.dump(data, f, indent=2, ensure_ascii=False)
-        except OSError as e:
-            logger.error(f"Failed to save skills index: {e}")
-            raise SkillStorageError(f"Failed to save skills index: {e}", path=str(index_path))
+    def _get_db(self) -> CharactersRAGDB:
+        if self.db is None:
+            raise SkillsError("SkillsService requires a database instance for registry operations.")
+        return self.db
 
     def _get_skill_dir(self, name: str) -> Path:
         """Get the directory path for a skill."""
         return self.skills_dir / name
+
+    def _parse_skill_file(self, skill_dir: Path) -> Optional[Any]:
+        """Parse SKILL.md content without loading supporting files."""
+        skill_file = skill_dir / "SKILL.md"
+        if not skill_file.exists():
+            return None
+        try:
+            content = skill_file.read_text(encoding="utf-8")
+        except OSError as e:
+            logger.warning(f"Failed to read SKILL.md for {skill_dir.name}: {e}")
+            return None
+        try:
+            return self._parser.parse_content(content, default_name=skill_dir.name)
+        except Exception as e:
+            logger.warning(f"Failed to parse SKILL.md for {skill_dir.name}: {e}")
+            return None
+
+    def _metadata_from_row(self, row: dict[str, Any]) -> SkillMetadata:
+        created_at = row.get("created_at")
+        last_modified = row.get("last_modified")
+        return SkillMetadata(
+            id=row.get("uuid") or row.get("id"),
+            name=row.get("name") or "",
+            description=row.get("description"),
+            argument_hint=row.get("argument_hint"),
+            disable_model_invocation=bool(row.get("disable_model_invocation", False)),
+            user_invocable=bool(row.get("user_invocable", True)),
+            allowed_tools=row.get("allowed_tools"),
+            model=row.get("model"),
+            context=row.get("context", "inline"),
+            directory_path=row.get("directory_path", ""),
+            content_hash=row.get("file_hash"),
+            created_at=created_at if isinstance(created_at, datetime) else datetime.now(timezone.utc),
+            last_modified=last_modified if isinstance(last_modified, datetime) else datetime.now(timezone.utc),
+            version=int(row.get("version") or 1),
+        )
+
+    def _sync_registry(self) -> None:
+        """Synchronize skill_registry with filesystem contents."""
+        db = self._get_db()
+        try:
+            registry_rows = db.list_skill_registry(
+                include_hidden=True,
+                include_deleted=True,
+                limit=10000,
+                offset=0,
+            )
+        except CharactersRAGDBError as e:
+            logger.error(f"Failed to read skill registry: {e}")
+            raise SkillsError(f"Failed to read skill registry: {e}") from e
+
+        registry_by_name = {row.get("name"): row for row in registry_rows if row and row.get("name")}
+
+        disk_names: set[str] = set()
+        if self.skills_dir.exists():
+            for item in self.skills_dir.iterdir():
+                if not item.is_dir():
+                    continue
+                if not (item / "SKILL.md").exists():
+                    continue
+
+                disk_names.add(item.name)
+                parsed = self._parse_skill_file(item)
+                if not parsed:
+                    continue
+
+                existing = registry_by_name.get(item.name)
+                if existing is None:
+                    try:
+                        db.insert_skill_registry(
+                            {
+                                "name": item.name,
+                                "description": parsed.frontmatter.description,
+                                "argument_hint": parsed.frontmatter.argument_hint,
+                                "disable_model_invocation": parsed.frontmatter.disable_model_invocation,
+                                "user_invocable": parsed.frontmatter.user_invocable,
+                                "allowed_tools": parsed.frontmatter.allowed_tools,
+                                "model": parsed.frontmatter.model,
+                                "context": parsed.frontmatter.context,
+                                "directory_path": str(item),
+                                "file_hash": parsed.content_hash,
+                            }
+                        )
+                        logger.info(f"Indexed new skill '{item.name}' from disk")
+                    except ConflictError:
+                        logger.warning(f"Skill '{item.name}' already exists while syncing; skipping insert")
+                    except CharactersRAGDBError as e:
+                        logger.warning(f"Failed to insert skill '{item.name}' into registry: {e}")
+                    continue
+
+                if existing.get("deleted"):
+                    update_data = {
+                        "description": parsed.frontmatter.description,
+                        "argument_hint": parsed.frontmatter.argument_hint,
+                        "disable_model_invocation": parsed.frontmatter.disable_model_invocation,
+                        "user_invocable": parsed.frontmatter.user_invocable,
+                        "allowed_tools": parsed.frontmatter.allowed_tools,
+                        "model": parsed.frontmatter.model,
+                        "context": parsed.frontmatter.context,
+                        "directory_path": str(item),
+                        "file_hash": parsed.content_hash,
+                        "deleted": 0,
+                    }
+                    try:
+                        db.update_skill_registry(item.name, update_data, expected_version=existing.get("version", 1))
+                        logger.info(f"Restored deleted skill '{item.name}' from disk")
+                    except ConflictError as e:
+                        logger.warning(f"Conflict restoring skill '{item.name}': {e}")
+                    except CharactersRAGDBError as e:
+                        logger.warning(f"Failed to restore skill '{item.name}': {e}")
+                    continue
+
+                if existing.get("file_hash") != parsed.content_hash:
+                    update_data = {
+                        "description": parsed.frontmatter.description,
+                        "argument_hint": parsed.frontmatter.argument_hint,
+                        "disable_model_invocation": parsed.frontmatter.disable_model_invocation,
+                        "user_invocable": parsed.frontmatter.user_invocable,
+                        "allowed_tools": parsed.frontmatter.allowed_tools,
+                        "model": parsed.frontmatter.model,
+                        "context": parsed.frontmatter.context,
+                        "directory_path": str(item),
+                        "file_hash": parsed.content_hash,
+                    }
+                    try:
+                        db.update_skill_registry(item.name, update_data, expected_version=existing.get("version", 1))
+                        logger.info(f"Updated skill registry for '{item.name}'")
+                    except ConflictError as e:
+                        logger.warning(f"Conflict updating skill '{item.name}': {e}")
+                    except CharactersRAGDBError as e:
+                        logger.warning(f"Failed to update skill '{item.name}': {e}")
+
+        for name, row in registry_by_name.items():
+            if name not in disk_names and not row.get("deleted"):
+                try:
+                    db.mark_skill_registry_deleted(name, expected_version=row.get("version", 1))
+                    logger.info(f"Marked missing skill '{name}' as deleted")
+                except ConflictError as e:
+                    logger.warning(f"Conflict marking skill '{name}' deleted: {e}")
+                except CharactersRAGDBError as e:
+                    logger.warning(f"Failed to mark skill '{name}' deleted: {e}")
 
     async def list_skills(
         self,
@@ -204,22 +327,15 @@ class SkillsService:
         Returns:
             List of skill metadata
         """
-        index = self._load_index()
-
-        # Synchronize index with filesystem
-        self._sync_index(index)
-
-        skills = list(index.values())
-
-        # Filter hidden skills
-        if not include_hidden:
-            skills = [s for s in skills if s.user_invocable]
-
-        # Sort by name
-        skills.sort(key=lambda s: s.name)
-
-        # Apply pagination
-        return skills[offset : offset + limit]
+        self._sync_registry()
+        db = self._get_db()
+        rows = db.list_skill_registry(
+            include_hidden=include_hidden,
+            include_deleted=False,
+            limit=limit,
+            offset=offset,
+        )
+        return [self._metadata_from_row(row) for row in rows]
 
     async def get_skill(self, name: str) -> dict[str, Any]:
         """
@@ -234,24 +350,27 @@ class SkillsService:
         Raises:
             SkillNotFoundError: If skill doesn't exist
         """
-        index = self._load_index()
+        name = name.strip().lower()
+        self._sync_registry()
+        db = self._get_db()
 
-        if name not in index:
+        row = db.get_skill_registry(name, include_deleted=False)
+        if not row:
             raise SkillNotFoundError(name)
 
-        metadata = index[name]
+        metadata = self._metadata_from_row(row)
         skill_dir = self._get_skill_dir(name)
-
         if not skill_dir.exists():
-            # Skill directory was deleted, remove from index
-            del index[name]
-            self._save_index(index)
+            try:
+                db.mark_skill_registry_deleted(name, expected_version=metadata.version)
+            except Exception:
+                pass
             raise SkillNotFoundError(name, detail="Skill directory not found")
 
         try:
             parsed = self._parser.parse_directory(skill_dir)
         except Exception as e:
-            raise SkillsError(f"Failed to parse skill: {e}")
+            raise SkillsError(f"Failed to parse skill: {e}") from e
 
         return {
             "id": metadata.id,
@@ -293,16 +412,18 @@ class SkillsService:
             SkillValidationError: If content is invalid
         """
         name = name.strip().lower()
-        index = self._load_index()
+        self._sync_registry()
+        db = self._get_db()
 
-        if name in index:
+        existing = db.get_skill_registry(name, include_deleted=True)
+        if existing and not existing.get("deleted"):
             raise SkillConflictError(f"Skill '{name}' already exists", skill_name=name)
 
         # Parse the content to validate
         try:
             parsed = self._parser.parse_content(content, default_name=name)
         except Exception as e:
-            raise SkillValidationError(f"Invalid skill content: {e}")
+            raise SkillValidationError(f"Invalid skill content: {e}") from e
 
         # Create skill directory
         skill_dir = self._get_skill_dir(name)
@@ -331,28 +452,30 @@ class SkillsService:
                 except OSError as e:
                     logger.warning(f"Failed to write supporting file {filename}: {e}")
 
-        # Create metadata
-        now = datetime.now(timezone.utc)
-        metadata = SkillMetadata(
-            id=str(uuid.uuid4()),
-            name=name,
-            description=parsed.frontmatter.description,
-            argument_hint=parsed.frontmatter.argument_hint,
-            disable_model_invocation=parsed.frontmatter.disable_model_invocation,
-            user_invocable=parsed.frontmatter.user_invocable,
-            allowed_tools=parsed.frontmatter.allowed_tools,
-            model=parsed.frontmatter.model,
-            context=parsed.frontmatter.context,
-            directory_path=str(skill_dir),
-            content_hash=parsed.content_hash,
-            created_at=now,
-            last_modified=now,
-            version=1,
-        )
+        registry_payload = {
+            "name": name,
+            "description": parsed.frontmatter.description,
+            "argument_hint": parsed.frontmatter.argument_hint,
+            "disable_model_invocation": parsed.frontmatter.disable_model_invocation,
+            "user_invocable": parsed.frontmatter.user_invocable,
+            "allowed_tools": parsed.frontmatter.allowed_tools,
+            "model": parsed.frontmatter.model,
+            "context": parsed.frontmatter.context,
+            "directory_path": str(skill_dir),
+            "file_hash": parsed.content_hash,
+        }
 
-        # Update index
-        index[name] = metadata
-        self._save_index(index)
+        try:
+            if existing and existing.get("deleted"):
+                db.update_skill_registry(name, {**registry_payload, "deleted": 0}, expected_version=existing.get("version", 1))
+            else:
+                db.insert_skill_registry(registry_payload)
+        except ConflictError as e:
+            shutil.rmtree(skill_dir, ignore_errors=True)
+            raise SkillConflictError(str(e), skill_name=name) from e
+        except (CharactersRAGDBError, InputError) as e:
+            shutil.rmtree(skill_dir, ignore_errors=True)
+            raise SkillsError(f"Failed to record skill '{name}' in registry: {e}") from e
 
         logger.info(f"Created skill '{name}' for user {self.user_id}")
 
@@ -381,34 +504,37 @@ class SkillsService:
             SkillNotFoundError: If skill doesn't exist
             SkillConflictError: If version mismatch
         """
-        index = self._load_index()
+        name = name.strip().lower()
+        self._sync_registry()
+        db = self._get_db()
 
-        if name not in index:
+        row = db.get_skill_registry(name, include_deleted=False)
+        if not row:
             raise SkillNotFoundError(name)
 
-        metadata = index[name]
-
-        # Check version for optimistic locking
-        if expected_version is not None and metadata.version != expected_version:
+        current_version = int(row.get("version") or 1)
+        if expected_version is not None and current_version != expected_version:
             raise SkillConflictError(
-                f"Skill '{name}' was modified (expected version {expected_version}, got {metadata.version})",
+                f"Skill '{name}' was modified (expected version {expected_version}, got {current_version})",
                 skill_name=name,
                 expected_version=expected_version,
-                actual_version=metadata.version,
+                actual_version=current_version,
             )
 
         skill_dir = self._get_skill_dir(name)
         if not skill_dir.exists():
-            del index[name]
-            self._save_index(index)
+            try:
+                db.mark_skill_registry_deleted(name, expected_version=current_version)
+            except Exception:
+                pass
             raise SkillNotFoundError(name, detail="Skill directory not found")
 
-        # Update SKILL.md if provided
+        update_data: dict[str, Any] = {}
         if content is not None:
             try:
                 parsed = self._parser.parse_content(content, default_name=name)
             except Exception as e:
-                raise SkillValidationError(f"Invalid skill content: {e}")
+                raise SkillValidationError(f"Invalid skill content: {e}") from e
 
             skill_file = skill_dir / "SKILL.md"
             try:
@@ -416,40 +542,43 @@ class SkillsService:
             except OSError as e:
                 raise SkillStorageError(f"Failed to write SKILL.md: {e}", path=str(skill_file))
 
-            # Update metadata from parsed content
-            metadata.description = parsed.frontmatter.description
-            metadata.argument_hint = parsed.frontmatter.argument_hint
-            metadata.disable_model_invocation = parsed.frontmatter.disable_model_invocation
-            metadata.user_invocable = parsed.frontmatter.user_invocable
-            metadata.allowed_tools = parsed.frontmatter.allowed_tools
-            metadata.model = parsed.frontmatter.model
-            metadata.context = parsed.frontmatter.context
-            metadata.content_hash = parsed.content_hash
+            update_data.update(
+                {
+                    "description": parsed.frontmatter.description,
+                    "argument_hint": parsed.frontmatter.argument_hint,
+                    "disable_model_invocation": parsed.frontmatter.disable_model_invocation,
+                    "user_invocable": parsed.frontmatter.user_invocable,
+                    "allowed_tools": parsed.frontmatter.allowed_tools,
+                    "model": parsed.frontmatter.model,
+                    "context": parsed.frontmatter.context,
+                    "directory_path": str(skill_dir),
+                    "file_hash": parsed.content_hash,
+                }
+            )
 
         # Handle supporting files
         if supporting_files:
             for filename, file_content in supporting_files.items():
                 file_path = skill_dir / filename
                 if file_content is None:
-                    # Delete the file
                     if file_path.exists():
                         try:
                             file_path.unlink()
                         except OSError as e:
                             logger.warning(f"Failed to delete supporting file {filename}: {e}")
                 else:
-                    # Create/update the file
                     try:
                         file_path.write_text(file_content, encoding="utf-8")
                     except OSError as e:
                         logger.warning(f"Failed to write supporting file {filename}: {e}")
 
-        # Update metadata
-        metadata.last_modified = datetime.now(timezone.utc)
-        metadata.version += 1
-
-        index[name] = metadata
-        self._save_index(index)
+        if update_data:
+            try:
+                db.update_skill_registry(name, update_data, expected_version=current_version)
+            except ConflictError as e:
+                raise SkillConflictError(str(e), skill_name=name) from e
+            except (CharactersRAGDBError, InputError) as e:
+                raise SkillsError(f"Failed to update skill '{name}' in registry: {e}") from e
 
         logger.info(f"Updated skill '{name}' for user {self.user_id}")
 
@@ -467,19 +596,21 @@ class SkillsService:
             SkillNotFoundError: If skill doesn't exist
             SkillConflictError: If version mismatch
         """
-        index = self._load_index()
+        name = name.strip().lower()
+        self._sync_registry()
+        db = self._get_db()
 
-        if name not in index:
+        row = db.get_skill_registry(name, include_deleted=True)
+        if not row:
             raise SkillNotFoundError(name)
 
-        metadata = index[name]
-
-        if expected_version is not None and metadata.version != expected_version:
+        current_version = int(row.get("version") or 1)
+        if expected_version is not None and current_version != expected_version:
             raise SkillConflictError(
-                f"Skill '{name}' was modified (expected version {expected_version}, got {metadata.version})",
+                f"Skill '{name}' was modified (expected version {expected_version}, got {current_version})",
                 skill_name=name,
                 expected_version=expected_version,
-                actual_version=metadata.version,
+                actual_version=current_version,
             )
 
         # Delete skill directory
@@ -490,9 +621,13 @@ class SkillsService:
             except OSError as e:
                 raise SkillStorageError(f"Failed to delete skill directory: {e}", path=str(skill_dir))
 
-        # Remove from index
-        del index[name]
-        self._save_index(index)
+        if not row.get("deleted"):
+            try:
+                db.mark_skill_registry_deleted(name, expected_version=current_version)
+            except ConflictError as e:
+                raise SkillConflictError(str(e), skill_name=name) from e
+            except CharactersRAGDBError as e:
+                raise SkillsError(f"Failed to delete skill '{name}' in registry: {e}") from e
 
         logger.info(f"Deleted skill '{name}' for user {self.user_id}")
 
@@ -527,11 +662,13 @@ class SkillsService:
 
         skill_name = skill_name.strip().lower()
 
-        index = self._load_index()
+        self._sync_registry()
+        db = self._get_db()
+        existing = db.get_skill_registry(skill_name, include_deleted=True)
 
-        if skill_name in index:
+        if existing and not existing.get("deleted"):
             if overwrite:
-                await self.delete_skill(skill_name)
+                await self.delete_skill(skill_name, expected_version=existing.get("version"))
             else:
                 raise SkillConflictError(f"Skill '{skill_name}' already exists", skill_name=skill_name)
 
@@ -652,13 +789,18 @@ class SkillsService:
         - available_skills: list of skill summaries
         - context_text: formatted text for LLM context
         """
-        index = self._load_index()
-        self._sync_index(index)
+        self._sync_registry()
+        db = self._get_db()
+        rows = db.list_skill_registry(
+            include_hidden=False,
+            include_deleted=False,
+            limit=10000,
+            offset=0,
+        )
 
-        # Filter to user-invocable skills that can be auto-invoked
         skills = [
-            s for s in index.values()
-            if s.user_invocable and not s.disable_model_invocation
+            row for row in rows
+            if row.get("user_invocable") and not row.get("disable_model_invocation")
         ]
 
         if not skills:
@@ -669,85 +811,32 @@ class SkillsService:
 
         # Build context text
         lines = ["<available-skills>"]
-        for skill in sorted(skills, key=lambda s: s.name):
-            hint = f" {skill.argument_hint}" if skill.argument_hint else ""
-            desc = skill.description or "No description"
-            lines.append(f"- {skill.name}{hint}: {desc}")
+        for skill in sorted(skills, key=lambda s: s.get("name") or ""):
+            hint = f" {skill.get('argument_hint')}" if skill.get("argument_hint") else ""
+            desc = skill.get("description") or "No description"
+            lines.append(f"- {skill.get('name')}{hint}: {desc}")
         lines.append("</available-skills>")
 
         return {
             "available_skills": [
                 {
-                    "name": s.name,
-                    "description": s.description,
-                    "argument_hint": s.argument_hint,
-                    "user_invocable": s.user_invocable,
-                    "disable_model_invocation": s.disable_model_invocation,
-                    "context": s.context,
+                    "name": s.get("name"),
+                    "description": s.get("description"),
+                    "argument_hint": s.get("argument_hint"),
+                    "user_invocable": bool(s.get("user_invocable")),
+                    "disable_model_invocation": bool(s.get("disable_model_invocation")),
+                    "context": s.get("context", "inline"),
                 }
                 for s in skills
             ],
             "context_text": "\n".join(lines),
         }
 
-    def _sync_index(self, index: dict[str, SkillMetadata]) -> None:
-        """
-        Synchronize the index with the filesystem.
-
-        - Add skills that exist on disk but not in index
-        - Remove skills from index that no longer exist on disk
-        """
-        changed = False
-
-        # Find skills on disk
-        if self.skills_dir.exists():
-            disk_skills = set()
-            for item in self.skills_dir.iterdir():
-                if item.is_dir() and (item / "SKILL.md").exists():
-                    disk_skills.add(item.name)
-
-            # Add missing skills
-            for name in disk_skills:
-                if name not in index:
-                    try:
-                        parsed = self._parser.parse_directory(self._get_skill_dir(name))
-                        now = datetime.now(timezone.utc)
-                        index[name] = SkillMetadata(
-                            id=str(uuid.uuid4()),
-                            name=name,
-                            description=parsed.frontmatter.description,
-                            argument_hint=parsed.frontmatter.argument_hint,
-                            disable_model_invocation=parsed.frontmatter.disable_model_invocation,
-                            user_invocable=parsed.frontmatter.user_invocable,
-                            allowed_tools=parsed.frontmatter.allowed_tools,
-                            model=parsed.frontmatter.model,
-                            context=parsed.frontmatter.context,
-                            directory_path=str(self._get_skill_dir(name)),
-                            content_hash=parsed.content_hash,
-                            created_at=now,
-                            last_modified=now,
-                            version=1,
-                        )
-                        changed = True
-                        logger.info(f"Discovered skill '{name}' on disk")
-                    except Exception as e:
-                        logger.warning(f"Failed to index skill '{name}': {e}")
-
-            # Remove missing skills
-            for name in list(index.keys()):
-                if name not in disk_skills:
-                    del index[name]
-                    changed = True
-                    logger.info(f"Removed stale skill '{name}' from index")
-
-        if changed:
-            self._save_index(index)
-
     async def get_total_count(self, include_hidden: bool = False) -> int:
         """Get total count of skills."""
-        index = self._load_index()
-        self._sync_index(index)
-
-        if include_hidden:
-            return len(index)
-        return sum(1 for s in index.values() if s.user_invocable)
+        self._sync_registry()
+        db = self._get_db()
+        return db.count_skill_registry(
+            include_hidden=include_hidden,
+            include_deleted=False,
+        )

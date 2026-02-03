@@ -13,7 +13,7 @@ from typing import Any, Optional
 from loguru import logger
 
 try:
-    from prometheus_client import Counter, Gauge, Histogram, Summary
+    from prometheus_client import Counter, Gauge, Histogram
     PROMETHEUS_AVAILABLE = True
 except ImportError:
     PROMETHEUS_AVAILABLE = False

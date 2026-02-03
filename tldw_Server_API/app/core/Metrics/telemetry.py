@@ -64,7 +64,7 @@ class DummyMeter:
 
 # Try to import core OpenTelemetry components
 try:
-    from opentelemetry import baggage, metrics, trace
+    from opentelemetry import metrics, trace
     from opentelemetry.metrics import Meter
     from opentelemetry.sdk.metrics import MeterProvider
 

@@ -131,10 +131,10 @@ Legend
 |---|---|---|---|
 | Single-user (X-API-KEY) | Working | Simple local deployments | [docs](../API-related/AuthNZ-API-Guide.md) · [code](https://github.com/rmusser01/tldw_server/blob/main/tldw_Server_API/app/api/v1/endpoints/auth.py) |
 | Multi-user JWT + RBAC | Working | Users/roles/permissions | [docs](../API-related/AuthNZ-API-Guide.md) · [code](https://github.com/rmusser01/tldw_server/blob/main/tldw_Server_API/app/api/v1/endpoints/auth.py) |
-| API keys manager | Working | Create/rotate/audit | [docs](../API-related/AuthNZ-API-Guide.md) · [code](https://github.com/rmusser01/tldw_server/blob/main/tldw_Server_API/app/api/v1/endpoints/admin.py) |
+| API keys manager | Working | Create/rotate/audit | [docs](../API-related/AuthNZ-API-Guide.md) · [code](https://github.com/rmusser01/tldw_server/blob/main/tldw_Server_API/app/api/v1/endpoints/admin/__init__.py) |
 | Egress + SSRF guards | Working | Centralized guards | [docs](https://github.com/rmusser01/tldw_server/blob/main/tldw_Server_API/app/core/Security/README.md) · [code](https://github.com/rmusser01/tldw_server/blob/main/tldw_Server_API/app/core/Security/egress.py) |
-| Audit logging & alerts | Working | Unified audit + alerts | [docs](https://github.com/rmusser01/tldw_server/blob/main/Docs/API-related/Audit_Configuration.md) · [code](https://github.com/rmusser01/tldw_server/blob/main/tldw_Server_API/app/api/v1/endpoints/admin.py) |
-| Admin & Ops | Working | Users/orgs/teams, roles/perms, quotas, usage | [docs](https://github.com/rmusser01/tldw_server/blob/main/Docs/API-related/Admin_Orgs_Teams.md) · [code](https://github.com/rmusser01/tldw_server/blob/main/tldw_Server_API/app/api/v1/endpoints/admin.py) |
+| Audit logging & alerts | Working | Unified audit + alerts | [docs](https://github.com/rmusser01/tldw_server/blob/main/Docs/API-related/Audit_Configuration.md) · [code](https://github.com/rmusser01/tldw_server/blob/main/tldw_Server_API/app/api/v1/endpoints/admin/__init__.py) |
+| Admin & Ops | Working | Users/orgs/teams, roles/perms, quotas, usage | [docs](https://github.com/rmusser01/tldw_server/blob/main/Docs/API-related/Admin_Orgs_Teams.md) · [code](https://github.com/rmusser01/tldw_server/blob/main/tldw_Server_API/app/api/v1/endpoints/admin/__init__.py) |
 | Billing & subscriptions | Working | Plans, invoices, usage | [docs](../API-related/Orgs_Billing_API.md) · [code](https://github.com/rmusser01/tldw_server/blob/main/tldw_Server_API/app/api/v1/endpoints/billing.py) |
 | Monitoring & metrics | Working | Prometheus text + JSON | [docs](../Monitoring/index.md) · [code](https://github.com/rmusser01/tldw_server/blob/main/tldw_Server_API/app/api/v1/endpoints/metrics.py) |
 

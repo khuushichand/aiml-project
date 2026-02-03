@@ -9,7 +9,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query, Response, status
 from loguru import logger
 
 from tldw_Server_API.app.api.v1.API_Deps.auth_deps import require_token_scope
-from tldw_Server_API.app.api.v1.endpoints.evaluations_auth import (
+from tldw_Server_API.app.api.v1.endpoints.evaluations.evaluations_auth import (
     create_error_response,
     get_eval_request_user,
     sanitize_error_message,

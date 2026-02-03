@@ -13,6 +13,7 @@
 ####################
 # Import necessary libraries
 import asyncio
+import importlib.util
 import gc
 import re
 from datetime import datetime
@@ -368,12 +369,7 @@ def process_pdf(
             elif parser == "pymupdf":
                  content = extract_text_and_format_from_pdf(path_for_processing)
             elif parser == "docling":
-                DOCLING_AVAILABLE = False
-                try:
-                    from docling.document_converter import DocumentConverter
-                    DOCLING_AVAILABLE = True
-                except ImportError:
-                    DOCLING_AVAILABLE = False
+                DOCLING_AVAILABLE = importlib.util.find_spec("docling.document_converter") is not None
                 if not DOCLING_AVAILABLE:
                     raise ImportError("Docling parser selected, but library is not installed.")
                 content = docling_parse_pdf(path_for_processing)

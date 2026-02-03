@@ -6,7 +6,7 @@ import soundfile as sf
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
-from tldw_Server_API.app.api.v1.endpoints.audio import router as audio_router
+from tldw_Server_API.app.api.v1.endpoints.audio.audio import router as audio_router
 
 TEST_API_KEY = "test-api-key-1234567890"
 
@@ -30,7 +30,7 @@ def test_audio_transcriptions_uses_adapter_base_dir(
     monkeypatch.setenv("SINGLE_USER_FIXED_ID", "1")
 
     from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import get_request_user, User
-    import tldw_Server_API.app.api.v1.endpoints.audio as audio_ep
+    import tldw_Server_API.app.api.v1.endpoints.audio.audio as audio_ep
     import tldw_Server_API.app.core.Ingestion_Media_Processing.Audio.Audio_Transcription_Lib as atlib
 
     async def _fake_get_request_user() -> User:

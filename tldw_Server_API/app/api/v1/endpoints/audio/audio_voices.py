@@ -7,7 +7,7 @@ from fastapi.responses import StreamingResponse
 from loguru import logger
 from starlette import status
 
-from tldw_Server_API.app.api.v1.endpoints.audio_tts import get_tts_service
+from tldw_Server_API.app.api.v1.endpoints.audio.audio_tts import get_tts_service
 from tldw_Server_API.app.api.v1.schemas.audio_schemas import (
     OpenAISpeechRequest,
     VoiceEncodeRequest,

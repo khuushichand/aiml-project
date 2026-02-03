@@ -4,6 +4,7 @@
 # Imports
 import asyncio
 import base64
+import importlib.util
 import tempfile
 from pathlib import Path
 from typing import Any, Optional
@@ -81,12 +82,10 @@ class AudioProcessor:
 
     def _check_librosa(self) -> bool:
         """Check if librosa is available for audio processing"""
-        try:
-            import librosa
-            return True
-        except ImportError:
+        if importlib.util.find_spec("librosa") is None:
             logger.warning("librosa not installed - advanced audio processing unavailable")
             return False
+        return True
 
     def decode_base64_audio(self, base64_data: str) -> bytes:
         """

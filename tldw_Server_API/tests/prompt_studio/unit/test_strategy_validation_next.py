@@ -2,7 +2,7 @@ import pytest
 
 from fastapi import HTTPException
 
-from tldw_Server_API.app.api.v1.endpoints import prompt_studio_optimization as pso
+from tldw_Server_API.app.api.v1.endpoints.prompt_studio import prompt_studio_optimization as pso
 
 
 def test_beam_search_length_penalty_and_reranker_ok():

@@ -1,7 +1,6 @@
 import pytest
 
-from tldw_Server_API.app.api.v1.endpoints import prompt_studio_websocket as ws_mod
-
+from tldw_Server_API.app.api.v1.endpoints.prompt_studio import prompt_studio_websocket as ws_mod
 
 pytestmark = pytest.mark.integration
 

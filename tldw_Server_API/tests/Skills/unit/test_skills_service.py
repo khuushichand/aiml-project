@@ -7,6 +7,7 @@ import tempfile
 from pathlib import Path
 from datetime import datetime
 
+from tldw_Server_API.app.core.DB_Management.ChaChaNotes_DB import CharactersRAGDB
 from tldw_Server_API.app.core.Skills.skills_service import SkillsService, SkillMetadata
 from tldw_Server_API.app.core.Skills.exceptions import (
     SkillNotFoundError,
@@ -67,7 +68,11 @@ class TestSkillsService:
     @pytest.fixture
     def service(self, temp_base_path):
         """Create a SkillsService instance for testing."""
-        return SkillsService(user_id=1, base_path=temp_base_path)
+        db_path = temp_base_path / "ChaChaNotes.db"
+        chacha_db = CharactersRAGDB(db_path=db_path, client_id="test_client")
+        service = SkillsService(user_id=1, base_path=temp_base_path, db=chacha_db)
+        yield service
+        chacha_db.close_connection()
 
     @pytest.mark.asyncio
     async def test_create_skill_simple(self, service):

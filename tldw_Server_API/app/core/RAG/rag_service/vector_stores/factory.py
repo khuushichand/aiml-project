@@ -16,7 +16,7 @@ from .chromadb_adapter import ChromaDBAdapter
 _PGVectorAdapter: Optional[type[VectorStoreAdapter]]
 try:
     from .pgvector_adapter import PGVectorAdapter as _PGVectorAdapter
-except Exception:
+except ImportError:
     _PGVectorAdapter = None  # Optional
 
 PGVectorAdapter: Optional[type[VectorStoreAdapter]] = _PGVectorAdapter
@@ -60,10 +60,7 @@ class VectorStoreFactory:
 
         if not adapter_class:
             available = ", ".join([t.value for t in cls._adapters.keys()])
-            raise ValueError(
-                f"Unsupported vector store type: {config.store_type}. "
-                f"Available types: {available}"
-            )
+            raise UnsupportedVectorStoreError(config.store_type, available)
 
         logger.info(f"Creating {config.store_type.value} adapter")
         adapter = adapter_class(config)
@@ -73,6 +70,15 @@ class VectorStoreFactory:
             logger.info(f"Adapter created (initialization pending)")
 
         return adapter
+
+
+class UnsupportedVectorStoreError(ValueError):
+    """Raised when a requested vector store type is not supported."""
+
+    def __init__(self, store_type: VectorStoreType, available: str) -> None:
+        super().__init__(
+            f"Unsupported vector store type: {store_type}. Available types: {available}"
+        )
 
     @classmethod
     def register_adapter(

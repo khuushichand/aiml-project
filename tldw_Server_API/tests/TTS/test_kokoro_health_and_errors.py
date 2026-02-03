@@ -9,7 +9,7 @@ from tldw_Server_API.app.core.TTS.tts_exceptions import TTSGenerationError
 @pytest.mark.asyncio
 async def test_audio_health_endpoint_smoke():
     # Import router lazily to avoid heavy imports at module load time
-    from tldw_Server_API.app.api.v1.endpoints.audio import router
+    from tldw_Server_API.app.api.v1.endpoints.audio.audio import router
 
     app = FastAPI()
     app.include_router(router, prefix="")
@@ -53,8 +53,6 @@ async def test_kokoro_pytorch_requires_pkg(monkeypatch):
 
         def to(self, *args, **kwargs):
             return self
-
-    import torch
 
     monkeypatch.setattr("torch.jit.load", lambda *args, **kwargs: DummyTorchModule())
     monkeypatch.setattr("torch.load", lambda *args, **kwargs: DummyTorchModule())

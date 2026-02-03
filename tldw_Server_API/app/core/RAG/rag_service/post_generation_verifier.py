@@ -60,33 +60,33 @@ multi_strategy_expansion: MultiStrategyExpansionFn | None = None
 try:
     from . import claims as _claims_mod
     ClaimsEngine = cast(Optional[type[ClaimsEngineType]], getattr(_claims_mod, "ClaimsEngine", None))
-except Exception:
+except ImportError:
     ClaimsEngine = None
 
 try:
     from . import database_retrievers as _db_mod
     MultiDatabaseRetriever = cast(Optional[type[MultiDatabaseRetrieverType]], getattr(_db_mod, "MultiDatabaseRetriever", None))
-except Exception:
+except ImportError:
     MultiDatabaseRetriever = None
 
 try:
     from . import generation as _gen_mod
     AnswerGenerator = cast(Optional[type[AnswerGeneratorType]], getattr(_gen_mod, "AnswerGenerator", None))
-except Exception:
+except ImportError:
     AnswerGenerator = None
 
 try:
     from . import hyde as _hyde_mod
     generate_hypothetical_answer = cast(Optional[GenerateHypoFn], getattr(_hyde_mod, "generate_hypothetical_answer", None))
     hyde_embed_text = cast(Optional[HydeEmbedFn], getattr(_hyde_mod, "embed_text", None))
-except Exception:
+except ImportError:
     generate_hypothetical_answer = None
     hyde_embed_text = None
 
 try:
     from . import query_expansion as _qe_mod
     multi_strategy_expansion = cast(Optional[MultiStrategyExpansionFn], getattr(_qe_mod, "multi_strategy_expansion", None))
-except Exception:
+except ImportError:
     multi_strategy_expansion = None
 
 try:
@@ -95,7 +95,7 @@ try:
         increment_counter,
         observe_histogram,
     )
-except Exception:  # pragma: no cover
+except Exception:  # noqa: BLE001 - metrics optional in test envs
     def increment_counter(metric_name: str, value: float = 1.0, labels: dict[str, str] | None = None) -> Any:
         return None
     def observe_histogram(metric_name: str, value: float, labels: dict[str, str] | None = None) -> Any:
@@ -130,7 +130,7 @@ class PostGenerationVerifier:
         self._max_retries = max(0, int(max_retries or 0))
         try:
             self._threshold = float(unsupported_threshold)
-        except Exception:
+        except (TypeError, ValueError):
             self._threshold = 0.15
         self._max_claims = max(1, int(max_claims or 1))
         self._time_budget = float(time_budget_sec) if time_budget_sec is not None else None
@@ -139,7 +139,7 @@ class PostGenerationVerifier:
             try:
                 env_val = os.getenv("RAG_ADAPTIVE_ADVANCED_REWRITES", "true").strip().lower()
                 self._adv = env_val in {"1", "true", "yes", "on"}
-            except Exception:
+            except Exception:  # noqa: BLE001 - env parsing best-effort
                 self._adv = True
         else:
             self._adv = bool(use_advanced_rewrites)
@@ -234,7 +234,7 @@ class PostGenerationVerifier:
                             # Other sources could be added similarly
                             docs = sorted(docs, key=lambda d: getattr(d, 'score', 0.0), reverse=True)
                             return docs[:top]
-                        except Exception:
+                        except Exception:  # noqa: BLE001 - retrieval fallback should be safe
                             return base_documents[:top]
 
                     run = await engine.run(
@@ -252,7 +252,7 @@ class PostGenerationVerifier:
                     )
                     claims_payload = (run or {}).get("claims")
                     summary_payload = (run or {}).get("summary")
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001 - claims verification best-effort
             logger.warning(f"Post-check claims verification failed: {e}")
 
         # Compute unsupported ratio
@@ -265,7 +265,7 @@ class PostGenerationVerifier:
                 nei = int(summary_payload.get("nei") or 0)
                 total = max(0, supported + refuted + nei)
                 unsupported = max(0, refuted + nei)
-        except Exception:
+        except (TypeError, ValueError):
             pass
         ratio = (unsupported / total) if total else 0.0
 
@@ -279,7 +279,7 @@ class PostGenerationVerifier:
         try:
             from tldw_Server_API.app.core.Claims_Extraction.monitoring import record_postcheck_metrics
             record_postcheck_metrics(total, unsupported)
-        except Exception:
+        except Exception:  # noqa: BLE001 - metrics best-effort
             pass
 
         # Decide if we should attempt a repair
@@ -326,7 +326,7 @@ class PostGenerationVerifier:
                                     expanded = await expand_fn(query, strategies=["acronym", "synonym", "domain"])  # light expansion
                                     if isinstance(expanded, list):
                                         candidate_queries.extend([q for q in expanded if isinstance(q, str) and q.strip()])
-                            except Exception:
+                            except Exception:  # noqa: BLE001 - expansion best-effort
                                 pass
                             # Optional HyDE vector for the base query
                             hyde_vector = None
@@ -336,7 +336,7 @@ class PostGenerationVerifier:
                                     vec = await hyde_embed_text(hypo)
                                     if vec:
                                         hyde_vector = vec
-                            except Exception:
+                            except Exception:  # noqa: BLE001 - HyDE best-effort
                                 hyde_vector = None
 
                             # Aggregate retrieval across queries
@@ -355,14 +355,14 @@ class PostGenerationVerifier:
                                         prev = docs_union.get(getattr(d, "id", ""))
                                         if prev is None or float(getattr(d, "score", 0.0)) > float(getattr(prev, "score", 0.0)):
                                             docs_union[getattr(d, "id", "")] = d
-                                except Exception:
+                                except Exception:  # noqa: BLE001 - per-query retrieval best-effort
                                     continue
 
                             merged_docs = sorted(docs_union.values(), key=lambda x: getattr(x, "score", 0.0), reverse=True)
                             merged_docs = merged_docs[: max(5, min(30, top_k * 2))]
                             # Apply simple diversity filter to reduce near-duplicates
                             new_docs = _select_diverse(merged_docs, k=max(5, min(15, top_k)))
-            except Exception as e:
+            except Exception as e:  # noqa: BLE001 - fallback to base docs
                 logger.debug(f"Adaptive retrieval failed; using base docs. Reason: {e}")
                 new_docs = base_documents[:]
 
@@ -376,7 +376,7 @@ class PostGenerationVerifier:
                     new_answer = maybe.get("answer") if isinstance(maybe, dict) else str(maybe)
                 else:
                     new_answer = None
-            except Exception as e:
+            except Exception as e:  # noqa: BLE001 - regeneration best-effort
                 logger.debug(f"Adaptive regeneration failed: {e}")
                 new_answer = None
 
@@ -419,7 +419,7 @@ class PostGenerationVerifier:
                     sum2 = (run2 or {}).get("summary") or {}
                 else:
                     sum2 = {}
-            except Exception as e:
+            except Exception as e:  # noqa: BLE001 - recheck best-effort
                 logger.debug(f"Adaptive recheck failed: {e}")
                 sum2 = {}
 
@@ -429,7 +429,7 @@ class PostGenerationVerifier:
                 s2_nei = int(sum2.get("nei") or 0)
                 s2_total = max(0, s2_supported + s2_refuted + s2_nei)
                 s2_ratio = ((s2_refuted + s2_nei) / s2_total) if s2_total else 0.0
-            except Exception:
+            except (TypeError, ValueError):
                 s2_ratio = 0.0
 
             if s2_ratio <= self._threshold:
@@ -444,7 +444,7 @@ class PostGenerationVerifier:
             outcome.new_answer = new_answer
             try:
                 increment_counter("rag_adaptive_fix_success_total", 1)
-            except Exception:
+            except Exception:  # noqa: BLE001 - metrics best-effort
                 pass
             observe_histogram("rag_postcheck_duration_seconds", time.time() - start_ts, labels={"outcome": "fixed"})
         else:
@@ -468,7 +468,7 @@ def _jaccard(a: str, b: str) -> float:
         inter = len(sa & sb)
         union = len(sa | sb)
         return float(inter) / float(union) if union else 0.0
-    except Exception:
+    except Exception:  # noqa: BLE001 - best-effort similarity
         return 0.0
 
 

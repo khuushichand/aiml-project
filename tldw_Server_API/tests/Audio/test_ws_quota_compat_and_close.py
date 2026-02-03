@@ -15,7 +15,7 @@ def test_audio_ws_quota_error_includes_error_type_and_closes_1008(monkeypatch):
     """
     from tldw_Server_API.app.main import app
     from tldw_Server_API.app.core.AuthNZ.settings import get_settings
-    import tldw_Server_API.app.api.v1.endpoints.audio as audio_ep
+    import tldw_Server_API.app.api.v1.endpoints.audio.audio as audio_ep
 
     # Force daily minutes denial
     async def _deny(user_id: int, minutes_requested: float):

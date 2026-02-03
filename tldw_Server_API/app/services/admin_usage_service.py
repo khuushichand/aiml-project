@@ -2,10 +2,27 @@ from __future__ import annotations
 
 from typing import Any
 
+from fastapi import HTTPException
 from loguru import logger
 
+from tldw_Server_API.app.api.v1.schemas.admin_schemas import (
+    LLMTopSpenderRow,
+    LLMTopSpendersResponse,
+    LLMUsageLogResponse,
+    LLMUsageLogRow,
+    LLMUsageSummaryResponse,
+    LLMUsageSummaryRow,
+    UsageDailyResponse,
+    UsageDailyRow,
+    UsageTopResponse,
+    UsageTopRow,
+)
 from tldw_Server_API.app.core.AuthNZ.database import is_postgres_backend
+from tldw_Server_API.app.core.AuthNZ.principal_model import AuthPrincipal
 from tldw_Server_API.app.core.Metrics import get_metrics_registry
+from tldw_Server_API.app.services import admin_scope_service
+from tldw_Server_API.app.services.llm_usage_aggregator import aggregate_llm_usage_daily
+from tldw_Server_API.app.services.usage_aggregator import aggregate_usage_daily
 
 
 def _fmt_csv_value(x: Any) -> str:
@@ -590,3 +607,361 @@ async def fetch_llm_top_spenders(
         {"user_id": int(r[0] or 0), "requests": int(r[1] or 0), "total_cost_usd": float(r[2] or 0.0)}
         for r in rows
     ]
+
+
+async def get_usage_daily(
+    *,
+    principal: AuthPrincipal,
+    db,
+    user_id: int | None,
+    start: str | None,
+    end: str | None,
+    page: int,
+    limit: int,
+    org_id: int | None,
+) -> UsageDailyResponse:
+    try:
+        if user_id is not None:
+            await admin_scope_service.enforce_admin_user_scope(principal, user_id, require_hierarchy=False)
+        org_ids = await admin_scope_service.get_admin_org_ids(principal)
+        if org_id is not None:
+            if org_ids is None:
+                org_ids = [org_id]
+            else:
+                org_ids = [org_id] if org_id in org_ids else []
+        rows, total, _ = await fetch_usage_daily(
+            db,
+            user_id=user_id,
+            org_ids=org_ids,
+            start=start,
+            end=end,
+            page=page,
+            limit=limit,
+        )
+        items = [UsageDailyRow(**r) for r in rows]
+        return UsageDailyResponse(items=items, total=int(total or 0), page=page, limit=limit)
+    except Exception:
+        logger.exception("Failed to query usage_daily")
+        raise HTTPException(status_code=500, detail="Failed to load usage daily data")
+
+
+async def get_usage_top(
+    *,
+    principal: AuthPrincipal,
+    db,
+    start: str | None,
+    end: str | None,
+    limit: int,
+    metric: str,
+    org_id: int | None,
+) -> UsageTopResponse:
+    try:
+        org_ids = await admin_scope_service.get_admin_org_ids(principal)
+        if org_id is not None:
+            if org_ids is None:
+                org_ids = [org_id]
+            else:
+                org_ids = [org_id] if org_id in org_ids else []
+        rows = await fetch_usage_top(
+            db,
+            start=start,
+            end=end,
+            limit=limit,
+            metric=metric,
+            org_ids=org_ids,
+        )
+        for r in rows:
+            r.setdefault("bytes_in_total", None)
+        return UsageTopResponse(items=[UsageTopRow(**r) for r in rows])
+    except Exception as exc:
+        logger.error(f"Failed to query usage top: {exc}")
+        raise HTTPException(status_code=500, detail="Failed to load usage top data")
+
+
+async def run_usage_aggregate(day: str | None) -> dict:
+    try:
+        await aggregate_usage_daily(day=day)
+        return {"status": "ok", "day": day}
+    except Exception:
+        logger.exception("Manual usage aggregation failed/skipped")
+        return {"status": "skipped", "reason": "aggregation failed or was skipped", "day": day}
+
+
+async def export_usage_daily_csv(
+    *,
+    principal: AuthPrincipal,
+    db,
+    user_id: int | None,
+    start: str | None,
+    end: str | None,
+    limit: int,
+    org_id: int | None,
+) -> tuple[str, str]:
+    try:
+        if user_id is not None:
+            await admin_scope_service.enforce_admin_user_scope(principal, user_id, require_hierarchy=False)
+        org_ids = await admin_scope_service.get_admin_org_ids(principal)
+        if org_id is not None:
+            if org_ids is None:
+                org_ids = [org_id]
+            else:
+                org_ids = [org_id] if org_id in org_ids else []
+        content = await export_usage_daily_csv_text(
+            db,
+            user_id=user_id,
+            org_ids=org_ids,
+            start=start,
+            end=end,
+            limit=limit,
+        )
+        _start = start or "all"
+        _end = end or "all"
+        filename = f"usage_daily_{_start}_{_end}.csv"
+        return content, filename
+    except Exception as exc:
+        logger.error(f"Failed to export usage daily CSV: {exc}")
+        raise HTTPException(status_code=500, detail="Failed to export usage daily CSV")
+
+
+async def export_usage_top_csv(
+    *,
+    principal: AuthPrincipal,
+    db,
+    start: str | None,
+    end: str | None,
+    limit: int,
+    metric: str,
+    org_id: int | None,
+) -> tuple[str, str]:
+    try:
+        org_ids = await admin_scope_service.get_admin_org_ids(principal)
+        if org_id is not None:
+            if org_ids is None:
+                org_ids = [org_id]
+            else:
+                org_ids = [org_id] if org_id in org_ids else []
+        content = await export_usage_top_csv_text(
+            db,
+            start=start,
+            end=end,
+            limit=limit,
+            metric=metric,
+            org_ids=org_ids,
+        )
+        _start = start or "all"
+        _end = end or "all"
+        filename = f"usage_top_{metric}_{_start}_{_end}.csv"
+        return content, filename
+    except Exception as exc:
+        logger.error(f"Failed to export usage top CSV: {exc}")
+        raise HTTPException(status_code=500, detail="Failed to export usage top CSV")
+
+
+async def run_llm_usage_aggregate(day: str | None) -> dict:
+    try:
+        await aggregate_llm_usage_daily(day=day)
+        return {"status": "ok", "day": day}
+    except Exception as exc:
+        logger.warning(f"Manual LLM usage aggregation failed/skipped: {exc}")
+        return {
+            "status": "skipped",
+            "reason": "Manual LLM usage aggregation failed or was skipped",
+            "day": day,
+        }
+
+
+async def get_llm_usage(
+    *,
+    principal: AuthPrincipal,
+    db,
+    user_id: int | None,
+    provider: str | None,
+    model: str | None,
+    operation: str | None,
+    status_code: int | None,
+    start: str | None,
+    end: str | None,
+    page: int,
+    limit: int,
+    org_id: int | None,
+) -> LLMUsageLogResponse:
+    try:
+        if user_id is not None:
+            await admin_scope_service.enforce_admin_user_scope(principal, user_id, require_hierarchy=False)
+        org_ids = await admin_scope_service.get_admin_org_ids(principal)
+        if org_id is not None:
+            if org_ids is None:
+                org_ids = [org_id]
+            else:
+                org_ids = [org_id] if org_id in org_ids else []
+        rows, total = await fetch_llm_usage(
+            db,
+            user_id=user_id,
+            provider=provider,
+            model=model,
+            operation=operation,
+            status_code=status_code,
+            start=start,
+            end=end,
+            page=page,
+            limit=limit,
+            org_ids=org_ids,
+        )
+        items = [LLMUsageLogRow(**r) for r in rows]
+        return LLMUsageLogResponse(items=items, total=int(total or 0), page=page, limit=limit)
+    except Exception:
+        logger.exception("Failed to query llm_usage_log")
+        raise HTTPException(status_code=500, detail="Failed to load LLM usage data")
+
+
+async def get_llm_usage_summary(
+    *,
+    principal: AuthPrincipal,
+    db,
+    start: str | None,
+    end: str | None,
+    group_by: str,
+    org_id: int | None,
+) -> LLMUsageSummaryResponse:
+    try:
+        org_ids = await admin_scope_service.get_admin_org_ids(principal)
+        if org_id is not None:
+            if org_ids is None:
+                org_ids = [org_id]
+            else:
+                org_ids = [org_id] if org_id in org_ids else []
+        rows = await fetch_llm_usage_summary(
+            db,
+            group_by=group_by,
+            provider=None,
+            start=start,
+            end=end,
+            org_ids=org_ids,
+        )
+        return LLMUsageSummaryResponse(items=[LLMUsageSummaryRow(**r) for r in rows])
+    except Exception as exc:
+        logger.error(f"Failed to summarize llm_usage_log: {exc}")
+        raise HTTPException(status_code=500, detail="Failed to load LLM usage summary")
+
+
+async def get_llm_top_spenders(
+    *,
+    principal: AuthPrincipal,
+    db,
+    start: str | None,
+    end: str | None,
+    limit: int,
+    org_id: int | None,
+) -> LLMTopSpendersResponse:
+    try:
+        org_ids = await admin_scope_service.get_admin_org_ids(principal)
+        if org_id is not None:
+            if org_ids is None:
+                org_ids = [org_id]
+            else:
+                org_ids = [org_id] if org_id in org_ids else []
+        rows = await fetch_llm_top_spenders(db, start=start, end=end, limit=limit, org_ids=org_ids)
+        return LLMTopSpendersResponse(items=[LLMTopSpenderRow(**r) for r in rows])
+    except Exception as exc:
+        logger.error(f"Failed to load llm top spenders: {exc}")
+        raise HTTPException(status_code=500, detail="Failed to load LLM top spenders")
+
+
+async def export_llm_usage_csv(
+    *,
+    principal: AuthPrincipal,
+    db,
+    user_id: int | None,
+    provider: str | None,
+    model: str | None,
+    operation: str | None,
+    status_code: int | None,
+    start: str | None,
+    end: str | None,
+    limit: int,
+    org_id: int | None,
+) -> str:
+    try:
+        if user_id is not None:
+            await admin_scope_service.enforce_admin_user_scope(principal, user_id, require_hierarchy=False)
+        org_ids = await admin_scope_service.get_admin_org_ids(principal)
+        if org_id is not None:
+            if org_ids is None:
+                org_ids = [org_id]
+            else:
+                org_ids = [org_id] if org_id in org_ids else []
+        is_pg = await is_postgres_backend()
+        conditions: list[str] = []
+        params: list[Any] = []
+
+        def add_cond(sql: str, value):
+            if value is None:
+                return
+            if is_pg:
+                conditions.append(sql.replace("?", f"${len(params) + 1}"))
+            else:
+                conditions.append(sql)
+            params.append(value)
+
+        add_cond("user_id = ?", user_id)
+        add_cond("LOWER(provider) = LOWER(?)", provider)
+        add_cond("LOWER(model) = LOWER(?)", model)
+        add_cond("operation = ?", operation)
+        add_cond("status = ?", status_code)
+        if start:
+            add_cond("ts >= ?", start)
+        if end:
+            add_cond("ts <= ?", end)
+        join_clause = ""
+        if org_ids is not None:
+            join_clause = " JOIN org_members om ON om.user_id = llm_usage_log.user_id"
+            if is_pg:
+                conditions.append(f"om.org_id = ANY(${len(params) + 1})")
+                params.append(org_ids)
+            else:
+                placeholders = ",".join("?" for _ in org_ids)
+                conditions.append(f"om.org_id IN ({placeholders})")
+                params.extend(org_ids)
+        where_clause = (" WHERE " + " AND ".join(conditions)) if conditions else ""
+
+        if is_pg:
+            limit_placeholder = f"${len(params) + 1}"
+            sql = (
+                f"SELECT id, ts, COALESCE(user_id,0) as user_id, COALESCE(key_id,0) as key_id, endpoint, operation, provider, model, status, latency_ms, "
+                f"COALESCE(prompt_tokens,0), COALESCE(completion_tokens,0), COALESCE(total_tokens,0), COALESCE(total_cost_usd,0), currency, estimated, request_id "
+                f"FROM llm_usage_log{join_clause}{where_clause} ORDER BY ts DESC LIMIT {limit_placeholder}"
+            )
+            rows = await db.fetch(sql, *params, limit)
+            data = [(
+                r["id"], r["ts"], r["user_id"], r["key_id"], r["endpoint"], r["operation"], r["provider"], r["model"], r["status"], r["latency_ms"],
+                r["prompt_tokens"], r["completion_tokens"], r["total_tokens"], r["total_cost_usd"], r["currency"], r["estimated"], r["request_id"]
+            ) for r in rows]
+        else:
+            sql = (
+                f"SELECT id, ts, IFNULL(user_id,0), IFNULL(key_id,0), endpoint, operation, provider, model, status, latency_ms, "
+                f"IFNULL(prompt_tokens,0), IFNULL(completion_tokens,0), IFNULL(total_tokens,0), IFNULL(total_cost_usd,0), currency, estimated, request_id "
+                f"FROM llm_usage_log{join_clause}{where_clause} ORDER BY ts DESC LIMIT ?"
+            )
+            cur = await db.execute(sql, params + [limit])
+            data = await cur.fetchall()
+
+        header = [
+            "id","ts","user_id","key_id","endpoint","operation","provider","model","status","latency_ms",
+            "prompt_tokens","completion_tokens","total_tokens","total_cost_usd","currency","estimated","request_id"
+        ]
+        lines = [",".join(header)]
+
+        def _fmt(value):
+            if value is None:
+                return ""
+            s = str(value)
+            if "," in s or "\n" in s:
+                return '"' + s.replace('"', '""') + '"'
+            return s
+
+        for row in data:
+            lines.append(",".join(_fmt(c) for c in row))
+        return "\n".join(lines) + "\n"
+    except Exception as exc:
+        logger.error(f"Failed to export llm usage CSV: {exc}")
+        raise HTTPException(status_code=500, detail="Failed to export CSV")

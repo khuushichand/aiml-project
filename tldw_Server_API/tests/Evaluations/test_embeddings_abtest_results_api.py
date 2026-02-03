@@ -3,7 +3,7 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 from tldw_Server_API.app.api.v1.API_Deps.auth_deps import get_auth_principal
-from tldw_Server_API.app.api.v1.endpoints.evaluations_unified import router as evals_router
+from tldw_Server_API.app.api.v1.endpoints.evaluations.evaluations_unified import router as evals_router
 from tldw_Server_API.app.core.AuthNZ.principal_model import AuthPrincipal
 from tldw_Server_API.app.core.AuthNZ.settings import get_settings, reset_settings
 from tldw_Server_API.app.core.Evaluations.unified_evaluation_service import (

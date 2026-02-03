@@ -1,4 +1,3 @@
-import os
 import pytest
 from fastapi.testclient import TestClient
 
@@ -76,7 +75,7 @@ def test_evaluation_async_add_task_receives_request_id(monkeypatch, override_ps_
     monkeypatch.setattr(_BT, "add_task", fake_add_task, raising=True)
 
     # Also patch the runner to a noop (defensive)
-    import tldw_Server_API.app.api.v1.endpoints.prompt_studio_evaluations as eval_ep
+    import tldw_Server_API.app.api.v1.endpoints.prompt_studio.prompt_studio_evaluations as eval_ep
 
     async def noop_run(*a, **kw):
         return None

@@ -16,15 +16,11 @@ import tempfile
 import os
 from pathlib import Path
 from unittest.mock import Mock, patch
-import numpy as np
 import sqlite3
-import json
-from datetime import datetime
 
 from tldw_Server_API.app.core.Evaluations.rag_evaluator import RAGEvaluator
 from tldw_Server_API.app.core.Evaluations.evaluation_manager import EvaluationManager
-from tldw_Server_API.app.core.Evaluations.unified_evaluation_service import UnifiedEvaluationService, get_unified_evaluation_service
-from tldw_Server_API.app.core.DB_Management.migrations import migrate_evaluations_database, MigrationManager
+from tldw_Server_API.app.core.DB_Management.migrations import migrate_evaluations_database
 
 
 class TestEvaluationIntegration:
@@ -303,7 +299,7 @@ class TestAuthentication:
     @pytest.mark.asyncio
     async def test_single_user_auth(self, mock_settings, setup_auth_db):
         """Test single-user authentication without hardcoded keys."""
-        from tldw_Server_API.app.api.v1.endpoints.evaluations_unified import verify_api_key
+        from tldw_Server_API.app.api.v1.endpoints.evaluations.evaluations_unified import verify_api_key
         from fastapi import HTTPException
         from fastapi.security import HTTPAuthorizationCredentials
         from starlette.requests import Request
@@ -329,7 +325,7 @@ class TestAuthentication:
     @pytest.mark.asyncio
     async def test_multi_user_jwt_auth(self, mock_settings, setup_auth_db):
         """Test multi-user JWT authentication."""
-        from tldw_Server_API.app.api.v1.endpoints.evaluations_unified import verify_api_key
+        from tldw_Server_API.app.api.v1.endpoints.evaluations.evaluations_unified import verify_api_key
         from fastapi.security import HTTPAuthorizationCredentials
         from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import User
         from starlette.requests import Request
@@ -359,7 +355,7 @@ class TestAuthentication:
     @pytest.mark.asyncio
     async def test_multi_user_jwt_expired_token_maps_error(self, mock_settings, setup_auth_db):
         """Expired JWTs should map to token_expired in evals auth."""
-        from tldw_Server_API.app.api.v1.endpoints.evaluations_unified import verify_api_key
+        from tldw_Server_API.app.api.v1.endpoints.evaluations.evaluations_unified import verify_api_key
         from fastapi.security import HTTPAuthorizationCredentials
         from fastapi import HTTPException
         from tldw_Server_API.app.core.AuthNZ.exceptions import TokenExpiredError
@@ -386,7 +382,7 @@ class TestAuthentication:
     @pytest.mark.asyncio
     async def test_multi_user_jwt_invalid_token_maps_error(self, mock_settings, setup_auth_db):
         """Invalid JWTs should map to invalid_token in evals auth."""
-        from tldw_Server_API.app.api.v1.endpoints.evaluations_unified import verify_api_key
+        from tldw_Server_API.app.api.v1.endpoints.evaluations.evaluations_unified import verify_api_key
         from fastapi.security import HTTPAuthorizationCredentials
         from fastapi import HTTPException
         from tldw_Server_API.app.core.AuthNZ.exceptions import InvalidTokenError
@@ -413,7 +409,7 @@ class TestAuthentication:
     @pytest.mark.asyncio
     async def test_multi_user_jwt_inactive_user_maps_error(self, mock_settings, setup_auth_db):
         """Inactive users should map to inactive_user in evals auth."""
-        from tldw_Server_API.app.api.v1.endpoints.evaluations_unified import verify_api_key
+        from tldw_Server_API.app.api.v1.endpoints.evaluations.evaluations_unified import verify_api_key
         from fastapi.security import HTTPAuthorizationCredentials
         from fastapi import HTTPException
         from starlette.requests import Request
@@ -444,7 +440,7 @@ class TestAuthentication:
     @pytest.mark.asyncio
     async def test_single_user_auth_respects_ip_allowlist(self, mock_settings, setup_auth_db):
         """Single-user auth should enforce SINGLE_USER_ALLOWED_IPS."""
-        from tldw_Server_API.app.api.v1.endpoints.evaluations_unified import verify_api_key
+        from tldw_Server_API.app.api.v1.endpoints.evaluations.evaluations_unified import verify_api_key
         from starlette.requests import Request
         from fastapi import HTTPException
 

@@ -1194,6 +1194,82 @@ class MCPProtocol:
 
         return {"tools": tools}
 
+    def _extract_allowed_tools(self, context: RequestContext) -> list[str] | None:
+        """Extract allowed-tools list from request context metadata."""
+        try:
+            metadata = context.metadata or {}
+            allowed = metadata.get("allowed_tools")
+        except Exception:
+            return None
+
+        if allowed is None:
+            return None
+        if isinstance(allowed, list):
+            cleaned = [str(item).strip() for item in allowed if str(item).strip()]
+            return cleaned or None
+        if isinstance(allowed, str):
+            try:
+                parsed = json.loads(allowed)
+                if isinstance(parsed, list):
+                    cleaned = [str(item).strip() for item in parsed if str(item).strip()]
+                    return cleaned or None
+            except json.JSONDecodeError:
+                pass
+            cleaned = [part.strip() for part in allowed.split(",") if part.strip()]
+            return cleaned or None
+        return None
+
+    def _extract_tool_command(self, tool_args: Any) -> str | None:
+        """Extract command-like string from tool arguments for pattern matching."""
+        if not isinstance(tool_args, dict):
+            return None
+        for key in ("command", "cmd", "args", "arguments"):
+            if key not in tool_args:
+                continue
+            value = tool_args.get(key)
+            if isinstance(value, str):
+                return value
+            if isinstance(value, list):
+                return " ".join(str(part) for part in value)
+        return None
+
+    def _matches_allowed_tool_pattern(self, tool_name: str, tool_args: Any, pattern: str) -> bool:
+        """Check if tool invocation matches an allowed-tools pattern."""
+        pattern = str(pattern or "").strip()
+        if not pattern:
+            return False
+        if "(" not in pattern:
+            return tool_name == pattern
+        if not pattern.endswith(")"):
+            return False
+
+        base_name, cmd_pattern = pattern.split("(", 1)
+        cmd_pattern = cmd_pattern[:-1]
+        base_name = base_name.strip()
+        if tool_name != base_name:
+            return False
+
+        command = self._extract_tool_command(tool_args)
+        if command is None:
+            return False
+
+        regex_pattern = re.escape(cmd_pattern)
+        regex_pattern = regex_pattern.replace(r"\*", ".*")
+        try:
+            return bool(re.match(f"^{regex_pattern}$", command.strip()))
+        except re.error:
+            return False
+
+    def _is_tool_allowed_by_context(self, tool_name: str, tool_args: Any, context: RequestContext) -> bool:
+        """Return True when tool usage is allowed by context metadata."""
+        allowed_tools = self._extract_allowed_tools(context)
+        if not allowed_tools:
+            return True
+        for pattern in allowed_tools:
+            if self._matches_allowed_tool_pattern(tool_name, tool_args, pattern):
+                return True
+        return False
+
     async def _handle_tools_call(
         self,
         params: dict[str, Any],
@@ -1211,6 +1287,10 @@ class MCPProtocol:
         # Strictly validate tool name
         if not self._tool_name_re.match(tool_name):
             raise InvalidParamsException("Invalid tool name")
+
+        # Enforce allowed-tools constraints from context metadata (skill execution)
+        if not self._is_tool_allowed_by_context(tool_name, tool_args, context):
+            raise PermissionError(f"Tool '{tool_name}' not allowed by execution context")
 
         # Find module for tool
         module = await self.module_registry.find_module_for_tool(tool_name)

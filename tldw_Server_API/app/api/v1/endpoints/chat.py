@@ -145,6 +145,11 @@ from tldw_Server_API.app.core.DB_Management.ChaChaNotes_DB import (
     ConflictError,
     InputError,
 )
+from tldw_Server_API.app.core.DB_Management.db_path_utils import DatabasePaths
+from tldw_Server_API.app.core.Skills.context_integration import (
+    add_skill_tool_to_tools_list,
+    build_system_message_with_skills,
+)
 from tldw_Server_API.app.core.DB_Management.transaction_utils import (
     db_transaction,
 )
@@ -1259,6 +1264,12 @@ async def create_chat_completion(
 
     # Get user ID for rate limiting and audit (use authenticated user)
     user_id = str(current_user.id) if current_user and getattr(current_user, 'id', None) is not None else client_id
+    user_base_dir = None
+    if current_user and getattr(current_user, "id", None) is not None:
+        try:
+            user_base_dir = DatabasePaths.get_user_base_directory(current_user.id)
+        except Exception:
+            user_base_dir = None
 
     # Initialize audit context for logging
     context = None
@@ -1352,6 +1363,13 @@ async def create_chat_completion(
                 validated_tools = validate_tool_definitions(tools_as_dicts, provider=provider_hint)
                 # Keep the validated tools as dicts since that's what the LLM API expects
                 request_data.tools = validated_tools
+            if user_base_dir is not None and current_user and getattr(current_user, "id", None) is not None:
+                request_data.tools = add_skill_tool_to_tools_list(
+                    request_data.tools,
+                    user_id=current_user.id,
+                    base_path=user_base_dir,
+                    db=chat_db,
+                )
             if request_data.temperature is not None:
                 request_data.temperature = validate_temperature(request_data.temperature)
             if request_data.max_tokens is not None:
@@ -2011,6 +2029,13 @@ async def create_chat_completion(
                 character_card=character_card_for_context or {},
                 llm_payload_messages=llm_payload_messages,
             )
+            if user_base_dir is not None and current_user and getattr(current_user, "id", None) is not None:
+                final_system_message = build_system_message_with_skills(
+                    final_system_message,
+                    current_user.id,
+                    user_base_dir,
+                    db=chat_db,
+                )
 
             system_message_id: str | None = None
             if should_persist and final_conversation_id:

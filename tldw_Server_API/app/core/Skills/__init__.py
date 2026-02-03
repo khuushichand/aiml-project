@@ -24,7 +24,7 @@ Usage:
     parsed = parser.parse_content(skill_content)
 
     # Manage skills
-    service = SkillsService(user_id=1, db=chacha_db)
+    service = SkillsService(user_id=1, base_path=Path("Databases/user_databases/1"), db=chacha_db)
     skill = await service.create_skill("my-skill", content)
 
     # Execute a skill

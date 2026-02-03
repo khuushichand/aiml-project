@@ -4,10 +4,34 @@ import json
 from datetime import datetime
 from typing import Any
 
+from fastapi import HTTPException
 from loguru import logger
 
+from tldw_Server_API.app.api.v1.schemas.admin_schemas import (
+    OrgBudgetItem,
+    OrgBudgetListResponse,
+    OrgBudgetUpdateRequest,
+)
 from tldw_Server_API.app.core.AuthNZ.database import is_postgres_backend
 from tldw_Server_API.app.core.Billing.plan_limits import get_plan_limits
+from tldw_Server_API.app.core.AuthNZ.principal_model import AuthPrincipal
+
+
+async def _emit_budget_audit_event(*args, **kwargs):
+    """Dispatch audit events through the admin module to preserve test monkeypatch hooks."""
+    try:
+        from tldw_Server_API.app.api.v1.endpoints import admin as admin_mod
+
+        emit_fn = getattr(admin_mod, "emit_budget_audit_event", None)
+        if callable(emit_fn):
+            return await emit_fn(*args, **kwargs)
+    except Exception:
+        pass
+
+    from tldw_Server_API.app.services.budget_audit_service import emit_budget_audit_event
+
+    return await emit_budget_audit_event(*args, **kwargs)
+
 
 _BUDGET_KEYS = {
     "budget_day_usd",
@@ -301,6 +325,95 @@ def _build_budget_item(row: dict[str, Any]) -> dict[str, Any]:
         "effective_limits": effective_limits,
         "updated_at": row.get("budgets_updated_at") or row.get("updated_at"),
     }
+
+
+async def list_budgets(
+    *,
+    principal: AuthPrincipal,
+    org_id: int | None,
+    page: int,
+    limit: int,
+    db,
+) -> OrgBudgetListResponse:
+    """List organization budgets and plan context."""
+    try:
+        del principal  # admin role already enforced by router dependency
+        if org_id is not None:
+            org_ids = [org_id]
+        else:
+            org_ids = None
+        items, total = await list_org_budgets(
+            db,
+            org_ids=org_ids,
+            page=page,
+            limit=limit,
+        )
+        return OrgBudgetListResponse(
+            items=[OrgBudgetItem(**item) for item in items],
+            total=total,
+            page=page,
+            limit=limit,
+        )
+    except Exception as exc:
+        logger.error(f"Failed to list org budgets: {exc}")
+        raise HTTPException(status_code=500, detail="Failed to list org budgets")
+
+
+async def upsert_budget(
+    *,
+    payload: OrgBudgetUpdateRequest,
+    request,
+    principal: AuthPrincipal,
+    db,
+) -> OrgBudgetItem:
+    """Upsert budget settings for an organization with audit logging."""
+    budget_updates = None
+    if payload.budgets is not None:
+        budget_updates = payload.budgets.model_dump(exclude_unset=True, by_alias=True)
+    try:
+        item, audit_changes = await upsert_org_budget(
+            db,
+            org_id=payload.org_id,
+            budget_updates=budget_updates,
+            clear_budgets=payload.clear_budgets,
+        )
+    except ValueError as exc:
+        detail = str(exc)
+        if detail == "org_not_found":
+            raise HTTPException(status_code=404, detail="org_not_found") from exc
+        if detail == "plan_not_found":
+            raise HTTPException(status_code=500, detail="plan_not_found") from exc
+        if detail == "subscription_not_found":
+            raise HTTPException(status_code=500, detail="subscription_not_found") from exc
+        raise HTTPException(status_code=400, detail="invalid_budget_update") from exc
+    except Exception as exc:
+        logger.error(f"Failed to upsert org budget: {exc}")
+        raise HTTPException(status_code=500, detail="Failed to upsert org budget") from exc
+
+    actor_role = None
+    try:
+        if principal.is_admin:
+            actor_role = "admin"
+        elif principal.roles:
+            actor_role = principal.roles[0]
+    except Exception:
+        actor_role = None
+
+    try:
+        await _emit_budget_audit_event(
+            request,
+            principal,
+            org_id=payload.org_id,
+            budget_updates=budget_updates,
+            audit_changes=audit_changes,
+            clear_budgets=payload.clear_budgets,
+            actor_role=actor_role,
+        )
+    except Exception as exc:
+        logger.error(f"Budget audit failed: {exc}")
+        raise HTTPException(status_code=500, detail="audit_failed") from exc
+
+    return OrgBudgetItem(**item)
 
 
 def merge_budget_settings(

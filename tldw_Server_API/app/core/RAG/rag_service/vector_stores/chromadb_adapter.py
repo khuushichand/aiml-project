@@ -18,6 +18,25 @@ from tldw_Server_API.app.core.Metrics.traces import get_tracing_manager
 from .base import VectorSearchResult, VectorStoreAdapter, VectorStoreConfig
 
 
+class ChromaDBNotInitializedError(RuntimeError):
+    """Raised when the ChromaDB adapter is used before initialization."""
+
+    def __init__(self) -> None:
+        super().__init__("ChromaDB adapter not initialized")
+
+
+class ChromaDBVectorsNotFoundError(ValueError):
+    """Raised when requested vector IDs are missing from a collection."""
+
+    def __init__(self, missing: list[str]) -> None:
+        super().__init__(f"Vector(s) not found: {missing}")
+        self.missing = missing
+
+
+def _raise_missing_vectors(missing: list[str]) -> None:
+    raise ChromaDBVectorsNotFoundError(missing)
+
+
 class ChromaDBAdapter(VectorStoreAdapter):
     """ChromaDB implementation of the vector store adapter."""
 
@@ -34,7 +53,7 @@ class ChromaDBAdapter(VectorStoreAdapter):
 
     def _require_manager(self) -> ChromaDBManager:
         if self.manager is None:
-            raise RuntimeError("ChromaDB adapter not initialized")
+            raise ChromaDBNotInitializedError()
         return self.manager
 
     async def initialize(self) -> None:
@@ -54,7 +73,7 @@ class ChromaDBAdapter(VectorStoreAdapter):
             self._loop = asyncio.get_event_loop()
             logger.info(f"ChromaDB adapter initialized for user {self.config.user_id}")
 
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001 - surface initialization failures
             logger.error(f"Failed to initialize ChromaDB adapter: {e}")
             raise
 
@@ -195,8 +214,8 @@ class ChromaDBAdapter(VectorStoreAdapter):
                 existing_ids = set(data.get("ids") or []) if isinstance(data, dict) else set()
                 missing = [vid for vid in ids if vid not in existing_ids]
                 if missing:
-                    raise ValueError(f"Vector(s) not found: {missing}")
-            except Exception as e:
+                    _raise_missing_vectors(missing)
+            except Exception:
                 # Bubble up as not-found for endpoint to translate to 404/400
                 raise
             collection.delete(ids=ids)
@@ -218,10 +237,11 @@ class ChromaDBAdapter(VectorStoreAdapter):
             delete = getattr(collection, 'delete', None)
             if callable(delete):
                 delete(where=filter)
-            return 0
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001 - best-effort delete
             logger.error(f"Failed to delete by filter in '{collection_name}': {e}")
+        else:
             return 0
+        return 0
 
     # Adapter-specific helper: list vectors with pagination
     async def list_vectors_paginated(self, collection_name: str, limit: int, offset: int, filter: Optional[dict[str, Any]] = None) -> dict[str, Any]:
@@ -232,12 +252,12 @@ class ChromaDBAdapter(VectorStoreAdapter):
         total = 0
         try:
             total = int(collection.count())
-        except Exception:
+        except Exception:  # noqa: BLE001 - count best-effort
             total = 0
         # Best-effort where filter if supported
         try:
             data = collection.get(limit=limit, offset=offset, include=["documents", "metadatas"], where=filter)
-        except Exception:
+        except Exception:  # noqa: BLE001 - fallback when where unsupported
             data = collection.get(limit=limit, offset=offset, include=["documents", "metadatas"])
         items = []
         data_dict = cast(dict[str, Any], data) if isinstance(data, dict) else {}
@@ -264,9 +284,10 @@ class ChromaDBAdapter(VectorStoreAdapter):
                 return None
             content = (data_dict.get('documents') or [""])[0]
             metadata = (data_dict.get('metadatas') or [{}])[0]
-            return {'id': vector_id, 'content': content, 'metadata': metadata}
-        except Exception:
+        except Exception:  # noqa: BLE001 - best-effort lookup
             return None
+        else:
+            return {'id': vector_id, 'content': content, 'metadata': metadata}
 
     # Adapter-specific helper: for duplication - vectors plus embeddings
     async def list_vectors_with_embeddings_paginated(self, collection_name: str, limit: int, offset: int, filter: Optional[dict[str, Any]] = None) -> dict[str, Any]:
@@ -277,11 +298,11 @@ class ChromaDBAdapter(VectorStoreAdapter):
         total = 0
         try:
             total = int(collection.count())
-        except Exception:
+        except Exception:  # noqa: BLE001 - count best-effort
             total = 0
         try:
             data = collection.get(limit=limit, offset=offset, include=["embeddings", "documents", "metadatas"], where=filter)
-        except Exception:
+        except Exception:  # noqa: BLE001 - fallback when where unsupported
             data = collection.get(limit=limit, offset=offset, include=["embeddings", "documents", "metadatas"])
         items = []
         data_dict = cast(dict[str, Any], data) if isinstance(data, dict) else {}
@@ -291,13 +312,13 @@ class ChromaDBAdapter(VectorStoreAdapter):
             try:
                 if hasattr(embs, 'tolist'):
                     embs = embs.tolist()
-            except Exception:
+            except Exception:  # noqa: BLE001 - best-effort conversion
                 pass
             for i, vid in enumerate(data_dict['ids']):
                 vec: list[float] = []
                 try:
                     vec = list(embs[i]) if isinstance(embs[i], (list, tuple)) else (embs[i].tolist() if hasattr(embs[i], 'tolist') else [])
-                except Exception:
+                except Exception:  # noqa: BLE001 - best-effort conversion
                     vec = []
                 items.append({
                     'id': vid,
@@ -365,11 +386,11 @@ class ChromaDBAdapter(VectorStoreAdapter):
                     )
                     search_results.append(result)
 
-            return search_results
-
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001 - surface as adapter error
             logger.error(f"Failed to search in collection '{collection_name}': {e}")
             raise
+        else:
+            return search_results
 
     async def multi_search(
         self,
@@ -431,7 +452,7 @@ class ChromaDBAdapter(VectorStoreAdapter):
                     for result in results:
                         result.metadata["source_collection"] = collection_name
                     all_results.extend(results)
-                except Exception as e:
+                except Exception as e:  # noqa: BLE001 - best-effort per-collection search
                     logger.warning(f"Failed to search collection '{collection_name}': {e}")
                     continue
 
@@ -439,7 +460,7 @@ class ChromaDBAdapter(VectorStoreAdapter):
             all_results.sort(key=lambda x: x.score, reverse=True)
             return all_results[:k]
 
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001 - surface as adapter error
             logger.error(f"Failed to perform multi-search: {e}")
             raise
 
@@ -472,7 +493,7 @@ class ChromaDBAdapter(VectorStoreAdapter):
             try:
                 if metadata and "embedding_dimension" in metadata:
                     dimension = int(metadata["embedding_dimension"]) or None
-            except Exception:
+            except Exception:  # noqa: BLE001 - metadata best-effort
                 dimension = None
             if dimension is None and count > 0:
                 sample = collection.get(limit=1, include=["embeddings"])
@@ -483,16 +504,19 @@ class ChromaDBAdapter(VectorStoreAdapter):
                 elif emb is not None and hasattr(emb, "tolist"):
                     try:
                         emb_list = emb.tolist()
-                    except Exception:
+                    except Exception:  # noqa: BLE001 - best-effort conversion
                         emb_list = None
                 if emb_list:
                     try:
                         dimension = len(emb_list[0])
-                    except Exception:
+                    except Exception:  # noqa: BLE001 - best-effort shape inspection
                         pass
             if dimension is None:
                 dimension = self.config.embedding_dim
-
+        except Exception as e:  # noqa: BLE001 - surface as adapter error
+            logger.error(f"Failed to get stats for collection '{collection_name}': {e}")
+            raise
+        else:
             return {
                 "name": collection_name,
                 "count": count,
@@ -500,10 +524,6 @@ class ChromaDBAdapter(VectorStoreAdapter):
                 "metadata": metadata,
                 "distance_metric": self.config.distance_metric
             }
-
-        except Exception as e:
-            logger.error(f"Failed to get stats for collection '{collection_name}': {e}")
-            raise
 
     async def optimize_collection(self, collection_name: str) -> None:
         """

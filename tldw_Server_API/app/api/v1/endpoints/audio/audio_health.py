@@ -7,7 +7,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from loguru import logger
 from starlette import status
 
-from tldw_Server_API.app.api.v1.endpoints.audio_tts import get_tts_service
+from tldw_Server_API.app.api.v1.endpoints.audio.audio_tts import get_tts_service
 from tldw_Server_API.app.core.Audio.error_payloads import _http_error_detail
 from tldw_Server_API.app.core.Audio.transcription_service import _map_openai_audio_model_to_whisper
 from tldw_Server_API.app.core.Logging.log_context import ensure_request_id

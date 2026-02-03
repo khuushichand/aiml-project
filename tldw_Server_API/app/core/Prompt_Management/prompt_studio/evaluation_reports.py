@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import csv
+import importlib.util
 
 # evaluation_reports.py
 # Generate evaluation reports for Prompt Studio
@@ -15,12 +16,9 @@ from loguru import logger
 if TYPE_CHECKING:
     from matplotlib.backends.backend_pdf import PdfPages  # pragma: no cover
 
-# Try to import optional dependencies
-try:
-    import pandas as pd
-    PANDAS_AVAILABLE = True
-except ImportError:
-    PANDAS_AVAILABLE = False
+# Try to detect optional dependencies
+PANDAS_AVAILABLE = importlib.util.find_spec("pandas") is not None
+if not PANDAS_AVAILABLE:
     logger.warning("pandas not available for advanced report features")
 
 ########################################################################################################################

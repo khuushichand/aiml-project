@@ -11,7 +11,7 @@ from loguru import logger
 
 from tldw_Server_API.app.api.v1.API_Deps.auth_deps import get_auth_principal, require_token_scope
 from tldw_Server_API.app.api.v1.API_Deps.DB_Deps import get_media_db_for_user
-from tldw_Server_API.app.api.v1.endpoints.evaluations_auth import (
+from tldw_Server_API.app.api.v1.endpoints.evaluations.evaluations_auth import (
     check_evaluation_rate_limit,
     enforce_heavy_evaluations_admin,
     get_eval_request_user,

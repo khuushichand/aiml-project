@@ -19,7 +19,7 @@ from tldw_Server_API.app.api.v1.API_Deps.kanban_deps import (
     handle_kanban_db_error,
     kanban_rate_limit,
 )
-from tldw_Server_API.app.api.v1.endpoints._kanban_utils import to_db_timestamp
+from tldw_Server_API.app.api.v1.endpoints.kanban._kanban_utils import to_db_timestamp
 from tldw_Server_API.app.api.v1.schemas.kanban_schemas import (
     ActivitiesListResponse,
     ActivityResponse,

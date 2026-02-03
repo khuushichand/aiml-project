@@ -12,7 +12,7 @@ from tldw_Server_API.app.api.v1.API_Deps.auth_deps import (
     rbac_rate_limit,
     require_token_scope,
 )
-from tldw_Server_API.app.api.v1.endpoints.evaluations_auth import (
+from tldw_Server_API.app.api.v1.endpoints.evaluations.evaluations_auth import (
     check_evaluation_rate_limit,
     create_error_response,
     get_eval_request_user,

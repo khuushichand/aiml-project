@@ -37,7 +37,7 @@ Scoped RBAC adds a second layer of permission grants derived from org/team membe
 - Role-permission mappings must exclude denylisted permissions. Any mapping changes should reject denylisted entries with clear validation errors (400) and avoid partial updates.
 - Runtime filtering always drops denylisted permissions before merging into `AuthPrincipal.permissions` as a safety net.
 - Implementation locations:
-  - Role creation/update handlers: admin RBAC endpoints in `tldw_Server_API/app/api/v1/endpoints/admin.py` (or a dedicated admin RBAC module if split out).
+  - Role creation/update handlers: admin RBAC endpoints in `tldw_Server_API/app/api/v1/endpoints/admin/__init__.py` (or a dedicated admin RBAC module if split out).
   - Permission-check flow: scoped resolver in `tldw_Server_API/app/core/AuthNZ/org_rbac.py` applies denylist filtering before merging into `AuthPrincipal.permissions`; `require_permissions` in `tldw_Server_API/app/api/v1/API_Deps/auth_deps.py` relies on the filtered set.
 
 ### Active Org/Team Resolution

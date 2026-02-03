@@ -7,7 +7,7 @@ import json
 import os
 import time
 from types import SimpleNamespace
-from typing import Any, Dict, List, Optional, Set
+from typing import Any, Optional, Set
 from uuid import uuid4
 
 import numpy as np
@@ -19,7 +19,7 @@ from starlette import status
 from tldw_Server_API.app.api.v1.API_Deps.auth_deps import require_token_scope
 from tldw_Server_API.app.api.v1.API_Deps.ChaCha_Notes_DB_Deps import get_chacha_db_for_user
 from tldw_Server_API.app.api.v1.API_Deps.personalization_deps import UsageEventLogger, get_usage_event_logger
-from tldw_Server_API.app.api.v1.endpoints.audio_tts import get_tts_service
+from tldw_Server_API.app.api.v1.endpoints.audio.audio_tts import get_tts_service
 from tldw_Server_API.app.api.v1.schemas.audio_schemas import OpenAISpeechRequest, SpeechChatRequest, SpeechChatResponse
 from tldw_Server_API.app.api.v1.schemas.chat_request_schemas import DEFAULT_LLM_PROVIDER, get_api_keys
 from tldw_Server_API.app.core.Audio.error_payloads import _ws_error_payload, _maybe_debug_details
@@ -65,7 +65,18 @@ router = APIRouter(
 
 def _audio_shim_attr(name: str):
     from tldw_Server_API.app.api.v1.endpoints import audio as audio_shim
+    try:
+        if name in getattr(audio_shim, "__dict__", {}):
+            return getattr(audio_shim, name)
+    except Exception:
+        pass
+    try:
+        from tldw_Server_API.app.api.v1.endpoints.audio import audio as audio_mod
 
+        if hasattr(audio_mod, name):
+            return getattr(audio_mod, name)
+    except Exception:
+        pass
     if not hasattr(audio_shim, name):
         raise NameError(name)
     return getattr(audio_shim, name)

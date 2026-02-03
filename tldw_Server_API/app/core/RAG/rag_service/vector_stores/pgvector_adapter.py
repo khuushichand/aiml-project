@@ -18,9 +18,41 @@ from .base import VectorSearchResult, VectorStoreAdapter, VectorStoreConfig
 try:
     from pgvector.psycopg import Vector as _PgVector
     from pgvector.psycopg import register_vector as _register_pgvector
-except Exception:  # pragma: no cover - optional dependency
+except ImportError:  # pragma: no cover - optional dependency
     _register_pgvector = None
     _PgVector = None
+
+
+class PGVectorError(RuntimeError):
+    """Base error for PGVector adapter failures."""
+
+
+class PGVectorNotInitializedError(PGVectorError):
+    """Raised when pgvector connections are not initialized."""
+
+    def __init__(self) -> None:
+        super().__init__("PGVector connection not initialized")
+
+
+class InvalidIndexTypeError(ValueError):
+    """Raised when an unsupported index type is requested."""
+
+    def __init__(self) -> None:
+        super().__init__("index_type must be one of: hnsw, ivfflat, drop")
+
+
+class InvalidQueryVectorError(TypeError):
+    """Raised when the query vector is not a sequence."""
+
+    def __init__(self) -> None:
+        super().__init__("query_vector must be a sequence of floats")
+
+
+class InvalidQueryVectorValueError(TypeError):
+    """Raised when the query vector contains non-numeric values."""
+
+    def __init__(self) -> None:
+        super().__init__("query_vector must contain numbers")
 
 
 class PGVectorAdapter(VectorStoreAdapter):
@@ -70,21 +102,39 @@ class PGVectorAdapter(VectorStoreAdapter):
                 import psycopg
                 try:
                     from psycopg_pool import ConnectionPool
-                    self._pool = ConnectionPool(conninfo=dsn, min_size=1, max_size=int(self.config.connection_params.get('pool_size', 5)))
-                    self._driver = 'psycopg_pool'
-                except Exception:
+                    try:
+                        self._pool = ConnectionPool(
+                            conninfo=dsn,
+                            min_size=1,
+                            max_size=int(self.config.connection_params.get('pool_size', 5)),
+                        )
+                        self._driver = 'psycopg_pool'
+                    except Exception as exc:  # noqa: BLE001 - fallback to single connection
+                        logger.debug("psycopg_pool init failed; falling back to single connection", exc_info=exc)
+                        self._pool = None
+                except ImportError:
+                    self._pool = None
+                if self._pool is None:
                     # Fallback to single psycopg connection
                     self._conn = await asyncio.get_event_loop().run_in_executor(
                         None,
-                        lambda: psycopg.connect(dsn)
+                        lambda: psycopg.connect(dsn),
                     )
                     self._driver = 'psycopg'
-            except Exception:
+            except ImportError:
                 # Final fallback: psycopg2 single connection
                 import psycopg2
                 self._conn = await asyncio.get_event_loop().run_in_executor(
                     None,
-                    lambda: psycopg2.connect(dsn)
+                    lambda: psycopg2.connect(dsn),
+                )
+                self._driver = 'psycopg2'
+            except Exception as exc:  # noqa: BLE001 - fallback to psycopg2 on psycopg failure
+                logger.debug("psycopg connect failed; falling back to psycopg2", exc_info=exc)
+                import psycopg2
+                self._conn = await asyncio.get_event_loop().run_in_executor(
+                    None,
+                    lambda: psycopg2.connect(dsn),
                 )
                 self._driver = 'psycopg2'
 
@@ -94,7 +144,7 @@ class PGVectorAdapter(VectorStoreAdapter):
             await self._exec("CREATE EXTENSION IF NOT EXISTS vector")
             self._initialized = True
             logger.info("PGVector adapter initialized")
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001 - initialization should not raise
             logger.error(f"Failed to initialize PGVector adapter: {e}")
             self._conn = None
             self._pool = None
@@ -126,7 +176,7 @@ class PGVectorAdapter(VectorStoreAdapter):
                 def __enter__(self): return self.conn
                 def __exit__(self, exc_type, exc, tb): return False
             return _Ctx(self._conn)
-        raise RuntimeError("PGVector connection not initialized")
+        raise PGVectorNotInitializedError()
 
     async def _register_vector_support(self) -> None:
         """Register pgvector adapters with psycopg when available."""
@@ -144,7 +194,7 @@ class PGVectorAdapter(VectorStoreAdapter):
                 return
             self._vector_cls = _PgVector
             logger.debug("Registered pgvector type with psycopg")
-        except Exception as exc:  # pragma: no cover - registration best-effort
+        except Exception as exc:  # noqa: BLE001 - registration best-effort
             logger.debug(f"pgvector registration failed: {exc}")
             self._vector_cls = None
 
@@ -154,13 +204,13 @@ class PGVectorAdapter(VectorStoreAdapter):
         if self._vector_cls is not None and isinstance(vector_obj, self._vector_cls):
             vector = list(cast(Any, vector_obj))
         if not isinstance(vector, (list, tuple)):
-            raise TypeError("query_vector must be a sequence of floats")
+            raise InvalidQueryVectorError()
         parts = []
         for val in vector:
             try:
                 parts.append(format(float(val), ".15g"))
-            except Exception as exc:
-                raise TypeError("query_vector must contain numbers") from exc
+            except (TypeError, ValueError) as exc:
+                raise InvalidQueryVectorValueError() from exc
         return "[" + ",".join(parts) + "]"
 
     async def _exec(self, sql: str, params: Optional[tuple] = None) -> None:
@@ -171,20 +221,20 @@ class PGVectorAdapter(VectorStoreAdapter):
                 try:
                     try:
                         cur.execute(f"SET hnsw.ef_search = {int(ef)}")
-                    except Exception as e:
+                    except Exception as e:  # noqa: BLE001 - best-effort session tuning
                         logger.debug("pgvector._exec: SET hnsw.ef_search failed", exc_info=e)
                     cur.execute(sql, params or ())
                     conn.commit()
-                except Exception as e:
+                except Exception:  # noqa: BLE001 - re-raise after rollback
                     try:
                         conn.rollback()
-                    except Exception as rb_e:
+                    except Exception as rb_e:  # noqa: BLE001 - rollback best-effort
                         logger.debug("pgvector._exec: rollback failed", exc_info=rb_e)
                     raise
                 finally:
                     try:
                         cur.close()
-                    except Exception as e:
+                    except Exception as e:  # noqa: BLE001 - cursor close best-effort
                         logger.debug("pgvector._exec: cursor close failed", exc_info=e)
         await asyncio.get_event_loop().run_in_executor(
             None,
@@ -202,21 +252,22 @@ class PGVectorAdapter(VectorStoreAdapter):
                 try:
                     try:
                         cur.execute(f"SET hnsw.ef_search = {int(ef)}")
-                    except Exception as e:
+                    except Exception as e:  # noqa: BLE001 - best-effort session tuning
                         logger.debug("pgvector._query: SET hnsw.ef_search failed", exc_info=e)
                     cur.execute(sql, params or ())
                     rows = cur.fetchall()
-                    return rows
                 except Exception as e:
                     try:
                         conn.rollback()
-                    except Exception as rb_e:
+                    except Exception as rb_e:  # noqa: BLE001 - rollback best-effort
                         logger.debug("pgvector._query: rollback failed", exc_info=rb_e)
                     raise
+                else:
+                    return rows
                 finally:
                     try:
                         cur.close()
-                    except Exception as e:
+                    except Exception as e:  # noqa: BLE001 - cursor close best-effort
                         logger.debug("pgvector._query: cursor close failed", exc_info=e)
         return await asyncio.get_event_loop().run_in_executor(
             None,
@@ -246,18 +297,18 @@ class PGVectorAdapter(VectorStoreAdapter):
             await self._exec(
                 f"CREATE INDEX IF NOT EXISTS {tbl}_embedding_hnsw ON {tbl} USING hnsw (embedding {ops}) WITH (m=16, ef_construction=200)"
             )
-        except Exception:
+        except Exception:  # noqa: BLE001 - index creation best-effort
             try:
                 await self._exec(
                     f"CREATE INDEX IF NOT EXISTS {tbl}_embedding_ivf ON {tbl} USING ivfflat (embedding {ops})"
                 )
-            except Exception:
+            except Exception:  # noqa: BLE001 - index creation best-effort
                 # If both fail, continue without an ANN index (still usable for brute-force)
                 pass
         # Analyze to help planner (best-effort)
         try:
             await self._exec(f"ANALYZE {tbl}")
-        except Exception:
+        except Exception:  # noqa: BLE001 - analyze best-effort
             pass
 
     async def delete_collection(self, collection_name: str) -> None:
@@ -294,7 +345,7 @@ class PGVectorAdapter(VectorStoreAdapter):
                 try:
                     try:
                         cur.execute(f"SET hnsw.ef_search = {int(ef)}")
-                    except Exception as e:
+                    except Exception as e:  # noqa: BLE001 - best-effort session tuning
                         logger.debug("pgvector.upsert: SET hnsw.ef_search failed", exc_info=e)
                     args = [(_id, doc, JsonDumper.dumps(meta), vec) for _id, doc, meta, vec in values]
                     cur.executemany(
@@ -306,14 +357,14 @@ class PGVectorAdapter(VectorStoreAdapter):
                 finally:
                     try:
                         cur.close()
-                    except Exception as e:
+                    except Exception as e:  # noqa: BLE001 - cursor close best-effort
                         logger.debug("pgvector.upsert: cursor close failed", exc_info=e)
         # Observe rows + latency
         with self._H_UPSERT_LAT.labels(collection=tbl).time():
             await asyncio.get_event_loop().run_in_executor(None, _batch, self._borrow_conn(), None if self._pool else self._borrow_conn(), self._ef_search)
         try:
             self._C_ROWS_UPSERTED.labels(collection=tbl).inc(len(values))
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001 - metrics best-effort
             logger.debug("pgvector.upsert: metrics increment failed", exc_info=e)
 
     async def delete_vectors(self, collection_name: str, ids: list[str]) -> None:
@@ -330,13 +381,13 @@ class PGVectorAdapter(VectorStoreAdapter):
                 finally:
                     try:
                         cur.close()
-                    except Exception as e:
+                    except Exception as e:  # noqa: BLE001 - cursor close best-effort
                         logger.debug("pgvector.delete_vectors: cursor close failed", exc_info=e)
         with self._H_DELETE_LAT.labels(collection=tbl).time():
             rc = await asyncio.get_event_loop().run_in_executor(None, _batch, self._borrow_conn(), None if self._pool else self._borrow_conn(), self._ef_search)
         try:
             self._C_ROWS_DELETED.labels(collection=tbl).inc(int(rc))
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001 - metrics best-effort
             logger.debug("pgvector.delete_vectors: metrics increment failed", exc_info=e)
 
     async def delete_by_filter(self, collection_name: str, filter: dict[str, Any]) -> int:
@@ -354,7 +405,7 @@ class PGVectorAdapter(VectorStoreAdapter):
                 try:
                     try:
                         cur.execute(f"SET hnsw.ef_search = {int(ef)}")
-                    except Exception as e:
+                    except Exception as e:  # noqa: BLE001 - best-effort session tuning
                         logger.debug("pgvector.delete_by_filter: SET hnsw.ef_search failed", exc_info=e)
                     cur.execute(f"DELETE FROM {tbl}{where_sql}", tuple(params))
                     rc = getattr(cur, 'rowcount', 0)
@@ -363,17 +414,17 @@ class PGVectorAdapter(VectorStoreAdapter):
                 finally:
                     try:
                         cur.close()
-                    except Exception as e:
+                    except Exception as e:  # noqa: BLE001 - cursor close best-effort
                         logger.debug("pgvector.delete_by_filter: cursor close failed", exc_info=e)
         with self._H_DELETE_LAT.labels(collection=tbl).time():
             rc = await asyncio.get_event_loop().run_in_executor(None, _run, self._borrow_conn(), None if self._pool else self._borrow_conn(), self._ef_search)
         try:
             self._C_ROWS_DELETED.labels(collection=tbl).inc(int(rc or 0))
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001 - metrics best-effort
             logger.debug("pgvector.delete_by_filter: metrics increment failed", exc_info=e)
         try:
             return int(rc)
-        except Exception:
+        except (TypeError, ValueError):
             return 0
 
     # Adapter-specific helper: list vectors with pagination
@@ -503,7 +554,7 @@ class PGVectorAdapter(VectorStoreAdapter):
                     vec = vec.tolist()
                 elif isinstance(vec, tuple):
                     vec = list(vec)
-            except Exception:
+            except (AttributeError, TypeError):
                 pass
             items.append({
                 'id': str(rid),
@@ -521,7 +572,7 @@ class PGVectorAdapter(VectorStoreAdapter):
     def set_ef_search(self, value: int) -> int:
         try:
             self._ef_search = max(1, int(value))
-        except Exception:
+        except (TypeError, ValueError):
             pass
         return self._ef_search
 
@@ -551,14 +602,14 @@ class PGVectorAdapter(VectorStoreAdapter):
                 defrows = await self._query("SELECT indexdef FROM pg_indexes WHERE indexname = %s", (name,))
                 if defrows and 'embedding' in (defrows[0][0] or '').lower():
                     await self._exec(f"DROP INDEX IF EXISTS \"{name}\"")
-            except Exception:
+            except Exception:  # noqa: BLE001 - index drop best-effort
                 # Continue dropping best-effort
                 pass
 
         if index_type.lower() == 'drop':
             try:
                 await self._exec(f"ANALYZE {tbl}")
-            except Exception:
+            except Exception:  # noqa: BLE001 - analyze best-effort
                 pass
             return await self.get_index_info(collection_name)
 
@@ -573,11 +624,11 @@ class PGVectorAdapter(VectorStoreAdapter):
                 f"CREATE INDEX IF NOT EXISTS {tbl}_embedding_ivf ON {tbl} USING ivfflat (embedding {ops}) WITH (lists={int(lists)})"
             )
         else:
-            raise ValueError("index_type must be one of: hnsw, ivfflat, drop")
+            raise InvalidIndexTypeError()
 
         try:
             await self._exec(f"ANALYZE {tbl}")
-        except Exception:
+        except Exception:  # noqa: BLE001 - analyze best-effort
             pass
         return await self.get_index_info(collection_name)
 
@@ -646,7 +697,7 @@ class PGVectorAdapter(VectorStoreAdapter):
             # Convert distance to similarity in [0,1] by heuristic
             try:
                 sim = 1.0 / (1.0 + float(distance))
-            except Exception:
+            except (TypeError, ValueError):
                 sim = 0.0
             results.append(VectorSearchResult(
                 id=str(rid),
@@ -694,7 +745,7 @@ class PGVectorAdapter(VectorStoreAdapter):
         tbl = self._sanitize_collection(collection_name)
         try:
             await self._exec(f"ANALYZE {tbl}")
-        except Exception:
+        except Exception:  # noqa: BLE001 - analyze best-effort
             pass
 
     async def get_index_info(self, collection_name: str) -> dict[str, Any]:
@@ -704,7 +755,7 @@ class PGVectorAdapter(VectorStoreAdapter):
             rows = await self._query("SELECT indexdef FROM pg_indexes WHERE tablename = %s", (tbl,))
             idxdef = " ".join([(r[0] or "") for r in rows])
             idx_type = "hnsw" if "using hnsw" in idxdef.lower() else ("ivfflat" if "using ivfflat" in idxdef.lower() else "none")
-        except Exception:
+        except Exception:  # noqa: BLE001 - index lookup best-effort
             idx_type = "unknown"
         stats = await self.get_collection_stats(collection_name)
         return {
@@ -722,14 +773,14 @@ class PGVectorAdapter(VectorStoreAdapter):
             if self._pool is not None:
                 # psycopg_pool.ConnectionPool exposes close(); run in executor to avoid blocking
                 await asyncio.get_event_loop().run_in_executor(None, getattr(self._pool, "close", lambda: None))
-        except Exception:
+        except Exception:  # noqa: BLE001 - close best-effort
             pass
         finally:
             self._pool = None
         try:
             if self._conn:
                 await asyncio.get_event_loop().run_in_executor(None, self._conn.close)
-        except Exception:
+        except Exception:  # noqa: BLE001 - close best-effort
             pass
         finally:
             self._conn = None
@@ -748,17 +799,17 @@ class PGVectorAdapter(VectorStoreAdapter):
                     "num_connections": getattr(self._pool, "num_connections", None),
                     "num_available": getattr(self._pool, "num_available", None),
                 }
-        except Exception:
+        except Exception:  # noqa: BLE001 - pool stats best-effort
             pass
         try:
             rows = await self._query("SELECT 1", None)
             ok = bool(rows)
-        except Exception:
+        except Exception:  # noqa: BLE001 - retry on any failure
             try:
                 await self.initialize()
                 rows2 = await self._query("SELECT 1", None)
                 ok = bool(rows2)
-            except Exception:
+            except Exception:  # noqa: BLE001 - final fallback
                 ok = False
         info["ok"] = bool(ok)
         return info
@@ -771,5 +822,5 @@ class JsonDumper:
         import json as _json
         try:
             return _json.dumps(obj)
-        except Exception:
+        except (TypeError, ValueError):
             return '{}'

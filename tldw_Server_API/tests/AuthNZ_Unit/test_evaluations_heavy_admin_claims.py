@@ -3,7 +3,7 @@ from types import SimpleNamespace
 from typing import Optional
 
 import pytest
-from fastapi import Depends, FastAPI, Request
+from fastapi import FastAPI, Request
 from fastapi.testclient import TestClient
 
 from tldw_Server_API.app.api.v1.API_Deps import auth_deps
@@ -32,9 +32,9 @@ def _make_principal(
 
 
 def _build_app_with_admin_cleanup(principal: AuthPrincipal) -> FastAPI:
-    from tldw_Server_API.app.api.v1.endpoints import evaluations_unified as eval_unified
+    from tldw_Server_API.app.api.v1.endpoints.evaluations import evaluations_unified as eval_unified
     from tldw_Server_API.app.core.AuthNZ import User_DB_Handling as udh
-    from tldw_Server_API.app.api.v1.endpoints import evaluations_auth as eval_auth
+    from tldw_Server_API.app.api.v1.endpoints.evaluations import evaluations_auth as eval_auth
 
     app = FastAPI()
     app.include_router(eval_unified.router, prefix="/api/v1")
@@ -106,7 +106,7 @@ def _build_app_with_admin_cleanup(principal: AuthPrincipal) -> FastAPI:
 @pytest.mark.unit
 def test_require_admin_helper_respects_env_guard(monkeypatch):
     from fastapi import HTTPException
-    from tldw_Server_API.app.api.v1.endpoints.evaluations_auth import require_admin
+    from tldw_Server_API.app.api.v1.endpoints.evaluations.evaluations_auth import require_admin
 
     user = SimpleNamespace(is_admin=False, role="user", roles=["user"])
     monkeypatch.setenv("EVALS_HEAVY_ADMIN_ONLY", "true")

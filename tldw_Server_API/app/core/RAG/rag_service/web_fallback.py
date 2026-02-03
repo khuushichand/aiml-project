@@ -136,7 +136,7 @@ async def web_search_fallback(
             metadata={"error": "module_not_available"},
         )
 
-    except Exception as e:
+    except Exception as e:  # noqa: BLE001 - fallback should be resilient to unexpected failures
         logger.warning(f"Web search fallback failed: {e}")
         return WebFallbackResult(
             documents=[],
@@ -210,7 +210,7 @@ def _convert_web_results_to_documents(
             )
             documents.append(doc)
 
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001 - best-effort conversion of results
             logger.warning(f"Failed to convert web result {idx}: {e}")
             continue
 

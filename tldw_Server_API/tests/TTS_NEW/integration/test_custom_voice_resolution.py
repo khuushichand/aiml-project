@@ -4,7 +4,7 @@ from unittest.mock import AsyncMock
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
-from tldw_Server_API.app.api.v1.endpoints.audio import router as audio_router
+from tldw_Server_API.app.api.v1.endpoints.audio.audio import router as audio_router
 from tldw_Server_API.app.api.v1.endpoints import audio as audio_endpoints
 from tldw_Server_API.app.core.AuthNZ.settings import reset_settings
 from tldw_Server_API.app.core.TTS.adapters.base import TTSResponse

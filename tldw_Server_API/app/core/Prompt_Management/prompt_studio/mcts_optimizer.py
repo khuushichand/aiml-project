@@ -26,7 +26,7 @@ from .types_common import MetricType
 
 try:
     # Optional: shared WS connection manager if WS endpoints loaded
-    from tldw_Server_API.app.api.v1.endpoints.prompt_studio_websocket import (
+    from tldw_Server_API.app.api.v1.endpoints.prompt_studio.prompt_studio_websocket import (
         connection_manager as ws_connection_manager,
     )
 except Exception:  # pragma: no cover - optional in minimal builds

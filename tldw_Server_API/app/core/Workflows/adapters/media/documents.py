@@ -437,7 +437,6 @@ async def run_document_table_extract_adapter(config: dict[str, Any], context: di
         if provider == "docling":
             # Use docling for table extraction
             try:
-                from docling.datamodel.base_models import InputFormat
                 from docling.document_converter import DocumentConverter
 
                 converter = DocumentConverter()

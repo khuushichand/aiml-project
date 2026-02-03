@@ -16,13 +16,11 @@ from loguru import logger
 
 try:
     from prometheus_client import (
-        CONTENT_TYPE_LATEST,
         CollectorRegistry,
         Counter,
         Gauge,
         Histogram,
         Info,
-        Summary,
         generate_latest,
     )
     PROMETHEUS_AVAILABLE = True

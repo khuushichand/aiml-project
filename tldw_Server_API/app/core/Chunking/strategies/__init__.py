@@ -3,8 +3,6 @@ Chunking strategies for different text processing methods.
 Each strategy implements the ChunkingStrategy protocol from base.py.
 """
 
-from typing import Any, Dict, Type
-
 from ..base import ChunkingStrategy
 from .fixed_size import FixedSizeChunkingStrategy
 from .json_xml import JSONChunkingStrategy, XMLChunkingStrategy

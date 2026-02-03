@@ -40,11 +40,11 @@ from tldw_Server_API.app.core.LLM_Calls.adapter_utils import (
 )
 from tldw_Server_API.app.core.LLM_Calls.provider_metadata import provider_requires_api_key
 
-from ....core.DB_Management.backends.base import BackendType
-from ....core.DB_Management.PromptStudioDatabase import PromptStudioDatabase
-from ....core.Prompt_Management.prompt_studio.evaluation_manager import EvaluationManager
-from ..API_Deps.prompt_studio_deps import get_prompt_studio_db, get_prompt_studio_user
-from ..schemas.prompt_studio_schemas import (
+from tldw_Server_API.app.core.DB_Management.backends.base import BackendType
+from tldw_Server_API.app.core.DB_Management.PromptStudioDatabase import PromptStudioDatabase
+from tldw_Server_API.app.core.Prompt_Management.prompt_studio.evaluation_manager import EvaluationManager
+from tldw_Server_API.app.api.v1.API_Deps.prompt_studio_deps import get_prompt_studio_db, get_prompt_studio_user
+from tldw_Server_API.app.api.v1.schemas.prompt_studio_schemas import (
     EvaluationCreate,
     EvaluationList,
     EvaluationResponse,

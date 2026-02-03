@@ -144,7 +144,7 @@ def test_e2e_prompt_studio_deny_headers_retry_after(monkeypatch, tmp_path, auth_
     )
 
     from tldw_Server_API.app.api.v1.API_Deps.prompt_studio_deps import get_prompt_studio_db
-    from tldw_Server_API.app.api.v1.endpoints.prompt_studio_status import router as prompt_studio_status_router
+    from tldw_Server_API.app.api.v1.endpoints.prompt_studio.prompt_studio_status import router as prompt_studio_status_router
 
     class _StubPromptStudioDB:
         def get_job_stats(self):
