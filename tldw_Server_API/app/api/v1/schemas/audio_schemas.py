@@ -8,9 +8,9 @@
 # Local Imports
 #
 #######################################################################################################################
-from typing import Any, Literal, Optional
+from typing import Any, Literal, Optional, Union
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 
 class NormalizationOptions(BaseModel):
@@ -175,6 +175,81 @@ class AudioTokenizerDecodeRequest(BaseModel):
     response_format: Literal["wav", "pcm"] = Field(
         default="wav",
         description="Desired audio output format.",
+    )
+
+
+class StreamingStatusFeatures(BaseModel):
+    """Response schema for streaming transcription feature flags."""
+
+    partial_results: bool = Field(True, description="Whether partial results are supported.")
+    multiple_languages: bool = Field(True, description="Whether multiple languages are supported.")
+    concurrent_streams: bool = Field(True, description="Whether concurrent streams are supported.")
+    segment_metadata: bool = Field(True, description="Whether segment metadata is supported.")
+    live_insights: bool = Field(True, description="Whether live insights are supported.")
+    meeting_notes: bool = Field(True, description="Whether meeting notes are supported.")
+    speaker_diarization: bool = Field(True, description="Whether speaker diarization is supported.")
+    audio_persistence: bool = Field(True, description="Whether audio persistence is supported.")
+
+
+class StreamingStatusResponse(BaseModel):
+    """Response schema for streaming transcription availability."""
+
+    status: Literal["available", "unavailable", "error"] = Field(
+        ..., description="Availability status of streaming transcription."
+    )
+    available_models: list[str] = Field(
+        default_factory=list,
+        description="Detected streaming model variants.",
+    )
+    websocket_endpoint: str = Field(
+        ..., description="WebSocket endpoint for streaming transcription."
+    )
+    supported_features: StreamingStatusFeatures = Field(
+        ..., description="Feature flags for streaming transcription."
+    )
+
+
+class StreamingLimitsResponse(BaseModel):
+    """Response schema for streaming quota and usage."""
+
+    user_id: Union[int, str] = Field(..., description="User identifier.")
+    tier: str = Field(..., description="User tier name.")
+    limits: dict[str, Any] = Field(
+        ..., description="Resolved limit values for the user."
+    )
+    used_today_minutes: float = Field(
+        ..., description="Minutes already used today."
+    )
+    remaining_minutes: Optional[float] = Field(
+        default=None,
+        description="Minutes remaining today, or null if unknown/unbounded.",
+    )
+    active_streams: int = Field(
+        ..., description="Number of currently active streams."
+    )
+    can_start_stream: bool = Field(
+        ..., description="Whether another stream can be started."
+    )
+    legacy_can_start_stream: bool = Field(
+        ...,
+        alias="_can_start_stream",
+        description="Backwards-compatible alias for can_start_stream.",
+    )
+
+    model_config = ConfigDict(populate_by_name=True)
+
+
+class StreamingTestResponse(BaseModel):
+    """Response schema for streaming transcription test endpoint."""
+
+    status: Literal["success", "error"] = Field(
+        ..., description="Outcome of the streaming test."
+    )
+    test_passed: bool = Field(..., description="Whether the test passed.")
+    message: str = Field(..., description="Human-readable status message.")
+    test_result: Optional[Any] = Field(
+        default=None,
+        description="Transcriber response or 'Buffer accumulating' when buffering.",
     )
 
 

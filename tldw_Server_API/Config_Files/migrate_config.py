@@ -19,6 +19,8 @@ from datetime import datetime
 from pathlib import Path
 from typing import Optional
 
+from loguru import logger
+
 
 class ConfigMigrator:
     """Handles migration of configuration from config.txt to .env"""
@@ -112,7 +114,7 @@ class ConfigMigrator:
                     if value and not value.startswith("<") and not value.endswith(">"):
                         if value != "your_api_key_here" and value != "":
                             extracted[env_key] = value
-                            print(f"  Found {key}: {value[:8]}..." if len(value) > 8 else f"  Found {key}")
+                            logger.info("Found API key for migration: {}", key)
 
         # Process Local-API section
         if config.has_section("Local-API"):
@@ -126,7 +128,7 @@ class ConfigMigrator:
                             continue
                         if value != "":
                             extracted[env_key] = value
-                            print(f"  Found {key}: {value[:20]}..." if len(value) > 20 else f"  Found {key}")
+                            logger.info("Found local API key for migration: {}", key)
 
         # Process Embeddings section
         if config.has_section("Embeddings"):
@@ -134,13 +136,13 @@ class ConfigMigrator:
                 value = config.get("Embeddings", "embedding_api_key")
                 if value and value != "your_api_key_here" and value != "":
                     extracted["EMBEDDING_API_KEY"] = value
-                    print(f"  Found embedding_api_key")
+                    logger.info("Found embedding API key for migration")
 
             if config.has_option("Embeddings", "embedding_api_url"):
                 value = config.get("Embeddings", "embedding_api_url")
                 if value and value != "http://localhost:8080/v1/embeddings":
                     extracted["EMBEDDING_API_URL"] = value
-                    print(f"  Found embedding_api_url: {value}")
+                    logger.info("Found embedding API URL for migration")
 
         self.extracted_keys = extracted
         return extracted
@@ -151,12 +153,16 @@ class ConfigMigrator:
             return {}
 
         existing = {}
-        with open(self.env_file, 'r') as f:
-            for line in f:
-                line = line.strip()
-                if line and not line.startswith('#') and '=' in line:
-                    key, value = line.split('=', 1)
-                    existing[key.strip()] = value.strip()
+        try:
+            with open(self.env_file, "r", encoding="utf-8") as f:
+                for line in f:
+                    line = line.strip()
+                    if line and not line.startswith("#") and "=" in line:
+                        key, value = line.split("=", 1)
+                        existing[key.strip()] = value.strip()
+        except (OSError, UnicodeError) as exc:
+            logger.error("Failed to read .env file: {}", exc)
+            return {}
 
         self.existing_env_keys = existing
         return existing
@@ -166,8 +172,12 @@ class ConfigMigrator:
         # Read template for structure
         template_lines = []
         if self.env_template.exists():
-            with open(self.env_template, 'r') as f:
-                template_lines = f.readlines()
+            try:
+                with open(self.env_template, "r", encoding="utf-8") as f:
+                    template_lines = f.readlines()
+            except (OSError, UnicodeError) as exc:
+                logger.error("Failed to read .env template: {}", exc)
+                template_lines = []
 
         # Merge with existing keys if preserving
         final_keys = {}
@@ -176,59 +186,70 @@ class ConfigMigrator:
         final_keys.update(keys)
 
         # Write new .env file
-        with open(self.env_file, 'w') as f:
-            if template_lines:
-                # Use template structure
-                for line in template_lines:
-                    if '=' in line and not line.strip().startswith('#'):
-                        key = line.split('=')[0].strip()
-                        if key in final_keys:
-                            # Skip empty values
-                            if final_keys[key]:
-                                f.write(f"{key}={final_keys[key]}\n")
-                                final_keys.pop(key)  # Mark as written
+        try:
+            with open(self.env_file, "w", encoding="utf-8") as f:
+                if template_lines:
+                    # Use template structure
+                    for line in template_lines:
+                        if "=" in line and not line.strip().startswith("#"):
+                            key = line.split("=")[0].strip()
+                            if key in final_keys:
+                                # Skip empty values
+                                if final_keys[key]:
+                                    f.write(f"{key}={final_keys[key]}\n")
+                                    final_keys.pop(key)  # Mark as written
+                                else:
+                                    f.write(line)  # Keep original empty line
                             else:
-                                f.write(line)  # Keep original empty line
+                                f.write(line)
                         else:
                             f.write(line)
-                    else:
-                        f.write(line)
 
-                # Add any keys not in template
-                if final_keys:
-                    f.write("\n# Additional migrated keys\n")
-                    for key, value in final_keys.items():
-                        if value:  # Skip empty values
-                            f.write(f"{key}={value}\n")
-            else:
-                # No template, write simple format
-                f.write("# Migrated configuration\n")
-                f.write(f"# Generated on {datetime.now().isoformat()}\n\n")
+                    # Add any keys not in template
+                    if final_keys:
+                        f.write("\n# Additional migrated keys\n")
+                        for key, value in final_keys.items():
+                            if value:  # Skip empty values
+                                f.write(f"{key}={value}\n")
+                else:
+                    # No template, write simple format
+                    f.write("# Migrated configuration\n")
+                    f.write(f"# Generated on {datetime.now().isoformat()}\n\n")
 
-                # Group by type
-                api_keys = {k: v for k, v in final_keys.items() if "API_KEY" in k}
-                api_ips = {k: v for k, v in final_keys.items() if "API_IP" in k}
-                others = {k: v for k, v in final_keys.items() if k not in api_keys and k not in api_ips}
+                    # Group by type
+                    api_keys = {k: v for k, v in final_keys.items() if "API_KEY" in k}
+                    api_ips = {k: v for k, v in final_keys.items() if "API_IP" in k}
+                    others = {
+                        k: v for k, v in final_keys.items() if k not in api_keys and k not in api_ips
+                    }
 
-                if api_keys:
-                    f.write("# API Keys\n")
-                    for key, value in sorted(api_keys.items()):
-                        if value:
-                            f.write(f"{key}={value}\n")
-                    f.write("\n")
+                    if api_keys:
+                        f.write("# API Keys\n")
+                        for key, value in sorted(api_keys.items()):
+                            if value:
+                                f.write(f"{key}={value}\n")
+                        f.write("\n")
 
-                if api_ips:
-                    f.write("# API Endpoints\n")
-                    for key, value in sorted(api_ips.items()):
-                        if value:
-                            f.write(f"{key}={value}\n")
-                    f.write("\n")
+                    if api_ips:
+                        f.write("# API Endpoints\n")
+                        for key, value in sorted(api_ips.items()):
+                            if value:
+                                f.write(f"{key}={value}\n")
+                        f.write("\n")
 
-                if others:
-                    f.write("# Other Settings\n")
-                    for key, value in sorted(others.items()):
-                        if value:
-                            f.write(f"{key}={value}\n")
+                    if others:
+                        f.write("# Other Settings\n")
+                        for key, value in sorted(others.items()):
+                            if value:
+                                f.write(f"{key}={value}\n")
+        except OSError as exc:
+            logger.error("Failed to write .env file: {}", exc)
+            raise
+
+        try:
+            self.env_file.chmod(0o600)
+        except OSError as exc:
+            logger.warning("Unable to set permissions on .env: {}", exc)
 
     def migrate(self, dry_run: bool = False, backup: bool = True) -> bool:
         """Perform the migration"""
@@ -269,11 +290,11 @@ class ConfigMigrator:
                 conflicts.append(key)
 
         if conflicts:
-            print(f"\n⚠ Warning: {len(conflicts)} keys already exist in .env with different values:")
-            for key in conflicts:
-                print(f"  {key}:")
-                print(f"    Current: {existing_env[key][:20]}..." if len(existing_env[key]) > 20 else f"    Current: {existing_env[key]}")
-                print(f"    New:     {extracted[key][:20]}..." if len(extracted[key]) > 20 else f"    New:     {extracted[key]}")
+            logger.warning(
+                "Warning: {} keys already exist in .env with different values: {}",
+                len(conflicts),
+                ", ".join(sorted(conflicts)),
+            )
 
             if not dry_run:
                 response = input("\nOverwrite existing values? (y/N): ")
@@ -287,9 +308,11 @@ class ConfigMigrator:
             self.write_env_file(extracted, preserve_existing=True)
             print(f"✓ Updated .env file with {len(extracted)} keys")
         else:
-            print("\n📝 Would write the following keys to .env:")
-            for key, value in extracted.items():
-                print(f"  {key}={value[:20]}..." if len(value) > 20 else f"  {key}={value}")
+            logger.info(
+                "Would write {} keys to .env: {}",
+                len(extracted),
+                ", ".join(sorted(extracted)),
+            )
 
         # Step 6: Summary
         print("\n" + "="*60)

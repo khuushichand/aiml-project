@@ -16,6 +16,31 @@ from typing import Any, Optional
 from loguru import logger
 
 
+class ConnectionPoolError(RuntimeError):
+    """Base error for connection pool failures."""
+
+
+class PoolClosedError(ConnectionPoolError):
+    """Raised when the pool is closed."""
+
+    def __init__(self) -> None:
+        super().__init__("Connection pool is closed")
+
+
+class ConnectionCreationError(ConnectionPoolError):
+    """Raised when a connection cannot be created."""
+
+    def __init__(self) -> None:
+        super().__init__("Failed to create connection")
+
+
+class ConnectionExhaustedError(ConnectionPoolError):
+    """Raised when no connections are available."""
+
+    def __init__(self, max_connections: int) -> None:
+        super().__init__(f"Connection pool exhausted (max={max_connections})")
+
+
 class ConnectionPool:
     """
     Thread-safe connection pool for SQLite databases.
@@ -117,11 +142,11 @@ class ConnectionPool:
                 self._stats["connections_created"] += 1
 
             logger.debug(f"Created new connection {conn_id} for {self.db_path}")
-            return conn
-
-        except Exception as e:
+        except (OSError, RuntimeError, TypeError, ValueError, sqlite3.Error) as e:
             logger.error(f"Failed to create connection to {self.db_path}: {e}")
-            return None
+        else:
+            return conn
+        return None
 
     def _is_connection_valid(self, conn: sqlite3.Connection) -> bool:
         """
@@ -135,10 +160,11 @@ class ConnectionPool:
         """
         try:
             conn.execute("SELECT 1")
-            return True
-        except Exception as e:
+        except (sqlite3.Error, RuntimeError, TypeError, ValueError) as e:
             logger.debug(f"Connection validation failed: error={e}")
-            return False
+        else:
+            return True
+        return False
 
     @contextmanager
     def get_connection(self):
@@ -152,7 +178,7 @@ class ConnectionPool:
             TimeoutError: If unable to acquire connection within timeout
         """
         if self._closed:
-            raise RuntimeError("Connection pool is closed")
+            raise PoolClosedError()
 
         conn = None
         wait_start = time.time()
@@ -168,7 +194,7 @@ class ConnectionPool:
                     self._close_connection(conn)
                     conn = self._create_connection()
                     if not conn:
-                        raise RuntimeError("Failed to create replacement connection")
+                        raise ConnectionCreationError()
 
                 with self._lock:
                     self._stats["connections_reused"] += 1
@@ -181,12 +207,10 @@ class ConnectionPool:
                     if active_count < self.max_connections:
                         conn = self._create_connection()
                         if not conn:
-                            raise RuntimeError("Failed to create new connection")
+                            raise ConnectionCreationError() from None
                     else:
                         self._stats["pool_exhausted_count"] += 1
-                        raise TimeoutError(
-                            f"Connection pool exhausted (max={self.max_connections})"
-                        )
+                        raise ConnectionExhaustedError(self.max_connections) from None
 
             # Update connection state
             conn_id = id(conn)
@@ -235,7 +259,7 @@ class ConnectionPool:
                     del self._all_connections[conn_id]
                 self._stats["connections_closed"] += 1
 
-        except Exception as e:
+        except (sqlite3.Error, RuntimeError, TypeError, ValueError) as e:
             logger.error(f"Error closing connection: {e}")
 
     def close_idle_connections(self):
@@ -261,7 +285,7 @@ class ConnectionPool:
                 self._close_connection(conn)
                 logger.debug(f"Closed idle connection")
 
-            except Exception as e:
+            except (sqlite3.Error, RuntimeError, TypeError, ValueError) as e:
                 logger.error(f"Error closing idle connection: {e}")
 
     def get_stats(self) -> dict[str, Any]:
@@ -303,7 +327,7 @@ class ConnectionPool:
             for info in list(self._all_connections.values()):
                 try:
                     info["connection"].close()
-                except Exception as e:
+                except (sqlite3.Error, RuntimeError, TypeError, ValueError) as e:
                     logger.debug(f"Error closing pooled connection during shutdown: error={e}")
 
             self._all_connections.clear()

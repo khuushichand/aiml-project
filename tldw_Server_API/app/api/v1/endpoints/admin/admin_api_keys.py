@@ -1,7 +1,5 @@
 from __future__ import annotations
 
-from typing import Any
-
 from fastapi import APIRouter, Depends, Query
 
 from tldw_Server_API.app.api.v1.API_Deps.auth_deps import (
@@ -13,6 +11,7 @@ from tldw_Server_API.app.api.v1.schemas.api_key_schemas import (
     APIKeyCreateRequest,
     APIKeyCreateResponse,
     APIKeyMetadata,
+    APIKeyRevokeResponse,
     APIKeyRotateRequest,
     APIKeyUpdateRequest,
 )
@@ -67,12 +66,12 @@ async def admin_rotate_user_api_key(
     )
 
 
-@router.delete("/users/{user_id}/api-keys/{key_id}")
+@router.delete("/users/{user_id}/api-keys/{key_id}", response_model=APIKeyRevokeResponse)
 async def admin_revoke_user_api_key(
     user_id: int,
     key_id: int,
     principal: AuthPrincipal = Depends(get_auth_principal),
-) -> dict[str, Any]:
+) -> APIKeyRevokeResponse:
     """Revoke an API key for the given user (admin)."""
     return await admin_api_keys_service.revoke_user_api_key(
         principal,
@@ -99,12 +98,12 @@ async def admin_update_user_api_key(
     )
 
 
-@router.post("/users/{user_id}/virtual-keys")
+@router.post("/users/{user_id}/virtual-keys", response_model=APIKeyCreateResponse)
 async def admin_create_virtual_key(
     user_id: int,
     payload: VirtualKeyCreateRequest,
     principal: AuthPrincipal = Depends(get_auth_principal),
-) -> dict[str, Any]:
+) -> APIKeyCreateResponse:
     return await admin_api_keys_service.create_virtual_key(
         principal,
         user_id,

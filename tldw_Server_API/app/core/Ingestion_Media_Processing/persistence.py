@@ -752,7 +752,7 @@ async def add_media_orchestrate(
                                 "Original file path rejected outside temp dir: %s",
                                 source_path,
                             )
-                            result.setdefault("warnings", []).append(
+                            _ensure_warnings_list(result).append(
                                 "Original file not stored: unsafe local path"
                             )
                             continue
@@ -786,7 +786,7 @@ async def add_media_orchestrate(
                                         f"Storage quota exceeded for user {user_id_str}, "
                                         f"skipping original file storage for media_id={media_id}"
                                     )
-                                    result.setdefault("warnings", []).append(
+                                    _ensure_warnings_list(result).append(
                                         "Original file not stored: storage quota exceeded"
                                     )
                                     continue
@@ -851,7 +851,7 @@ async def add_media_orchestrate(
                             )
                             # Non-fatal - don't fail the entire ingestion
                             result["original_file_stored"] = False
-                            result.setdefault("warnings", []).append(
+                            _ensure_warnings_list(result).append(
                                 f"Failed to store original file: {store_err}"
                             )
 

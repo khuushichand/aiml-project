@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from fastapi import APIRouter, Depends, Query, Request
+from loguru import logger
 
 from tldw_Server_API.app.api.v1.API_Deps.auth_deps import (
     get_auth_principal,
@@ -79,8 +80,8 @@ async def admin_list_user_profiles(
     if audit_info:
         try:
             await _get_emit_admin_audit_event()(http_request, principal, **audit_info)
-        except Exception:
-            pass
+        except Exception as exc:
+            logger.warning("Admin audit emission failed: {}", exc, exc_info=True)
     return response
 
 
@@ -120,8 +121,8 @@ async def admin_get_user_profile(
     if audit_info:
         try:
             await _get_emit_admin_audit_event()(http_request, principal, **audit_info)
-        except Exception:
-            pass
+        except Exception as exc:
+            logger.warning("Admin audit emission failed: {}", exc, exc_info=True)
     return response
 
 
@@ -143,8 +144,8 @@ async def admin_update_user_profile(
     if audit_info:
         try:
             await _get_emit_admin_audit_event()(http_request, principal, **audit_info)
-        except Exception:
-            pass
+        except Exception as exc:
+            logger.warning("Admin audit emission failed: {}", exc, exc_info=True)
     return response
 
 
@@ -162,6 +163,6 @@ async def admin_bulk_update_user_profiles(
     if audit_info:
         try:
             await _get_emit_admin_audit_event()(http_request, principal, **audit_info)
-        except Exception:
-            pass
+        except Exception as exc:
+            logger.warning("Admin audit emission failed: {}", exc, exc_info=True)
     return response

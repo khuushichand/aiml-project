@@ -139,7 +139,7 @@ class SemanticCache:
                 embedding_array = embedding_array / norm
 
             return embedding_array
-        except Exception as e:
+        except (AttributeError, TypeError, ValueError, RuntimeError, np.linalg.LinAlgError) as e:
             logger.error(f"Failed to generate embedding: {e}")
             return None
 
@@ -228,7 +228,7 @@ class SemanticCache:
                     try:
                         key = self._generate_key(query)
                         logger.debug(f"Exact cache hit for key={key} (len={len(query)})")
-                    except Exception:
+                    except (AttributeError, TypeError, ValueError):
                         logger.debug("Exact cache hit")
                     return entry.value
                 else:
@@ -313,7 +313,7 @@ class SemanticCache:
             try:
                 key = self._generate_key(query)
                 logger.debug(f"Cached result for key={key} (len={len(query)})")
-            except Exception:
+            except (AttributeError, TypeError, ValueError):
                 logger.debug("Cached result")
 
     def _evict_lru(self) -> None:
@@ -432,7 +432,7 @@ class SemanticCache:
                     json.dump(state, f, indent=2)
 
                 logger.info(f"Saved semantic cache state ({len(self._cache)} entries)")
-        except Exception as e:
+        except (OSError, RuntimeError, TypeError, ValueError) as e:
             logger.error(f"Failed to save semantic cache: {e}")
 
     def load(self) -> None:
@@ -485,7 +485,7 @@ class SemanticCache:
                 logger.info(f"Loaded semantic cache ({len(self._cache)} entries, {len(self._embeddings)} embeddings)")
         except FileNotFoundError:
             logger.debug(f"No cache file found at {self.persist_path}")
-        except Exception as e:
+        except (json.JSONDecodeError, OSError, RuntimeError, TypeError, ValueError) as e:
             logger.error(f"Failed to load semantic cache: {e}")
 
 
@@ -778,7 +778,7 @@ def get_shared_cache(
     if persist_path:
         try:
             Path(persist_path).parent.mkdir(parents=True, exist_ok=True)
-        except Exception:
+        except OSError:
             pass
     ttl_key = int(ttl) if ttl is not None else None
     max_size_key = int(max_size) if max_size is not None else None
@@ -811,7 +811,7 @@ def clear_shared_caches(namespace: Optional[str] = None) -> int:
             if namespace_key is None or key_namespace == namespace_key:
                 try:
                     cache.clear()
-                except Exception:
+                except (AttributeError, RuntimeError, TypeError, ValueError):
                     pass
                 cleared += 1
     return cleared

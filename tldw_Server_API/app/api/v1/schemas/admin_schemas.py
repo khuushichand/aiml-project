@@ -74,6 +74,31 @@ class UserSummary(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
 
+class UserDetailResponse(BaseModel):
+    """Detailed user information for admin endpoints."""
+
+    id: int
+    uuid: UUID | None = None
+    username: str
+    email: str
+    role: str | None = None
+    is_active: bool | None = None
+    is_superuser: bool | None = None
+    is_verified: bool | None = None
+    email_verified: bool | None = None
+    created_at: datetime | None = None
+    updated_at: datetime | None = None
+    last_login: datetime | None = None
+    storage_quota_mb: int | None = None
+    storage_used_mb: float | None = None
+    is_locked: bool | None = None
+    failed_login_attempts: int | None = None
+    locked_until: datetime | None = None
+    metadata: Any | None = None
+
+    model_config = ConfigDict(from_attributes=True)
+
+
 class UserListResponse(BaseModel):
     """Response for user list endpoint"""
     users: list[UserSummary]
@@ -1009,6 +1034,17 @@ class NotesTitleSettingsUpdate(BaseModel):
     llm_enabled: bool | None = Field(default=None)
     default_strategy: Literal['heuristic', 'llm', 'llm_fallback'] | None = Field(default=None)
 
+
+class NotesTitleSettingsResponse(BaseModel):
+    """Response payload for Notes auto-title settings."""
+    llm_enabled: bool
+    default_strategy: str
+    effective_strategy: str
+    strategies: list[str]
+
+    model_config = ConfigDict(from_attributes=True)
+
+
 #
 # Cleanup worker settings (admin)
 
@@ -1022,6 +1058,14 @@ class AdminCleanupSettingsUpdate(BaseModel):
 
     enabled: bool | None = Field(default=None)
     interval_sec: int | None = Field(default=None, ge=60, le=604800)
+
+
+class AdminCleanupSettingsResponse(BaseModel):
+    """Response payload for cleanup worker settings."""
+    enabled: bool
+    interval_sec: int
+
+    model_config = ConfigDict(from_attributes=True)
 
 #
 ## End of admin_schemas.py

@@ -34,6 +34,15 @@ def resolve_safe_local_path(path: Path, base_dir: Path) -> Path | None:
             return None
         if common_path == str(base_resolved):
             return path_resolved
+        # Fallback to realpath comparison (macOS /var -> /private/var symlink, etc.)
+        base_real = os.path.realpath(base_resolved)
+        path_real = os.path.realpath(path_resolved)
+        try:
+            common_real = os.path.commonpath([base_real, path_real])
+        except ValueError:
+            common_real = None
+        if common_real == base_real:
+            return Path(path_real)
         logger.warning(
             "Rejected path outside of base directory for local media source: %s (base: %s)",
             path_resolved,

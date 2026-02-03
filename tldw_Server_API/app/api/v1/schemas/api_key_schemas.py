@@ -56,6 +56,12 @@ class APIKeyCreateResponse(APIKeyMetadata):
     message: Optional[str] = None
 
 
+class APIKeyRevokeResponse(BaseModel):
+    message: str
+    user_id: int
+    key_id: int
+
+
 class APIKeyUpdateRequest(BaseModel):
     rate_limit: Optional[int] = Field(None, description="Requests per minute for this key")
     allowed_ips: Optional[list[str]] = Field(None, description="Restrict usage to these IPs")

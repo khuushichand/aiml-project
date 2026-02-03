@@ -37,15 +37,14 @@ const collectCollections = (
           ? (record.metadata as Record<string, unknown>)
           : undefined
     })
-    return
   }
 
   if ("collections" in record) {
     collectCollections(record.collections, output)
-    return
   }
 
-  for (const value of Object.values(record)) {
+  for (const [key, value] of Object.entries(record)) {
+    if (key === "collections") continue
     collectCollections(value, output)
   }
 }

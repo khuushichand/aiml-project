@@ -1,8 +1,14 @@
 from typing import Any, Optional
 
-from fastapi import FastAPI, Request, status
+from fastapi import FastAPI, HTTPException, Request, status
 from fastapi.responses import JSONResponse
 from loguru import logger
+
+DEFAULT_VALIDATION_STATUS = getattr(
+    status,
+    "HTTP_422_UNPROCESSABLE_CONTENT",
+    status.HTTP_422_UNPROCESSABLE_ENTITY,
+)
 
 
 class VideoProcessingError(Exception):
@@ -35,6 +41,14 @@ class BadRequestError(ValueError):
 
 class ValidationError(BadRequestError):
     """Raised when validation of input parameters fails."""
+
+
+class APIValidationError(HTTPException):
+    """Raised when API input validation fails and should return HTTP 422."""
+
+    def __init__(self, detail: Any, *, status_code: int | None = None) -> None:
+        resolved_status = status_code if status_code is not None else DEFAULT_VALIDATION_STATUS
+        super().__init__(status_code=resolved_status, detail=detail)
 
 
 class SyncCallInEventLoopError(BadRequestError):

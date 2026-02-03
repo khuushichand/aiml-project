@@ -26,30 +26,31 @@ def _safe_path(user_id: str | None) -> Path:
         if base:
             p = Path(base)
             p.parent.mkdir(parents=True, exist_ok=True)
-            return p
-        return DatabasePaths.get_user_rewrite_cache_path(user_id)
-    except (OSError, RuntimeError, ValueError) as exc:
+            path = p
+        else:
+            path = DatabasePaths.get_user_rewrite_cache_path(user_id)
+    except (AttributeError, OSError, RuntimeError, TypeError, ValueError) as exc:
         logger.error("Rewrite cache: failed to resolve cache path: {}", exc)
         raise
-    except Exception as exc:
-        logger.exception("Rewrite cache: unexpected error resolving cache path: {}", exc)
-        raise
+    else:
+        return path
 
 
 def _is_relative_to(path: Path, base: Path) -> bool:
     try:
         resolved_path = path.resolve()
         resolved_base = base.resolve()
-    except Exception:
+    except (OSError, RuntimeError, ValueError):
         return False
     try:
         return resolved_path.is_relative_to(resolved_base)
     except AttributeError:
         try:
             resolved_path.relative_to(resolved_base)
-            return True
         except ValueError:
             return False
+        else:
+            return True
 
 
 def _normalize_query(q: str) -> str:
@@ -69,9 +70,6 @@ def _normalize_query(q: str) -> str:
         return "".join(out).strip()
     except (AttributeError, TypeError, ValueError) as exc:
         logger.warning("Rewrite cache: failed to normalize query; returning fallback: {}", exc)
-        return q or ""
-    except Exception:
-        logger.exception("Rewrite cache: unexpected error normalizing query")
         return q or ""
 
 
@@ -113,7 +111,7 @@ class RewriteCache:
         try:
             _ttl_env = os.getenv("RAG_REWRITE_CACHE_TTL_HOURS")
             ttl_fallback = float(_ttl_env) if _ttl_env is not None else None
-        except Exception:
+        except (TypeError, ValueError):
             ttl_fallback = None
         self.ttl_hours = float(ttl_hours) if ttl_hours is not None else (ttl_fallback if ttl_fallback is not None else None)
         self._index: dict[str, RewriteEntry] = {}
@@ -142,7 +140,7 @@ class RewriteCache:
                         )
                         if entry.cluster_id:
                             self._index[entry.cluster_id] = entry
-                    except Exception:
+                    except (AttributeError, TypeError, ValueError, json.JSONDecodeError):
                         continue
         finally:
             self._loaded = True
@@ -158,7 +156,7 @@ class RewriteCache:
             # weight * 0.5^(dt/half_life)
             decay_factor = pow(0.5, dt / half_life_sec)
             return float(entry.weight) * float(decay_factor)
-        except Exception:
+        except (TypeError, ValueError, OverflowError):
             return float(entry.weight)
 
     def get(self, query: str, *, intent: str | None = None, corpus: str | None = None) -> list[str] | None:
@@ -170,7 +168,7 @@ class RewriteCache:
             try:
                 from tldw_Server_API.app.core.Metrics.metrics_manager import increment_counter
                 increment_counter("rag_rewrite_cache_misses_total", 1, labels={"corpus": str(corpus or ""), "intent": str(intent or ""), "reason": "empty"})
-            except Exception:
+            except (ImportError, AttributeError, RuntimeError, TypeError, ValueError):
                 pass
             return None
         # Hard TTL expiry
@@ -182,7 +180,7 @@ class RewriteCache:
                 try:
                     from tldw_Server_API.app.core.Metrics.metrics_manager import increment_counter
                     increment_counter("rag_rewrite_cache_misses_total", 1, labels={"corpus": str(corpus or ""), "intent": str(intent or ""), "reason": "expired"})
-                except Exception:
+                except (ImportError, AttributeError, RuntimeError, TypeError, ValueError):
                     pass
                 return None
         # Apply decay to reorder (heavier first)
@@ -194,17 +192,18 @@ class RewriteCache:
                 try:
                     from tldw_Server_API.app.core.Metrics.metrics_manager import increment_counter
                     increment_counter("rag_rewrite_cache_hits_total", 1, labels={"corpus": str(corpus or ""), "intent": str(intent or "")})
-                except Exception:
+                except (ImportError, AttributeError, RuntimeError, TypeError, ValueError):
                     pass
             else:
                 try:
                     from tldw_Server_API.app.core.Metrics.metrics_manager import increment_counter
                     increment_counter("rag_rewrite_cache_misses_total", 1, labels={"corpus": str(corpus or ""), "intent": str(intent or ""), "reason": "empty_rewrites"})
-                except Exception:
+                except (ImportError, AttributeError, RuntimeError, TypeError, ValueError):
                     pass
-            return out
-        except Exception:
+        except (TypeError, ValueError, RuntimeError):
             return entry.rewrites[:5]
+        else:
+            return out
 
     def put(self, query: str, rewrites: list[str], *, intent: str | None = None, corpus: str | None = None) -> None:
         if not rewrites:
@@ -250,7 +249,7 @@ class RewriteCache:
             try:
                 from tldw_Server_API.app.core.Metrics.metrics_manager import increment_counter
                 increment_counter("rag_rewrite_cache_puts_total", 1, labels={"corpus": str(corpus or ""), "intent": str(intent or "")})
-            except Exception:
+            except (ImportError, AttributeError, RuntimeError, TypeError, ValueError):
                 pass
-        except Exception as e:
+        except (OSError, RuntimeError, TypeError, ValueError) as e:
             logger.warning(f"Failed to persist rewrite cache: {e}")

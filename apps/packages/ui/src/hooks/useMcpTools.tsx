@@ -86,11 +86,6 @@ export const useMcpTools = (): McpToolsStatus => {
     () => normalizeModuleList(storedModule),
     [storedModule]
   )
-  const toolModulesKey = React.useMemo(
-    () => normalizedToolModules.join("|"),
-    [normalizedToolModules]
-  )
-
   const healthQuery = useQuery({
     queryKey: ["mcp-health"],
     queryFn: async () => apiSend({ path: "/api/v1/mcp/health", method: "GET" }),
@@ -118,7 +113,7 @@ export const useMcpTools = (): McpToolsStatus => {
       "mcp-tools",
       toolCatalog,
       toolCatalogId,
-      toolModulesKey,
+      normalizedToolModules,
       toolCatalogStrict
     ],
     queryFn: async () => {

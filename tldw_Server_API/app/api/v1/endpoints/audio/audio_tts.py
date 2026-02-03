@@ -500,4 +500,4 @@ async def reset_tts_metrics(
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=_http_error_detail("Failed to reset metrics", request_id, exc=e),
-        )
+        ) from e

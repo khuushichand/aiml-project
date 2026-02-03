@@ -1,8 +1,8 @@
 # tldw_Server_API/app/api/v1/API_Deps/Prompts_DB_Deps.py
 #
 # Imports
+import asyncio
 import os
-import threading
 import uuid as _uuid
 from pathlib import Path
 from typing import Optional
@@ -48,7 +48,6 @@ if not SERVER_CLIENT_ID:
 # --- Global Cache for Prompts DB Instances (managed by prompts_interop, but we track paths) ---
 MAX_CACHED_PROMPTS_DB_INSTANCES = settings.get("MAX_CACHED_PROMPTS_DB_INSTANCES", 20)
 _prompts_db_paths_cache: LRUCache = LRUCache(maxsize=MAX_CACHED_PROMPTS_DB_INSTANCES)
-_prompts_db_lock = threading.Lock() # Lock for path cache and initialization coordination
 
 # --- Helper Functions ---
 
@@ -65,8 +64,95 @@ def _get_prompts_db_path_for_user(user_id: int, salt: Optional[str] = None) -> P
 
 # --- Main Dependency Function ---
 
-_user_db_instances: dict[tuple[int, str], PromptsDatabase] = {}
-_user_db_locks: dict[tuple[int, str], threading.Lock] = {}
+_user_db_instances: LRUCache | None = None
+_user_db_locks: LRUCache | None = None
+
+
+def _close_prompts_db_instance(
+    cache_key: tuple[int, str],
+    db_instance: PromptsDatabase,
+    *,
+    reason: str,
+) -> None:
+    try:
+        db_instance.close_connection()
+        logger.info(
+            "Closed PromptsDatabase instance for cache_key=%s (reason=%s).",
+            cache_key,
+            reason,
+        )
+    except Exception as exc:
+        logger.error(
+            "Error closing PromptsDatabase instance for cache_key=%s (reason=%s): %s",
+            cache_key,
+            reason,
+            exc,
+            exc_info=True,
+        )
+
+
+def _on_prompts_db_eviction(cache_key: tuple[int, str], db_instance: PromptsDatabase) -> None:
+    _close_prompts_db_instance(cache_key, db_instance, reason="evicted")
+    if _user_db_locks is not None:
+        _user_db_locks.pop(cache_key, None)
+
+
+def _on_prompts_lock_eviction(cache_key: tuple[int, str], _lock: asyncio.Lock) -> None:
+    if _user_db_instances is None:
+        return
+    db_instance = _user_db_instances.pop(cache_key, None)
+    if db_instance:
+        _close_prompts_db_instance(cache_key, db_instance, reason="lock-evicted")
+
+
+class _EvictingLRUCache(LRUCache):
+    def __init__(self, *args, on_evict=None, **kwargs):
+        super().__init__(*args, **kwargs)
+        self._on_evict = on_evict
+
+    def popitem(self):
+        cache_key, value = super().popitem()
+        if self._on_evict is not None:
+            try:
+                self._on_evict(cache_key, value)
+            except Exception as exc:
+                logger.error(
+                    "Prompts DB cache eviction callback failed for %s: %s",
+                    cache_key,
+                    exc,
+                    exc_info=True,
+                )
+        return cache_key, value
+
+
+_user_db_instances = _EvictingLRUCache(
+    maxsize=MAX_CACHED_PROMPTS_DB_INSTANCES,
+    on_evict=_on_prompts_db_eviction,
+)
+_user_db_locks = _EvictingLRUCache(
+    maxsize=MAX_CACHED_PROMPTS_DB_INSTANCES,
+    on_evict=_on_prompts_lock_eviction,
+)
+
+
+def _is_db_instance_alive(db_instance: PromptsDatabase) -> bool:
+    try:
+        conn = db_instance.get_connection()
+        conn.execute("SELECT 1")
+        return True
+    except Exception:
+        return False
+
+
+def _create_prompts_db_instance(
+    user_id: int,
+    salt: Optional[str],
+    client_id: str,
+) -> tuple[PromptsDatabase, Path]:
+    db_path = _get_prompts_db_path_for_user(user_id, salt=salt)
+    db_instance = PromptsDatabase(db_path=str(db_path), client_id=client_id)
+    return db_instance, db_path
+
 
 async def get_prompts_db_for_user(
         current_user: User = Depends(get_request_user),
@@ -76,6 +162,7 @@ async def get_prompts_db_for_user(
     FastAPI dependency to get the PromptsDatabase instance for the identified user,
     managed via the prompts_interop layer.
     """
+    assert _user_db_instances is not None and _user_db_locks is not None
     # More robust check for User object and its id
     if not isinstance(current_user, User) or not hasattr(current_user, 'id') or not isinstance(current_user.id, int):
         logger.error(
@@ -100,13 +187,12 @@ async def get_prompts_db_for_user(
     cache_key = (user_id, salt)
 
     # Get or create a lock for this specific user_id
-    if cache_key not in _user_db_locks:
-        with _prompts_db_lock: # Protect access to _user_db_locks
-            if cache_key not in _user_db_locks: # Double check
-                _user_db_locks[cache_key] = threading.Lock()
-    user_specific_lock = _user_db_locks[cache_key]
+    user_specific_lock = _user_db_locks.get(cache_key)
+    if user_specific_lock is None:
+        user_specific_lock = asyncio.Lock()
+        _user_db_locks[cache_key] = user_specific_lock
 
-    with user_specific_lock:
+    async with user_specific_lock:
         # Check if an instance for this user_id already exists (cached for this request/app lifetime if persistent)
         # The prompts_interop itself doesn't manage multiple DBs, it manages ONE.
         # So, we need a way to tell prompts_interop WHICH db to use, or manage instances here.
@@ -127,24 +213,32 @@ async def get_prompts_db_for_user(
         #           The `prompts_interop.py` utility functions that take `db_instance` can still be used.
         #           The interop's own instance-based methods will be bypassed.
 
-        if cache_key in _user_db_instances:
-            db_instance = _user_db_instances.get(cache_key)
-            if db_instance:
-                try:
-                    # Quick check if connection is alive
-                    conn = db_instance.get_connection()
-                    conn.execute("SELECT 1")
-                    logger.debug(f"Using cached PromptsDatabase instance for user_id: {user_id}")
-                    return db_instance
-                except Exception as e:
-                    logger.warning(f"Cached PromptsDatabase for user {user_id} inactive ({e}). Re-creating.")
-                    _user_db_instances.pop(cache_key, None) # Remove bad instance
+        db_instance = _user_db_instances.get(cache_key)
+        if db_instance:
+            is_alive = await asyncio.to_thread(_is_db_instance_alive, db_instance)
+            if is_alive:
+                logger.debug(f"Using cached PromptsDatabase instance for user_id: {user_id}")
+                _user_db_locks[cache_key] = user_specific_lock
+                return db_instance
+            logger.warning(f"Cached PromptsDatabase for user {user_id} inactive. Re-creating.")
+            _user_db_instances.pop(cache_key, None)
+            await asyncio.to_thread(
+                _close_prompts_db_instance,
+                cache_key,
+                db_instance,
+                reason="inactive",
+            )
 
         # If not cached or cache was bad, create a new one
         db_path: Optional[Path] = None
         try:
             # Call with positional args to be compatible with test monkeypatches
-            db_path = _get_prompts_db_path_for_user(user_id, salt or None)
+            db_instance, db_path = await asyncio.to_thread(
+                _create_prompts_db_instance,
+                user_id,
+                salt or None,
+                str(current_user.id),
+            )
             logger.info(f"Initializing PromptsDatabase instance for user {user_id} at path: {db_path}")
 
             # Instantiate PromptsDatabase directly
@@ -153,9 +247,8 @@ async def get_prompts_db_for_user(
             # If you need to track the specific end-user initiating the change,
             # that would be a different field, or SERVER_CLIENT_ID could be user-specific.
             # For now, using a global server client ID.
-            db_instance = PromptsDatabase(db_path=str(db_path), client_id=str(current_user.id))
-
             _user_db_instances[cache_key] = db_instance # Cache it for this user/app salt
+            _user_db_locks[cache_key] = user_specific_lock
             logger.info(f"PromptsDatabase instance created and cached for user {user_id} (salt={salt or 'none'}) at {db_path}")
             return db_instance
 
@@ -180,17 +273,18 @@ async def get_prompts_db_for_user(
 
 def close_all_cached_prompts_db_instances():
     """Closes all cached PromptsDatabase connections. Useful for application shutdown."""
-    with _prompts_db_lock: # Protects _user_db_locks and _user_db_instances
-        logger.info(f"Closing all cached PromptsDatabase instances ({len(_user_db_instances)})...")
-        for user_id, db_instance in list(_user_db_instances.items()):
-            try:
-                db_instance.close_connection() # PromptsDatabase handles its own thread-local connections
-                logger.info(f"Closed PromptsDatabase connection for current thread for user {user_id}.")
-            except Exception as e:
-                logger.error(f"Error closing PromptsDatabase instance for user {user_id}: {e}", exc_info=True)
-        _user_db_instances.clear()
-        _user_db_locks.clear() # Clear user-specific locks as well
-        logger.info("All PromptsDatabase instances cleared from cache and locks removed.")
+    if _user_db_instances is None or _user_db_locks is None:
+        return
+    logger.info(f"Closing all cached PromptsDatabase instances ({len(_user_db_instances)})...")
+    for cache_key, db_instance in list(_user_db_instances.items()):
+        try:
+            db_instance.close_connection() # PromptsDatabase handles its own thread-local connections
+            logger.info(f"Closed PromptsDatabase connection for cache_key {cache_key}.")
+        except Exception as e:
+            logger.error(f"Error closing PromptsDatabase instance for cache_key {cache_key}: {e}", exc_info=True)
+    _user_db_instances.clear()
+    _user_db_locks.clear() # Clear user-specific locks as well
+    logger.info("All PromptsDatabase instances cleared from cache and locks removed.")
 
 # Register for shutdown in your main FastAPI app:
 # @app.on_event("shutdown")

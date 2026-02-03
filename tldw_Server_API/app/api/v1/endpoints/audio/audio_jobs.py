@@ -2,7 +2,9 @@ from __future__ import annotations
 
 import os
 import threading
+from pathlib import Path
 from typing import Annotated, Any
+from urllib.parse import urlparse
 
 from cachetools import LRUCache
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
@@ -26,6 +28,9 @@ from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import User, get_request_u
 from tldw_Server_API.app.core.Ingestion_Media_Processing.Audio.stt_provider_adapter import (
     resolve_default_transcription_model,
 )
+from tldw_Server_API.app.core.Ingestion_Media_Processing.Audio.Audio_Transcription_Lib import (
+    _get_allowed_media_base_dirs,
+)
 from tldw_Server_API.app.core.Jobs.manager import JobManager
 from tldw_Server_API.app.core.Logging.log_context import ensure_request_id, ensure_traceparent, get_ps_logger
 from tldw_Server_API.app.core.Usage.audio_quota import (
@@ -45,6 +50,33 @@ _ADMIN_DEPS = [
     Depends(require_roles("admin")),
     Depends(require_permissions(SYSTEM_MAINTENANCE)),
 ]
+
+
+def _path_is_within(path: Path, base_dir: Path) -> bool:
+    try:
+        path.relative_to(base_dir)
+        return True
+    except ValueError:
+        return False
+
+
+def _validate_audio_job_url(url: str) -> str:
+    parsed = urlparse(url)
+    if parsed.scheme not in {"http", "https"}:
+        raise ValueError("url must use http or https scheme")
+    return url
+
+
+def _validate_audio_job_local_path(local_path: str) -> str:
+    path = Path(local_path)
+    if not path.is_absolute():
+        raise ValueError("local_path must be an absolute path")
+    resolved = path.resolve(strict=False)
+    allowed_roots = _get_allowed_media_base_dirs()
+    if not any(_path_is_within(resolved, root) for root in allowed_roots):
+        allowed_str = ", ".join(str(root) for root in allowed_roots) or "<none configured>"
+        raise ValueError(f"local_path must resolve under one of the allowed base directories: {allowed_str}")
+    return str(resolved)
 
 
 def get_job_manager() -> JobManager:
@@ -91,20 +123,26 @@ class SubmitAudioJobRequest(BaseModel):
     api_name: str | None = Field(None, description="LLM provider key for analysis stage")
 
     if model_validator is not None:
-        @model_validator(mode="after")
-        def _validate_inputs(self) -> "SubmitAudioJobRequest":
-            url = (self.url or "").strip() if self.url else ""
-            lp = (self.local_path or "").strip() if self.local_path else ""
+        @model_validator(mode="before")
+        def _validate_inputs(cls, values: Any) -> Any:  # type: ignore[override]
+            if not isinstance(values, dict):
+                return values
+            url = (values.get("url") or "").strip()
+            lp = (values.get("local_path") or "").strip()
             if not url and not lp:
                 raise ValueError("Either 'url' or 'local_path' must be provided")
             if url and lp:
                 raise ValueError("Provide only one of 'url' or 'local_path'")
-            return self
+            if url:
+                values["url"] = _validate_audio_job_url(url)
+            if lp:
+                values["local_path"] = _validate_audio_job_local_path(lp)
+            return values
     else:
         # Backward-compatible path for environments still on Pydantic v1
         from pydantic import root_validator as _rv  # type: ignore
 
-        @_rv
+        @_rv(pre=True)
         def _validate_inputs(cls, values: dict[str, Any]) -> dict[str, Any]:  # type: ignore[no-redef]
             url = (values.get("url") or "").strip()
             lp = (values.get("local_path") or "").strip()
@@ -112,6 +150,10 @@ class SubmitAudioJobRequest(BaseModel):
                 raise ValueError("Either 'url' or 'local_path' must be provided")
             if url and lp:
                 raise ValueError("Provide only one of 'url' or 'local_path'")
+            if url:
+                values["url"] = _validate_audio_job_url(url)
+            if lp:
+                values["local_path"] = _validate_audio_job_local_path(lp)
             return values
 
 

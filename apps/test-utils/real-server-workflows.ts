@@ -1935,9 +1935,12 @@ const pollForWorldBookByName = async (
   const normalized = serverUrl.replace(/\/$/, "")
   const deadline = Date.now() + timeoutMs
   while (Date.now() < deadline) {
-    const listRes = await fetchWithKey(
+    const remainingMs = Math.max(0, deadline - Date.now())
+    const listRes = await fetchWithKeyTimeout(
       `${normalized}/api/v1/characters/world-books`,
-      apiKey
+      apiKey,
+      {},
+      remainingMs
     ).catch(() => null)
     if (listRes?.ok) {
       const payload = await listRes.json().catch(() => [])
@@ -4759,8 +4762,7 @@ test.describe("Real server end-to-end workflows", () => {
         const payload = await characterListRes.json().catch(() => [])
         const list = parseListPayload(payload, ["characters"])
         const match = list.find((item: any) => String(item?.name || "") === characterName)
-        const fallback = list.find((item: any) => String(item?.name || "").trim())
-        attachCharacterName = (match?.name || fallback?.name || characterName) as string
+        attachCharacterName = (match?.name || characterName) as string
       }
 
       const granted = await driver.ensureHostPermission()
@@ -4943,6 +4945,13 @@ test.describe("Real server end-to-end workflows", () => {
           { timeout: 20000, intervals: [500, 1000, 2000] }
         )
         .toBeGreaterThan(0)
+      const closeAttach = attachModal.locator(".ant-modal-close").first()
+      if ((await closeAttach.count()) > 0) {
+        await closeAttach.click()
+      } else {
+        await page.keyboard.press("Escape")
+      }
+      await expect(attachModal).toBeHidden({ timeout: 10000 }).catch(() => {})
 
       await page.evaluate(() => {
         const w = window as any
@@ -4974,24 +4983,27 @@ test.describe("Real server end-to-end workflows", () => {
         w.__tldw_lastDownload = null
       })
 
-      await row.getByRole("button", { name: /Export/i }).click()
-      await page.waitForFunction(
-        () => {
+      try {
+        await row.getByRole("button", { name: /Export/i }).click()
+        await page.waitForFunction(
+          () => {
+            const w = window as any
+            const name = w?.__tldw_lastDownload?.download || ""
+            return typeof name === "string" && name.toLowerCase().endsWith(".json")
+          },
+          undefined,
+          { timeout: 15000 }
+        )
+      } finally {
+        await page.evaluate(() => {
           const w = window as any
-          const name = w?.__tldw_lastDownload?.download || ""
-          return typeof name === "string" && name.toLowerCase().endsWith(".json")
-        },
-        undefined,
-        { timeout: 15000 }
-      )
-      await page.evaluate(() => {
-        const w = window as any
-        if (w.__tldw_originalAnchorClick) {
-          HTMLAnchorElement.prototype.click = w.__tldw_originalAnchorClick
-          delete w.__tldw_originalAnchorClick
-          delete w.__tldw_downloadCaptureInstalled
-        }
-      })
+          if (w.__tldw_originalAnchorClick) {
+            HTMLAnchorElement.prototype.click = w.__tldw_originalAnchorClick
+            delete w.__tldw_originalAnchorClick
+            delete w.__tldw_downloadCaptureInstalled
+          }
+        })
+      }
 
       await row.getByRole("button", { name: /Stats/i }).click()
       const statsModal = page.getByRole("dialog", {

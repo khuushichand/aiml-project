@@ -125,6 +125,9 @@ from tldw_Server_API.app.services.admin_roles_permissions_service import (
     grant_tool_permission_to_role as svc_grant_tool_perm,
 )
 from tldw_Server_API.app.services.admin_roles_permissions_service import (
+    list_roles as svc_list_roles,
+)
+from tldw_Server_API.app.services.admin_roles_permissions_service import (
     list_role_permissions as svc_list_role_permissions,
 )
 from tldw_Server_API.app.services.admin_roles_permissions_service import (
@@ -443,14 +446,8 @@ async def admin_kanban_fts_maintenance(
 @router.get("/roles", response_model=list[RoleResponse])
 async def list_roles(db=Depends(get_db_transaction)) -> list[RoleResponse]:
     try:
-        is_pg = await is_postgres_backend()
-        if is_pg:
-            rows = await db.fetch("SELECT id, name, description, COALESCE(is_system, FALSE) as is_system FROM roles ORDER BY name")
-            return [RoleResponse(**dict(r)) for r in rows]
-        else:
-            cur = await db.execute("SELECT id, name, description, COALESCE(is_system, 0) as is_system FROM roles ORDER BY name")
-            rows = await cur.fetchall()
-            return [RoleResponse(id=row[0], name=row[1], description=row[2], is_system=bool(row[3])) for row in rows]
+        rows = await svc_list_roles(db)
+        return [RoleResponse(**row) for row in rows]
     except Exception as e:
         logger.error(f"Failed to list roles: {e}")
         raise HTTPException(status_code=500, detail="Failed to list roles")
@@ -1337,7 +1334,7 @@ async def delete_user_override(
         if _is_pg:
             await db.execute("DELETE FROM user_permissions WHERE user_id = $1 AND permission_id = $2", user_id, permission_id)
         else:
-            cur = await db.execute("DELETE FROM user_permissions WHERE user_id = ? AND permission_id = ?", (user_id, permission_id))
+            await db.execute("DELETE FROM user_permissions WHERE user_id = ? AND permission_id = ?", (user_id, permission_id))
             if not _is_pg:
                 await db.commit()
         return {"message": "Override deleted"}

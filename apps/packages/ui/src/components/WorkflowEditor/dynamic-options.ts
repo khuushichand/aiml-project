@@ -326,10 +326,14 @@ const loadOptions = async (key: OptionSourceKey): Promise<Option[]> => {
         const providers = await fetchTtsProviders()
         const names = new Set<string>()
         if (providers?.providers) {
-          Object.keys(providers.providers).forEach((name) => names.add(name))
+          Object.keys(providers.providers).forEach((name) => {
+            names.add(name)
+          })
         }
         if (providers?.voices) {
-          Object.keys(providers.voices).forEach((name) => names.add(name))
+          Object.keys(providers.voices).forEach((name) => {
+            names.add(name)
+          })
         }
         options = normalizeOptions(
           Array.from(names).map((name) => ({ value: name, label: name }))

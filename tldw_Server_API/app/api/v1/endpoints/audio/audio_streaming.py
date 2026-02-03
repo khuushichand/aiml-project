@@ -20,7 +20,14 @@ from tldw_Server_API.app.api.v1.API_Deps.auth_deps import require_token_scope
 from tldw_Server_API.app.api.v1.API_Deps.ChaCha_Notes_DB_Deps import get_chacha_db_for_user
 from tldw_Server_API.app.api.v1.API_Deps.personalization_deps import UsageEventLogger, get_usage_event_logger
 from tldw_Server_API.app.api.v1.endpoints.audio.audio_tts import get_tts_service
-from tldw_Server_API.app.api.v1.schemas.audio_schemas import OpenAISpeechRequest, SpeechChatRequest, SpeechChatResponse
+from tldw_Server_API.app.api.v1.schemas.audio_schemas import (
+    OpenAISpeechRequest,
+    SpeechChatRequest,
+    SpeechChatResponse,
+    StreamingLimitsResponse,
+    StreamingStatusResponse,
+    StreamingTestResponse,
+)
 from tldw_Server_API.app.api.v1.schemas.chat_request_schemas import DEFAULT_LLM_PROVIDER, get_api_keys
 from tldw_Server_API.app.core.Audio.error_payloads import _ws_error_payload, _maybe_debug_details
 from tldw_Server_API.app.core.Audio.quota_helpers import EXPECTED_DB_EXC, EXPECTED_REDIS_EXC, _get_failopen_cap_minutes
@@ -1083,12 +1090,12 @@ async def websocket_audio_chat_stream(
             try:
                 adapter = get_registry().get_adapter(normalize_provider(llm_provider))
                 if adapter is None:
-                        llm_stream = await _shim_chat_api_call_async(
-                            api_endpoint=llm_provider,
-                            messages_payload=messages_payload,
-                            api_key=provider_api_key,
-                            temp=llm_temperature,
-                            model=llm_model,
+                    llm_stream = await _shim_chat_api_call_async(
+                        api_endpoint=llm_provider,
+                        messages_payload=messages_payload,
+                        api_key=provider_api_key,
+                        temp=llm_temperature,
+                        model=llm_model,
                         max_tokens=llm_max_tokens,
                         streaming=True,
                         system_message=llm_system_prompt,
@@ -2116,13 +2123,17 @@ async def websocket_tts_realtime(
                 )
 
 
-@router.get("/stream/status", summary="Check streaming transcription availability")
+@router.get(
+    "/stream/status",
+    response_model=StreamingStatusResponse,
+    summary="Check streaming transcription availability",
+)
 async def streaming_status():
     """
     Report availability and capabilities of the streaming transcription WebSocket endpoint.
 
     Returns:
-        A JSON object with the following keys:
+        StreamingStatusResponse with the following keys:
           - `status` (str): "available" if at least one streaming model is present, "unavailable" otherwise, or "error" on failure.
           - `available_models` (list[str]): Names of detected streaming model variants (e.g., "parakeet-mlx", "parakeet-standard", "parakeet-onnx").
           - `websocket_endpoint` (str): URL path of the streaming transcription WebSocket.
@@ -2152,35 +2163,35 @@ async def streaming_status():
         ):
             available_models.append("parakeet-onnx")
 
-        return JSONResponse(
-            {
-                "status": "available" if available_models else "unavailable",
-                "available_models": available_models,
-                "websocket_endpoint": "/api/v1/audio/stream/transcribe",
-                "supported_features": {
-                    "partial_results": True,
-                    "multiple_languages": True,
-                    "concurrent_streams": True,
-                    "segment_metadata": True,
-                    "live_insights": True,
-                    "meeting_notes": True,
-                    "speaker_diarization": True,
-                    "audio_persistence": True,
-                },
-            }
-        )
+        return {
+            "status": "available" if available_models else "unavailable",
+            "available_models": available_models,
+            "websocket_endpoint": "/api/v1/audio/stream/transcribe",
+            "supported_features": {
+                "partial_results": True,
+                "multiple_languages": True,
+                "concurrent_streams": True,
+                "segment_metadata": True,
+                "live_insights": True,
+                "meeting_notes": True,
+                "speaker_diarization": True,
+                "audio_persistence": True,
+            },
+        }
 
-    except Exception as e:
-        import traceback
-
-        logger.error(f"Error checking streaming status: {e}\n{traceback.format_exc()}")
+    except Exception:
+        logger.error("Error checking streaming status", exc_info=True)
         return JSONResponse(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             content={"status": "error", "message": "An internal error occurred. Please try again later."},
         )
 
 
-@router.get("/stream/limits", summary="Get user's streaming quota and usage")
+@router.get(
+    "/stream/limits",
+    response_model=StreamingLimitsResponse,
+    summary="Get user's streaming quota and usage",
+)
 async def streaming_limits(
     request: Request,
     current_user: User = Depends(get_request_user),
@@ -2189,7 +2200,7 @@ async def streaming_limits(
     Return the current user's streaming quota and usage summary.
 
     Returns:
-        JSONResponse: A JSON object with the following keys:
+        StreamingLimitsResponse with the following keys:
             - user_id (str): The user's identifier.
             - tier (str): The user's tier name (e.g., "free").
             - limits (dict): The resolved limit values (e.g., daily_minutes, concurrent_streams, concurrent_jobs, max_file_size_mb).
@@ -2253,21 +2264,23 @@ async def streaming_limits(
         )
         max_streams = 0
     can_start = (max_streams == 0) or (active_streams < max_streams)
-    return JSONResponse(
-        {
-            "user_id": current_user.id,
-            "tier": tier,
-            "limits": limits,
-            "used_today_minutes": used_minutes,
-            "remaining_minutes": remaining_minutes,
-            "active_streams": active_streams,
-            "can_start_stream": can_start,
-            "_can_start_stream": can_start,
-        }
-    )
+    return {
+        "user_id": current_user.id,
+        "tier": tier,
+        "limits": limits,
+        "used_today_minutes": used_minutes,
+        "remaining_minutes": remaining_minutes,
+        "active_streams": active_streams,
+        "can_start_stream": can_start,
+        "_can_start_stream": can_start,
+    }
 
 
-@router.post("/stream/test", summary="Test streaming transcription setup")
+@router.post(
+    "/stream/test",
+    response_model=StreamingTestResponse,
+    summary="Test streaming transcription setup",
+)
 async def test_streaming():
     """
     Run a lightweight end-to-end check of the streaming transcription pipeline using a short generated audio sample.
@@ -2275,7 +2288,7 @@ async def test_streaming():
     Performs a minimal initialization of the Parakeet streaming transcriber, sends a short synthetic audio chunk, and returns the transcriber's immediate response or a buffering status.
 
     Returns:
-        JSONResponse: On success, a JSON object with keys:
+        StreamingTestResponse: On success, a JSON object with keys:
             - "status": "success"
             - "test_passed": True
             - "message": Human-readable success message
@@ -2308,17 +2321,15 @@ async def test_streaming():
         # Try processing
         result = await transcriber.process_audio_chunk(base64.b64decode(encoded))
 
-        return JSONResponse(
-            {
-                "status": "success",
-                "test_passed": True,
-                "message": "Streaming transcription is working",
-                "test_result": result if result else "Buffer accumulating",
-            }
-        )
+        return {
+            "status": "success",
+            "test_passed": True,
+            "message": "Streaming transcription is working",
+            "test_result": result if result else "Buffer accumulating",
+        }
 
-    except Exception as e:
-        logger.error(f"Streaming test failed: {e}")
+    except Exception:
+        logger.error("Streaming test failed", exc_info=True)
         return JSONResponse(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             content={

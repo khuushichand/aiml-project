@@ -37,9 +37,12 @@ def _get_ensure_sqlite_authnz_ready_if_test_mode():
 
 
 @router.post("/orgs", response_model=OrganizationResponse)
-async def admin_create_org(payload: OrganizationCreateRequest) -> OrganizationResponse:
+async def admin_create_org(
+    payload: OrganizationCreateRequest,
+    principal: AuthPrincipal = Depends(get_auth_principal),
+) -> OrganizationResponse:
     await _get_ensure_sqlite_authnz_ready_if_test_mode()()
-    return await admin_orgs_service.create_org(payload)
+    return await admin_orgs_service.create_org(payload, principal)
 
 
 @router.get("/orgs")

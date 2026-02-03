@@ -30,6 +30,34 @@ class TableFormat(Enum):
     PIPE_DELIMITED = "pipe"
 
 
+class TableSerializationError(ValueError):
+    """Base class for table serialization errors."""
+
+
+class InvalidMarkdownTableError(TableSerializationError):
+    """Raised when a Markdown table cannot be parsed."""
+
+
+class EmptyCsvDataError(TableSerializationError):
+    """Raised when CSV data is empty."""
+
+
+class InvalidJsonTableError(TableSerializationError):
+    """Raised when JSON table data is not an array of objects."""
+
+
+class TableFormatDetectionError(TableSerializationError):
+    """Raised when table format cannot be detected."""
+
+
+class UnsupportedTableFormatError(TableSerializationError):
+    """Raised when table format is unsupported."""
+
+
+class InvalidGroupByColumnError(TableSerializationError):
+    """Raised when grouping column is not in table headers."""
+
+
 @dataclass
 class TableCell:
     """Represents a single table cell."""
@@ -114,14 +142,14 @@ class TableParser:
             data = json.loads(text)
             if isinstance(data, list) and all(isinstance(item, dict) for item in data):
                 return TableFormat.JSON
-        except Exception as e:
+        except (json.JSONDecodeError, TypeError, ValueError) as e:
             logger.debug(f"Table JSON detection failed: error={e}")
             try:
                 get_metrics_registry().increment(
                     "app_warning_events_total",
                     labels={"component": "rag", "event": "table_json_detect_failed"},
                 )
-            except Exception:
+            except (AttributeError, RuntimeError, TypeError, ValueError):
                 logger.debug("metrics increment failed for rag table_json_detect_failed")
 
         # Check for CSV/TSV
@@ -140,7 +168,7 @@ class TableParser:
         lines = [line.strip() for line in text.strip().split('\n') if line.strip()]
 
         if len(lines) < 2:
-            raise ValueError("Invalid Markdown table: too few lines")
+            raise InvalidMarkdownTableError
 
         # Parse header
         header_line = lines[0]
@@ -177,7 +205,7 @@ class TableParser:
         rows_data = list(reader)
 
         if not rows_data:
-            raise ValueError("Empty CSV data")
+            raise EmptyCsvDataError
 
         # First row is assumed to be headers
         headers = rows_data[0] if rows_data else []
@@ -201,7 +229,7 @@ class TableParser:
         data = json.loads(text)
 
         if not isinstance(data, list):
-            raise ValueError("JSON must be an array of objects")
+            raise InvalidJsonTableError
 
         if not data:
             return Table(headers=[], rows=[], format=TableFormat.JSON)
@@ -238,7 +266,7 @@ class TableParser:
         if format is None:
             format = cls.detect_format(text)
             if format is None:
-                raise ValueError("Could not detect table format")
+                raise TableFormatDetectionError
 
         if format == TableFormat.MARKDOWN:
             return cls.parse_markdown_table(text)
@@ -249,7 +277,7 @@ class TableParser:
         elif format == TableFormat.JSON:
             return cls.parse_json_table(text)
         else:
-            raise ValueError(f"Unsupported format: {format}")
+            raise UnsupportedTableFormatError
 
 
 class TableSerializer:
@@ -359,7 +387,7 @@ class TableSerializer:
             Dictionary of key-value representations
         """
         if group_by_column and group_by_column not in table.headers:
-            raise ValueError(f"Group by column '{group_by_column}' not found in headers")
+            raise InvalidGroupByColumnError
 
         result: dict[str, list[dict[str, str]]] = {}
 
@@ -493,14 +521,24 @@ class TableProcessor:
         try:
             table = self.parser.parse(table_text, format)
             return self.serializer.serialize_for_rag(table, self.serialize_method)
-        except Exception as e:
+        except (
+            InvalidMarkdownTableError,
+            EmptyCsvDataError,
+            InvalidJsonTableError,
+            TableFormatDetectionError,
+            UnsupportedTableFormatError,
+            InvalidGroupByColumnError,
+            json.JSONDecodeError,
+            TypeError,
+            ValueError,
+        ) as e:
             logger.warning(f"Failed to process table: {e}")
             try:
                 get_metrics_registry().increment(
                     "app_warning_events_total",
                     labels={"component": "rag", "event": "table_process_failed"},
                 )
-            except Exception:
+            except (AttributeError, RuntimeError, TypeError, ValueError):
                 logger.debug("metrics increment failed for rag table_process_failed")
             return {
                 "error": str(e),
@@ -583,14 +621,24 @@ class TableProcessor:
 
                 logger.debug(f"Processed table with {table.num_rows} rows and {table.num_columns} columns")
 
-            except Exception as e:
+            except (
+                InvalidMarkdownTableError,
+                EmptyCsvDataError,
+                InvalidJsonTableError,
+                TableFormatDetectionError,
+                UnsupportedTableFormatError,
+                InvalidGroupByColumnError,
+                json.JSONDecodeError,
+                TypeError,
+                ValueError,
+            ) as e:
                 logger.warning(f"Failed to process table: {e}")
                 try:
                     get_metrics_registry().increment(
                         "app_warning_events_total",
                         labels={"component": "rag", "event": "table_process_failed"},
                     )
-                except Exception:
+                except (AttributeError, RuntimeError, TypeError, ValueError):
                     logger.debug("metrics increment failed for rag table_process_failed")
                 continue
 

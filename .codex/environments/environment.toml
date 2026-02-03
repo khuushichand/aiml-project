@@ -6,6 +6,6 @@ name = "tldw_server2"
 script = ""
 
 [[actions]]
-name = "Run"
+name = "Install"
 icon = "run"
-command = "uv pip install"
+command = "uv pip install -e ."

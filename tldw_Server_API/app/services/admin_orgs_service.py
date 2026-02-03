@@ -160,8 +160,12 @@ async def _emit_membership_audit_event(
         logger.debug(f"Audit ({action}) skipped/failed: {exc}")
 
 
-async def create_org(payload: OrganizationCreateRequest) -> OrganizationResponse:
+async def create_org(
+    payload: OrganizationCreateRequest,
+    principal: AuthPrincipal,
+) -> OrganizationResponse:
     try:
+        admin_scope_service.require_platform_admin(principal)
         row = await core_create_organization(
             name=payload.name,
             owner_user_id=payload.owner_user_id,

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from fastapi import APIRouter, Depends, Query, Request
+from loguru import logger
 
 from tldw_Server_API.app.api.v1.API_Deps.auth_deps import (
     get_auth_principal,
@@ -52,8 +53,8 @@ async def create_registration_code(
     if audit_info:
         try:
             await _get_emit_admin_audit_event()(http_request, principal, **audit_info)
-        except Exception:
-            pass
+        except Exception as exc:
+            logger.debug("Audit emission failed for registration code creation: {}", exc)
     return response
 
 
@@ -76,6 +77,6 @@ async def delete_registration_code(
     if audit_info:
         try:
             await _get_emit_admin_audit_event()(http_request, principal, **audit_info)
-        except Exception:
-            pass
+        except Exception as exc:
+            logger.debug("Audit emission failed for registration code deletion: {}", exc)
     return response

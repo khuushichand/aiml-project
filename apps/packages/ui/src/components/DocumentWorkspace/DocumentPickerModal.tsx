@@ -91,12 +91,17 @@ export const DocumentPickerModal: React.FC<DocumentPickerModalProps> = ({
   const [openingId, setOpeningId] = React.useState<number | null>(null)
   const [showAllMedia, setShowAllMedia] = React.useState(false)
   const [uploading, setUploading] = React.useState(false)
+  const [uploadWarning, setUploadWarning] = React.useState<{
+    message: string
+    mediaId?: number
+  } | null>(null)
   const fileInputRef = React.useRef<HTMLInputElement>(null)
 
   React.useEffect(() => {
     if (open) {
       setActiveTab(initialTab)
       setError(null)
+      setUploadWarning(null)
     }
   }, [open, initialTab])
 
@@ -176,6 +181,7 @@ export const DocumentPickerModal: React.FC<DocumentPickerModalProps> = ({
 
     setUploading(true)
     setError(null)
+    setUploadWarning(null)
 
     try {
       const mediaType = inferUploadMediaTypeFromFile(file.name, file.type)
@@ -189,6 +195,22 @@ export const DocumentPickerModal: React.FC<DocumentPickerModalProps> = ({
         throw new Error(
           t("option:documentWorkspace.uploadMissingMediaId", "Upload succeeded but no media ID was returned")
         )
+      }
+
+      const result = extractUploadResult(response)
+      const warnings = extractWarnings(result)
+      const hasStorageWarning =
+        warnings.some((warning) => warning.includes("original file")) ||
+        result?.original_file_stored === false
+      if (hasStorageWarning) {
+        setUploadWarning({
+          message: t(
+            "option:documentWorkspace.uploadStorageWarning",
+            "Upload finished, but the original file could not be stored. Open in Media to view extracted text, or re-upload after fixing storage."
+          ),
+          mediaId: Number(mediaId)
+        })
+        return
       }
 
       const docType = inferDocumentTypeFromMedia(mediaType, file.name)
@@ -358,6 +380,28 @@ export const DocumentPickerModal: React.FC<DocumentPickerModalProps> = ({
           className="mb-3"
         />
       )}
+      {uploadWarning && (
+        <Alert
+          type="warning"
+          showIcon
+          message={uploadWarning.message}
+          className="mb-3"
+          action={
+            uploadWarning.mediaId ? (
+              <Button
+                size="small"
+                onClick={async () => {
+                  await setSetting(LAST_MEDIA_ID_SETTING, String(uploadWarning.mediaId))
+                  navigate("/media-multi")
+                  onClose()
+                }}
+              >
+                {t("option:documentWorkspace.openInMedia", "Open in Media")}
+              </Button>
+            ) : undefined
+          }
+        />
+      )}
       {error && (
         <Alert
           type="error"
@@ -413,6 +457,23 @@ function extractMediaId(data: any, visited: WeakSet<object> = new WeakSet()): st
   if (direct !== undefined && direct !== null) return direct
 
   return null
+}
+
+function extractUploadResult(data: any): any {
+  if (!data || typeof data !== "object") return null
+  if (Array.isArray(data?.results) && data.results.length > 0) {
+    return data.results[0]
+  }
+  if (data?.result) return data.result
+  if (data?.media) return data.media
+  return data
+}
+
+function extractWarnings(result: any): string[] {
+  if (!result) return []
+  const warnings = result?.warnings
+  if (!Array.isArray(warnings)) return []
+  return warnings.map((warning) => String(warning || "").toLowerCase())
 }
 
 export default DocumentPickerModal

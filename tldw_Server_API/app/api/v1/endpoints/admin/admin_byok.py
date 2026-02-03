@@ -2,7 +2,11 @@ from __future__ import annotations
 
 from fastapi import APIRouter, Depends, Query, Response, status
 
-from tldw_Server_API.app.api.v1.API_Deps.auth_deps import check_rate_limit, get_auth_principal
+from tldw_Server_API.app.api.v1.API_Deps.auth_deps import (
+    check_rate_limit,
+    get_auth_principal,
+    require_roles,
+)
 from tldw_Server_API.app.api.v1.schemas.user_keys import (
     AdminUserKeysResponse,
     SharedProviderKeyResponse,
@@ -20,7 +24,7 @@ router = APIRouter()
 @router.get(
     "/keys/users/{user_id}",
     response_model=AdminUserKeysResponse,
-    dependencies=[Depends(check_rate_limit)],
+    dependencies=[Depends(require_roles("admin")), Depends(check_rate_limit)],
 )
 async def admin_list_user_byok_keys(
     user_id: int,
@@ -33,7 +37,7 @@ async def admin_list_user_byok_keys(
     "/keys/users/{user_id}/{provider}",
     status_code=status.HTTP_204_NO_CONTENT,
     response_class=Response,
-    dependencies=[Depends(check_rate_limit)],
+    dependencies=[Depends(require_roles("admin")), Depends(check_rate_limit)],
 )
 async def admin_revoke_user_byok_key(
     user_id: int,
@@ -47,7 +51,7 @@ async def admin_revoke_user_byok_key(
 @router.post(
     "/keys/shared",
     response_model=SharedProviderKeyResponse,
-    dependencies=[Depends(check_rate_limit)],
+    dependencies=[Depends(require_roles("admin")), Depends(check_rate_limit)],
 )
 async def admin_upsert_shared_byok_key(
     payload: SharedProviderKeyUpsertRequest,
@@ -59,7 +63,7 @@ async def admin_upsert_shared_byok_key(
 @router.post(
     "/keys/shared/test",
     response_model=SharedProviderKeyTestResponse,
-    dependencies=[Depends(check_rate_limit)],
+    dependencies=[Depends(require_roles("admin")), Depends(check_rate_limit)],
 )
 async def admin_test_shared_byok_key(
     payload: SharedProviderKeyTestRequest,
@@ -71,7 +75,7 @@ async def admin_test_shared_byok_key(
 @router.get(
     "/keys/shared",
     response_model=SharedProviderKeysResponse,
-    dependencies=[Depends(check_rate_limit)],
+    dependencies=[Depends(require_roles("admin")), Depends(check_rate_limit)],
 )
 async def admin_list_shared_byok_keys(
     principal: AuthPrincipal = Depends(get_auth_principal),
@@ -91,7 +95,7 @@ async def admin_list_shared_byok_keys(
     "/keys/shared/{scope_type}/{scope_id}/{provider}",
     status_code=status.HTTP_204_NO_CONTENT,
     response_class=Response,
-    dependencies=[Depends(check_rate_limit)],
+    dependencies=[Depends(require_roles("admin")), Depends(check_rate_limit)],
 )
 async def admin_delete_shared_byok_key(
     scope_type: str,

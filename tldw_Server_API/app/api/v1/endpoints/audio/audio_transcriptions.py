@@ -89,7 +89,12 @@ async def create_transcription(
         description="Optional hotwords to guide transcription (CSV or JSON list). Primarily used by VibeVoice-ASR.",
     ),
     response_format: str = Form(default="json", description="Format of the transcript output"),
-    temperature: float = Form(default=0.0, ge=0.0, le=1.0, description="Sampling temperature"),
+    temperature: float = Form(
+        default=0.0,
+        ge=0.0,
+        le=1.0,
+        description="Sampling temperature (currently ignored by all providers).",
+    ),
     task: str = Form(
         default="transcribe",
         description="Task for Whisper models: 'transcribe' (default) or 'translate'. "
@@ -716,7 +721,12 @@ async def create_translation(
     ),
     prompt: Optional[str] = Form(default=None, description="Optional text to guide the model's style"),
     response_format: str = Form(default="json", description="Format of the transcript output"),
-    temperature: float = Form(default=0.0, ge=0.0, le=1.0, description="Sampling temperature"),
+    temperature: float = Form(
+        default=0.0,
+        ge=0.0,
+        le=1.0,
+        description="Sampling temperature (currently ignored by all providers).",
+    ),
     current_user: User = Depends(get_request_user),
     usage_log: UsageEventLogger = Depends(get_usage_event_logger),
 ):
@@ -732,12 +742,12 @@ async def create_translation(
 
     try:
         usage_log.log_event(
-            "audio.transcriptions",
+            "audio.translations",
             tags=[str(model or "")],
             metadata={"filename": getattr(file, "filename", None), "language": "en"},
         )
     except Exception as e:
-        logger.debug(f"usage_log audio.transcriptions failed: error={e}")
+        logger.debug(f"usage_log audio.translations failed: error={e}")
 
     return await create_transcription(
         request=request,

@@ -228,4 +228,6 @@ async def export_llm_usage_csv(
         limit=limit,
         org_id=org_id,
     )
-    return PlainTextResponse(content=content, media_type="text/csv")
+    resp = PlainTextResponse(content=content, media_type="text/csv")
+    resp.headers["Content-Disposition"] = 'attachment; filename="llm_usage_export.csv"'
+    return resp

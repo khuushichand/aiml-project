@@ -2,7 +2,10 @@ from __future__ import annotations
 
 from fastapi import APIRouter, Depends, Query, Response, status
 
-from tldw_Server_API.app.api.v1.API_Deps.auth_deps import check_rate_limit
+from tldw_Server_API.app.api.v1.API_Deps.auth_deps import (
+    check_rate_limit,
+    get_auth_principal,
+)
 from tldw_Server_API.app.api.v1.schemas.admin_schemas import (
     LLMProviderOverrideListResponse,
     LLMProviderOverrideRequest,
@@ -24,7 +27,7 @@ def _get_ensure_sqlite_authnz_ready_if_test_mode():
 @router.get(
     "/llm/providers/overrides",
     response_model=LLMProviderOverrideListResponse,
-    dependencies=[Depends(check_rate_limit)],
+    dependencies=[Depends(get_auth_principal), Depends(check_rate_limit)],
 )
 async def admin_list_llm_provider_overrides(
     provider: str | None = Query(None),
@@ -36,7 +39,7 @@ async def admin_list_llm_provider_overrides(
 @router.get(
     "/llm/providers/overrides/{provider}",
     response_model=LLMProviderOverrideResponse,
-    dependencies=[Depends(check_rate_limit)],
+    dependencies=[Depends(get_auth_principal), Depends(check_rate_limit)],
 )
 async def admin_get_llm_provider_override(provider: str) -> LLMProviderOverrideResponse:
     await _get_ensure_sqlite_authnz_ready_if_test_mode()()
@@ -46,7 +49,7 @@ async def admin_get_llm_provider_override(provider: str) -> LLMProviderOverrideR
 @router.put(
     "/llm/providers/overrides/{provider}",
     response_model=LLMProviderOverrideResponse,
-    dependencies=[Depends(check_rate_limit)],
+    dependencies=[Depends(get_auth_principal), Depends(check_rate_limit)],
 )
 async def admin_upsert_llm_provider_override(
     provider: str,
@@ -60,7 +63,7 @@ async def admin_upsert_llm_provider_override(
     "/llm/providers/overrides/{provider}",
     status_code=status.HTTP_204_NO_CONTENT,
     response_class=Response,
-    dependencies=[Depends(check_rate_limit)],
+    dependencies=[Depends(get_auth_principal), Depends(check_rate_limit)],
 )
 async def admin_delete_llm_provider_override(provider: str) -> Response:
     await _get_ensure_sqlite_authnz_ready_if_test_mode()()
@@ -71,7 +74,9 @@ async def admin_delete_llm_provider_override(provider: str) -> Response:
 @router.post(
     "/llm/providers/test",
     response_model=LLMProviderTestResponse,
-    dependencies=[Depends(check_rate_limit)],
+    dependencies=[Depends(get_auth_principal), Depends(check_rate_limit)],
 )
 async def admin_test_llm_provider(payload: LLMProviderTestRequest) -> LLMProviderTestResponse:
+    """Test an LLM provider configuration (admin scope)."""
+    await _get_ensure_sqlite_authnz_ready_if_test_mode()()
     return await admin_llm_providers_service.test_provider(payload)

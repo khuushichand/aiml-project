@@ -11,8 +11,10 @@ from tldw_Server_API.app.api.v1.API_Deps.auth_deps import (
     get_db_transaction,
     get_registration_service_dep,
 )
+from tldw_Server_API.app.api.v1.schemas.auth_schemas import MessageResponse
 from tldw_Server_API.app.api.v1.schemas.admin_schemas import (
     AdminUserCreateRequest,
+    UserDetailResponse,
     UserListResponse,
     UserSummary,
     UserUpdateRequest,
@@ -161,11 +163,11 @@ async def export_users(
         raise HTTPException(status_code=500, detail="Failed to export users")
 
 
-@router.get("/users/{user_id}")
+@router.get("/users/{user_id}", response_model=UserDetailResponse)
 async def get_user_details(
     user_id: int,
     principal: AuthPrincipal = Depends(get_auth_principal),
-):
+) -> UserDetailResponse:
     return await admin_users_service.get_user_details(principal, user_id)
 
 
@@ -175,13 +177,13 @@ def _get_is_pg_fn():
     return admin_mod._is_postgres_backend
 
 
-@router.put("/users/{user_id}")
+@router.put("/users/{user_id}", response_model=MessageResponse)
 async def update_user(
     user_id: int,
     request: UserUpdateRequest,
     principal: AuthPrincipal = Depends(get_auth_principal),
     db=Depends(get_db_transaction),
-):
+) -> MessageResponse:
     return await admin_users_service.update_user(
         principal,
         user_id,
@@ -191,12 +193,12 @@ async def update_user(
     )
 
 
-@router.delete("/users/{user_id}")
+@router.delete("/users/{user_id}", response_model=MessageResponse)
 async def delete_user(
     user_id: int,
     principal: AuthPrincipal = Depends(get_auth_principal),
     db=Depends(get_db_transaction),
-):
+) -> MessageResponse:
     return await admin_users_service.delete_user(
         principal,
         user_id,

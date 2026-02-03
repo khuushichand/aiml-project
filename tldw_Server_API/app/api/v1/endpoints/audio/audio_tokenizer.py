@@ -101,7 +101,13 @@ async def encode_audio_tokenizer(
         except Exception:
             sample_rate_hint = None
     else:
-        payload = AudioTokenizerEncodeRequest(**(await request.json()))
+        try:
+            payload = AudioTokenizerEncodeRequest(**(await request.json()))
+        except Exception as exc:
+            raise HTTPException(
+                status_code=400,
+                detail=_http_error_detail("Invalid JSON payload", request_id, exc=exc),
+            ) from exc
         audio_bytes = _decode_base64_payload(payload.audio_base64)
         tokenizer_model = payload.tokenizer_model or tokenizer_model
         token_format = payload.token_format or token_format

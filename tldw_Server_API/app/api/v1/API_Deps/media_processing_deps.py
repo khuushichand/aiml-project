@@ -486,4 +486,7 @@ __all__ = [
     "get_process_documents_form",
     "get_process_videos_form",
     "get_process_audios_form",
+    "get_process_pdfs_form",
+    "get_process_ebooks_form",
+    "get_process_emails_form",
 ]

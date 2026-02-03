@@ -21,6 +21,13 @@ from loguru import logger
 from tldw_Server_API.app.core.Metrics import get_metrics_registry
 
 
+class InvalidRelevanceScoreError(ValueError):
+    """Raised when a relevance score is out of the 1-5 range."""
+
+    def __init__(self) -> None:
+        super().__init__("Relevance score must be between 1 and 5")
+
+
 class FeedbackType(Enum):
     """Types of feedback that can be collected."""
     RELEVANCE = "relevance"  # 1-5 star rating
@@ -161,7 +168,7 @@ class FeedbackStore:
                 conn.commit()
                 return True
 
-        except Exception as e:
+        except (sqlite3.Error, OSError, RuntimeError, TypeError, ValueError) as e:
             logger.error(f"Failed to store feedback: {e}")
             return False
 
@@ -330,14 +337,14 @@ class FeedbackAnalyzer:
                     normalized = (relevance - 1) / 4  # Normalize to 0-1
                     score += normalized * 3.0  # Weight of 3
                     weight_sum += 3.0
-                except Exception as e:
+                except (TypeError, ValueError, json.JSONDecodeError) as e:
                     logger.debug(f"Failed to parse relevance feedback value: error={e}")
                     try:
                         get_metrics_registry().increment(
                             "app_warning_events_total",
                             labels={"component": "rag", "event": "feedback_parse_relevance_failed"},
                         )
-                    except Exception:
+                    except (AttributeError, RuntimeError, TypeError, ValueError):
                         logger.debug("metrics increment failed for rag feedback_parse_relevance_failed")
 
             elif feedback_type == "helpful":
@@ -346,14 +353,14 @@ class FeedbackAnalyzer:
                     helpful = json.loads(value) if isinstance(value, str) else value
                     score += (1.0 if helpful else 0.0) * 2.0  # Weight of 2
                     weight_sum += 2.0
-                except Exception as e:
+                except (TypeError, ValueError, json.JSONDecodeError) as e:
                     logger.debug(f"Failed to parse helpful feedback value: error={e}")
                     try:
                         get_metrics_registry().increment(
                             "app_warning_events_total",
                             labels={"component": "rag", "event": "feedback_parse_helpful_failed"},
                         )
-                    except Exception:
+                    except (AttributeError, RuntimeError, TypeError, ValueError):
                         logger.debug("metrics increment failed for rag feedback_parse_helpful_failed")
 
             elif feedback_type == "click":
@@ -369,14 +376,14 @@ class FeedbackAnalyzer:
                     normalized = min(dwell / 30.0, 1.0)
                     score += normalized * 1.5  # Weight of 1.5
                     weight_sum += 1.5
-                except Exception as e:
+                except (TypeError, ValueError, json.JSONDecodeError) as e:
                     logger.debug(f"Failed to parse dwell_time feedback value: error={e}")
                     try:
                         get_metrics_registry().increment(
                             "app_warning_events_total",
                             labels={"component": "rag", "event": "feedback_parse_dwell_failed"},
                         )
-                    except Exception:
+                    except (AttributeError, RuntimeError, TypeError, ValueError):
                         logger.debug("metrics increment failed for rag feedback_parse_dwell_failed")
 
         return score / weight_sum if weight_sum > 0 else 0.5
@@ -407,7 +414,7 @@ class FeedbackAnalyzer:
                 try:
                     score = float(json.loads(value) if isinstance(value, str) else value)
                     relevance_scores.append(score)
-                except Exception as e:
+                except (TypeError, ValueError, json.JSONDecodeError) as e:
                     logger.debug(f"Failed to parse relevance score for query document: error={e}")
 
             elif feedback_type == "helpful":
@@ -417,7 +424,7 @@ class FeedbackAnalyzer:
                         perf.helpful_count += 1
                     else:
                         perf.unhelpful_count += 1
-                except Exception as e:
+                except (TypeError, ValueError, json.JSONDecodeError) as e:
                     logger.debug(f"Failed to parse helpful feedback value: error={e}")
 
             elif feedback_type == "click":
@@ -427,7 +434,7 @@ class FeedbackAnalyzer:
                 try:
                     dwell = float(json.loads(value) if isinstance(value, str) else value)
                     dwell_times.append(dwell)
-                except Exception as e:
+                except (TypeError, ValueError, json.JSONDecodeError) as e:
                     logger.debug(f"Failed to parse dwell_time feedback value: error={e}")
 
         perf.total_results = len(unique_docs)
@@ -468,7 +475,7 @@ class FeedbackAnalyzer:
                             score = float(json.loads(entry["value"]) if isinstance(entry["value"], str) else entry["value"])
                             query_doc_score = (score - 1) / 4  # Normalize to 0-1
                             break
-                        except Exception as e:
+                        except (TypeError, ValueError, json.JSONDecodeError) as e:
                             logger.debug(f"Failed to parse relevance score for query document: error={e}")
 
             # Combine document and query-specific scores
@@ -578,19 +585,18 @@ class FeedbackSystem:
                     f"Feedback submitted: {feedback_type.value} for doc {document_id} "
                     f"by user {user_id}"
                 )
-
-            return success
-
-        except Exception as e:
+        except (TypeError, ValueError, RuntimeError) as e:
             logger.error(f"Failed to submit feedback: {e}")
             try:
                 get_metrics_registry().increment(
                     "app_exception_events_total",
                     labels={"component": "rag", "event": "feedback_submit_failed"},
                 )
-            except Exception:
+            except (AttributeError, RuntimeError, TypeError, ValueError):
                 logger.debug("metrics increment failed for rag feedback_submit_failed")
-            return False
+        else:
+            return success
+        return False
 
     async def submit_relevance_score(
         self,
@@ -602,7 +608,7 @@ class FeedbackSystem:
     ) -> bool:
         """Submit relevance score (1-5)."""
         if not 1 <= score <= 5:
-            raise ValueError("Relevance score must be between 1 and 5")
+            raise InvalidRelevanceScoreError()
 
         return await self.submit_feedback(
             query=query,

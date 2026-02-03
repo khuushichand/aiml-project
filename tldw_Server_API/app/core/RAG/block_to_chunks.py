@@ -20,17 +20,17 @@ def _as_dict(value: Any) -> dict[str, Any]:
     if hasattr(value, "model_dump"):
         try:
             return value.model_dump()  # type: ignore[call-arg]
-        except Exception:
+        except (AttributeError, TypeError, ValueError):
             pass
     if hasattr(value, "dict"):
         try:
             return value.dict()  # type: ignore[call-arg]
-        except Exception:
+        except (AttributeError, TypeError, ValueError):
             pass
     if hasattr(value, "__dict__"):
         try:
             return dict(value.__dict__)
-        except Exception:
+        except (TypeError, ValueError):
             pass
     return {}
 
@@ -67,7 +67,7 @@ def _coerce_int(value: Any) -> Optional[int]:
         if stripped.isdigit() or (stripped.startswith("-") and stripped[1:].isdigit()):
             try:
                 return int(stripped)
-            except Exception:
+            except (OverflowError, ValueError):
                 return None
     return None
 
@@ -85,7 +85,7 @@ def _normalize_timestamp_ms(value: Any) -> Optional[int]:
         return None
     try:
         num = float(value)
-    except Exception:
+    except (TypeError, ValueError):
         return None
     if num < 0:
         return None
@@ -123,7 +123,7 @@ def _normalize_bbox_quad(value: Any) -> Optional[list[dict[str, float]]]:
                 continue
             try:
                 points.append({"x": float(x), "y": float(y)})
-            except Exception:
+            except (TypeError, ValueError):
                 continue
     if not points:
         return None
@@ -135,7 +135,7 @@ def _normalize_block_type(value: Any) -> str:
         return "text"
     try:
         raw = str(value).strip().upper()
-    except Exception:
+    except (TypeError, ValueError):
         return "text"
     mapping = {
         "TEXT": "text",
@@ -312,4 +312,3 @@ def block_to_chunks(blocks: Sequence[Any]) -> list[dict[str, Any]]:
 
 
 __all__ = ["block_to_chunks"]
-

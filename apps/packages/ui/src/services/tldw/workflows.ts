@@ -22,7 +22,8 @@ export const getWorkflowStepTypes = async (
   force = false
 ): Promise<WorkflowStepTypeInfo[]> => {
   const now = Date.now()
-  if (!force && stepTypesPromise && stepTypesFetchedAt) {
+  if (!force && stepTypesPromise) {
+    if (!stepTypesFetchedAt) return stepTypesPromise
     if (now - stepTypesFetchedAt < STEP_TYPES_TTL_MS) {
       return stepTypesPromise
     }

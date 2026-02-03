@@ -22,7 +22,7 @@ from loguru import logger
 try:
     # Prefer the RAG Document type for consistency
     from .types import Document
-except Exception:  # pragma: no cover - fallback for tests
+except (ImportError, AttributeError):  # pragma: no cover - fallback for tests
     from dataclasses import dataclass as _dc
 
     @_dc
@@ -103,12 +103,12 @@ def downweight_injection_docs(docs: list[Document], strength: float = 0.5) -> di
                 # downweight
                 try:
                     s = float(getattr(d, "score", 0.0) or 0.0)
-                except Exception:
+                except (TypeError, ValueError):
                     logger.debug("Failed to parse doc score for injection downweight", exc_info=True)
                     s = 0.0
                 d.score = s * max(0.05, min(1.0, float(strength)))
                 affected += 1
-        except Exception:
+        except (AttributeError, TypeError, ValueError):
             logger.debug("Guardrail processing failed during injection downweight", exc_info=True)
             continue
     return {"total": total, "affected": affected}
@@ -165,11 +165,15 @@ def _extract_numeric_tokens(text: str) -> set[str]:
     toks = [m.group(0) for m in _NUMERIC_RE.finditer(s)]
     # Handle simple word multipliers like "3 million" or "5 percent"
     try:
-        word_pairs = re.findall(r"(\d+(?:\.\d+)?)\s+(million|millions|billion|billions|thousand|thousands|percent|percentage)\b", s, re.IGNORECASE)
+        word_pairs = re.findall(
+            r"(\d+(?:\.\d+)?)\s+(million|millions|billion|billions|thousand|thousands|percent|percentage)\b",
+            s,
+            re.IGNORECASE,
+        )
         for num, word in word_pairs:
             unit = _WORD_MULTIPLIERS.get(word.lower(), "")
             toks.append(f"{num}{unit}")
-    except Exception:
+    except (TypeError, re.error):
         logger.debug("Guardrail numeric word-pair extraction failed", exc_info=True)
     base: set[str] = set()
     expanded: set[str] = set()
@@ -189,7 +193,7 @@ def _extract_numeric_tokens(text: str) -> set[str]:
                 core = canon.replace(",", "").replace("_", "").replace(".", "")
                 if core and core.isdigit():
                     expanded.add(core)
-        except Exception:
+        except (TypeError, ValueError):
             logger.debug("Guardrail numeric canonicalization failed", exc_info=True)
         # Add expansion for k/m/b to canonical integer string for matching against raw numbers
         try:
@@ -203,9 +207,9 @@ def _extract_numeric_tokens(text: str) -> set[str]:
                     num = float(val_str)
                     canonical = str(int(round(num * factor)))
                     expanded.add(canonical)
-                except Exception:
+                except (TypeError, ValueError):
                     logger.debug("Guardrail numeric expansion failed", exc_info=True)
-        except Exception:
+        except (TypeError, ValueError):
             logger.debug("Guardrail numeric expansion setup failed", exc_info=True)
     return base | expanded
 
@@ -252,7 +256,7 @@ def check_numeric_fidelity(answer: str, docs: list[Document]) -> NumericFidelity
                 num = float(core)
                 factor = {"k": 1_000, "m": 1_000_000, "b": 1_000_000_000}[unit]
                 out.add(str(int(round(num * factor))))
-        except Exception:
+        except (TypeError, ValueError):
             logger.debug("Guardrail numeric alias expansion failed", exc_info=True)
         return out
     present = set()
@@ -288,9 +292,10 @@ def _parse_numeric_value(token: str) -> float | None:
             val *= 1_000_000
         elif unit == "b":
             val *= 1_000_000_000
-        return val
-    except Exception:
+    except (TypeError, ValueError):
         return None
+    else:
+        return val
 
 
 def check_numeric_precision(
@@ -480,7 +485,7 @@ def build_hard_citations(
                             "start": int(cit.get("start", 0)),
                             "end": int(cit.get("end", 0)),
                         })
-                    except Exception:
+                    except (TypeError, ValueError):
                         logger.debug("Guardrail citation mapping failed for claim", exc_info=True)
                         continue
                 if entry_claim["citations"]:
@@ -510,7 +515,7 @@ def build_hard_citations(
                         "start": int(start),
                         "end": int(end),
                     })
-            except Exception:
+            except (AttributeError, TypeError, ValueError):
                 logger.debug("Guardrail hard citation mapping failed", exc_info=True)
                 continue
         if entry_sentence["citations"]:
@@ -534,7 +539,7 @@ def _verify_offsets(doc_text: str, start: int, end: int, target: str) -> bool:
         def _norm(x: str) -> str:
             return re.sub(r"\s+", " ", (x or "").strip())
         return _norm(segment) in {_norm(target), _norm(target[: len(segment)])}
-    except Exception:
+    except (TypeError, ValueError):
         logger.debug("Guardrail offset verification failed", exc_info=True)
         return False
 
@@ -569,7 +574,7 @@ def build_quote_citations(answer: str, docs: list[Document]) -> dict[str, Any]:
                         "end": int(end),
                         "verified": bool(verified),
                     })
-            except Exception:
+            except (AttributeError, TypeError, ValueError):
                 logger.debug("Guardrail quote citation mapping failed", exc_info=True)
                 continue
         if entry_quote["citations"]:
@@ -686,7 +691,7 @@ def sanitize_html_allowlist(text: str, allowed_tags: list[str] | None = None, al
     try:
         stripper.feed(text)
         return stripper.get_data()
-    except Exception:
+    except (TypeError, ValueError):
         logger.debug("Guardrail HTML sanitizer failed; falling back to plain text", exc_info=True)
         # On parser failure, return plain text fallback
         return re.sub(r"<[^>]+>", "", text)
@@ -706,7 +711,7 @@ def gate_docs_by_ocr_confidence(docs: list[Document], threshold: float = 0.0) ->
         conf = None
         try:
             conf = float(md.get("ocr_confidence") or md.get("ocr", {}).get("confidence"))
-        except Exception:
+        except (TypeError, ValueError):
             conf = None
         if conf is not None and conf < float(threshold):
             dropped += 1
