@@ -203,12 +203,7 @@ async def create_transcription(
             rid,
         )
         max_file_size = 25 * 1024 * 1024
-    contents = await file.read()
-    if len(contents) > max_file_size:
-        raise HTTPException(
-            status_code=status.HTTP_413_CONTENT_TOO_LARGE,
-            detail=f"File size exceeds maximum of {int(max_file_size/1024/1024)}MB",
-        )
+    upload_chunk_size = 1024 * 1024
 
     # Resolve default model from config when omitted.
     if not (model or "").strip():
@@ -245,8 +240,20 @@ async def create_transcription(
     canonical_path = None
     try:
         file_extension = os.path.splitext(file.filename)[1] if file.filename else ".wav"
+        total_read = 0
         with tempfile.NamedTemporaryFile(suffix=file_extension, delete=False) as tmp_file:
-            tmp_file.write(contents)
+            while True:
+                chunk = await file.read(upload_chunk_size)
+                if not chunk:
+                    break
+                total_read += len(chunk)
+                if total_read > max_file_size:
+                    temp_audio_path = tmp_file.name
+                    raise HTTPException(
+                        status_code=status.HTTP_413_CONTENT_TOO_LARGE,
+                        detail=f"File size exceeds maximum of {int(max_file_size/1024/1024)}MB",
+                    )
+                tmp_file.write(chunk)
             temp_audio_path = tmp_file.name
 
         # Convert to canonical 16k mono WAV for consistent processing; base_dir constrains output location.
@@ -287,12 +294,25 @@ async def create_transcription(
         base_dir = PathLib(canonical_path).parent
 
         sf_mod = _audio_shim_attr("sf")
-        audio_data, sample_rate = sf_mod.read(canonical_path)
+        duration_seconds = 0.0
         try:
-            duration_seconds = float(len(audio_data)) / float(sample_rate or 16000)
+            info_fn = getattr(sf_mod, "info", None)
+            if not callable(info_fn):
+                raise AttributeError("soundfile.info not available")
+            info = info_fn(canonical_path)
+            frames = getattr(info, "frames", None)
+            samplerate = getattr(info, "samplerate", None)
+            if frames is None or not samplerate:
+                raise ValueError("soundfile.info returned incomplete metadata")
+            duration_seconds = float(frames) / float(samplerate)
         except Exception as e:
-            logger.debug(f"Failed to compute audio duration; defaulting to 0: error={e}")
-            duration_seconds = 0.0
+            logger.debug(f"soundfile.info failed; falling back to read for duration: error={e}")
+            try:
+                audio_data, sample_rate = sf_mod.read(canonical_path)
+                duration_seconds = float(len(audio_data)) / float(sample_rate or 16000)
+            except Exception as read_err:
+                logger.debug(f"Failed to compute audio duration; defaulting to 0: error={read_err}")
+                duration_seconds = 0.0
 
         granularity_tokens = set()
         try:
