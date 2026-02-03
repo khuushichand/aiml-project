@@ -34,7 +34,7 @@ function syncReadingProgressWithBeacon(
   }
 
   try {
-    const url = `${serverUrl}/api/v1/media/${mediaId}/reading-progress`
+    const url = `${serverUrl}/api/v1/media/${mediaId}/progress`
     const payload = JSON.stringify(progress)
 
     // sendBeacon returns true if the browser successfully queued the request

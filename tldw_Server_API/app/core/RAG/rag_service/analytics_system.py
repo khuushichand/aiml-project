@@ -21,7 +21,15 @@ from typing import Any, Optional
 
 from loguru import logger
 
-from tldw_Server_API.app.core.DB_Management.backends.base import BackendType
+from tldw_Server_API.app.core.DB_Management.backends.base import (
+    BackendType,
+    DatabaseError as BackendDatabaseError,
+)
+
+try:
+    from tldw_Server_API.app.core.DB_Management.ChaChaNotes_DB import CharactersRAGDBError
+except (ImportError, AttributeError):
+    CharactersRAGDBError = RuntimeError  # type: ignore[assignment]
 
 from .analytics_db import DEFAULT_ANALYTICS_DB_PATH, get_analytics_db
 
@@ -128,10 +136,11 @@ class AnalyticsStore:
             await asyncio.get_event_loop().run_in_executor(
                 None, self.db.record_search, search_data
             )
-            return True
-        except Exception as e:
+        except (BackendDatabaseError, AttributeError, OSError, RuntimeError, TypeError, ValueError) as e:
             logger.error(f"Failed to record search analytics: {e}")
-            return False
+        else:
+            return True
+        return False
 
     async def record_feedback(self, feedback_data: dict[str, Any]) -> bool:
         """
@@ -147,10 +156,11 @@ class AnalyticsStore:
             await asyncio.get_event_loop().run_in_executor(
                 None, self.db.record_feedback, feedback_data
             )
-            return True
-        except Exception as e:
+        except (BackendDatabaseError, AttributeError, OSError, RuntimeError, TypeError, ValueError) as e:
             logger.error(f"Failed to record feedback: {e}")
-            return False
+        else:
+            return True
+        return False
 
     async def record_event(self, event: "AnalyticsEvent | dict[str, Any]") -> bool:
         """
@@ -167,10 +177,11 @@ class AnalyticsStore:
             await asyncio.get_event_loop().run_in_executor(
                 None, self.db.record_event, payload
             )
-            return True
-        except Exception as e:
+        except (BackendDatabaseError, AttributeError, OSError, RuntimeError, TypeError, ValueError) as e:
             logger.error(f"Failed to record analytics event: {e}")
-            return False
+        else:
+            return True
+        return False
 
     async def record_performance_metric(
         self,
@@ -236,17 +247,18 @@ class AnalyticsStore:
         Returns:
             Success status
         """
+        payload = doc_data or kwargs
+        if not payload:
+            return False
         try:
-            payload = doc_data or kwargs
-            if not payload:
-                return False
             await asyncio.get_event_loop().run_in_executor(
                 None, self.db.record_document_performance, payload
             )
-            return True
-        except Exception as e:
+        except (BackendDatabaseError, AttributeError, OSError, RuntimeError, TypeError, ValueError) as e:
             logger.error(f"Failed to record document performance: {e}")
-            return False
+        else:
+            return True
+        return False
 
     async def record_error(self, error_data: Optional[dict[str, Any]] = None, **kwargs: Any) -> bool:
         """
@@ -259,17 +271,18 @@ class AnalyticsStore:
         Returns:
             Success status
         """
+        payload = error_data or kwargs
+        if not payload:
+            return False
         try:
-            payload = error_data or kwargs
-            if not payload:
-                return False
             await asyncio.get_event_loop().run_in_executor(
                 None, self.db.record_error, payload
             )
-            return True
-        except Exception as e:
+        except (BackendDatabaseError, AttributeError, OSError, RuntimeError, TypeError, ValueError) as e:
             logger.error(f"Failed to record error: {e}")
-            return False
+        else:
+            return True
+        return False
 
     async def record_feature_usage(self, feature_data: dict[str, Any]) -> bool:
         """
@@ -285,10 +298,11 @@ class AnalyticsStore:
             await asyncio.get_event_loop().run_in_executor(
                 None, self.db.record_feature_usage, feature_data
             )
-            return True
-        except Exception as e:
+        except (BackendDatabaseError, AttributeError, OSError, RuntimeError, TypeError, ValueError) as e:
             logger.error(f"Failed to record feature usage: {e}")
-            return False
+        else:
+            return True
+        return False
 
     async def get_analytics_summary(self, days: int = 7) -> dict[str, Any]:
         """
@@ -304,10 +318,11 @@ class AnalyticsStore:
             summary = await asyncio.get_event_loop().run_in_executor(
                 None, self.db.get_analytics_summary, days
             )
-            return summary
-        except Exception as e:
+        except (BackendDatabaseError, AttributeError, OSError, RuntimeError, TypeError, ValueError) as e:
             logger.error(f"Failed to get analytics summary: {e}")
-            return {}
+        else:
+            return summary
+        return {}
 
     async def cleanup_old_data(self, days_to_keep: int = 90) -> int:
         """
@@ -323,10 +338,11 @@ class AnalyticsStore:
             deleted = await asyncio.get_event_loop().run_in_executor(
                 None, self.db.cleanup_old_data, days_to_keep
             )
-            return deleted
-        except Exception as e:
+        except (BackendDatabaseError, AttributeError, OSError, RuntimeError, TypeError, ValueError) as e:
             logger.error(f"Failed to cleanup old data: {e}")
-            return 0
+        else:
+            return deleted
+        return 0
 
 
 class UserFeedbackStore:
@@ -403,13 +419,13 @@ class UserFeedbackStore:
                         conn.execute("ALTER TABLE conversation_feedback ADD COLUMN issues TEXT")
                     else:
                         conn.execute("ALTER TABLE conversation_feedback ADD COLUMN IF NOT EXISTS issues TEXT")
-                except Exception as exc:  # noqa: BLE001
+                except (BackendDatabaseError, CharactersRAGDBError, AttributeError, OSError, RuntimeError, TypeError, ValueError) as exc:
                     msg = str(exc).lower()
                     if self.db.backend_type == BackendType.SQLITE and "duplicate column" in msg:
                         pass
                     else:
                         logger.debug(f"conversation_feedback: issues column add skipped: {exc}")
-        except Exception as exc:  # noqa: BLE001
+        except (BackendDatabaseError, CharactersRAGDBError, AttributeError, OSError, RuntimeError, TypeError, ValueError) as exc:
             logger.error(f"Failed to initialize feedback schema: {exc}", exc_info=True)
 
     async def add_feedback(
@@ -466,12 +482,12 @@ class UserFeedbackStore:
                         user_notes,
                     ),
                 )
-
-            logger.info(f"Added feedback {feedback_id} for conversation {conversation_id}")
-            return feedback_id
-        except Exception as exc:  # noqa: BLE001
+        except (BackendDatabaseError, CharactersRAGDBError, AttributeError, OSError, RuntimeError, TypeError, ValueError) as exc:
             logger.error(f"Failed to add feedback: {exc}")
             raise
+        else:
+            logger.info(f"Added feedback {feedback_id} for conversation {conversation_id}")
+            return feedback_id
 
     async def merge_feedback_update(
         self,
@@ -487,64 +503,65 @@ class UserFeedbackStore:
         if self.db.backend_type == BackendType.SQLITE:
             select_sql = select_sql.replace('%s', '?')
 
+        result: Optional[dict[str, Any]] = None
         try:
             cursor = self.db.execute_query(select_sql, (feedback_id,))
             row = cursor.fetchone()
-            if not row:
-                return None
-
-            if isinstance(row, dict):
-                record = dict(row)
-            else:
-                # Handle sqlite3.Row or tuple-like results
-                if hasattr(row, "keys"):
+            if row:
+                if isinstance(row, dict):
                     record = dict(row)
-                elif cursor.description:
-                    columns = [col[0] for col in cursor.description]
-                    record = dict(zip(columns, row))
                 else:
-                    record = {}
+                    # Handle sqlite3.Row or tuple-like results
+                    if hasattr(row, "keys"):
+                        record = dict(row)
+                    elif cursor.description:
+                        columns = [col[0] for col in cursor.description]
+                        record = dict(zip(columns, row))
+                    else:
+                        record = {}
 
-            raw_issues = record.get("issues")
-            existing_issues: list[str] = []
-            if raw_issues:
-                try:
-                    decoded = json.loads(raw_issues)
-                    if isinstance(decoded, list):
-                        existing_issues = [str(item) for item in decoded if str(item).strip()]
-                except Exception:
-                    existing_issues = []
+                raw_issues = record.get("issues")
+                existing_issues: list[str] = []
+                if raw_issues:
+                    try:
+                        decoded = json.loads(raw_issues)
+                        if isinstance(decoded, list):
+                            existing_issues = [str(item) for item in decoded if str(item).strip()]
+                    except (json.JSONDecodeError, TypeError, ValueError):
+                        existing_issues = []
 
-            def _merge_issues(existing: list[str], incoming: Optional[list[str]]) -> list[str]:
-                if not incoming:
-                    return list(existing)
-                merged: list[str] = []
-                seen = set()
-                for item in existing + [str(item) for item in incoming if str(item).strip()]:
-                    if item in seen:
-                        continue
-                    seen.add(item)
-                    merged.append(item)
-                return merged
+                def _merge_issues(existing: list[str], incoming: Optional[list[str]]) -> list[str]:
+                    if not incoming:
+                        return list(existing)
+                    merged: list[str] = []
+                    seen = set()
+                    for item in existing + [str(item) for item in incoming if str(item).strip()]:
+                        if item in seen:
+                            continue
+                        seen.add(item)
+                        merged.append(item)
+                    return merged
 
-            updated_issues = _merge_issues(existing_issues, issues)
-            existing_notes = record.get("user_notes")
-            updated_notes = existing_notes if user_notes is None else user_notes
+                updated_issues = _merge_issues(existing_issues, issues)
+                existing_notes = record.get("user_notes")
+                updated_notes = existing_notes if user_notes is None else user_notes
 
-            if updated_issues == existing_issues and updated_notes == existing_notes:
-                return {"issues": existing_issues, "user_notes": existing_notes}
+                if updated_issues == existing_issues and updated_notes == existing_notes:
+                    result = {"issues": existing_issues, "user_notes": existing_notes}
+                else:
+                    update_sql = "UPDATE conversation_feedback SET issues = %s, user_notes = %s WHERE id = %s"
+                    if self.db.backend_type == BackendType.SQLITE:
+                        update_sql = update_sql.replace('%s', '?')
 
-            update_sql = "UPDATE conversation_feedback SET issues = %s, user_notes = %s WHERE id = %s"
-            if self.db.backend_type == BackendType.SQLITE:
-                update_sql = update_sql.replace('%s', '?')
+                    with self.db.transaction() as conn:
+                        conn.execute(update_sql, (json.dumps(updated_issues), updated_notes, feedback_id))
 
-            with self.db.transaction() as conn:
-                conn.execute(update_sql, (json.dumps(updated_issues), updated_notes, feedback_id))
-
-            return {"issues": updated_issues, "user_notes": updated_notes}
-        except Exception as exc:  # noqa: BLE001
+                    result = {"issues": updated_issues, "user_notes": updated_notes}
+        except (BackendDatabaseError, CharactersRAGDBError, AttributeError, OSError, RuntimeError, TypeError, ValueError) as exc:
             logger.error(f"Failed to merge feedback update: {exc}")
-            return None
+        else:
+            return result
+        return None
 
     async def get_conversation_feedback(
         self,
@@ -571,10 +588,11 @@ class UserFeedbackStore:
                 helpful_value = fb.get("helpful")
                 fb["helpful"] = None if helpful_value is None else bool(helpful_value)
                 feedback.append(fb)
-            return feedback
-        except Exception as exc:  # noqa: BLE001
+        except (BackendDatabaseError, CharactersRAGDBError, AttributeError, OSError, RuntimeError, TypeError, ValueError) as exc:
             logger.error(f"Failed to get conversation feedback: {exc}")
-            return []
+        else:
+            return feedback
+        return []
 
 
 class UnifiedFeedbackSystem:
@@ -654,7 +672,7 @@ class UnifiedFeedbackSystem:
                 result["feedback_id"] = feedback_id
                 result["success"] = True
 
-            except Exception as e:
+            except (BackendDatabaseError, CharactersRAGDBError, AttributeError, OSError, RuntimeError, TypeError, ValueError) as e:
                 result["errors"].append(f"User feedback error: {str(e)}")
 
         # Store anonymized metrics in Analytics DB
@@ -728,7 +746,7 @@ class UnifiedFeedbackSystem:
                 )
                 await self.analytics.record_event(event)
 
-            except Exception as e:
+            except (BackendDatabaseError, AttributeError, OSError, RuntimeError, TypeError, ValueError) as e:
                 result["errors"].append(f"Analytics error: {str(e)}")
 
         return result
@@ -774,7 +792,7 @@ class UnifiedFeedbackSystem:
                 )
             except ValueError as e:
                 logger.debug(f"Personalization store update skipped for user_id={user_id}: {e}")
-            except Exception as e:
+            except (AttributeError, OSError, RuntimeError, TypeError, ValueError) as e:
                 logger.debug(f"Personalization store update failed: {e}")
 
             # Emit anonymized analytics
@@ -813,7 +831,7 @@ class UnifiedFeedbackSystem:
                     metrics=metrics,
                 )
                 await self.analytics.record_event(evt)
-        except Exception as e:
+        except (BackendDatabaseError, AttributeError, OSError, RuntimeError, TypeError, ValueError) as e:
             logger.debug(f"Implicit interaction recording failed: {e}")
 
     async def record_search(
@@ -992,10 +1010,10 @@ async def apply_feedback_boost(context: Any, **kwargs) -> Any:
         from .user_personalization_store import UserPersonalizationStore
         store = UserPersonalizationStore(user_id)
         context.documents = store.boost_documents(context.documents, corpus=context.config.get("index_namespace"))
-        return context
     except ValueError as e:
         logger.debug(f"Feedback boost skipped for user_id={user_id}: {e}")
-        return context
-    except Exception as e:
+    except (AttributeError, OSError, RuntimeError, TypeError, ValueError) as e:
         logger.debug(f"Feedback boost failed: {e}")
+    else:
         return context
+    return context

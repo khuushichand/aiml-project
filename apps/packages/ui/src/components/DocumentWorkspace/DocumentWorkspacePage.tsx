@@ -1,7 +1,7 @@
-import React, { useState, useEffect, useCallback } from "react"
+import React, { useState, useEffect, useCallback, useRef } from "react"
 import { useTranslation } from "react-i18next"
 import { useStorage } from "@plasmohq/storage/hook"
-import { Drawer, Tabs, Empty, Tooltip } from "antd"
+import { Drawer, Tabs, Tooltip } from "antd"
 import {
   FileText,
   MessageSquare,
@@ -17,10 +17,14 @@ import {
   Highlighter,
   Quote,
   HelpCircle,
-  Keyboard
+  Keyboard,
+  Plus
 } from "lucide-react"
 import { useDocumentWorkspaceStore } from "@/store/document-workspace"
 import { useMobile } from "@/hooks/useMediaQuery"
+import { useAntdMessage } from "@/hooks/useAntdMessage"
+import { bgRequest } from "@/services/background-proxy"
+import { tldwClient } from "@/services/tldw"
 import type { SidebarTab, RightPanelTab } from "./types"
 import { DocumentViewer } from "./DocumentViewer"
 import {
@@ -35,6 +39,8 @@ import { DocumentWorkspaceErrorBoundary } from "./DocumentWorkspaceErrorBoundary
 import { DocumentShortcutsModal } from "./DocumentShortcutsModal"
 import { DocumentTabBar } from "./DocumentTabBar"
 import { SyncStatusIndicator } from "./SyncStatusIndicator"
+import { DocumentPickerModal } from "./DocumentPickerModal"
+import { getDocumentMimeType, inferDocumentTypeFromMedia } from "./document-utils"
 import {
   useAnnotations,
   useAnnotationSync,
@@ -183,6 +189,7 @@ const WorkspaceHeader: React.FC<{
   onToggleLeftPane: () => void
   onToggleRightPane: () => void
   onShowShortcuts: () => void
+  onOpenPicker: (tab: "library" | "upload") => void
   onRetrySync?: () => void
   hideToggles?: boolean
 }> = ({
@@ -191,6 +198,7 @@ const WorkspaceHeader: React.FC<{
   onToggleLeftPane,
   onToggleRightPane,
   onShowShortcuts,
+  onOpenPicker,
   onRetrySync,
   hideToggles
 }) => {
@@ -232,6 +240,16 @@ const WorkspaceHeader: React.FC<{
       <div className="flex items-center gap-2">
         {/* Sync status indicator */}
         <SyncStatusIndicator onRetry={onRetrySync} />
+
+        <Tooltip title={t("option:documentWorkspace.openDocument", "Open document")}>
+          <button
+            onClick={() => onOpenPicker("library")}
+            className="rounded p-1.5 hover:bg-hover text-text-subtle hover:text-text"
+            aria-label={t("option:documentWorkspace.openDocument", "Open document")}
+          >
+            <Plus className="h-5 w-5" />
+          </button>
+        </Tooltip>
 
         <Tooltip title={t("option:documentWorkspace.shortcuts", "Keyboard shortcuts (?)")}>
           <button
@@ -278,9 +296,12 @@ const STORAGE_KEY_RIGHT_PANE = "document-workspace-right-pane"
 export const DocumentWorkspacePage: React.FC = () => {
   const { t } = useTranslation(["option", "common"])
   const isMobile = useMobile()
+  const message = useAntdMessage()
 
   // Get active document for hooks
   const activeDocumentId = useDocumentWorkspaceStore((s) => s.activeDocumentId)
+  const openDocuments = useDocumentWorkspaceStore((s) => s.openDocuments)
+  const openDocument = useDocumentWorkspaceStore((s) => s.openDocument)
 
   // Initialize annotation fetching and sync
   useAnnotations(activeDocumentId)
@@ -310,6 +331,9 @@ export const DocumentWorkspacePage: React.FC = () => {
 
   // Keyboard shortcuts modal state
   const [shortcutsModalOpen, setShortcutsModalOpen] = useState(false)
+  const [pickerOpen, setPickerOpen] = useState(false)
+  const [pickerTab, setPickerTab] = useState<"library" | "upload">("library")
+  const blobUrlMapRef = useRef<Map<number, string>>(new Map())
 
   const handleShowShortcuts = useCallback(() => {
     setShortcutsModalOpen(true)
@@ -317,6 +341,15 @@ export const DocumentWorkspacePage: React.FC = () => {
 
   const handleCloseShortcuts = useCallback(() => {
     setShortcutsModalOpen(false)
+  }, [])
+
+  const handleOpenPicker = useCallback((tab: "library" | "upload") => {
+    setPickerTab(tab)
+    setPickerOpen(true)
+  }, [])
+
+  const handleClosePicker = useCallback(() => {
+    setPickerOpen(false)
   }, [])
 
   // Listen for "?" key to open shortcuts modal
@@ -358,6 +391,116 @@ export const DocumentWorkspacePage: React.FC = () => {
     }
   }
 
+  const registerBlobUrl = useCallback((mediaId: number, url: string) => {
+    const existing = blobUrlMapRef.current.get(mediaId)
+    if (existing && existing !== url && existing.startsWith("blob:")) {
+      URL.revokeObjectURL(existing)
+    }
+    blobUrlMapRef.current.set(mediaId, url)
+  }, [])
+
+  const cleanupRemovedBlobUrls = useCallback(() => {
+    const openIds = new Set(openDocuments.map((doc) => doc.id))
+    for (const [id, url] of blobUrlMapRef.current.entries()) {
+      if (!openIds.has(id)) {
+        if (url.startsWith("blob:")) {
+          URL.revokeObjectURL(url)
+        }
+        blobUrlMapRef.current.delete(id)
+      }
+    }
+  }, [openDocuments])
+
+  useEffect(() => {
+    cleanupRemovedBlobUrls()
+  }, [cleanupRemovedBlobUrls])
+
+  useEffect(() => {
+    return () => {
+      for (const url of blobUrlMapRef.current.values()) {
+        if (url.startsWith("blob:")) {
+          URL.revokeObjectURL(url)
+        }
+      }
+      blobUrlMapRef.current.clear()
+    }
+  }, [])
+
+  const openDocumentById = useCallback(
+    async (mediaId: number, docTypeHint?: "pdf" | "epub" | null) => {
+      try {
+        const details = await tldwClient.getMediaDetails(mediaId, {
+          include_content: false,
+          include_versions: false
+        })
+
+        const filename =
+          details?.metadata?.original_filename ||
+          details?.metadata?.filename ||
+          details?.metadata?.file_name ||
+          details?.filename
+
+        const docType = docTypeHint ?? inferDocumentTypeFromMedia(details?.type, filename)
+
+        if (!docType) {
+          message.error(
+            t(
+              "option:documentWorkspace.unsupportedType",
+              "This media type isn’t supported in the document workspace."
+            )
+          )
+          return
+        }
+
+        let data: ArrayBuffer | Blob
+        try {
+          data = await bgRequest<ArrayBuffer>({
+            path: `/api/v1/media/${mediaId}/file`,
+            method: "GET",
+            responseType: "arrayBuffer",
+            timeoutMs: 60000
+          })
+        } catch (err: any) {
+          const status = err?.status
+          if (status === 404) {
+            message.error(
+              t(
+                "option:documentWorkspace.missingFile",
+                "This item was ingested without keeping the original file. Re-ingest with “Keep original file” enabled."
+              )
+            )
+            return
+          }
+          throw err
+        }
+
+        const blob =
+          data instanceof Blob
+            ? data
+            : new Blob([data], { type: getDocumentMimeType(docType) })
+        const url = URL.createObjectURL(blob)
+        registerBlobUrl(mediaId, url)
+
+        openDocument({
+          id: mediaId,
+          title: details?.title || `Media ${mediaId}`,
+          type: docType,
+          url
+        })
+      } catch (err) {
+        message.error(
+          err instanceof Error
+            ? err.message
+            : t(
+                "option:documentWorkspace.openFailed",
+                "Failed to open document"
+              )
+        )
+      }
+    },
+    [message, openDocument, registerBlobUrl, t]
+  )
+
   // Mobile tab items
   const mobileTabItems = [
     {
@@ -378,7 +521,12 @@ export const DocumentWorkspacePage: React.FC = () => {
           <span>{t("option:documentWorkspace.document", "Document")}</span>
         </span>
       ),
-      children: <DocumentViewer />
+      children: (
+        <DocumentViewer
+          onOpenLibrary={() => handleOpenPicker("library")}
+          onOpenUpload={() => handleOpenPicker("upload")}
+        />
+      )
     },
     {
       key: "chat",
@@ -403,12 +551,19 @@ export const DocumentWorkspacePage: React.FC = () => {
             onToggleLeftPane={handleToggleLeftPane}
             onToggleRightPane={handleToggleRightPane}
             onShowShortcuts={handleShowShortcuts}
+            onOpenPicker={handleOpenPicker}
             onRetrySync={retrySync}
             hideToggles
           />
           <DocumentShortcutsModal
             open={shortcutsModalOpen}
             onClose={handleCloseShortcuts}
+          />
+          <DocumentPickerModal
+            open={pickerOpen}
+            initialTab={pickerTab}
+            onClose={handleClosePicker}
+            onOpenDocument={openDocumentById}
           />
 
           <Tabs
@@ -436,15 +591,22 @@ export const DocumentWorkspacePage: React.FC = () => {
           onToggleLeftPane={handleToggleLeftPane}
           onToggleRightPane={handleToggleRightPane}
           onShowShortcuts={handleShowShortcuts}
+          onOpenPicker={handleOpenPicker}
           onRetrySync={retrySync}
         />
         <DocumentShortcutsModal
           open={shortcutsModalOpen}
           onClose={handleCloseShortcuts}
         />
+        <DocumentPickerModal
+          open={pickerOpen}
+          initialTab={pickerTab}
+          onClose={handleClosePicker}
+          onOpenDocument={openDocumentById}
+        />
 
         {/* Document tabs - shown when multiple documents are open */}
-        <DocumentTabBar />
+        <DocumentTabBar onOpenPicker={() => handleOpenPicker("library")} />
 
         <div className="flex min-h-0 flex-1">
           {/* Left pane - Sidebar (desktop) */}
@@ -474,7 +636,10 @@ export const DocumentWorkspacePage: React.FC = () => {
 
           {/* Center pane - Document Viewer */}
           <main className="flex min-w-0 flex-1 flex-col bg-bg">
-            <DocumentViewer />
+            <DocumentViewer
+              onOpenLibrary={() => handleOpenPicker("library")}
+              onOpenUpload={() => handleOpenPicker("upload")}
+            />
           </main>
 
           {/* Right pane - Chat/Annotations (desktop) */}

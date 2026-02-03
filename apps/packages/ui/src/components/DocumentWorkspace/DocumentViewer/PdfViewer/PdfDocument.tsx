@@ -20,6 +20,14 @@ function getPdfWorkerSrc(): string {
     return cdnUrl
   }
 
+  // In extension runtime, always use CDN (local worker is not bundled)
+  const isExtensionRuntime =
+    typeof (window as any).chrome?.runtime?.id === "string" ||
+    typeof (window as any).browser?.runtime?.id === "string"
+  if (isExtensionRuntime) {
+    return cdnUrl
+  }
+
   // In Next.js production builds, use the local worker from public/
   // The file is copied by scripts/copy-pdf-worker.mjs during postinstall
   if (process.env.NODE_ENV === "production") {

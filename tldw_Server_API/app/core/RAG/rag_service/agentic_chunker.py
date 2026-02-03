@@ -369,7 +369,7 @@ def _assemble_ephemeral_chunk(
                     from tldw_Server_API.app.core.Metrics.metrics_manager import increment_counter, observe_histogram
                     observe_histogram("agentic_span_length_chars", float(len(snippet)), labels={"phase": "assemble"})
                     increment_counter("span_bytes_read_total", float(len(snippet.encode('utf-8'))), labels={"tool": "heuristic"})
-                except Exception:
+                except (ImportError, AttributeError, RuntimeError, TypeError, ValueError):
                     pass
             remaining_tokens -= toks
             if remaining_tokens <= 0:
@@ -399,7 +399,7 @@ class AgenticToolbox:
     def _build_indexes(self) -> None:
         try:
             import numpy as _np  # noqa: F401
-        except Exception:
+        except ImportError:
             pass
         for d in self.docs:
             text = d.content or ""
@@ -418,7 +418,7 @@ class AgenticToolbox:
                                 try:
                                     from tldw_Server_API.app.core.Metrics.metrics_manager import increment_counter
                                     increment_counter("agentic_cache_hits_total", 1, labels={"cache_type": "intra_doc"})
-                                except Exception:
+                                except (ImportError, AttributeError, RuntimeError, TypeError, ValueError):
                                     pass
                         else:
                             from tldw_Server_API.app.core.config import load_comprehensive_config
@@ -439,7 +439,7 @@ class AgenticToolbox:
                             self._para_vecs[d.id] = vecs_np
                             _INTRA_DOC_VEC_CACHE[key] = vecs_np
                             continue
-                    except Exception:
+                    except (ImportError, AttributeError, ConnectionError, OSError, RuntimeError, TypeError, ValueError, TimeoutError):
                         # Fallback to hashed embeddings
                         pass
                 vecs = []
@@ -460,7 +460,7 @@ class AgenticToolbox:
                 idxs = sorted(range(len(sims)), key=lambda i: sims[i], reverse=True)[:max_hits]
                 paras = self._paragraphs.get(doc.id) or []
                 return [paras[i] for i in idxs]
-            except Exception:
+            except (ImportError, AttributeError, RuntimeError, TypeError, ValueError):
                 pass
         # Fallback keyword window search
         terms = _keyword_terms(query)
@@ -472,7 +472,7 @@ class AgenticToolbox:
         try:
             from tldw_Server_API.app.core.config import rag_enable_structure_index
             _enable_si = rag_enable_structure_index()
-        except Exception:
+        except (ImportError, AttributeError, RuntimeError, TypeError, ValueError):
             _enable_si = True
         if _enable_si:
             try:
@@ -483,7 +483,7 @@ class AgenticToolbox:
                         res = db.lookup_section_by_heading(int(str(mid_raw)), heading)
                         if isinstance(res, tuple):
                             return (int(res[0]), int(res[1]))
-            except Exception:
+            except (AttributeError, OSError, RuntimeError, TypeError, ValueError):
                 pass
         if self.cfg.enable_section_index and doc.id in self._sections:
             secs = self._sections.get(doc.id) or []
@@ -595,7 +595,7 @@ async def _tool_loop(docs: list[Document], query: str, cfg: AgenticConfig) -> tu
                     planned_headings = [str(x)[:80] for x in obj["headings"]][:5]
                 if isinstance(obj.get("keywords"), list):
                     planned_terms = [str(x)[:40] for x in obj["keywords"]][:8]
-        except Exception:
+        except (ImportError, AttributeError, ConnectionError, RuntimeError, TypeError, ValueError, TimeoutError):
             planned_headings = []
             planned_terms = []
 
@@ -604,6 +604,9 @@ async def _tool_loop(docs: list[Document], query: str, cfg: AgenticConfig) -> tu
 
     # Helper to compute coverage/corroboration + redundancy
     def _compute_progress_metrics() -> dict[str, Any]:
+        coverage = 0.0
+        uniq_docs = 0
+        redundancy = 0.0
         try:
             terms = _keyword_terms(query)
             assembled_text = "\n".join([(d.content or "")[s:e] for d, s, e in assembled])
@@ -630,9 +633,9 @@ async def _tool_loop(docs: list[Document], query: str, cfg: AgenticConfig) -> tu
                         merged_ranges[-1] = (ps, max(pe, e))
                 merged += sum(e - s for s, e in merged_ranges)
             redundancy = 1.0 - (merged / max(1, raw))
-            return {"coverage": coverage, "unique_docs": uniq_docs, "redundancy": redundancy}
-        except Exception:
-            return {"coverage": 0.0, "unique_docs": 0, "redundancy": 0.0}
+        except (TypeError, ValueError, AttributeError):
+            pass
+        return {"coverage": coverage, "unique_docs": uniq_docs, "redundancy": redundancy}
 
     # Heuristic policy per subgoal: scan top docs, pick best spans by semantic/keyword hits, consider headings
     for goal in subgoals:
@@ -652,7 +655,7 @@ async def _tool_loop(docs: list[Document], query: str, cfg: AgenticConfig) -> tu
                     from tldw_Server_API.app.core.Metrics.metrics_manager import increment_counter, observe_histogram
                     increment_counter("agentic_tool_calls_total", 1, labels={"tool": "search_within"})
                     observe_histogram("agentic_tool_duration_seconds", (_t1 - _t0), labels={"tool": "search_within"})
-                except Exception:
+                except (ImportError, AttributeError, RuntimeError, TypeError, ValueError):
                     pass
             if cfg.enable_table_support and any(kw in local_query.lower() for kw in cfg.table_trigger_keywords):
                 # Reorder to prefer table-like spans
@@ -673,7 +676,7 @@ async def _tool_loop(docs: list[Document], query: str, cfg: AgenticConfig) -> tu
                             )
                             increment_counter("agentic_tool_calls_total", 1, labels={"tool": "open_section"})
                             observe_histogram("agentic_tool_duration_seconds", (_s1 - _s0), labels={"tool": "open_section"})
-                        except Exception:
+                        except (ImportError, AttributeError, RuntimeError, TypeError, ValueError):
                             pass
                     if sec:
                         hits = [sec]
@@ -693,7 +696,7 @@ async def _tool_loop(docs: list[Document], query: str, cfg: AgenticConfig) -> tu
                         )
                         increment_counter("agentic_tool_calls_total", 1, labels={"tool": "expand_window"})
                         observe_histogram("agentic_tool_duration_seconds", (_e1 - _e0), labels={"tool": "expand_window"})
-                    except Exception:
+                    except (ImportError, AttributeError, RuntimeError, TypeError, ValueError):
                         pass
                 assembled.append((d, s2, e2))
                 steps += 1
@@ -707,7 +710,7 @@ async def _tool_loop(docs: list[Document], query: str, cfg: AgenticConfig) -> tu
                         )
                         observe_histogram("agentic_span_length_chars", float(len(snippet)), labels={"phase": "tool"})
                         increment_counter("span_bytes_read_total", float(len(snippet.encode('utf-8'))), labels={"tool": "expand_window"})
-                    except Exception:
+                    except (ImportError, AttributeError, RuntimeError, TypeError, ValueError):
                         pass
                 if cfg.debug_trace:
                     tool_trace.append({
@@ -810,7 +813,7 @@ async def agentic_rag_pipeline(
         from tldw_Server_API.app.core.config import rag_require_hard_citations as _rag_req_hc
         if not bool(require_hard_citations) and bool(_rag_req_hc(default=False)):
             require_hard_citations = True
-    except Exception:
+    except (ImportError, AttributeError, RuntimeError, TypeError, ValueError):
         pass
 
     # 1) Build retriever
@@ -854,7 +857,7 @@ async def agentic_rag_pipeline(
 
     try:
         docs = await retriever.retrieve(query=query, sources=wanted_sources, config=config, index_namespace=index_namespace)
-    except Exception as e:
+    except (AttributeError, ConnectionError, OSError, RuntimeError, TypeError, ValueError, TimeoutError) as e:
         logger.warning(f"Agentic coarse retrieval failed: {e}")
         docs = []
 
@@ -886,7 +889,7 @@ async def agentic_rag_pipeline(
             )
             if fallback_docs:
                 docs = fallback_docs
-        except Exception as _fb_err:
+        except (AttributeError, ConnectionError, OSError, RuntimeError, TypeError, ValueError, TimeoutError) as _fb_err:
             logger.warning(f"Agentic Media DB fallback retrieval failed: {_fb_err}")
 
     # Optional: VLM late chunking to add table/figure hints for PDFs
@@ -896,7 +899,7 @@ async def agentic_rag_pipeline(
                 from tldw_Server_API.app.core.Ingestion_Media_Processing.VLM.registry import (
                     get_backend as _get_vlm_backend,
                 )
-            except Exception:
+            except ImportError:
                 _get_vlm_backend = lambda name=None: None
             backend = _get_vlm_backend(cfg.agentic_vlm_backend if cfg.agentic_vlm_backend not in (None, "auto") else None)
             if backend is not None:
@@ -912,7 +915,7 @@ async def agentic_rag_pipeline(
                         p = Path(str(url))
                         if p.exists() and p.suffix.lower() == ".pdf":
                             sel.append((d, str(p)))
-                    except Exception:
+                    except (OSError, RuntimeError, TypeError, ValueError):
                         continue
                 sel = sel[: max(1, int(cfg.agentic_vlm_late_chunk_top_k_docs or 1))]
                 added: list[Document] = []
@@ -959,7 +962,7 @@ async def agentic_rag_pipeline(
                                             "bbox": list(getattr(det, "bbox", [0.0, 0.0, 0.0, 0.0])),
                                             "page": i,
                                         })
-                        except Exception:
+                        except (ImportError, OSError, RuntimeError, TypeError, ValueError):
                             pass
                     for idx, dct in enumerate(detections[:100]):
                         label_val = dct.get("label")
@@ -985,7 +988,7 @@ async def agentic_rag_pipeline(
                         )
                 if added:
                     docs.extend(added)
-        except Exception as e:
+        except (ImportError, AttributeError, OSError, RuntimeError, TypeError, ValueError, TimeoutError) as e:
             logger.debug(f"Agentic VLM late chunking skipped: {e}")
 
     # 3) Cache key
@@ -1006,7 +1009,7 @@ async def agentic_rag_pipeline(
             try:
                 from tldw_Server_API.app.core.Metrics.metrics_manager import increment_counter
                 increment_counter("agentic_cache_hits_total", 1, labels={"cache_type": "ephemeral"})
-            except Exception:
+            except (ImportError, AttributeError, RuntimeError, TypeError, ValueError):
                 pass
     else:
         cached_hit = False
@@ -1068,7 +1071,7 @@ async def agentic_rag_pipeline(
         for p in (prov or []):
             try:
                 per_doc.setdefault(str(p.get("document_id")), []).append((int(p.get("start", 0)), int(p.get("end", 0))))
-            except Exception:
+            except (AttributeError, TypeError, ValueError):
                 continue
         raw = 0
         merged = 0
@@ -1090,7 +1093,7 @@ async def agentic_rag_pipeline(
             "unique_docs": int(uniq_docs),
             "redundancy": float(redundancy),
         })
-    except Exception:
+    except (AttributeError, KeyError, TypeError, ValueError):
         pass
 
     # Explain-only dry run: return plan/provenance without answer or chunk body
@@ -1103,7 +1106,7 @@ async def agentic_rag_pipeline(
             result.metadata["explain"].update({
                 "provenance": prov,
             })
-        except Exception:
+        except (AttributeError, TypeError, ValueError):
             pass
         # Timings and return
         result.total_time = time.time() - t0
@@ -1125,7 +1128,7 @@ async def agentic_rag_pipeline(
             )
             ans = gen_out["answer"] if isinstance(gen_out, dict) else str(gen_out)
             result.generated_answer = ans
-        except Exception as e:
+        except (ImportError, AttributeError, ConnectionError, RuntimeError, TypeError, ValueError, TimeoutError) as e:
             logger.warning(f"Agentic generation failed: {e}")
             result.errors.append(str(e))
 
@@ -1161,7 +1164,7 @@ async def agentic_rag_pipeline(
                 claims_payload = claims_run.get("claims")
                 result.metadata["claims"] = claims_payload
                 result.metadata["factuality"] = claims_run.get("summary")
-            except Exception as _e:
+            except (ImportError, AttributeError, ConnectionError, RuntimeError, TypeError, ValueError, TimeoutError) as _e:
                 logger.debug(f"Agentic claims verification skipped: {_e}")
 
         # Hard citations using assembled spans
@@ -1180,7 +1183,7 @@ async def agentic_rag_pipeline(
                     })
                     # Abstain if strict
                     result.generated_answer = "Insufficient evidence: missing citations for some statements."
-        except Exception as _ec:
+        except (ImportError, AttributeError, RuntimeError, TypeError, ValueError) as _ec:
             result.errors.append(f"Hard citations failed: {str(_ec)}")
 
     # Numeric fidelity check and optional mitigation
@@ -1217,7 +1220,7 @@ async def agentic_rag_pipeline(
                                     for tok in list(nf.missing)[:3]:
                                         try:
                                             added.extend(await mdr.retrieve(query=f"{query} {tok}", sources=[DataSource.MEDIA_DB], config=conf, index_namespace=index_namespace))
-                                        except Exception:
+                                        except (AttributeError, ConnectionError, OSError, RuntimeError, TypeError, ValueError, TimeoutError):
                                             continue
                                     if added:
                                         by_id: dict[str, Document] = {getattr(d, 'id', ''): d for d in (result.documents or [])}
@@ -1226,9 +1229,9 @@ async def agentic_rag_pipeline(
                                             if cur is None or float(getattr(d, 'score', 0.0)) > float(getattr(cur, 'score', 0.0)):
                                                 by_id[getattr(d, 'id', '')] = d
                                         result.documents = list(by_id.values())
-                            except Exception:
+                            except (AttributeError, ConnectionError, OSError, RuntimeError, TypeError, ValueError, TimeoutError):
                                 pass
-        except Exception as _enf:
+        except (ImportError, AttributeError, RuntimeError, TypeError, ValueError) as _enf:
             result.errors.append(f"Numeric fidelity check failed: {str(_enf)}")
 
         # NLI low-confidence gate (lightweight, optional)
@@ -1263,7 +1266,7 @@ async def agentic_rag_pipeline(
                 try:
                     from tldw_Server_API.app.core.Metrics.metrics_manager import increment_counter, set_gauge
                     set_gauge("rag_nli_unsupported_ratio", float(vres.unsupported_ratio or 0.0), labels={"strategy": "agentic"})
-                except Exception:
+                except (ImportError, AttributeError, RuntimeError, TypeError, ValueError):
                     pass
                 low_conf = (vres.unsupported_ratio > float(adaptive_unsupported_threshold or 0.15)) and (not vres.fixed)
                 if low_conf:
@@ -1277,21 +1280,21 @@ async def agentic_rag_pipeline(
                     try:
                         from tldw_Server_API.app.core.Metrics.metrics_manager import increment_counter
                         increment_counter("rag_nli_low_confidence_total", 1)
-                    except Exception:
+                    except (ImportError, AttributeError, RuntimeError, TypeError, ValueError):
                         pass
                     if low_confidence_behavior == "ask":
                         note = "\n\n[Note] Evidence is insufficient; please clarify or provide more context."
                         result.generated_answer = (result.generated_answer or "") + note
                     elif low_confidence_behavior == "decline":
                         result.generated_answer = "Insufficient evidence found to answer confidently."
-        except Exception as _enlv:
+        except (ImportError, AttributeError, ConnectionError, RuntimeError, TypeError, ValueError, TimeoutError) as _enlv:
             result.errors.append(f"NLI verification failed: {str(_enlv)}")
 
     # Include tool trace on debug
     if (debug_mode or cfg.debug_trace) and (not cached_hit) and cfg.enable_tools:
         try:
             result.metadata["tool_trace"] = tool_trace
-        except Exception:
+        except (AttributeError, TypeError, ValueError):
             pass
 
     # Timings
@@ -1324,7 +1327,7 @@ async def agentic_rag_pipeline(
                     })
                 entries.append(entry)
             result.metadata["chunk_citations"] = {"sentences": entries}
-    except Exception:
+    except (AttributeError, TypeError, ValueError):
         pass
 
     return result

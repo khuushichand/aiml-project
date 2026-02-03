@@ -1116,7 +1116,22 @@ export class TldwApiClient {
       if (typeof v === 'boolean') normalized[k] = v ? 'true' : 'false'
       else normalized[k] = v
     }
-    return await bgUpload<any>({ path: '/api/v1/media/add', method: 'POST', fields: normalized, file: { name, type, data } })
+    let uploadTimeoutMs = 60000
+    const cfg = await this.getConfig().catch(() => null)
+    if (cfg && typeof (cfg as any).uploadRequestTimeoutMs === "number") {
+      const cfgTimeout = Number((cfg as any).uploadRequestTimeoutMs)
+      if (cfgTimeout > 0) {
+        uploadTimeoutMs = cfgTimeout
+      }
+    }
+    return await bgUpload<any>({
+      path: '/api/v1/media/add',
+      method: 'POST',
+      fields: normalized,
+      file: { name, type, data },
+      fileFieldName: 'files',
+      timeoutMs: uploadTimeoutMs
+    })
   }
 
   async listMedia(

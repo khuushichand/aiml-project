@@ -35,12 +35,84 @@ if TYPE_CHECKING:
     from tldw_Server_API.app.core.DB_Management.Media_DB_v2 import MediaDatabase
 
 
+class DatabasePathError(ValueError):
+    """Raised when a database path is invalid."""
+
+    def __init__(self) -> None:
+        super().__init__("Invalid database path")
+
+
+class PathNormalizationError(DatabasePathError):
+    """Raised when a database path cannot be normalized."""
+
+    def __init__(self) -> None:
+        super().__init__("Database path normalization failed")
+
+
+class InvalidFileUriError(DatabasePathError):
+    """Raised when a file:// URI is malformed."""
+
+    def __init__(self) -> None:
+        super().__init__("Invalid file URI for database path")
+
+
+class UnsupportedDatabaseSchemeError(DatabasePathError):
+    """Raised when a database path uses an unsupported URI scheme."""
+
+    def __init__(self) -> None:
+        super().__init__("Unsupported URI scheme in database path")
+
+
+class PathTraversalError(DatabasePathError):
+    """Raised when path traversal patterns are detected."""
+
+    def __init__(self) -> None:
+        super().__init__("Path traversal patterns (..) are not allowed")
+
+
+class PathResolutionError(DatabasePathError):
+    """Raised when a database path cannot be resolved."""
+
+    def __init__(self) -> None:
+        super().__init__("Database path resolution failed")
+
+
+class SuspiciousDatabasePathError(DatabasePathError):
+    """Raised when suspicious path patterns are detected."""
+
+    def __init__(self) -> None:
+        super().__init__("Suspicious path pattern detected in database path")
+
+
+class RestrictedDatabasePathError(DatabasePathError):
+    """Raised when a restricted directory is referenced."""
+
+    def __init__(self) -> None:
+        super().__init__("Access to restricted directory is not allowed")
+
+
+class MissingDatabasePathError(DatabasePathError):
+    """Raised when no database path is provided."""
+
+    def __init__(self) -> None:
+        super().__init__("db_path is required")
+
+
+class RawSqlFallbackDisabledError(RuntimeError):
+    """Raised when raw SQL fallback is disabled in production mode."""
+
+    def __init__(self, retriever_name: str) -> None:
+        super().__init__(
+            f"Raw SQL fallback is disabled in production for {retriever_name}. Provide a database adapter."
+        )
+
+
 def _sanitize_media_fts_query(query: Optional[str]) -> Optional[str]:
     if query is None:
         return None
     try:
         text = str(query).strip()
-    except Exception:
+    except (TypeError, ValueError):
         return query
     if not text:
         return text
@@ -63,7 +135,7 @@ def _coerce_int(value: Any) -> Optional[int]:
         if stripped.isdigit() or (stripped.startswith("-") and stripped[1:].isdigit()):
             try:
                 return int(stripped)
-            except Exception:
+            except (TypeError, ValueError):
                 return None
     return None
 
@@ -163,7 +235,7 @@ class BaseRetriever(ABC):
         try:
             prod_val = str(os.getenv("tldw_production", "false")).strip().lower()
             self._production_mode = prod_val in {"true", "1", "yes", "on", "y"}
-        except Exception:
+        except (AttributeError, TypeError, ValueError):
             self._production_mode = False
         # In production, prefer adapters over any raw SQL fallbacks
         if self._production_mode and self._db_adapter is None:
@@ -172,7 +244,7 @@ class BaseRetriever(ABC):
                 "Raw SQL fallback is disabled and calls will fail without an adapter."
             )
         if self._db_adapter is None and self.db_path is None:
-            raise ValueError("db_path is required when no database adapter is provided.")
+            raise MissingDatabasePathError()
 
     def _validate_path(self, path: Optional[str]) -> Optional[str]:
         """Validate and normalise database paths while guarding against traversal.
@@ -185,9 +257,9 @@ class BaseRetriever(ABC):
         try:
             if not isinstance(path, str):
                 path = str(path)
-        except Exception as exc:  # noqa: BLE001
+        except (TypeError, ValueError) as exc:
             logger.error(f"Path normalization error for '{path}': {exc}")
-            raise ValueError(f"Invalid database path: {exc}")
+            raise PathNormalizationError() from exc
 
         # Handle URI schemes - only allow file:// and validate the path component
         if '://' in path:
@@ -199,7 +271,7 @@ class BaseRetriever(ABC):
                 # Recursively validate the extracted path (this will catch traversal, etc.)
                 validated = self._validate_path(extracted_path)
                 if validated is None:
-                    raise ValueError("Invalid file URI: empty path")
+                    raise InvalidFileUriError()
                 # Return only the validated absolute path - drop query params and URI scheme
                 # This prevents SQLite URI mode options that could be dangerous
                 return validated
@@ -207,41 +279,42 @@ class BaseRetriever(ABC):
                 # Reject non-file URI schemes (http://, ftp://, etc.)
                 scheme = path.split('://')[0]
                 logger.warning(f"Rejected unsupported URI scheme: {scheme}")
-                raise ValueError(f"Unsupported URI scheme in database path: {scheme}://")
+                raise UnsupportedDatabaseSchemeError()
 
         # Check for path traversal sequences BEFORE resolving
         # This catches attempts like "../../../etc/passwd" before they get normalized
         if '..' in path:
             logger.warning(f"Path traversal attempt detected in: {path}")
-            raise ValueError("Path traversal patterns (..) are not allowed")
+            raise PathTraversalError()
 
         try:
             path_obj = Path(path)
             abs_path = path_obj.resolve()
             path_str = str(abs_path)
-            # Check for suspicious system paths in the resolved path
-            suspicious_patterns = [
-                '/etc/',
-                '/proc/',
-                '/sys/',
-                '\\System32\\',
-                '\\Windows\\',
-            ]
-            for pattern in suspicious_patterns:
-                if pattern in path_str:
-                    logger.warning(f"Suspicious path pattern detected: {pattern} in {path_str}")
-                    raise ValueError(f"Invalid path: contains suspicious pattern '{pattern}'")
-            if abs_path.parts and abs_path.parts[0] == '/' and len(abs_path.parts) > 1:
-                restricted_dirs = ['etc', 'proc', 'sys', 'dev', 'boot', 'root']
-                if abs_path.parts[1] in restricted_dirs:
-                    raise ValueError(f"Access to /{abs_path.parts[1]}/ directory is not allowed")
-            parent_dir = abs_path.parent
-            if not parent_dir.exists():
-                logger.warning(f"Parent directory does not exist: {parent_dir}")
-            return str(abs_path)
-        except Exception as exc:  # noqa: BLE001
+        except (OSError, RuntimeError, ValueError) as exc:
             logger.error(f"Path validation error for '{path}': {exc}")
-            raise ValueError(f"Invalid database path: {exc}")
+            raise PathResolutionError() from exc
+
+        # Check for suspicious system paths in the resolved path
+        suspicious_patterns = [
+            '/etc/',
+            '/proc/',
+            '/sys/',
+            '\\System32\\',
+            '\\Windows\\',
+        ]
+        for pattern in suspicious_patterns:
+            if pattern in path_str:
+                logger.warning(f"Suspicious path pattern detected: {pattern} in {path_str}")
+                raise SuspiciousDatabasePathError()
+        if abs_path.parts and abs_path.parts[0] == '/' and len(abs_path.parts) > 1:
+            restricted_dirs = ['etc', 'proc', 'sys', 'dev', 'boot', 'root']
+            if abs_path.parts[1] in restricted_dirs:
+                raise RestrictedDatabasePathError()
+        parent_dir = abs_path.parent
+        if not parent_dir.exists():
+            logger.warning(f"Parent directory does not exist: {parent_dir}")
+        return str(abs_path)
 
     @abstractmethod
     async def retrieve(
@@ -274,15 +347,12 @@ class BaseRetriever(ABC):
                     return []
                 fetched = cursor.fetchall() or []
                 return [dict(row) if not isinstance(row, dict) else row for row in fetched]
-            except Exception as exc:  # noqa: BLE001
+            except (AttributeError, OSError, RuntimeError, TypeError, ValueError, sqlite3.Error) as exc:
                 logger.error(f"Backend query error: {exc}")
                 return []
         # Disallow raw SQL fallback in production to honor project DB abstraction policy
         if getattr(self, "_production_mode", False):
-            raise RuntimeError(
-                f"Raw SQL fallback is disabled in production for {self.__class__.__name__}. "
-                "Provide a database adapter (e.g., MediaDatabase or CharactersRAGDB)."
-            )
+            raise RawSqlFallbackDisabledError(self.__class__.__name__)
         if not self.db_path:
             logger.error("No database path available for direct query execution.")
             return []
@@ -299,7 +369,7 @@ class BaseRetriever(ABC):
                 results = cursor.fetchall()
                 logger.debug(f"Query returned {len(results)} results")
                 return [dict(row) for row in results]
-        except Exception as exc:  # noqa: BLE001
+        except (sqlite3.Error, OSError, RuntimeError, TypeError, ValueError) as exc:
             logger.error(f"Database query error: {exc}")
             if not getattr(self, "_production_mode", False):
                 logger.error(f"Query was: {query}")
@@ -346,7 +416,7 @@ class MediaDBRetriever(BaseRetriever):
                 return None
             from tldw_Server_API.app.core.DB_Management.Media_DB_v2 import MediaDatabase
             return MediaDatabase(db_path=validated_path, client_id="rag_service")
-        except Exception:
+        except (ImportError, AttributeError, OSError, RuntimeError, TypeError, ValueError):
             return None
 
     def close(self):
@@ -355,7 +425,7 @@ class MediaDBRetriever(BaseRetriever):
                 close_fn = getattr(self.media_db, 'close_connection', None)
                 if callable(close_fn):
                     close_fn()
-        except Exception:
+        except (AttributeError, RuntimeError, TypeError, ValueError):
             pass
 
     def _initialize_vector_store(self):
@@ -370,7 +440,7 @@ class MediaDBRetriever(BaseRetriever):
                     self.user_id
                 )
                 logger.info(f"Vector store adapter initialized for MediaDBRetriever with user_id={self.user_id}")
-        except Exception as e:
+        except (ImportError, AttributeError, RuntimeError, TypeError, ValueError) as e:
             logger.warning(f"Could not initialize vector store: {e}")
             self.vector_store = None
 
@@ -386,7 +456,7 @@ class MediaDBRetriever(BaseRetriever):
             try:
                 if self.config.use_fts and getattr(self.config, 'fts_level', 'media') == 'chunk':
                     return self._retrieve_chunk_fts(query, media_type, **kwargs)
-            except Exception:
+            except (AttributeError, RuntimeError, TypeError, ValueError):
                 # Fall back gracefully to media-level
                 pass
             return self._retrieve_via_backend(query, media_type, **kwargs)
@@ -404,7 +474,7 @@ class MediaDBRetriever(BaseRetriever):
             # Allow nested RAG.FTS config or flat vars
             title_w = float((_settings.get("RAG", {}) or {}).get("fts_title_weight", _settings.get("FTS_TITLE_WEIGHT", 2.0)))
             content_w = float((_settings.get("RAG", {}) or {}).get("fts_content_weight", _settings.get("FTS_CONTENT_WEIGHT", 1.0)))
-        except Exception:
+        except (AttributeError, RuntimeError, TypeError, ValueError):
             pass
 
         # Build SQL with filters
@@ -498,7 +568,7 @@ class MediaDBRetriever(BaseRetriever):
                 check = getattr(self.media_db, 'maybe_rebuild_chunk_fts_if_empty', None)
                 if callable(check):
                     self.media_db.maybe_rebuild_chunk_fts_if_empty()
-            except Exception as exc:
+            except (AttributeError, RuntimeError, TypeError, ValueError) as exc:
                 logger.debug(f"Chunk FTS ensure/rebuild skipped: {exc}")
 
         params: list[Any] = []
@@ -573,7 +643,7 @@ class MediaDBRetriever(BaseRetriever):
                 return []
             cursor = execute_query(sql, tuple(params))
             rows = cursor.fetchall() if cursor is not None else []
-        except Exception as exc:  # noqa: BLE001
+        except (AttributeError, OSError, RuntimeError, TypeError, ValueError) as exc:
             logger.error(f"Chunk FTS query failed: {exc}")
             return []
 
@@ -621,7 +691,7 @@ class MediaDBRetriever(BaseRetriever):
                 try:
                     from tldw_Server_API.app.core.config import rag_enable_structure_index  # lazy import
                     _enable_si = rag_enable_structure_index()
-                except Exception:
+                except (ImportError, AttributeError, RuntimeError, TypeError, ValueError):
                     _enable_si = True
                 if _enable_si:
                     try:
@@ -639,7 +709,7 @@ class MediaDBRetriever(BaseRetriever):
                                 # Paragraph bounds default to chunk bounds
                                 md.setdefault('paragraph_start', md.get('start_char'))
                                 md.setdefault('paragraph_end', md.get('end_char'))
-                    except Exception:
+                    except (AttributeError, OSError, RuntimeError, TypeError, ValueError):
                         pass
 
                 raw_meta = row.get("chunk_metadata")
@@ -652,7 +722,7 @@ class MediaDBRetriever(BaseRetriever):
                             extra_meta = json.loads(raw_meta.decode("utf-8", "ignore"))
                         elif isinstance(raw_meta, str):
                             extra_meta = json.loads(raw_meta)
-                    except Exception:
+                    except (json.JSONDecodeError, UnicodeDecodeError, TypeError, ValueError):
                         extra_meta = None
                     if isinstance(extra_meta, dict):
                         for key, value in extra_meta.items():
@@ -704,7 +774,7 @@ class MediaDBRetriever(BaseRetriever):
                 include_trash=False,
                 include_deleted=False,
             )
-        except Exception as exc:  # noqa: BLE001
+        except (AttributeError, ConnectionError, OSError, RuntimeError, TypeError, ValueError) as exc:
             logger.error(f"MediaDatabase search failed: {exc}")
             return []
         documents: list[Document] = []
@@ -852,7 +922,7 @@ class MediaDBRetriever(BaseRetriever):
                     query_vector = embeddings[0]
                     if hasattr(query_vector, 'tolist'):
                         query_vector = query_vector.tolist()
-                except Exception as e:
+                except (ImportError, AttributeError, RuntimeError, TypeError, ValueError) as e:
                     logger.error(f"Failed to generate query embedding: {e}")
                     return []
 
@@ -896,7 +966,7 @@ class MediaDBRetriever(BaseRetriever):
                 hyde_score_floor = float(_settings.get("HYDE_SCORE_FLOOR", 0.30) or 0.30)
                 hyde_k_frac = float(_settings.get("HYDE_K_FRACTION", 0.5) or 0.5)
                 hyde_weight = float(_settings.get("HYDE_WEIGHT_QUESTION_MATCH", 0.05) or 0.05)
-            except Exception:
+            except (AttributeError, RuntimeError, TypeError, ValueError):
                 hyde_enabled = False
                 hyde_only_if_needed = True
                 hyde_score_floor = 0.30
@@ -935,7 +1005,7 @@ class MediaDBRetriever(BaseRetriever):
                         filter=f,
                         include_metadata=True,
                     )
-                except Exception as exc:
+                except (AttributeError, ConnectionError, OSError, RuntimeError, TypeError, ValueError) as exc:
                     logger.debug(f"Vector search with filter {f} failed, reason={exc}")
                     return []
 
@@ -955,7 +1025,7 @@ class MediaDBRetriever(BaseRetriever):
                     doc_media_id = result.metadata.get("media_id", result.id)
                     try:
                         doc_media_id_int = int(str(doc_media_id))
-                    except Exception:
+                    except (TypeError, ValueError):
                         doc_media_id_int = None
                     if allowed_set is not None and (doc_media_id_int is None or doc_media_id_int not in allowed_set):
                         continue
@@ -978,7 +1048,7 @@ class MediaDBRetriever(BaseRetriever):
             # 3) Merge - two modes: media-level (default) and optional chunk-level (by parent_chunk_id)
             try:
                 dedupe_by_parent = bool(_settings.get("HYDE_DEDUPE_BY_PARENT", False))
-            except Exception:
+            except (AttributeError, TypeError, ValueError):
                 dedupe_by_parent = False
 
             if not dedupe_by_parent:
@@ -1033,7 +1103,7 @@ class MediaDBRetriever(BaseRetriever):
                     for d in merged:
                         try:
                             mid = int(str(d.metadata.get("media_id", d.id)))
-                        except Exception:
+                        except (TypeError, ValueError):
                             mid = None
                         if mid is not None and mid in allowed_set:
                             tmp.append(d)
@@ -1090,7 +1160,7 @@ class MediaDBRetriever(BaseRetriever):
                 for d in chunk_docs:
                     try:
                         mid = int(str(d.metadata.get("media_id", d.id)))
-                    except Exception:
+                    except (TypeError, ValueError):
                         mid = None
                     if mid is not None and mid in allowed_set:
                         filtered.append(d)
@@ -1101,7 +1171,7 @@ class MediaDBRetriever(BaseRetriever):
             logger.debug(f"Retrieved {len(documents)} documents from vector search (HYDE merged, chunk-level)")
             return _finalize_docs(documents)
 
-        except Exception as e:
+        except (AttributeError, ConnectionError, OSError, RuntimeError, TypeError, ValueError) as e:
             logger.error(f"Vector search failed: {e}")
             # Fallback to FTS
             return await self._retrieve_fts(query, media_type, **kwargs)
@@ -1340,7 +1410,7 @@ class NotesDBRetriever(BaseRetriever):
             return []
         try:
             results = self.chacha_db.search_notes(query, limit=int(self.config.max_results))
-        except Exception as exc:  # noqa: BLE001
+        except (AttributeError, ConnectionError, OSError, RuntimeError, TypeError, ValueError) as exc:
             logger.error(f"ChaCha notes search failed: {exc}")
             return []
         documents: list[Document] = []
@@ -1352,7 +1422,7 @@ class NotesDBRetriever(BaseRetriever):
                 rv = r.get('bm25_score')
             try:
                 ranks.append(float(rv) if rv is not None else None)
-            except Exception:
+            except (TypeError, ValueError):
                 ranks.append(None)
         norm_map = {}
         if any(v is not None for v in ranks):
@@ -1462,7 +1532,7 @@ class KanbanDBRetriever(BaseRetriever):
     def _get_db(self) -> KanbanDB:
         if self.kanban_db is None:
             if self.db_path is None:
-                raise ValueError("Kanban db_path is required for retrieval")
+                raise MissingDatabasePathError()
             self.kanban_db = KanbanDB(db_path=str(self.db_path), user_id=self.user_id)
             self._owns_db = True
         return self.kanban_db
@@ -1719,16 +1789,17 @@ class KanbanDBRetriever(BaseRetriever):
                 return {}
             metadata = dict(card)
             metadata.setdefault("source", "kanban")
-            return metadata
-        except Exception as exc:  # noqa: BLE001
+        except (AttributeError, OSError, RuntimeError, TypeError, ValueError) as exc:
             logger.debug(f"KanbanDBRetriever metadata lookup failed for {doc_id}: {exc}")
-            return {}
+        else:
+            return metadata
+        return {}
 
     def close(self) -> None:
         if self._owns_db and self.kanban_db is not None:
             try:
                 self.kanban_db.close()
-            except Exception as exc:
+            except (AttributeError, RuntimeError, TypeError, ValueError) as exc:
                 logger.debug(f"KanbanDBRetriever close error: {exc}")
             finally:
                 self.kanban_db = None
@@ -1886,7 +1957,7 @@ class CharacterCardsRetriever(BaseRetriever):
                     rv = r.get("rank")
                     try:
                         raw_ranks.append(float(rv) if rv is not None else None)
-                    except Exception:
+                    except (TypeError, ValueError):
                         raw_ranks.append(None)
                 norm_map = {}
                 if any(v is not None for v in raw_ranks):
@@ -1968,10 +2039,7 @@ class CharacterCardsRetriever(BaseRetriever):
                         )
                         documents.append(doc)
 
-                documents.sort(key=lambda x: x.score, reverse=True)
-                logger.debug(f"Retrieved {len(documents)} Character/Chat documents via ChaCha backend")
-                return documents
-            except Exception as e:
+            except (AttributeError, ConnectionError, OSError, RuntimeError, TypeError, ValueError) as e:
                 if getattr(self.chacha_db, "backend_type", None) == BackendType.POSTGRESQL:
                     logger.warning(
                         "ChaCha backend search failed under PostgreSQL backend; skipping legacy fallback: %s",
@@ -1979,6 +2047,10 @@ class CharacterCardsRetriever(BaseRetriever):
                     )
                     raise
                 logger.debug(f"ChaCha backend search failed; falling back to legacy SQL: {e}")
+            else:
+                documents.sort(key=lambda x: x.score, reverse=True)
+                logger.debug(f"Retrieved {len(documents)} Character/Chat documents via ChaCha backend")
+                return documents
 
         # Legacy SQLite-style path
         # Search character cards
@@ -2143,7 +2215,7 @@ class MultiDatabaseRetriever:
         if "claims_db" in db_paths:
             try:
                 self.retrievers[DataSource.CLAIMS] = ClaimsRetriever(db_paths["claims_db"])
-            except Exception as e:
+            except (ImportError, AttributeError, OSError, RuntimeError, TypeError, ValueError) as e:
                 logger.debug(f"ClaimsRetriever init skipped: {e}")
 
     # Resource management
@@ -2154,7 +2226,7 @@ class MultiDatabaseRetriever:
                 if callable(close_fn):
                     try:
                         close_fn()
-                    except Exception:
+                    except (AttributeError, RuntimeError, TypeError, ValueError):
                         pass
         finally:
             self.retrievers.clear()
@@ -2165,7 +2237,7 @@ class MultiDatabaseRetriever:
     def __exit__(self, exc_type, exc, tb):
         try:
             self.close()
-        except Exception:
+        except (AttributeError, RuntimeError, TypeError, ValueError):
             pass
         # Do not suppress exceptions
         return False
@@ -2173,7 +2245,7 @@ class MultiDatabaseRetriever:
     def __del__(self):
         try:
             self.close()
-        except Exception:
+        except (AttributeError, RuntimeError, TypeError, ValueError):
             pass
 
     async def retrieve(
@@ -2212,7 +2284,7 @@ class MultiDatabaseRetriever:
                 else:
                     try:
                         ds_list.append(DataSource(str(s)))
-                    except Exception:
+                    except (ValueError, TypeError):
                         continue
 
         documents: list[Document] = []
@@ -2271,7 +2343,7 @@ class MultiDatabaseRetriever:
         if tasks:
             try:
                 results = await asyncio.gather(*tasks, return_exceptions=True)
-            except Exception as e:
+            except (RuntimeError, TypeError, ValueError) as e:
                 logger.error(f"Multi-database retrieval failed: {e}")
                 results = []
         else:
@@ -2309,7 +2381,7 @@ class MultiDatabaseRetriever:
                 continue
             try:
                 docs = await retr.retrieve(query)
-            except Exception:
+            except (AttributeError, ConnectionError, OSError, RuntimeError, TypeError, ValueError):
                 docs = []
             source_results[src] = docs
 
@@ -2425,7 +2497,7 @@ class ClaimsRetriever(BaseRetriever):
                 return None
             from tldw_Server_API.app.core.DB_Management.Media_DB_v2 import MediaDatabase
             return MediaDatabase(db_path=validated_path, client_id="rag_service")
-        except Exception:
+        except (ImportError, AttributeError, OSError, RuntimeError, TypeError, ValueError):
             return None
 
     def close(self):
@@ -2434,7 +2506,7 @@ class ClaimsRetriever(BaseRetriever):
                 close_fn = getattr(self.media_db, 'close_connection', None)
                 if callable(close_fn):
                     close_fn()
-        except Exception:
+        except (AttributeError, RuntimeError, TypeError, ValueError):
             pass
 
     async def retrieve(self, query: str, **kwargs) -> list[Document]:
@@ -2491,7 +2563,7 @@ class ClaimsRetriever(BaseRetriever):
                             score=0.4,
                         )
                     )
-        except Exception as e:
+        except (AttributeError, OSError, RuntimeError, TypeError, ValueError) as e:
             logger.debug(f"Claims FTS failed, fallback to LIKE: {e}")
             sql = (
                 "SELECT id, media_id, chunk_index, claim_text FROM Claims "
@@ -2522,7 +2594,7 @@ class ClaimsRetriever(BaseRetriever):
             return []
         try:
             results = self.media_db.search_claims(query, limit=int(self.config.max_results))
-        except Exception as exc:  # noqa: BLE001
+        except (AttributeError, ConnectionError, OSError, RuntimeError, TypeError, ValueError) as exc:
             logger.error(f"MediaDatabase claims search failed: {exc}")
             return []
         documents: list[Document] = []
@@ -2561,7 +2633,7 @@ class ClaimsRetriever(BaseRetriever):
             sql = "SELECT * FROM Claims WHERE id = ?"
             rows = self._execute_query(sql, (cid,))
             return dict(rows[0]) if rows else {}
-        except Exception:
+        except (AttributeError, TypeError, ValueError):
             return {}
 
     # (no second retrieve method inside ClaimsRetriever)
@@ -2571,7 +2643,7 @@ class ClaimsRetriever(BaseRetriever):
 try:
     # Some tests import MediaDatabaseRetriever; map to MediaDBRetriever for compatibility
     MediaDatabaseRetriever = MediaDBRetriever
-except Exception:
+except (NameError, AttributeError):
     pass
 
 

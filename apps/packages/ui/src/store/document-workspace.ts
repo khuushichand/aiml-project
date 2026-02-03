@@ -99,10 +99,18 @@ export const useDocumentWorkspaceStore = create<DocumentWorkspaceStore>(
         if (existingDoc) {
           // Restore existing document's viewer state
           const viewerState = existingDoc.viewerState ?? createDefaultViewerState()
+          const mergedDoc: OpenDocument = {
+            ...existingDoc,
+            ...doc,
+            viewerState
+          }
+          const mergedOpenDocs = updatedOpenDocs.map((d) =>
+            d.id === doc.id ? mergedDoc : d
+          )
           return {
-            openDocuments: updatedOpenDocs,
+            openDocuments: mergedOpenDocs,
             activeDocumentId: doc.id,
-            activeDocumentType: doc.type,
+            activeDocumentType: mergedDoc.type,
             currentPage: viewerState.currentPage,
             totalPages: viewerState.totalPages,
             zoomLevel: viewerState.zoomLevel,

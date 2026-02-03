@@ -1,6 +1,6 @@
 import React, { useCallback, useEffect, useRef } from "react"
 import { useTranslation } from "react-i18next"
-import { Empty, Spin } from "antd"
+import { Button } from "antd"
 import { FileText, AlertCircle } from "lucide-react"
 import type { PdfDocumentProxy } from "@/hooks/document-workspace/usePdfSearch"
 import { useDocumentWorkspaceStore } from "@/store/document-workspace"
@@ -12,9 +12,15 @@ import type { DocumentType } from "../types"
 
 interface DocumentViewerProps {
   className?: string
+  onOpenLibrary?: () => void
+  onOpenUpload?: () => void
 }
 
-export const DocumentViewer: React.FC<DocumentViewerProps> = ({ className }) => {
+export const DocumentViewer: React.FC<DocumentViewerProps> = ({
+  className,
+  onOpenLibrary,
+  onOpenUpload
+}) => {
   const { t } = useTranslation(["option", "common"])
   const pdfDocumentRef = useRef<PdfDocumentProxy | null>(null)
 
@@ -123,6 +129,20 @@ export const DocumentViewer: React.FC<DocumentViewerProps> = ({ className }) => 
             )}
           </p>
         </div>
+        {(onOpenLibrary || onOpenUpload) && (
+          <div className="flex flex-wrap items-center justify-center gap-2">
+            {onOpenUpload && (
+              <Button type="primary" onClick={onOpenUpload}>
+                {t("option:documentWorkspace.upload", "Upload")}
+              </Button>
+            )}
+            {onOpenLibrary && (
+              <Button onClick={onOpenLibrary}>
+                {t("option:documentWorkspace.openDocument", "Open document")}
+              </Button>
+            )}
+          </div>
+        )}
       </div>
     )
   }
