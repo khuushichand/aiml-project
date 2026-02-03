@@ -133,7 +133,7 @@ export const ExecutePlayground: React.FC<ExecutePlaygroundProps> = ({
         </span>
       }
       width={600}
-      destroyOnClose
+      destroyOnHidden
     >
       {isLoadingPrompt && <Skeleton paragraph={{ rows: 8 }} />}
 

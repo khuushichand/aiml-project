@@ -643,7 +643,7 @@ export const WorldBooksManager: React.FC = () => {
         width={screens.md ? "60vw" : "100%"}
         open={!!openEntries}
         onClose={handleCloseEntries}
-        destroyOnClose
+        destroyOnHidden
       >
         {openEntries && (
           <div className="mb-3 flex flex-wrap items-center gap-2 text-sm">

@@ -436,13 +436,37 @@ export const DocumentWorkspacePage: React.FC = () => {
           include_versions: false
         })
 
-        const filename =
-          details?.metadata?.original_filename ||
-          details?.metadata?.filename ||
-          details?.metadata?.file_name ||
-          details?.filename
+        const metadataSources = [
+          details?.processing?.safe_metadata,
+          details?.content?.metadata,
+          details?.metadata
+        ].filter(Boolean) as Array<Record<string, unknown>>
 
-        const docType = docTypeHint ?? inferDocumentTypeFromMedia(details?.type, filename)
+        const getMetadataValue = (keys: string[]): string | undefined => {
+          for (const source of metadataSources) {
+            for (const key of keys) {
+              if (key in source) {
+                const value = source[key]
+                if (value !== undefined && value !== null && String(value).trim() !== "") {
+                  return String(value)
+                }
+              }
+            }
+          }
+          return undefined
+        }
+
+        const filename =
+          getMetadataValue([
+            "original_filename",
+            "file_name",
+            "filename",
+            "fileName",
+            "FileName",
+            "File_Name"
+          ]) || details?.filename
+
+        const docType = docTypeHint ?? inferDocumentTypeFromMedia(details?.source?.type || details?.type, filename)
 
         if (!docType) {
           message.error(
@@ -483,9 +507,21 @@ export const DocumentWorkspacePage: React.FC = () => {
         const url = URL.createObjectURL(blob)
         registerBlobUrl(mediaId, url)
 
+        const titleFromMetadata = getMetadataValue([
+          "title",
+          "Title",
+          "document_title",
+          "DocumentTitle",
+          "dc:title"
+        ])
+
         openDocument({
           id: mediaId,
-          title: details?.title || `Media ${mediaId}`,
+          title:
+            details?.source?.title ||
+            details?.title ||
+            titleFromMetadata ||
+            `Media ${mediaId}`,
           type: docType,
           url
         })
@@ -574,6 +610,7 @@ export const DocumentWorkspacePage: React.FC = () => {
         <DocumentViewer
           onOpenLibrary={() => handleOpenPicker("library")}
           onOpenUpload={() => handleOpenPicker("upload")}
+          onReloadDocument={openDocumentById}
         />
       )
     },
@@ -690,6 +727,7 @@ export const DocumentWorkspacePage: React.FC = () => {
             <DocumentViewer
               onOpenLibrary={() => handleOpenPicker("library")}
               onOpenUpload={() => handleOpenPicker("upload")}
+              onReloadDocument={openDocumentById}
             />
           </main>
 

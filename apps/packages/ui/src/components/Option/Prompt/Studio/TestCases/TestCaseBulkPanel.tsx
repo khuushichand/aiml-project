@@ -153,7 +153,7 @@ export const TestCaseBulkPanel: React.FC<TestCaseBulkPanelProps> = ({
         defaultValue: "Import / Export Test Cases"
       })}
       width={500}
-      destroyOnClose
+      destroyOnHidden
     >
       <Tabs
         items={[

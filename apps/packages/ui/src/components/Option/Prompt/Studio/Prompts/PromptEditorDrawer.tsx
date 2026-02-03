@@ -199,7 +199,7 @@ export const PromptEditorDrawer: React.FC<PromptEditorDrawerProps> = ({
             })
       }
       width={640}
-      destroyOnClose
+      destroyOnHidden
       footer={
         <div className="flex justify-end gap-2">
           <Button type="secondary" onClick={onClose} disabled={isPending}>

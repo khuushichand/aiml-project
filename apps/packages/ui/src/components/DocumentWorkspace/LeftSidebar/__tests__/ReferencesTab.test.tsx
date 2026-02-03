@@ -50,7 +50,7 @@ describe("ReferencesTab", () => {
     vi.clearAllMocks()
   })
 
-  it("filters by DOI and citations", () => {
+  it("filters references by search query", () => {
     mockReferencesResponse = {
       media_id: 1,
       has_references: true,
@@ -75,11 +75,9 @@ describe("ReferencesTab", () => {
     expect(screen.getByText("With DOI")).toBeInTheDocument()
     expect(screen.getByText("No DOI")).toBeInTheDocument()
 
-    fireEvent.click(screen.getByText("Has DOI"))
+    const searchInput = screen.getByPlaceholderText("Search references...")
+    fireEvent.change(searchInput, { target: { value: "With DOI" } })
     expect(screen.getByText("With DOI")).toBeInTheDocument()
     expect(screen.queryByText("No DOI")).not.toBeInTheDocument()
-
-    fireEvent.click(screen.getByText("Has citations"))
-    expect(screen.getByText("With DOI")).toBeInTheDocument()
   })
 })

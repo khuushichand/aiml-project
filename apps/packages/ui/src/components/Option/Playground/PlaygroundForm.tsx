@@ -1445,7 +1445,7 @@ export const PlaygroundForm = ({ droppedFiles }: Props) => {
         className: "no-scrollbar",
         activeKey: selectedModel ?? undefined
       }}
-      dropdownRender={(menu) => (
+      popupRender={(menu) => (
         <div className="bg-surface rounded-lg shadow-lg border border-border">
           <div className="p-2 border-b border-border flex items-center gap-2">
             <Input

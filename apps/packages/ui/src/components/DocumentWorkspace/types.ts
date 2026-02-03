@@ -126,6 +126,9 @@ export interface DocumentMetadata {
   id: number
   title: string
   authors?: string[]
+  creator?: string
+  producer?: string
+  fileName?: string
   abstract?: string
   keywords?: string[]
   pageCount?: number

@@ -57,8 +57,7 @@ const TocEntry: React.FC<TocEntryProps> = ({
 
   return (
     <div role="treeitem" aria-expanded={hasChildren ? expanded : undefined}>
-      <button
-        onClick={handleClick}
+      <div
         className={`
           group flex w-full items-center gap-1 rounded px-2 py-1.5 text-left text-sm
           transition-colors hover:bg-hover
@@ -66,10 +65,10 @@ const TocEntry: React.FC<TocEntryProps> = ({
           ${containsCurrentPage && !isActive ? "text-text-secondary" : ""}
         `}
         style={{ paddingLeft }}
-        aria-current={isActive ? "page" : undefined}
       >
         {hasChildren ? (
           <button
+            type="button"
             onClick={handleToggle}
             className="shrink-0 rounded p-0.5 hover:bg-hover-deep"
             aria-label={
@@ -89,24 +88,31 @@ const TocEntry: React.FC<TocEntryProps> = ({
           <span className="w-4" aria-hidden="true" /> // Spacer for alignment
         )}
 
-        <span className="flex-1 truncate" title={item.title}>
-          {item.title}
-        </span>
-
-        {showPageNumber && (
-          <span
-            className={`
-              shrink-0 text-xs tabular-nums
-              ${isActive ? "text-primary" : "text-muted"}
-              opacity-0 group-hover:opacity-100
-              ${isActive ? "opacity-100" : ""}
-            `}
-            aria-label={t("option:documentWorkspace.pageNumber", "Page {{page}}", { page: item.page })}
-          >
-            {item.page}
+        <button
+          type="button"
+          onClick={handleClick}
+          className="flex min-w-0 flex-1 items-center gap-1 text-left"
+          aria-current={isActive ? "page" : undefined}
+        >
+          <span className="flex-1 truncate" title={item.title}>
+            {item.title}
           </span>
-        )}
-      </button>
+
+          {showPageNumber && (
+            <span
+              className={`
+                shrink-0 text-xs tabular-nums
+                ${isActive ? "text-primary" : "text-muted"}
+                opacity-0 group-hover:opacity-100
+                ${isActive ? "opacity-100" : ""}
+              `}
+              aria-label={t("option:documentWorkspace.pageNumber", "Page {{page}}", { page: item.page })}
+            >
+              {item.page}
+            </span>
+          )}
+        </button>
+      </div>
 
       {hasChildren && expanded && (
         <div role="group">

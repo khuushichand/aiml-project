@@ -631,7 +631,7 @@ export const GenerationPreviewModal: React.FC<GenerationPreviewModalProps> = ({
           })}
         </Button>
       ]}
-      destroyOnClose
+      destroyOnHidden
       aria-describedby="generation-preview-content">
       <div id="generation-preview-content">
         {previewContent}

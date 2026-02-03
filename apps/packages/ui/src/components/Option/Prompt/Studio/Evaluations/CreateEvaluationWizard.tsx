@@ -454,7 +454,7 @@ export const CreateEvaluationWizard: React.FC<CreateEvaluationWizardProps> = ({
       }
       width={700}
       footer={null}
-      destroyOnClose
+      destroyOnHidden
     >
       <div className="mt-4 space-y-6">
         <Steps

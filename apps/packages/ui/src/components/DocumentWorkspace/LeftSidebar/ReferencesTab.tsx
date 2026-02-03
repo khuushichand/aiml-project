@@ -1,6 +1,6 @@
 import React from "react"
 import { useTranslation } from "react-i18next"
-import { Empty, Skeleton, Tag, Tooltip, Checkbox, Collapse } from "antd"
+import { Empty, Skeleton, Tag, Tooltip, Input } from "antd"
 import {
   BookOpen,
   ExternalLink,
@@ -9,6 +9,7 @@ import {
   User,
   Calendar,
   FileText,
+  Search,
 } from "lucide-react"
 import { useDocumentWorkspaceStore } from "@/store/document-workspace"
 import {
@@ -32,9 +33,10 @@ const ReferenceCard: React.FC<{ reference: ReferenceEntry; index: number }> = ({
   // Use title if available, otherwise use first part of raw_text
   const displayTitle = reference.title || reference.raw_text.slice(0, 150)
   const isRawText = !reference.title
+  const showCitations = reference.citation_count !== undefined && reference.citation_count > 0
 
-  return (
-    <div className="rounded-lg border border-border bg-surface-alt p-3 text-sm">
+  const cardContent = (
+    <div className="rounded-lg border border-border bg-surface-alt p-3 text-sm transition-shadow hover:shadow-md">
       {/* Reference number */}
       <div className="flex items-start gap-2">
         <span className="shrink-0 rounded bg-surface px-1.5 py-0.5 text-xs font-medium text-text-muted">
@@ -79,14 +81,15 @@ const ReferenceCard: React.FC<{ reference: ReferenceEntry; index: number }> = ({
           {/* Links and badges */}
           <div className="mt-2 flex flex-wrap items-center gap-2">
             {/* Citation count */}
-            {reference.citation_count !== undefined && reference.citation_count > 0 && (
+            {showCitations && (
               <Tooltip title={t("option:documentWorkspace.citations", "Citations")}>
                 <Tag
                   color="blue"
                   className="m-0 flex items-center gap-1 text-xs"
                 >
                   <Quote className="h-3 w-3" />
-                  {formatCitationCount(reference.citation_count)}
+                  {formatCitationCount(reference.citation_count)}{" "}
+                  {t("option:documentWorkspace.citesShort", "cites")}
                 </Tag>
               </Tooltip>
             )}
@@ -106,15 +109,29 @@ const ReferenceCard: React.FC<{ reference: ReferenceEntry; index: number }> = ({
 
             {/* arXiv link */}
             {reference.arxiv_id && (
-              <a
-                href={`https://arxiv.org/abs/${reference.arxiv_id}`}
-                target="_blank"
-                rel="noopener noreferrer"
-                className="flex items-center gap-1 text-xs text-primary hover:underline"
-              >
-                arXiv
-                <ExternalLink className="h-3 w-3" />
-              </a>
+              <Tag color="geekblue" className="m-0 px-1.5 py-0.5 text-xs">
+                <a
+                  href={`https://arxiv.org/abs/${reference.arxiv_id}`}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="text-current"
+                >
+                  arXiv
+                </a>
+              </Tag>
+            )}
+
+            {reference.semantic_scholar_id && (
+              <Tag color="purple" className="m-0 px-1.5 py-0.5 text-xs">
+                <a
+                  href={`https://www.semanticscholar.org/paper/${reference.semantic_scholar_id}`}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="text-current"
+                >
+                  S2
+                </a>
+              </Tag>
             )}
 
             {/* Open Access PDF */}
@@ -135,7 +152,7 @@ const ReferenceCard: React.FC<{ reference: ReferenceEntry; index: number }> = ({
             )}
 
             {/* General URL if no specific links */}
-            {url && !reference.doi && !reference.arxiv_id && (
+            {url && !reference.doi && !reference.arxiv_id && !reference.semantic_scholar_id && (
               <a
                 href={url}
                 target="_blank"
@@ -147,55 +164,28 @@ const ReferenceCard: React.FC<{ reference: ReferenceEntry; index: number }> = ({
               </a>
             )}
           </div>
-
-          {/* Expandable details */}
-          <Collapse
-            ghost
-            size="small"
-            className="mt-2 [&_.ant-collapse-header]:px-0 [&_.ant-collapse-header]:py-0"
-            items={[
-              {
-                key: "details",
-                label: (
-                  <span className="text-xs text-text-muted">
-                    {t("common:details", "Details")}
-                  </span>
-                ),
-                children: (
-                  <div className="space-y-1 text-xs text-text-secondary">
-                    <div className="whitespace-pre-wrap break-words">
-                      {reference.raw_text}
-                    </div>
-                    {reference.semantic_scholar_id && (
-                      <div>
-                        {t("option:documentWorkspace.semanticScholarId", "Semantic Scholar ID")}:{" "}
-                        <span className="text-text-muted">
-                          {reference.semantic_scholar_id}
-                        </span>
-                      </div>
-                    )}
-                    {reference.url && (
-                      <div>
-                        {t("common:link", "Link")}:{" "}
-                        <a
-                          href={reference.url}
-                          target="_blank"
-                          rel="noopener noreferrer"
-                          className="text-primary hover:underline"
-                        >
-                          {reference.url}
-                        </a>
-                      </div>
-                    )}
-                  </div>
-                ),
-              },
-            ]}
-          />
         </div>
+        {url && (
+          <ExternalLink className="mt-1 h-4 w-4 shrink-0 text-muted" />
+        )}
       </div>
     </div>
   )
+
+  if (url) {
+    return (
+      <a
+        href={url}
+        target="_blank"
+        rel="noopener noreferrer"
+        className="block focus:outline-none focus-visible:ring-2 focus-visible:ring-primary"
+      >
+        {cardContent}
+      </a>
+    )
+  }
+
+  return cardContent
 }
 
 /**
@@ -263,7 +253,7 @@ const NoFilteredReferencesState: React.FC = () => {
         image={<FileText className="h-10 w-10 text-muted mx-auto mb-2" />}
         description={t(
           "option:documentWorkspace.noReferencesMatchFilters",
-          "No references match the selected filters"
+          "No references match your search"
         )}
       />
     </div>
@@ -322,8 +312,7 @@ const ErrorState: React.FC<{ error: Error }> = ({ error }) => {
 export const ReferencesTab: React.FC = () => {
   const { t } = useTranslation(["option", "common"])
   const activeDocumentId = useDocumentWorkspaceStore((s) => s.activeDocumentId)
-  const [filterHasDoi, setFilterHasDoi] = React.useState(false)
-  const [filterHasCitations, setFilterHasCitations] = React.useState(false)
+  const [searchQuery, setSearchQuery] = React.useState("")
   const isConnected = useConnectionStore((s) => s.state.isConnected)
   const mode = useConnectionStore((s) => s.state.mode)
   const isServerAvailable = isConnected && mode !== "demo"
@@ -356,67 +345,80 @@ export const ReferencesTab: React.FC = () => {
     return <NoReferencesState />
   }
 
-  // Count enriched references
-  const enrichedCount = data.references.filter(
-    (ref) =>
-      ref.citation_count !== undefined ||
-      ref.semantic_scholar_id ||
-      ref.open_access_pdf
-  ).length
+  const totalCount = data.references.length
+  const arxivCount = data.references.filter((ref) => ref.arxiv_id).length
+  const s2Count = data.references.filter((ref) => ref.semantic_scholar_id).length
 
+  const query = searchQuery.trim().toLowerCase()
   const filteredReferences = data.references.filter((ref) => {
-    if (filterHasDoi && !ref.doi) return false
-    if (
-      filterHasCitations &&
-      (ref.citation_count === undefined || ref.citation_count <= 0)
-    ) {
-      return false
-    }
-    return true
+    if (!query) return true
+    const haystack = [
+      ref.title,
+      ref.authors,
+      ref.venue,
+      ref.doi,
+      ref.arxiv_id,
+      ref.semantic_scholar_id,
+      ref.raw_text,
+    ]
+      .filter(Boolean)
+      .join(" ")
+      .toLowerCase()
+    return haystack.includes(query)
   })
-
-  const filtersActive = filterHasDoi || filterHasCitations
-  const countLabel = filtersActive
-    ? t(
-        "option:documentWorkspace.referencesCountFiltered",
-        "{{count}} of {{total}} references",
-        {
-          count: filteredReferences.length,
-          total: data.references.length,
-        }
-      )
-    : t("option:documentWorkspace.referencesCount", "{{count}} references", {
-        count: data.references.length,
-      })
 
   return (
     <div className="h-full overflow-y-auto">
       <div className="p-3">
-        {/* Header with stats */}
-        <div className="mb-3 flex items-center justify-between text-xs text-text-muted">
-          <span>{countLabel}</span>
-          {data.enrichment_source && enrichedCount > 0 && (
-            <span className="text-text-secondary">
-              {enrichedCount}{" "}
+        {/* Header */}
+        <div className="mb-3 flex items-center justify-between">
+          <div className="flex items-center gap-2 text-xs text-text-muted">
+            <span className="text-sm font-medium text-text">
+              {t("option:documentWorkspace.references", "References")}
+            </span>
+            <Tag className="m-0 rounded-full px-2 py-0.5 text-xs">
+              {totalCount}
+            </Tag>
+          </div>
+          {data.enrichment_source && (
+            <span className="text-xs text-text-muted">
               {t("option:documentWorkspace.enriched", "enriched")}
             </span>
           )}
         </div>
 
-        {/* Filters */}
-        <div className="mb-3 flex flex-wrap items-center gap-3 text-xs text-text-muted">
-          <Checkbox
-            checked={filterHasDoi}
-            onChange={(e) => setFilterHasDoi(e.target.checked)}
-          >
-            {t("option:documentWorkspace.filterHasDoi", "Has DOI")}
-          </Checkbox>
-          <Checkbox
-            checked={filterHasCitations}
-            onChange={(e) => setFilterHasCitations(e.target.checked)}
-          >
-            {t("option:documentWorkspace.filterHasCitations", "Has citations")}
-          </Checkbox>
+        {/* Search */}
+        <Input
+          placeholder={t(
+            "option:documentWorkspace.searchReferences",
+            "Search references..."
+          )}
+          value={searchQuery}
+          onChange={(e) => setSearchQuery(e.target.value)}
+          size="small"
+          prefix={<Search className="h-4 w-4 text-muted" />}
+          className="mb-3"
+          allowClear
+        />
+
+        {/* Counts */}
+        <div className="mb-3 flex flex-wrap items-center gap-2 text-xs text-text-muted">
+          <span>
+            {t("option:documentWorkspace.referencesCount", "{{count}} references", {
+              count: totalCount,
+            })}
+          </span>
+          {arxivCount > 0 && (
+            <span>
+              {arxivCount}{" "}
+              {t("option:documentWorkspace.arxivShort", "arXiv")}
+            </span>
+          )}
+          {s2Count > 0 && (
+            <span>
+              {s2Count} {t("option:documentWorkspace.s2Short", "S2")}
+            </span>
+          )}
         </div>
 
         {/* References list */}

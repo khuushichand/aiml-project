@@ -43,7 +43,7 @@ export const VoiceModeSelector: React.FC<VoiceModeSelectorProps> = ({
       title={t("playground:voiceMode.title", "Choose voice mode")}
       footer={null}
       centered
-      destroyOnClose
+      destroyOnHidden
     >
       <div className="flex flex-col gap-4 pt-2">
         {/* Voice Typing Card */}

@@ -202,7 +202,7 @@ export const PromptSelect: React.FC<Props> = ({
             className: `no-scrollbar ${menuDensity === 'compact' ? 'menu-density-compact' : 'menu-density-comfortable'}`,
             activeKey: selectedSystemPrompt
           }}
-          dropdownRender={(menu) => (
+          popupRender={(menu) => (
             <div className="bg-surface rounded-lg shadow-lg border border-border">
               <div className="p-2 border-b border-border">
                 <Input

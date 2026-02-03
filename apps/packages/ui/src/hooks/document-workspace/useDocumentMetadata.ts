@@ -4,12 +4,11 @@ import { useConnectionStore } from "@/store/connection"
 import type { DocumentMetadata, DocumentType } from "@/components/DocumentWorkspace/types"
 
 interface MediaDetailResponse {
-  id: number
+  id?: number
+  media_id?: number
   uuid?: string
   title?: string
   author?: string
-  content?: string
-  content_hash?: string
   type?: string
   keywords?: string[]
   metadata?: Record<string, unknown>
@@ -17,7 +16,17 @@ interface MediaDetailResponse {
   last_modified?: string
   file_size?: number
   page_count?: number
-  versions?: unknown[]
+  source?: {
+    title?: string
+    type?: string
+    url?: string
+  }
+  processing?: {
+    safe_metadata?: Record<string, unknown>
+  }
+  content?: {
+    metadata?: Record<string, unknown>
+  }
 }
 
 /**
@@ -39,6 +48,86 @@ function parseAuthors(author?: string): string[] | undefined {
     .split(/[,;&]/)
     .map((a) => a.trim())
     .filter(Boolean)
+}
+
+type MetadataRecord = Record<string, unknown>
+
+function asRecord(value: unknown): MetadataRecord {
+  if (!value || typeof value !== "object") return {}
+  return value as MetadataRecord
+}
+
+function getMetadataValue(
+  sources: MetadataRecord[],
+  keys: string[]
+): unknown {
+  for (const source of sources) {
+    for (const key of keys) {
+      if (key in source) {
+        const value = source[key]
+        if (value !== undefined && value !== null && String(value).trim() !== "") {
+          return value
+        }
+      }
+    }
+  }
+  return undefined
+}
+
+function normalizeString(value: unknown): string | undefined {
+  if (value === undefined || value === null) return undefined
+  if (typeof value === "string") {
+    const trimmed = value.trim()
+    return trimmed ? trimmed : undefined
+  }
+  if (typeof value === "number") return String(value)
+  return undefined
+}
+
+function parseAuthorField(value: unknown): string[] | undefined {
+  if (!value) return undefined
+  if (Array.isArray(value)) {
+    const list = value
+      .map((entry) => {
+        if (typeof entry === "string" || typeof entry === "number") {
+          return String(entry).trim()
+        }
+        if (entry && typeof entry === "object" && "name" in entry) {
+          return String((entry as { name?: unknown }).name ?? "").trim()
+        }
+        return ""
+      })
+      .filter(Boolean)
+    return list.length > 0 ? list : undefined
+  }
+  if (typeof value === "string") {
+    return parseAuthors(value)
+  }
+  if (value && typeof value === "object" && "name" in value) {
+    const nameValue = String((value as { name?: unknown }).name ?? "").trim()
+    return nameValue ? [nameValue] : undefined
+  }
+  return undefined
+}
+
+function parseNumber(value: unknown): number | undefined {
+  if (value === undefined || value === null) return undefined
+  if (typeof value === "number" && Number.isFinite(value)) return value
+  if (typeof value === "string") {
+    const parsed = Number(value.replace(/[^\d.]/g, ""))
+    if (!Number.isNaN(parsed)) return parsed
+  }
+  return undefined
+}
+
+function parseDate(value: unknown): Date | undefined {
+  if (!value) return undefined
+  if (value instanceof Date) return value
+  if (typeof value === "string" || typeof value === "number") {
+    const date = new Date(value)
+    if (!Number.isNaN(date.getTime())) return date
+  }
+  return undefined
 }
 
 /**
@@ -67,24 +156,103 @@ export function useDocumentMetadata(mediaId: number | null) {
         }
       )
 
-      const metadata = response.metadata || {}
+      const metadataSources = [
+        asRecord(response.processing?.safe_metadata),
+        asRecord(response.content?.metadata),
+        asRecord(response.metadata),
+      ]
+
+      const metadataTitle = normalizeString(
+        getMetadataValue(metadataSources, [
+          "title",
+          "Title",
+          "document_title",
+          "DocumentTitle",
+          "dc:title",
+        ])
+      )
+      const metadataAuthor = parseAuthorField(
+        getMetadataValue(metadataSources, [
+          "author",
+          "Author",
+          "authors",
+          "Authors",
+          "dc:creator",
+          "creator",
+        ])
+      )
+      const metadataCreator = normalizeString(
+        getMetadataValue(metadataSources, ["creator", "Creator"])
+      )
+      const metadataProducer = normalizeString(
+        getMetadataValue(metadataSources, ["producer", "Producer"])
+      )
+      const metadataAbstract = normalizeString(
+        getMetadataValue(metadataSources, ["abstract", "Abstract"])
+      )
+      const metadataFileName = normalizeString(
+        getMetadataValue(metadataSources, [
+          "original_filename",
+          "file_name",
+          "filename",
+          "fileName",
+          "FileName",
+          "File_Name",
+        ])
+      )
+      const metadataPageCount = parseNumber(
+        getMetadataValue(metadataSources, [
+          "page_count",
+          "pageCount",
+          "PageCount",
+          "pages",
+          "Pages",
+        ])
+      )
+      const metadataFileSize = parseNumber(
+        getMetadataValue(metadataSources, [
+          "file_size",
+          "fileSize",
+          "FileSize",
+        ])
+      )
+      const createdDate = parseDate(
+        response.created_at ??
+          getMetadataValue(metadataSources, [
+            "created_at",
+            "creation_date",
+            "CreationDate",
+            "created",
+          ])
+      )
+      const modifiedDate = parseDate(
+        response.last_modified ??
+          getMetadataValue(metadataSources, [
+            "last_modified",
+            "mod_date",
+            "ModDate",
+            "modified",
+          ])
+      )
 
       return {
-        id: response.id,
-        title: response.title || "Untitled",
-        authors: parseAuthors(response.author),
-        abstract: metadata.abstract as string | undefined,
+        id: response.media_id ?? response.id ?? mediaId,
+        title:
+          response.source?.title ||
+          response.title ||
+          metadataTitle ||
+          "Untitled",
+        authors: parseAuthors(response.author) || metadataAuthor,
+        creator: metadataCreator,
+        producer: metadataProducer,
+        fileName: metadataFileName,
+        abstract: metadataAbstract,
         keywords: response.keywords,
-        pageCount:
-          response.page_count ?? (metadata.page_count as number | undefined),
-        createdDate: response.created_at
-          ? new Date(response.created_at)
-          : undefined,
-        modifiedDate: response.last_modified
-          ? new Date(response.last_modified)
-          : undefined,
-        fileSize: response.file_size,
-        type: inferDocumentType(response.type)
+        pageCount: response.page_count ?? metadataPageCount,
+        createdDate,
+        modifiedDate,
+        fileSize: response.file_size ?? metadataFileSize,
+        type: inferDocumentType(response.source?.type || response.type)
       }
     },
     enabled: mediaId !== null && isServerAvailable,

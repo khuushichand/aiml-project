@@ -14,15 +14,34 @@ interface DocumentViewerProps {
   className?: string
   onOpenLibrary?: () => void
   onOpenUpload?: () => void
+  onReloadDocument?: (mediaId: number, docTypeHint?: DocumentType | null) => Promise<void> | void
+}
+
+const shouldRetryBlobLoad = (error: Error, url?: string): boolean => {
+  if (!url || !url.startsWith("blob:")) return false
+  const message = String(error?.message || "")
+  const status = (error as Error & { status?: number })?.status
+  if (status === 0) return true
+  if ((error as Error & { name?: string })?.name === "UnexpectedResponseException") return true
+  return [
+    "Unexpected server response",
+    "ERR_FILE_NOT_FOUND",
+    "Failed to fetch",
+    "NetworkError",
+    "Invalid name"
+  ].some((needle) => message.includes(needle))
 }
 
 export const DocumentViewer: React.FC<DocumentViewerProps> = ({
   className,
   onOpenLibrary,
-  onOpenUpload
+  onOpenUpload,
+  onReloadDocument
 }) => {
   const { t } = useTranslation(["option", "common"])
   const pdfDocumentRef = useRef<PdfDocumentProxy | null>(null)
+  const reloadAttemptsRef = useRef<Map<number, number>>(new Map())
+  const reloadInFlightRef = useRef<Set<number>>(new Set())
 
   const activeDocumentId = useDocumentWorkspaceStore((s) => s.activeDocumentId)
   const activeDocumentType = useDocumentWorkspaceStore(
@@ -104,13 +123,35 @@ export const DocumentViewer: React.FC<DocumentViewerProps> = ({
   const handleLoadSuccess = useCallback(
     (numPages: number) => {
       setTotalPages(numPages)
+      if (activeDocumentId !== null) {
+        reloadAttemptsRef.current.delete(activeDocumentId)
+      }
     },
-    [setTotalPages]
+    [activeDocumentId, setTotalPages]
   )
 
-  const handleLoadError = useCallback((error: Error) => {
-    console.error("Failed to load document:", error)
-  }, [])
+  const handleLoadError = useCallback(
+    (error: Error) => {
+      console.error("Failed to load document:", error)
+      if (!onReloadDocument) return
+      if (activeDocumentType !== "pdf") return
+      if (activeDocumentId === null) return
+      if (!activeDocument) return
+      const { url, type } = activeDocument
+      if (!url) return
+      if (!shouldRetryBlobLoad(error, url)) return
+      const attempts = reloadAttemptsRef.current.get(activeDocumentId) ?? 0
+      if (attempts >= 1) return
+      if (reloadInFlightRef.current.has(activeDocumentId)) return
+      reloadAttemptsRef.current.set(activeDocumentId, attempts + 1)
+      reloadInFlightRef.current.add(activeDocumentId)
+      Promise.resolve(onReloadDocument(activeDocumentId, type))
+        .finally(() => {
+          reloadInFlightRef.current.delete(activeDocumentId)
+        })
+    },
+    [activeDocument, activeDocumentId, activeDocumentType, onReloadDocument]
+  )
 
   if (!activeDocumentId || !activeDocument) {
     return (
